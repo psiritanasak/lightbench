@@ -1,0 +1,54 @@
+name: PhotoApp
+options:
+  bundleIdPrefix: com.photoapp
+  deploymentTarget:
+    macOS: "14.0"
+
+targets:
+  PhotoApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_NAME: PhotoApp
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        SWIFT_VERSION: "6.0"
+        ENABLE_HARDENED_RUNTIME: true
+        CODE_SIGN_STYLE: Automatic
+    info:
+      path: Sources/App/Info.plist
+      properties:
+        CFBundleDisplayName: PhotoApp
+        LSMinimumSystemVersion: "14.0"
+        NSPrincipalClass: NSApplication
+        NSHumanReadableCopyright: ""
+    entitlements:
+      path: Sources/App/PhotoApp.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.files.user-selected.read-only: true
+
+  PhotoAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+    dependencies:
+      - target: PhotoApp
+
+schemes:
+  PhotoApp:
+    build:
+      targets:
+        PhotoApp: all
+        PhotoAppTests: [test]
+    test:
+      targets:
+        - PhotoAppTests
+    run:
+      config: Debug

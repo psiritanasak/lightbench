@@ -9,6 +9,7 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var currentImage: CIImage?
     @Published private(set) var currentFileName: String?
     @Published var loadErrorMessage: String?
+    @Published var editState = EditState()
 
     func openImage() {
         let panel = NSOpenPanel()
@@ -27,6 +28,7 @@ final class ImageDocumentModel: ObservableObject {
         }
         currentImage = raw.oriented(Self.exifOrientation(of: url))
         currentFileName = url.lastPathComponent
+        editState = EditState() // edits are per-photo; don't carry over to the next one opened
     }
 
     private static func exifOrientation(of url: URL) -> CGImagePropertyOrientation {

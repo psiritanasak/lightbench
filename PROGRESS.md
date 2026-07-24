@@ -1,45 +1,67 @@
 # Progress
 
 ## Current phase
-Phase 1 — Foundation: Xcode project, open + display an image in a Metal-backed view.
+Phase 2 — Edit engine: exposure done; contrast, white balance, curves, HSL,
+crop not yet started (build one feature per session, per roadmap order).
 
 ## Done
-- Repo initialized, CLAUDE.md workflow rules in place (including quota/safe-pause
-  discipline and this PROGRESS.md file).
-- Xcode project scaffolded via XcodeGen (`project.yml`); `.xcodeproj` is generated,
-  gitignored, regenerate with `xcodegen generate`.
+### Phase 1 — Foundation (complete, verified live)
+- Repo initialized, CLAUDE.md workflow rules in place (quota/safe-pause
+  discipline, this PROGRESS.md file).
+- Xcode project scaffolded via XcodeGen (`project.yml`); `.xcodeproj` is
+  generated, gitignored, regenerate with `xcodegen generate`.
 - Rendering: `MetalImageView` (MTKView, on-demand redraw) + `ImageRenderer`
-  (CIContext-based draw, aspect-fit + centered) + `AspectFit` math with unit tests.
-- UI: `ContentView` + `ImageDocumentModel` — Open… via NSOpenPanel, read-only file
-  access, EXIF orientation applied, decode-failure alert.
-- Xcode 26.6 installed; `xcodebuild -scheme PhotoApp build` → BUILD SUCCEEDED;
-  `xcodebuild -scheme PhotoApp test` → all 6 `AspectFitTests` pass.
-- **Golden path manually verified by the user in the live running app**: opened a
-  real photo (portrait JPEG, EXIF orientation 1), displays upright, readable,
-  correctly centered. This took an extra round: an earlier vertical-flip fix
-  (added on the strength of an offline MTLTexture test) actually caused a 180°
-  rotated display in the *live* MTKView drawable; removing it fixed it. Root-caused
-  by testing the user's real file end-to-end rather than trusting the offline test.
-  See `Sources/Rendering/ImageRenderer.swift` for the (scoped, empirical) comment
-  explaining this — flagged as a re-verify-later risk for Phase 5 export and Phase 7
-  tiled rendering, which will target offscreen textures, the same destination shape
-  that misled the original test.
-- Reviewer agent ran on every substantive diff (multiple FIX FIRST → fix → APPROVE
-  cycles). All commits are reviewer-approved.
-- 8 commits total on `master`.
+  (CIContext-based draw, aspect-fit + centered) + `AspectFit` math with unit
+  tests.
+- UI: `ContentView` + `ImageDocumentModel` — Open… via NSOpenPanel, read-only
+  file access, EXIF orientation applied, decode-failure alert.
+- Golden path manually verified live: real photo opens upright, readable,
+  centered. (One round-trip bug along the way: a vertical-flip "fix" validated
+  only against an offline MTLTexture test actually caused 180° rotation in the
+  *live* MTKView drawable; removing it fixed it — see the comment in
+  `Sources/Rendering/ImageRenderer.swift` for the scoped, empirical explanation
+  and the flagged re-verify-later risk for Phase 5 export / Phase 7 tiled
+  rendering, which will target offscreen textures like the misleading test did.)
+
+### Phase 2, Feature 1 — Exposure adjustment (complete, verified live)
+- `Sources/EditEngine/EditState.swift` (new) — `Codable`/`Equatable`, one field
+  `exposureEV: Double = 0`.
+- `Sources/EditEngine/EditPipeline.swift` (new) — `EditPipeline.apply(_:to:)`
+  applies exposure via Core Image's built-in `CIExposureAdjust`; comment marks
+  where WB/contrast/curves/HSL/crop slot in later (not stubbed out yet).
+- `Sources/Rendering/ImageRenderer.swift` — `CIContext` now explicitly sets
+  `workingColorSpace` (extended-range linear sRGB) + `workingFormat` (`RGBAh`),
+  satisfying CLAUDE.md's "linear light in a defined working color space"
+  instead of relying on framework defaults; output stays sRGB, applied only at
+  final render. `draw(in:)` applies the edit pipeline and uses the *edited*
+  image's extent throughout (forward-compatible with the future crop stage).
+- `Sources/UI/ImageDocumentModel.swift` / `ContentView.swift` — exposure slider
+  (bottom bar, −5…+5 EV, live readout, Reset button, disabled with no image);
+  edit state resets per photo on load.
+- `Tests/EditEngineTests/EditPipelineTests.swift` (new, 9 tests) — linear-light
+  math verified by rendering through a `CIContext` pinned to the same working
+  space: identity, ×2/×0.5/×4 at whole EVs, √2 gain at +0.5 EV (proves genuine
+  `2^ev` math, not a lookup table), alpha preservation, and a highlight-headroom
+  case (0.6 + EV 1 → 1.2, not clamped) proving extended range is really in
+  effect.
+- All 15 tests pass (6 AspectFit + 9 EditPipeline); build succeeds; reviewer
+  APPROVE on the full diff (3 commits: color-math foundation, renderer wiring,
+  UI slider); user manually confirmed live in the running app — slider
+  brightens/darkens correctly, resets at 0, Reset button works, disabled state
+  correct.
+- 11 commits total on `master`.
 
 ## In progress / blocked
-Nothing blocked. Still outstanding before fully closing Phase 1 (nice-to-have,
-not required): manually check window-resize re-fit behavior and confirm opened
-file mtimes are unchanged (non-destructive invariant) — the non-destructive
-invariant is already confirmed by code review (read-only APIs only), and resize
-re-fit math is unit-tested, so this is low-risk but not yet eyeballed live.
+Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required to
+close Phase 1): window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-Phase 1 core goal (open + display an image in a Metal-backed view) is done and
-verified in the live app. Do not start Phase 2 (edit engine) without the user's
-go-ahead, per the "one feature per session" / roadmap-order rule — check with
-them first.
+Phase 2 exposure feature is done and verified. Do not start the next Phase 2
+sub-feature (contrast, WB, curves, HSL, or crop) without checking with the
+user first, per "one feature per session." Suggested next: contrast (still a
+simple, no-custom-color-science adjustment) or white balance (next in the
+fixed pipeline order, but more complex — temperature/tint math, likely wants
+its own custom kernel per CLAUDE.md's Stack section).
 
 ## Open reviewer issues
-None outstanding — last reviewer verdict was APPROVE (commit ab49d2e).
+None outstanding — last reviewer verdict was APPROVE.

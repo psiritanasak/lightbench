@@ -45,15 +45,24 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
         let fitRect = AspectFit.rect(fitting: image.extent.size, in: drawableSize)
         guard fitRect.width > 0, fitRect.height > 0 else { return }
 
+        // No manual y-flip here. Empirically verified against this exact live
+        // on-screen MTKView (colorPixelFormat = .rgba16Float, framebufferOnly =
+        // false — see MetalImageView.swift) with a real photo (EXIF orientation
+        // 1/identity): adding a y-flip made the on-screen result appear rotated
+        // 180°; removing it displays correctly. The exact mechanism isn't fully
+        // understood — an earlier version added the flip because it tested
+        // "correct" against an offline, manually-created MTLTexture read back on
+        // the CPU, so something about that offscreen setup doesn't faithfully
+        // reproduce this live drawable's behavior. Do NOT assume "no flip" holds
+        // for other destinations or configs — in particular, Phase 5 batch
+        // export and Phase 7 tiled rendering will render to offscreen/standalone
+        // MTLTextures (the same shape of destination that misled the earlier
+        // test), so that path must be independently re-derived and verified
+        // against real output when it's built, not assumed identical to this.
         let scale = fitRect.width / image.extent.width
         let transform = CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
             .concatenating(CGAffineTransform(scaleX: scale, y: scale))
             .concatenating(CGAffineTransform(translationX: fitRect.minX, y: fitRect.minY))
-            // Core Image's coordinate space has its origin at the bottom-left
-            // (y-up); the Metal drawable texture is stored top-left origin
-            // (y-down). Without this flip the rendered image appears upside-down.
-            .concatenating(CGAffineTransform(scaleX: 1, y: -1))
-            .concatenating(CGAffineTransform(translationX: 0, y: drawableSize.height))
         let fittedImage = image.transformed(by: transform)
 
         ciContext.render(

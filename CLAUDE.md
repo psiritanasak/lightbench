@@ -48,6 +48,30 @@ One feature per session. Do not start a later phase while an earlier one has ope
 - Build and run tests via xcodebuild after every significant change; fix failures
   before moving on.
 
+## Quota / safe-pause discipline
+The subscription can hit a usage limit and end the session at any moment. You
+cannot see the exact remaining quota, so assume a cutoff could happen after any
+step and make every stopping point safe:
+- Keep `PROGRESS.md` at the repo root always current. After finishing any feature
+  or before a long-running task, update it with: current phase, what's done, what's
+  in progress, the exact next step, and any open reviewer issues.
+- Work in small committed increments so no more than one small unit of work is ever
+  uncommitted. A hard cutoff should never lose more than a few minutes.
+- If the user says they are near their limit, or asks you to pause: immediately
+  commit work-in-progress on a branch, update PROGRESS.md, summarize where things
+  stand and the exact resume command, then stop — do not start new work.
+- To resume in a new session: read PROGRESS.md first, then continue from its
+  "next step".
+
+### Conserving quota (make the subscription last)
+- Reserve the stronger model for planning only (opusplan already does this). Don't
+  ask for Opus-level reasoning on routine implementation.
+- Run `/clear` between features so context doesn't accumulate — large context is
+  the main driver of token burn.
+- Keep plans and diffs scoped to one feature; avoid re-reading the whole codebase
+  when a targeted Grep/Read will do.
+- The reviewer agent only reads diffs, not the full tree — keep it that way.
+
 ## Conventions
 - Swift: SwiftLint defaults, no force-unwraps outside tests, `// MARK:` sections.
 - Shaders live in `Sources/Rendering/Shaders/`, one kernel per file, commented with

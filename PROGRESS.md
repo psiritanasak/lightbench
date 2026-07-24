@@ -56,12 +56,34 @@ Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required to
 close Phase 1): window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-Phase 2 exposure feature is done and verified. Do not start the next Phase 2
-sub-feature (contrast, WB, curves, HSL, or crop) without checking with the
-user first, per "one feature per session." Suggested next: contrast (still a
-simple, no-custom-color-science adjustment) or white balance (next in the
-fixed pipeline order, but more complex — temperature/tint math, likely wants
-its own custom kernel per CLAUDE.md's Stack section).
+**Paused mid-planning for Phase 2, Feature 2 (contrast) — nothing implemented
+yet, no code changes this round.** A full plan (with empirical color-science
+findings already worked out) is saved at
+`/Users/praween/.claude/plans/purring-mapping-pizza.md`. To resume:
+
+1. Read that plan file first.
+2. Enter Plan Mode, present that plan (or refresh it if stale) via
+   `ExitPlanMode`, get the user's go-ahead, then implement.
+
+Summary of what the plan already resolved, so it doesn't need re-deriving:
+contrast can't just use `CIColorControls` directly in this app's linear
+working space — empirically verified that a linear-domain pivot (0.5) crushes
+photographic middle gray (linear ≈0.214) to black at contrast factor 2.0. The
+correct approach is a **perceptual sandwich**: encode linear→sRGB gamma
+(`CILinearToSRGBToneCurve`) → `CIColorControls(contrast:)` → decode back to
+linear (`CISRGBToneCurveToLinear`), applied after exposure. This is a
+*documented deviation* from CLAUDE.md's default linear-light rule (which
+CLAUDE.md explicitly permits). The tone-curve filters are exact inverses and
+don't clamp >1, so exposure's highlight headroom survives. The plan makes this
+encode/decode boundary reusable in `EditPipeline` — curves and HSL (the two
+features after this one) must be added *inside* the same sandwich, not given
+their own, since they have the identical "must be perceptual" property. Full
+worked test values and file-by-file changes are in the plan file.
+
+Do not start any other Phase 2 sub-feature (WB, curves, HSL, crop) instead of
+contrast without checking with the user, per "one feature per session."
 
 ## Open reviewer issues
-None outstanding — last reviewer verdict was APPROVE.
+None outstanding — last reviewer verdict was APPROVE (exposure feature, Phase
+2 Feature 1). Contrast (Feature 2) has not been reviewed — it hasn't been
+implemented yet.

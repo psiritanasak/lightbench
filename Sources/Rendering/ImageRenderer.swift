@@ -15,13 +15,22 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     private let commandQueue: MTLCommandQueue
     private let ciContext: CIContext
 
-    /// Phase 1 renders straight to sRGB for on-screen display. The linear
-    /// working-space conversion mandated by the edit pipeline order in
-    /// CLAUDE.md (decode → WB → exposure → contrast → curves → HSL → crop →
-    /// output transform) slots in here once EditEngine exists (Phase 2).
+    /// Core Image performs all filter math (via `EditPipeline`) in this
+    /// explicitly-defined linear working space (extended-range linear sRGB,
+    /// 16-bit half-float to match the view's `.rgba16Float` drawable). This
+    /// satisfies CLAUDE.md's "all image math in linear light in a defined
+    /// working color space" — the space is defined here rather than relying
+    /// on CIContext's defaults. Extended range preserves highlight/shadow
+    /// headroom created by adjustments like exposure. Conversion to display
+    /// sRGB happens only at final render, via `outputColorSpace` below (the
+    /// "output transform" stage of the fixed pipeline).
+    private let workingColorSpace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)
+        ?? CGColorSpace(name: CGColorSpace.linearSRGB)
+        ?? CGColorSpaceCreateDeviceRGB()
     private let outputColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
     var image: CIImage?
+    var editState: EditState = .identity
 
     init(device: MTLDevice) {
         guard let queue = device.makeCommandQueue() else {
@@ -29,7 +38,10 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
         }
         self.device = device
         self.commandQueue = queue
-        self.ciContext = CIContext(mtlDevice: device)
+        self.ciContext = CIContext(mtlDevice: device, options: [
+            .workingColorSpace: workingColorSpace,
+            .workingFormat: CIFormat.RGBAh
+        ])
         super.init()
     }
 
@@ -41,8 +53,15 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
               let commandBuffer = commandQueue.makeCommandBuffer()
         else { return }
 
+        // MARK: - Edit pipeline
+        let edited = EditPipeline.apply(editState, to: image)
+
+        // Fit/transform against `edited.extent`, not `image.extent`: exposure
+        // doesn't change extent so this is a no-op today, but the future crop
+        // stage will change extent, so this must stay `edited` — don't
+        // "simplify" it back to `image`.
         let drawableSize = view.drawableSize
-        let fitRect = AspectFit.rect(fitting: image.extent.size, in: drawableSize)
+        let fitRect = AspectFit.rect(fitting: edited.extent.size, in: drawableSize)
         guard fitRect.width > 0, fitRect.height > 0 else { return }
 
         // No manual y-flip here. Empirically verified against this exact live
@@ -59,11 +78,11 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
         // MTLTextures (the same shape of destination that misled the earlier
         // test), so that path must be independently re-derived and verified
         // against real output when it's built, not assumed identical to this.
-        let scale = fitRect.width / image.extent.width
-        let transform = CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
+        let scale = fitRect.width / edited.extent.width
+        let transform = CGAffineTransform(translationX: -edited.extent.minX, y: -edited.extent.minY)
             .concatenating(CGAffineTransform(scaleX: scale, y: scale))
             .concatenating(CGAffineTransform(translationX: fitRect.minX, y: fitRect.minY))
-        let fittedImage = image.transformed(by: transform)
+        let fittedImage = edited.transformed(by: transform)
 
         ciContext.render(
             fittedImage,

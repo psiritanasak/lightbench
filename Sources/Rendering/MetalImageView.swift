@@ -4,6 +4,7 @@ import SwiftUI
 /// Displays a `CIImage` in a Metal-backed view, aspect-fit and centered.
 struct MetalImageView: NSViewRepresentable {
     var image: CIImage?
+    var editState: EditState
 
     func makeNSView(context: Context) -> MTKView {
         let renderer = context.coordinator
@@ -18,6 +19,7 @@ struct MetalImageView: NSViewRepresentable {
 
     func updateNSView(_ nsView: MTKView, context: Context) {
         context.coordinator.image = image
+        context.coordinator.editState = editState
         nsView.setNeedsDisplay(nsView.bounds)
     }
 

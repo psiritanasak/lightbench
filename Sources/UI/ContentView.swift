@@ -101,6 +101,28 @@ struct ContentView: View {
                 }
                 .disabled(document.editState.curvesShadows == 0)
             }
+            HStack {
+                Text("Hue")
+                Slider(value: $document.editState.hslHue, in: -180...180)
+                Text(String(format: "%+.0f°", document.editState.hslHue))
+                    .monospacedDigit()
+                    .frame(width: 70, alignment: .trailing)
+                Button("Reset") {
+                    document.editState.hslHue = 0
+                }
+                .disabled(document.editState.hslHue == 0)
+            }
+            HStack {
+                Text("Saturation")
+                Slider(value: $document.editState.hslSaturation, in: -1...1)
+                Text(String(format: "%+.0f%%", document.editState.hslSaturation * 100))
+                    .monospacedDigit()
+                    .frame(width: 70, alignment: .trailing)
+                Button("Reset") {
+                    document.editState.hslSaturation = 0
+                }
+                .disabled(document.editState.hslSaturation == 0)
+            }
         }
         .padding()
         .disabled(document.currentImage == nil)

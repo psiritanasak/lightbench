@@ -36,6 +36,28 @@ struct ContentView: View {
     private var editControls: some View {
         VStack {
             HStack {
+                Text("Temperature")
+                Slider(value: $document.editState.whiteBalanceTemperature, in: 3500...9500)
+                Text(String(format: "%.0fK", document.editState.whiteBalanceTemperature))
+                    .monospacedDigit()
+                    .frame(width: 70, alignment: .trailing)
+                Button("Reset") {
+                    document.editState.whiteBalanceTemperature = 6500
+                }
+                .disabled(document.editState.whiteBalanceTemperature == 6500)
+            }
+            HStack {
+                Text("Tint")
+                Slider(value: $document.editState.whiteBalanceTint, in: -100...100)
+                Text(String(format: "%+.0f", document.editState.whiteBalanceTint))
+                    .monospacedDigit()
+                    .frame(width: 70, alignment: .trailing)
+                Button("Reset") {
+                    document.editState.whiteBalanceTint = 0
+                }
+                .disabled(document.editState.whiteBalanceTint == 0)
+            }
+            HStack {
                 Text("Exposure")
                 Slider(value: $document.editState.exposureEV, in: -5...5)
                 Text(String(format: "%+.2f EV", document.editState.exposureEV))

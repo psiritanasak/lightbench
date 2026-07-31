@@ -7,9 +7,9 @@ import CoreImage.CIFilterBuiltins
 /// decode → WB → exposure → contrast → curves → HSL → crop → output transform.
 /// Decode already happened before this point (the caller loads the file);
 /// output transform (display color space conversion) happens at render time,
-/// outside this type. WB, exposure, contrast, and curves exist today — HSL
-/// and crop stages are not implemented yet and are intentionally absent
-/// rather than stubbed; they'll be inserted here, in order, as they're built.
+/// outside this type. WB, exposure, contrast, curves, and HSL exist today —
+/// only the crop stage is not implemented yet, and is intentionally absent
+/// rather than stubbed; it'll be inserted here, in order, once it's built.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
@@ -83,41 +83,53 @@ enum EditPipeline {
         return filter.outputImage ?? image
     }
 
-    // MARK: - Perceptual domain (contrast, curves, and later HSL)
+    // MARK: - Perceptual domain (contrast, curves, HSL)
 
-    /// Contrast, curves — and later HSL — are applied in the sRGB
-    /// gamma-encoded (perceptual / display-referred) domain, not scene-linear
-    /// light. This is a DOCUMENTED DEVIATION from CLAUDE.md's default "all
-    /// image math in linear light" rule (which CLAUDE.md itself permits when
-    /// documented). Rationale, verified empirically against Core Image's real
-    /// behavior in this app's working space: a linear-light pivot of 0.5 sits
-    /// at ~0.735 perceptual brightness, so a linear-domain contrast pivot
-    /// crushes photographic middle gray (linear ≈0.214) toward black —
-    /// wrong, and unlike every real photo editor. Encoding to sRGB gamma
-    /// first puts the pivot at perceptual middle gray instead. The
-    /// encode/decode tone-curve filters (`encodeToPerceptual`/
-    /// `decodeToLinear`) are exact inverses of each other and do NOT clamp
-    /// values above 1.0, so highlight headroom created by exposure (which
-    /// runs before this step) survives the round-trip back to linear — as
-    /// long as no stage in between clamps it itself. `CIToneCurve` (used by
-    /// `applyCurves` below) DOES clamp to [0,1] once active — see that
-    /// method's comment; the headroom guarantee above is conditional on
-    /// curves being inactive.
+    /// Contrast, curves, and HSL are applied in the sRGB gamma-encoded
+    /// (perceptual / display-referred) domain, not scene-linear light. This
+    /// is a DOCUMENTED DEVIATION from CLAUDE.md's default "all image math in
+    /// linear light" rule (which CLAUDE.md itself permits when documented).
+    /// Rationale, verified empirically against Core Image's real behavior in
+    /// this app's working space: a linear-light pivot of 0.5 sits at ~0.735
+    /// perceptual brightness, so a linear-domain contrast pivot crushes
+    /// photographic middle gray (linear ≈0.214) toward black — wrong, and
+    /// unlike every real photo editor. Encoding to sRGB gamma first puts the
+    /// pivot at perceptual middle gray instead. The encode/decode tone-curve
+    /// filters (`encodeToPerceptual`/`decodeToLinear`) are exact inverses of
+    /// each other and do NOT clamp values above 1.0, so highlight headroom
+    /// created by exposure (which runs before this step) survives the
+    /// round-trip back to linear — as long as no stage in between clamps it
+    /// itself. `CIToneCurve` (used by `applyCurves` below) DOES clamp to
+    /// [0,1] once active — see that method's comment; the headroom guarantee
+    /// above is conditional on curves being inactive. HSL's filters
+    /// (`CIHueAdjust`, `CIColorControls.saturation`), by contrast, do NOT
+    /// clamp — measured: saturation +1 on a 1.4 linear channel reads back as
+    /// 2.57770, not 1.0. Don't assume one adjustment's clamp behavior
+    /// carries to another; each was verified independently.
     ///
     /// Order inside the sandwich matters and is NOT arbitrary: contrast runs
     /// before curves because the two do not commute (measured — the same
-    /// inputs give different results depending on order), and this order
-    /// matches the fixed pipeline (…→contrast→curves→…).
-    ///
-    /// A future HSL stage belongs INSIDE this same encode/decode sandwich
-    /// (extend the guard below), not given its own — it shares the identical
-    /// "must be perceptual" requirement.
+    /// inputs give different results depending on order), and HSL runs after
+    /// curves for the same reason (measured non-commuting case). This
+    /// matches the fixed pipeline (…→contrast→curves→HSL→…). Within HSL,
+    /// hue and saturation ALSO do not commute in general — they only agree
+    /// to within this project's 0.002 test tolerance at modest slider
+    /// values; at wider (still in-range) settings they diverge measurably
+    /// (e.g. hue -90°/saturation +1 on a saturated red gives (0.42335,
+    /// 0.18309, 1.09968) hue-first vs (0.42582, 0.18283, 1.10397)
+    /// saturation-first — a 0.0043 gap). hue-then-saturation is therefore a
+    /// real, fixed requirement, not a discretionary clarity choice — see
+    /// `testHueSaturationOrderIsFixed`.
     private static func applyPerceptualAdjustments(_ state: EditState, to image: CIImage) -> CIImage {
-        guard state.contrast != 0 || curvesActive(state) else { return image } // later: || hsl active
+        guard state.contrast != 0 || curvesActive(state) || hslActive(state) else { return image }
 
         var img = encodeToPerceptual(image)
         if state.contrast != 0 { img = applyContrast(state.contrast, to: img) }
         if curvesActive(state) { img = applyCurves(state, to: img) }
+        if hslActive(state) {
+            if state.hslHue != 0 { img = applyHue(state.hslHue, to: img) }
+            if state.hslSaturation != 0 { img = applySaturation(state.hslSaturation, to: img) }
+        }
         img = decodeToLinear(img)
         return img
     }
@@ -172,6 +184,38 @@ enum EditPipeline {
         filter.point2 = CGPoint(x: 0.5, y: 0.5)
         filter.point3 = CGPoint(x: 0.75, y: 0.75 + state.curvesHighlights * kCurvePointSpan)
         filter.point4 = CGPoint(x: 1, y: 1)
+        return filter.outputImage ?? image
+    }
+
+    // MARK: - HSL (global hue & saturation)
+
+    private static func hslActive(_ state: EditState) -> Bool {
+        state.hslHue != 0 || state.hslSaturation != 0
+    }
+
+    /// Global hue rotation. `degrees` maps directly to `CIHueAdjust`'s
+    /// `angle` (converted to radians) — no sign inversion needed, unlike
+    /// white balance's filter parameters; the raw filter's rotation
+    /// direction already matches on-screen expectation (measured).
+    private static func applyHue(_ degrees: Double, to image: CIImage) -> CIImage {
+        let filter = CIFilter.hueAdjust()
+        filter.inputImage = image
+        filter.angle = Float(degrees * .pi / 180)
+        return filter.outputImage ?? image
+    }
+
+    /// Global saturation via Core Image's color-controls filter — a
+    /// SEPARATE instance from `applyContrast`'s, since fusing the two into
+    /// one filter call would apply them simultaneously rather than in the
+    /// pipeline's required contrast-then-HSL order. `hslSaturation` (-1...1)
+    /// maps to the filter's native `1 + hslSaturation` factor (0...2),
+    /// mirroring contrast's mapping. Unlike `applyCurves`, this does NOT
+    /// clamp highlight headroom — measured: a 1.4 linear input at
+    /// saturation +1 reads back as 2.57770, not clamped to 1.0.
+    private static func applySaturation(_ saturation: Double, to image: CIImage) -> CIImage {
+        let filter = CIFilter.colorControls()
+        filter.inputImage = image
+        filter.saturation = Float(1 + saturation)
         return filter.outputImage ?? image
     }
 

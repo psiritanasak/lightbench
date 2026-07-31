@@ -58,6 +58,26 @@ struct EditState: Equatable, Codable {
     /// limitation — see `EditPipeline` and the curve headroom tests).
     var curvesHighlights: Double = 0
 
+    // MARK: - HSL (global hue & saturation)
+
+    /// Global hue rotation in degrees, -180...180, 0 is identity. Rotates all
+    /// colors around the color wheel. Applied in the perceptual sRGB-gamma
+    /// domain, after curves, via `CIHueAdjust` (whose angle is radians —
+    /// `EditPipeline` maps degrees→radians). On-screen direction is measured
+    /// against the real filter, not assumed — see `EditPipeline`.
+    var hslHue: Double = 0
+
+    /// Global saturation, -1...1, 0 is identity. -1 is fully desaturated
+    /// (grayscale), positive increases saturation. Maps to `CIColorControls`'
+    /// `saturation` factor of `1 + hslSaturation` (range -1...1 → factor
+    /// 0...2), applied in the perceptual sRGB-gamma domain, after curves —
+    /// see `EditPipeline`. NOT a Lightness slider: global lightness would
+    /// duplicate exposure and the curves shadow/highlight controls, so it's
+    /// intentionally omitted (same reasoning curves omitted a midtones
+    /// slider). Unlike curves, HSL does NOT clamp highlight headroom
+    /// (measured).
+    var hslSaturation: Double = 0
+
     /// The no-op edit state: every adjustment at its default (identity) value.
     static let identity = EditState()
 }

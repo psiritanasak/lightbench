@@ -7,7 +7,7 @@ import CoreImage.CIFilterBuiltins
 /// decode → WB → exposure → contrast → curves → HSL → crop → output transform.
 /// Decode already happened before this point (the caller loads the file);
 /// output transform (display color space conversion) happens at render time,
-/// outside this type. WB, exposure, and contrast exist today — curves, HSL,
+/// outside this type. WB, exposure, contrast, and curves exist today — HSL
 /// and crop stages are not implemented yet and are intentionally absent
 /// rather than stubbed; they'll be inserted here, in order, as they're built.
 enum EditPipeline {
@@ -83,9 +83,9 @@ enum EditPipeline {
         return filter.outputImage ?? image
     }
 
-    // MARK: - Perceptual domain (contrast, and later curves + HSL)
+    // MARK: - Perceptual domain (contrast, curves, and later HSL)
 
-    /// Contrast — and later curves and HSL — are applied in the sRGB
+    /// Contrast, curves — and later HSL — are applied in the sRGB
     /// gamma-encoded (perceptual / display-referred) domain, not scene-linear
     /// light. This is a DOCUMENTED DEVIATION from CLAUDE.md's default "all
     /// image math in linear light" rule (which CLAUDE.md itself permits when
@@ -94,19 +94,30 @@ enum EditPipeline {
     /// at ~0.735 perceptual brightness, so a linear-domain contrast pivot
     /// crushes photographic middle gray (linear ≈0.214) toward black —
     /// wrong, and unlike every real photo editor. Encoding to sRGB gamma
-    /// first puts the pivot at perceptual middle gray instead. The tone-curve
-    /// filters below are exact inverses of each other and do NOT clamp
+    /// first puts the pivot at perceptual middle gray instead. The
+    /// encode/decode tone-curve filters (`encodeToPerceptual`/
+    /// `decodeToLinear`) are exact inverses of each other and do NOT clamp
     /// values above 1.0, so highlight headroom created by exposure (which
-    /// runs before this step) survives the round-trip back to linear.
+    /// runs before this step) survives the round-trip back to linear — as
+    /// long as no stage in between clamps it itself. `CIToneCurve` (used by
+    /// `applyCurves` below) DOES clamp to [0,1] once active — see that
+    /// method's comment; the headroom guarantee above is conditional on
+    /// curves being inactive.
     ///
-    /// Future curves/HSL stages belong INSIDE this same encode/decode
-    /// sandwich (extend the guard below), not given their own — they share
-    /// the identical "must be perceptual" requirement.
+    /// Order inside the sandwich matters and is NOT arbitrary: contrast runs
+    /// before curves because the two do not commute (measured — the same
+    /// inputs give different results depending on order), and this order
+    /// matches the fixed pipeline (…→contrast→curves→…).
+    ///
+    /// A future HSL stage belongs INSIDE this same encode/decode sandwich
+    /// (extend the guard below), not given its own — it shares the identical
+    /// "must be perceptual" requirement.
     private static func applyPerceptualAdjustments(_ state: EditState, to image: CIImage) -> CIImage {
-        guard state.contrast != 0 else { return image } // later: || curves active || hsl active
+        guard state.contrast != 0 || curvesActive(state) else { return image } // later: || hsl active
 
         var img = encodeToPerceptual(image)
-        img = applyContrast(state.contrast, to: img)
+        if state.contrast != 0 { img = applyContrast(state.contrast, to: img) }
+        if curvesActive(state) { img = applyCurves(state, to: img) }
         img = decodeToLinear(img)
         return img
     }
@@ -121,6 +132,46 @@ enum EditPipeline {
         let filter = CIFilter.colorControls()
         filter.inputImage = image
         filter.contrast = Float(1 + contrast)
+        return filter.outputImage ?? image
+    }
+
+    // MARK: - Curves
+
+    /// Slider-to-control-point span, measured to give a strong-but-monotone
+    /// curve across the full -1...1 slider range.
+    private static let kCurvePointSpan: Double = 0.15
+
+    private static func curvesActive(_ state: EditState) -> Bool {
+        state.curvesShadows != 0 || state.curvesHighlights != 0
+    }
+
+    /// A simplified, Lightroom-Basic-panel-style parametric tone curve: two
+    /// sliders (Shadows, Highlights) each move one control point of a
+    /// 5-point `CIToneCurve` spline, rather than exposing a full interactive
+    /// point-based curve editor (out of scope for this feature; see
+    /// EditState's doc comments for the field-level rationale).
+    ///
+    /// KNOWN, MEASURED, DOCUMENTED LIMITATION: `CIToneCurve` builds an
+    /// internal LUT clamped to [0,1] the moment it's non-identity, so any
+    /// active curve adjustment collapses linear values above 1.0 (e.g.
+    /// highlight headroom created by a prior exposure boost) to white. This
+    /// includes headroom contrast itself would otherwise have preserved (see
+    /// `applyPerceptualAdjustments`'s comment) — enabling curves changes
+    /// contrast's headroom guarantee. Accepted for this feature: it only
+    /// affects already-very-bright pixels, only when a curve is actively
+    /// engaged, and behaves like a defensible highlight-recovery clip rather
+    /// than a visible artifact. A custom Metal kernel with linear
+    /// extrapolation beyond x=1 (anticipated by CLAUDE.md's Stack note:
+    /// "custom kernels for curves, HSL, WB") would remove this limitation
+    /// and is explicitly deferred as future work, not built now.
+    private static func applyCurves(_ state: EditState, to image: CIImage) -> CIImage {
+        let filter = CIFilter.toneCurve()
+        filter.inputImage = image
+        filter.point0 = CGPoint(x: 0, y: 0)
+        filter.point1 = CGPoint(x: 0.25, y: 0.25 + state.curvesShadows * kCurvePointSpan)
+        filter.point2 = CGPoint(x: 0.5, y: 0.5)
+        filter.point3 = CGPoint(x: 0.75, y: 0.75 + state.curvesHighlights * kCurvePointSpan)
+        filter.point4 = CGPoint(x: 1, y: 1)
         return filter.outputImage ?? image
     }
 

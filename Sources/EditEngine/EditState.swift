@@ -38,6 +38,26 @@ struct EditState: Equatable, Codable {
     /// scene-linear — see `EditPipeline`. UI range: -1...1.
     var contrast: Double = 0
 
+    // MARK: - Curves (parametric tone)
+
+    /// Parametric shadow-tone adjustment, -1...1, 0 is identity. Positive
+    /// lifts (brightens) shadows, negative crushes them. Applied in the
+    /// perceptual sRGB-gamma domain, after contrast, by raising/lowering the
+    /// shadow control point (x=0.25) of a `CIToneCurve` spline — see
+    /// `EditPipeline`. The effect is weighted toward deep shadows and tapers
+    /// through the midtones.
+    var curvesShadows: Double = 0
+
+    /// Parametric highlight-tone adjustment, -1...1, 0 is identity. Positive
+    /// lifts (brightens) highlights, negative recovers (darkens) them.
+    /// Applied in the perceptual sRGB-gamma domain, after contrast, by
+    /// raising/lowering the highlight control point (x=0.75) of a
+    /// `CIToneCurve` spline — see `EditPipeline`. NOTE: because `CIToneCurve`
+    /// clamps its domain to [0,1], enabling any curve adjustment clips
+    /// highlight headroom above linear 1.0 to white (measured, documented
+    /// limitation — see `EditPipeline` and the curve headroom tests).
+    var curvesHighlights: Double = 0
+
     /// The no-op edit state: every adjustment at its default (identity) value.
     static let identity = EditState()
 }

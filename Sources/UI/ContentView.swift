@@ -79,6 +79,28 @@ struct ContentView: View {
                 }
                 .disabled(document.editState.contrast == 0)
             }
+            HStack {
+                Text("Highlights")
+                Slider(value: $document.editState.curvesHighlights, in: -1...1)
+                Text(String(format: "%+.0f%%", document.editState.curvesHighlights * 100))
+                    .monospacedDigit()
+                    .frame(width: 70, alignment: .trailing)
+                Button("Reset") {
+                    document.editState.curvesHighlights = 0
+                }
+                .disabled(document.editState.curvesHighlights == 0)
+            }
+            HStack {
+                Text("Shadows")
+                Slider(value: $document.editState.curvesShadows, in: -1...1)
+                Text(String(format: "%+.0f%%", document.editState.curvesShadows * 100))
+                    .monospacedDigit()
+                    .frame(width: 70, alignment: .trailing)
+                Button("Reset") {
+                    document.editState.curvesShadows = 0
+                }
+                .disabled(document.editState.curvesShadows == 0)
+            }
         }
         .padding()
         .disabled(document.currentImage == nil)

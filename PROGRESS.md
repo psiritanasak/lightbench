@@ -3,18 +3,19 @@
 ## Current phase
 Phase 2 (Edit engine) — **v1 of all six original roadmap items shipped**
 (exposure, contrast, white balance, curves, HSL, crop), each reviewer-approved
-and manually verified live. The roadmap in CLAUDE.md was just expanded (at
-the user's request) to spell out the fuller scope each of those items still
-has, plus a new item — none of the additions below are built yet:
-- Whites/blacks clipping-point sliders (rounds out Basic tone w/ exposure/contrast)
-- Curves v2: full interactive draggable point-curve editor (v1 = 2-slider approximation)
-- HSL v2: per-color-band panel, 8 bands × H/S/L = 24 params (v1 = global hue+sat)
-- Crop v2: interactive drag-handle overlay, aspect presets, straighten (v1 = 4 inset sliders)
-- Transform/Distort (new): perspective correction, lens distortion correction,
-  straighten/rotate — runs before crop in the fixed pipeline order
+and manually verified live. The roadmap in CLAUDE.md was expanded twice at the
+user's request to spell out the fuller scope: first adding Transform/Distort
+and v2 notes for curves/HSL/crop, then a second pass using Apple Photos'
+adjustment panel (screenshots the user shared) as a completeness reference.
+Full detail lives in CLAUDE.md's "Phase 2 edit engine backlog" section — do
+not duplicate it here, just read it there. Summary of what's NOT built yet:
+Brightness, Black Point, Brilliance, Vibrance, Cast, Black & White mode,
+Red-Eye removal, a WB neutral-gray eyedropper, Levels, Definition/Clarity,
+Selective Color (= HSL v2, per-band panel), Noise Reduction, Sharpen,
+Vignette, Transform/Distort, and Crop v2 (interactive overlay).
 
-Not yet decided which of these to build next — needs a Plan Mode session per
-feature as usual, one at a time. Phase 3 (non-destructive pipeline: param
+Not yet decided which to build next — needs a Plan Mode session per feature
+as usual, one at a time. Phase 3 (non-destructive pipeline: param
 serialization, edit history, undo) remains after Phase 2's expanded scope is
 done, and also needs its own explicit go-ahead when reached.
 

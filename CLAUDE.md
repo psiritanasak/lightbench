@@ -26,23 +26,7 @@ Edits are stored as parameter sets and rendered live on the GPU.
 ## Roadmap (build strictly in this order)
 1. Foundation: Xcode project, open + display an image in a Metal-backed view
 2. Edit engine: exposure, contrast, white balance, curves, HSL, crop, transform/distort
-   - Basic tone: exposure ✅, contrast ✅. Whites/blacks clipping-point sliders —
-     not built (would round out the Basic tone group alongside exposure/contrast).
-   - White balance: temperature + tint ✅.
-   - Curves: ✅ v1 shipped as simplified parametric Shadows/Highlights sliders
-     (2 control points of a tone-curve spline). v2 (not built): full interactive
-     draggable point-curve editor.
-   - HSL: ✅ v1 shipped as global Hue + Saturation sliders. v2 (not built):
-     per-color-band panel (8 bands × Hue/Saturation/Luminance = 24 params),
-     matching Lightroom's HSL panel.
-   - Crop: ✅ v1 shipped as four numeric inset sliders (top/bottom/left/right).
-     v2 (not built): interactive drag-handle crop rectangle overlaid on the
-     image, aspect-ratio presets, straighten.
-   - Transform/Distort — not built: perspective correction, lens distortion
-     correction, straighten/rotate. Geometric like crop; runs before crop in
-     the fixed pipeline order (see Architecture principles above).
-   - Not in scope for Phase 2 unless added explicitly later: sharpening, noise
-     reduction, vignette, dehaze/clarity — none are named in this roadmap today.
+   — see detailed backlog below (grown from the original 6 items after review)
 3. Non-destructive pipeline: param serialization, edit history, undo
 4. Library: import, catalog DB, thumbnail grid, ratings/flags, collections
 5. Presets + export: save/apply presets, batch export (resize, quality, format)
@@ -50,6 +34,49 @@ Edits are stored as parameter sets and rendered live on the GPU.
 7. Polish: tiled rendering for large images, perf, edge cases
 
 One feature per session. Do not start a later phase while an earlier one has open issues.
+
+### Phase 2 edit engine backlog
+Grouped to match Apple Photos' adjustment panel (used 2026-07-31 as a reference for
+completeness — a mature, shipping editor's full control set). ✅ = shipped (v1, may be
+a simplified version — see note); everything else is not built yet. Pick ONE at a time,
+each gets its own Plan Mode session per the workflow rules below.
+
+- **Light (tone):** Exposure ✅, Contrast ✅. Not built: Brightness (additive lightness,
+  distinct from Exposure's multiplicative linear-light gain), Black Point (shadow
+  clipping point), Brilliance (Apple's composite auto-adjustment blending several tone
+  controls at once — lowest priority, may skip as redundant with the others).
+  Shadows/Highlights currently live under Curves v1 below rather than as dedicated
+  Light-group sliders — revisit whether to split them out once Levels/Curves v2 lands.
+- **Color:** Saturation ✅ (global, under HSL v1 below). Not built: Vibrance (saturation
+  that protects already-saturated tones and skin tones — a different algorithm from
+  plain saturation, not just a rename), Cast (color-cast neutralization, distinct from
+  White Balance's temperature/tint).
+- **Black & White:** not built — monochrome conversion mode.
+- **Red-Eye:** not built — likely needs a point-and-click UI, a different interaction
+  model from every slider-based adjustment built so far.
+- **White Balance:** Temperature + Tint ✅. Not built: "pick a neutral gray" eyedropper.
+- **Curves:** ✅ v1 shipped as simplified parametric Shadows/Highlights sliders (2
+  control points of a `CIToneCurve` spline — known limitation: clamps highlight
+  headroom above linear 1.0 when active, see `EditPipeline.applyCurves`). v2 not built:
+  full interactive draggable RGB point-curve editor.
+- **Levels:** not built — black-point/white-point/gamma sliders with a live histogram;
+  distinct tool from Curves despite overlapping purpose.
+- **Definition (Clarity):** not built — local-contrast enhancement.
+- **Selective Color:** this is HSL v2 — per-color-band Hue/Saturation/Luminance panel
+  with a Range parameter (8 bands × 3 = 24 params), not yet built (v1 below is
+  global-only).
+- **HSL:** ✅ v1 shipped as global Hue + Saturation sliders (no Lightness — would
+  duplicate Exposure/Curves). v2 = Selective Color above.
+- **Noise Reduction:** not built.
+- **Sharpen:** not built — parametric (Intensity/Edges/Falloff-style).
+- **Vignette:** not built — parametric (Strength/Radius/Softness-style).
+- **Transform/Distort:** not built — perspective correction, lens distortion correction,
+  straighten/rotate. Geometric like crop; runs before crop in the fixed pipeline order
+  (see Architecture principles above).
+- **Crop:** ✅ v1 shipped as four numeric inset sliders (Top/Bottom/Left/Right). v2 not
+  built: interactive drag-handle crop rectangle overlaid on the image, aspect-ratio
+  presets, straighten (may fold into Transform/Distort's straighten instead of
+  duplicating it — decide when planning that feature).
 
 ## Workflow rules (important)
 - Model is `opusplan`: ALWAYS enter Plan Mode before starting a new feature so the

@@ -1,7 +1,7 @@
 # Progress
 
 ## Current phase
-Phase 2 — Edit engine: exposure, contrast, and white balance done; curves,
+Phase 2 — Edit engine: exposure, contrast, white balance, and curves done;
 HSL, crop not yet started. User has requested all remaining Phase 2 features
 be done sequentially in this session, each with full rigor (Plan Mode +
 empirical color-math verification where needed + tests + reviewer + commit) —
@@ -91,33 +91,69 @@ oversight.
 - All 31 tests pass (6 AspectFit + 25 EditPipeline); 2 commits (color-math,
   then UI); user manually confirmed live, including after the Kelvin pivot —
   dragging Temperature right visibly warms the photo, matching Lightroom.
-- 15 commits total on `master`.
+
+### Phase 2, Feature 4 — Curves (parametric shadows/highlights) (complete, verified live)
+- `Sources/EditEngine/EditState.swift` — `curvesShadows`, `curvesHighlights`
+  (both -1...1, default 0), added after `contrast`.
+- `Sources/EditEngine/EditPipeline.swift` — curves runs inside the existing
+  perceptual sandwich, **after contrast** (measured non-commutative: reversed
+  order gives a different result for the same inputs — 0.84872 vs 1.59067 at
+  one test point). Scoped as two sliders (Highlights, Shadows) each moving one
+  control point of Core Image's `CIToneCurve` (a 5-point spline), matching
+  Lightroom's simplified Basic-panel tone controls rather than a full
+  interactive point-based curve editor — consistent scope with every other
+  Phase 2 feature.
+- **Known, measured, documented limitation**: `CIToneCurve` clamps its domain
+  to [0,1] the moment it's non-identity, so enabling any curve adjustment
+  collapses highlight headroom above linear 1.0 — including headroom contrast
+  alone would otherwise preserve — to white. Confirmed via diagnostic script,
+  independently re-confirmed by the reviewer, who also stress-tested the
+  obvious "cheap" workaround (split off headroom, curve only the safe range,
+  recombine) and found it **silently corrupts alpha** via premultiplication
+  math — concretely validating that shipping the clamp as a documented v1
+  limitation and deferring a custom Metal kernel (per CLAUDE.md's Stack note:
+  "custom kernels for curves, HSL, WB") is the right tradeoff, not a shortcut.
+  Two tests (`testCurvesClampHighlightHeadroom`,
+  `testContrastHeadroomLostWhenCurveActive`) pin this as an intentional
+  regression guard, not just documentation.
+- Highlights/Shadows sliders (bottom bar, -1...1, live % readout), after
+  Contrast.
+- 10 new curves tests using values measured from the real filter (chromatic
+  spline behavior has no closed-form transfer function to hand-derive
+  against). All 40 tests pass (6 AspectFit + 34 EditPipeline); 2 commits
+  (color-math, then UI); user manually confirmed live — both sliders produce
+  visible, monotonic, controllable tonal shaping.
+- 18 commits total on `master`.
 
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Continuing directly to curves** (per the user's "do it all, sequentially,
-full rigor" instruction — no need to re-ask before starting it). After curves:
-HSL, then crop.
+**Continuing directly to HSL** (per the user's "do it all, sequentially, full
+rigor" instruction — no need to re-ask before starting it). After HSL: crop.
 
 **Important architectural notes carried forward:**
 - The perceptual sandwich (`applyPerceptualAdjustments` in
-  `Sources/EditEngine/EditPipeline.swift`) already exists for contrast —
-  curves and HSL must extend its guard condition and run *inside* it (between
-  the existing encode/decode calls), not build their own.
-- The curves session must independently re-verify highlight-headroom survival
-  with whatever curve filter it uses — `CIToneCurve` (the likely candidate)
-  clamps to [0,1] control points, unlike the unclamped tone-curve filters used
-  for contrast, so this can't be assumed to carry over; may need a custom
-  kernel per CLAUDE.md's Stack section.
-- White balance's two-inversion episode is a good reminder: whenever a filter
-  parameter or UI convention has an established "obvious" direction (compass
-  headings, Kelvin, percentages), verify it against the real filter and real
-  editor conventions rather than assuming — this project has now hit this
-  exact class of bug three times (y-flip, contrast pivot, WB signs x2).
+  `Sources/EditEngine/EditPipeline.swift`) now guards on
+  `contrast != 0 || curvesActive(state)` — HSL must extend this further
+  (`|| hslActive(state)`) and apply itself conditionally inside (the
+  established per-stage-`if` pattern), not build its own sandwich.
+- **HSL will likely inherit the same [0,1] clamp** if it uses a stock filter
+  in the same sandwich — but the "ship stock, document, defer the kernel"
+  precedent from curves should be re-evaluated, not blindly repeated: a
+  saturation boost on bright highlights more plausibly *wants* headroom than
+  a tone curve does. Verify empirically what HSL's actual filter does before
+  deciding.
+- Reuse the "find a non-commuting case to prove pipeline position" test
+  pattern (worked for WB↔contrast and contrast↔curves) for HSL's own ordering
+  test against curves.
+- This project has now hit "verify the sign/direction/behavior empirically,
+  don't assume" as a load-bearing pattern four times (y-flip, contrast pivot,
+  WB signs ×2, curves clamping) — keep defaulting to diagnostic scripts over
+  documentation-reading or intuition for any new filter.
 
 ## Open reviewer issues
-None outstanding — last reviewer verdict was APPROVE (white balance feature,
-Phase 2 Feature 3, verified after the Kelvin-scale pivot).
+None outstanding — last reviewer verdict was APPROVE (curves feature, Phase 2
+Feature 4; reviewer independently reproduced all measured test values and
+stress-tested the clamp-avoidance alternative before approving).

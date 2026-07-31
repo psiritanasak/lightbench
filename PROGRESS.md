@@ -1,12 +1,13 @@
 # Progress
 
 ## Current phase
-Phase 2 — Edit engine: exposure, contrast, white balance, curves, and HSL
-done; only crop remains. User has requested all remaining Phase 2 features be
-done sequentially in this session, each with full rigor (Plan Mode +
-empirical color-math verification where needed + tests + reviewer + commit) —
-this is a deliberate, explicit override of "one feature per session," not an
-oversight.
+**Phase 2 (Edit engine) is COMPLETE.** All six roadmap items shipped:
+exposure, contrast, white balance, curves, HSL, crop — each reviewer-approved
+and manually verified live. Phase 3 (non-destructive pipeline: param
+serialization, edit history, undo) is next per CLAUDE.md's roadmap, but has
+NOT been started and needs its own Plan Mode session + explicit user
+go-ahead — the "do it all" instruction covered Phase 2's remaining features
+specifically, not an open-ended continuation into Phase 3.
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
@@ -155,39 +156,81 @@ oversight.
   the real filters. All 49 tests pass (6 AspectFit + 43 EditPipeline); 2
   commits (color-math + fix, then UI); user manually confirmed live — hue
   rotates colors around the wheel, saturation ranges grayscale to punchier.
-- 21 commits total on `master`.
+
+### Phase 2, Feature 6 — Crop (final Phase 2 feature) (complete, verified live)
+- `Sources/EditEngine/EditState.swift` — `cropInsetTop`/`Bottom`/`Left`/`Right`
+  (all 0...0.45, default 0), added after `hslSaturation`. Struct does NOT
+  itself enforce the range (documented) — `EditPipeline` clamps on every use.
+- `Sources/EditEngine/EditPipeline.swift` — `applyCrop` is the final pipeline
+  stage, after the perceptual sandwich (pure geometry, no color-space
+  concerns — unlike every other Phase 2 feature). Unlike those features, this
+  plan was designed directly rather than via a dispatched Plan agent (given
+  this session hit a spend limit once already, and crop's risk profile is
+  much lower — close analog to `AspectFit`, no Core Image diagnostics needed).
+  Coordinate-direction claim ("top inset" trims the high-y portion of
+  `CIImage`'s coordinate space) was verified empirically before writing code,
+  then pinned with unit tests using a quadrant-colored synthetic image rather
+  than just extent-number checks.
+- **A real bug was found and fixed during live manual testing** (not caught
+  by any unit test, since it's a live-rendering-only artifact): dragging the
+  crop sliders continuously produced repeated/tiled strips of the image
+  instead of a clean single crop. Root cause: `ImageRenderer.draw(in:)`
+  renders directly into `drawable.texture`, bypassing MTKView's normal clear
+  pass; before crop, the fitted image always filled at least one full
+  dimension of the drawable, so uncovered margins never mattered. Crop is the
+  first stage that can shrink the fitted image on both axes at once, and
+  MTKView's buffered drawables retained stale content from earlier frames of
+  the same drag in those margins. Fixed by compositing the fitted image over
+  an explicit full-bounds black background every frame
+  (`Sources/Rendering/ImageRenderer.swift`). Verified live after the fix —
+  clean single crop, correct on all four sides. Reviewer confirmed the fix is
+  sound and color-space-invariant, noted a cheaper hardware-clear alternative
+  exists but isn't necessary before Phase 7's perf work.
+- Four crop inset sliders (bottom bar, last of 12 total rows — the control
+  panel is now wrapped in a `ScrollView` to stay usable).
+- 8 new crop tests, including a quadrant-image coordinate-direction proof.
+  All 57 tests pass (6 AspectFit + 51 EditPipeline); 3 commits (crop
+  color/geometry math, the rendering fix as its own commit, then UI).
+- 24 commits total on `master`.
 
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Continuing directly to crop** — the last Phase 2 feature (per the user's
-"do it all, sequentially, full rigor" instruction — no need to re-ask before
-starting it). After crop, Phase 2 is fully complete.
+**Phase 2 is done.** Do not start Phase 3 (non-destructive pipeline: param
+serialization, edit history, undo) without the user's explicit go-ahead — the
+"do it all" instruction this session was scoped to Phase 2's remaining
+features specifically, and starting a new phase always needs its own Plan
+Mode session per CLAUDE.md's roadmap-order rule regardless.
 
-**Important architectural notes carried forward:**
-- Crop is architecturally low-risk relative to the color-math features: it
-  changes *extent*, not tone/color, and `ImageRenderer.draw(in:)` already
-  fits against `edited.extent` (not `image.extent`) specifically to be
-  crop-ready — this was set up deliberately back in the exposure feature.
-- Crop runs after HSL, outside the perceptual sandwich (…→HSL→crop→output) —
-  it does not touch `applyPerceptualAdjustments` at all.
-- This project has now hit "verify the sign/direction/behavior empirically,
-  don't assume" as a load-bearing pattern five times (y-flip, contrast pivot,
-  WB signs ×2, curves clamping, HSL commutativity) — keep defaulting to
-  diagnostic scripts over documentation-reading or intuition for anything
-  with geometric/coordinate semantics too (crop rect origin/orientation is a
-  plausible place for exactly this class of bug, given the y-flip precedent
-  in `ImageRenderer`).
+**Patterns worth carrying into Phase 3 and beyond:**
+- This project hit "verify the sign/direction/behavior empirically, don't
+  assume" as a load-bearing pattern SIX times across Phase 2 (y-flip,
+  contrast pivot, WB signs ×2, curves clamping, HSL commutativity, and now
+  the crop coordinate-direction check that was verified proactively and
+  passed). Keep defaulting to diagnostic scripts/live testing over
+  documentation-reading or intuition for anything with coordinate, sign, or
+  GPU-buffering semantics.
+- **Not every bug is caught by unit tests** — the crop tiling bug was a
+  live-rendering-only artifact (multi-frame GPU buffer staleness) invisible
+  to any offscreen test, including the project's own established
+  offscreen-diagnostic technique. Manual live verification (the "drag
+  continuously, not just single clicks" step) is what caught it. Keep doing
+  real interactive testing, not just static single-state checks, for any
+  future rendering-path change.
 - When delegating empirical work to a spawned Plan-type agent, it will very
   likely need an explicit reminder that Plan Mode's read-only restriction
-  applies to the top-level orchestrating agent, not to it — this has now
-  happened twice (white balance, HSL) and cost a full extra round-trip both
-  times. Front-load that reminder in the initial prompt, not just after it
+  applies to the top-level orchestrating agent, not to it — this happened
+  twice (white balance, HSL) and cost a full extra round-trip both times.
+  Front-load that reminder in the initial prompt, not just after it
   hesitates.
+- Not every feature needs a dispatched Plan agent — crop was designed
+  directly given its low, well-understood risk profile and this session's
+  spend-limit sensitivity. Use judgment: color-math/domain questions need
+  empirical Plan-agent investigation; pure-geometry or already-established
+  patterns (like `AspectFit`) don't.
 
 ## Open reviewer issues
-None outstanding — last reviewer verdict was APPROVE (HSL feature, Phase 2
-Feature 5; reviewer verified the fix by actually reversing the code and
-confirming the new test catches it).
+None outstanding — last reviewer verdict was APPROVE (crop feature + the
+rendering fix, Phase 2 Feature 6 — the final Phase 2 feature).

@@ -1,9 +1,9 @@
 # Progress
 
 ## Current phase
-Phase 2 — Edit engine: exposure, contrast, white balance, and curves done;
-HSL, crop not yet started. User has requested all remaining Phase 2 features
-be done sequentially in this session, each with full rigor (Plan Mode +
+Phase 2 — Edit engine: exposure, contrast, white balance, curves, and HSL
+done; only crop remains. User has requested all remaining Phase 2 features be
+done sequentially in this session, each with full rigor (Plan Mode +
 empirical color-math verification where needed + tests + reviewer + commit) —
 this is a deliberate, explicit override of "one feature per session," not an
 oversight.
@@ -123,37 +123,71 @@ oversight.
   against). All 40 tests pass (6 AspectFit + 34 EditPipeline); 2 commits
   (color-math, then UI); user manually confirmed live — both sliders produce
   visible, monotonic, controllable tonal shaping.
-- 18 commits total on `master`.
+
+### Phase 2, Feature 5 — HSL (global hue + saturation) (complete, verified live)
+- `Sources/EditEngine/EditState.swift` — `hslHue` (-180...180°, default 0) and
+  `hslSaturation` (-1...1, default 0), added after `curvesHighlights`.
+- `Sources/EditEngine/EditPipeline.swift` — HSL runs inside the perceptual
+  sandwich, **after curves** (measured non-commutative, like contrast↔curves).
+  Scoped as two sliders (global Hue, global Saturation) rather than a
+  per-color-band professional HSL panel (8 bands × 3 params — an order of
+  magnitude more surface with no analog in anything shipped). Lightness
+  intentionally omitted: would duplicate exposure + curves' shadow/highlight
+  lift (same reasoning curves used to skip a midtones slider).
+- **Headline finding, verified not assumed**: unlike curves, HSL does NOT
+  clamp highlight headroom — `CIHueAdjust` and `CIColorControls.saturation`
+  are matrix/blend ops with no internal [0,1] LUT (measured: saturation +1 on
+  a 1.4 channel → 2.57770, not clamped). Confirms the curves plan's own
+  warning not to blindly repeat its clamp precedent for HSL. Hue's raw
+  rotation direction already matched on-screen intuition — no sign inversion
+  needed (unlike white balance's two).
+- **A first reviewer pass caught a real gap**: the initial claim "hue and
+  saturation commute" only held at modest slider values, untested at the
+  actual slider range, where the two measurably diverge (~0.0043 at hue
+  -90°/sat +1, over 2x the test tolerance) even though the shipped order is
+  fixed. Fixed by correcting the doc comment and adding
+  `testHueSaturationOrderIsFixed` as a real regression guard — the reviewer
+  verified this by temporarily reversing the code's internal order and
+  confirming the test failed with the exact predicted values, then restoring
+  it.
+- Hue/Saturation sliders (bottom bar, after Shadows).
+- 9 new HSL tests (+1 from the review fix = 10) using values measured from
+  the real filters. All 49 tests pass (6 AspectFit + 43 EditPipeline); 2
+  commits (color-math + fix, then UI); user manually confirmed live — hue
+  rotates colors around the wheel, saturation ranges grayscale to punchier.
+- 21 commits total on `master`.
 
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Continuing directly to HSL** (per the user's "do it all, sequentially, full
-rigor" instruction — no need to re-ask before starting it). After HSL: crop.
+**Continuing directly to crop** — the last Phase 2 feature (per the user's
+"do it all, sequentially, full rigor" instruction — no need to re-ask before
+starting it). After crop, Phase 2 is fully complete.
 
 **Important architectural notes carried forward:**
-- The perceptual sandwich (`applyPerceptualAdjustments` in
-  `Sources/EditEngine/EditPipeline.swift`) now guards on
-  `contrast != 0 || curvesActive(state)` — HSL must extend this further
-  (`|| hslActive(state)`) and apply itself conditionally inside (the
-  established per-stage-`if` pattern), not build its own sandwich.
-- **HSL will likely inherit the same [0,1] clamp** if it uses a stock filter
-  in the same sandwich — but the "ship stock, document, defer the kernel"
-  precedent from curves should be re-evaluated, not blindly repeated: a
-  saturation boost on bright highlights more plausibly *wants* headroom than
-  a tone curve does. Verify empirically what HSL's actual filter does before
-  deciding.
-- Reuse the "find a non-commuting case to prove pipeline position" test
-  pattern (worked for WB↔contrast and contrast↔curves) for HSL's own ordering
-  test against curves.
+- Crop is architecturally low-risk relative to the color-math features: it
+  changes *extent*, not tone/color, and `ImageRenderer.draw(in:)` already
+  fits against `edited.extent` (not `image.extent`) specifically to be
+  crop-ready — this was set up deliberately back in the exposure feature.
+- Crop runs after HSL, outside the perceptual sandwich (…→HSL→crop→output) —
+  it does not touch `applyPerceptualAdjustments` at all.
 - This project has now hit "verify the sign/direction/behavior empirically,
-  don't assume" as a load-bearing pattern four times (y-flip, contrast pivot,
-  WB signs ×2, curves clamping) — keep defaulting to diagnostic scripts over
-  documentation-reading or intuition for any new filter.
+  don't assume" as a load-bearing pattern five times (y-flip, contrast pivot,
+  WB signs ×2, curves clamping, HSL commutativity) — keep defaulting to
+  diagnostic scripts over documentation-reading or intuition for anything
+  with geometric/coordinate semantics too (crop rect origin/orientation is a
+  plausible place for exactly this class of bug, given the y-flip precedent
+  in `ImageRenderer`).
+- When delegating empirical work to a spawned Plan-type agent, it will very
+  likely need an explicit reminder that Plan Mode's read-only restriction
+  applies to the top-level orchestrating agent, not to it — this has now
+  happened twice (white balance, HSL) and cost a full extra round-trip both
+  times. Front-load that reminder in the initial prompt, not just after it
+  hesitates.
 
 ## Open reviewer issues
-None outstanding — last reviewer verdict was APPROVE (curves feature, Phase 2
-Feature 4; reviewer independently reproduced all measured test values and
-stress-tested the clamp-avoidance alternative before approving).
+None outstanding — last reviewer verdict was APPROVE (HSL feature, Phase 2
+Feature 5; reviewer verified the fix by actually reversing the code and
+confirming the new test catches it).

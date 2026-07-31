@@ -70,13 +70,20 @@ each gets its own Plan Mode session per the workflow rules below.
 - **Noise Reduction:** not built.
 - **Sharpen:** not built — parametric (Intensity/Edges/Falloff-style).
 - **Vignette:** not built — parametric (Strength/Radius/Softness-style).
-- **Transform/Distort:** not built — perspective correction, lens distortion correction,
-  straighten/rotate. Geometric like crop; runs before crop in the fixed pipeline order
-  (see Architecture principles above).
+- **Transform/Distort:** not built — refined against Apple Photos' Crop panel
+  (2026-07-31 reference): Straighten (rotation angle, degrees), Vertical and Horizontal
+  perspective/keystone correction (two independent axes, not one combined "distort"
+  control), lens distortion correction. Geometric like crop; runs before crop in the
+  fixed pipeline order (see Architecture principles above).
+- **Flip:** not built (new item, from the same reference) — mirror horizontal/vertical.
+  Simple/cheap relative to everything else in this backlog (no parameters, just two
+  toggles) — candidate for a quick session if a small win is wanted between bigger
+  features.
 - **Crop:** ✅ v1 shipped as four numeric inset sliders (Top/Bottom/Left/Right). v2 not
-  built: interactive drag-handle crop rectangle overlaid on the image, aspect-ratio
-  presets, straighten (may fold into Transform/Distort's straighten instead of
-  duplicating it — decide when planning that feature).
+  built: interactive drag-handle crop rectangle overlaid on the image; aspect-ratio
+  presets, concretely (from the same reference): Original, Freeform, Square, 16:9, 4:5,
+  5:7, 4:3, 3:5, 3:2, Custom. Straighten/Vertical/Horizontal live under Transform/Distort
+  above, not duplicated here, even though Photos surfaces them in the same Crop panel.
 
 ## Workflow rules (important)
 - Model is `opusplan`: ALWAYS enter Plan Mode before starting a new feature so the

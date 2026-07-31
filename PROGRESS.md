@@ -3,16 +3,20 @@
 ## Current phase
 Phase 2 (Edit engine) — **v1 of all six original roadmap items shipped**
 (exposure, contrast, white balance, curves, HSL, crop), each reviewer-approved
-and manually verified live. The roadmap in CLAUDE.md was expanded twice at the
-user's request to spell out the fuller scope: first adding Transform/Distort
-and v2 notes for curves/HSL/crop, then a second pass using Apple Photos'
-adjustment panel (screenshots the user shared) as a completeness reference.
-Full detail lives in CLAUDE.md's "Phase 2 edit engine backlog" section — do
-not duplicate it here, just read it there. Summary of what's NOT built yet:
-Brightness, Black Point, Brilliance, Vibrance, Cast, Black & White mode,
-Red-Eye removal, a WB neutral-gray eyedropper, Levels, Definition/Clarity,
-Selective Color (= HSL v2, per-band panel), Noise Reduction, Sharpen,
-Vignette, Transform/Distort, and Crop v2 (interactive overlay).
+and manually verified live. The roadmap in CLAUDE.md was expanded three times
+at the user's request to spell out the fuller scope: first adding
+Transform/Distort and v2 notes for curves/HSL/crop, then using Apple Photos'
+adjustment panel (screenshots the user shared) as a completeness reference,
+then again refining Transform/Distort and Crop v2 against Photos' specific
+Crop-panel controls (Straighten, Vertical/Horizontal perspective, Flip,
+concrete aspect-ratio preset list). Full detail lives in CLAUDE.md's "Phase 2
+edit engine backlog" section — do not duplicate it here, just read it there.
+Summary of what's NOT built yet: Brightness, Black Point, Brilliance,
+Vibrance, Cast, Black & White mode, Red-Eye removal, a WB neutral-gray
+eyedropper, Levels, Definition/Clarity, Selective Color (= HSL v2, per-band
+panel), Noise Reduction, Sharpen, Vignette, Transform/Distort (straighten +
+vertical/horizontal perspective + lens distortion), Flip, and Crop v2
+(interactive overlay + concrete aspect presets).
 
 Not yet decided which to build next — needs a Plan Mode session per feature
 as usual, one at a time. Phase 3 (non-destructive pipeline: param

@@ -78,6 +78,24 @@ struct EditState: Equatable, Codable {
     /// (measured).
     var hslSaturation: Double = 0
 
+    // MARK: - Crop
+
+    /// Fractional inset from each edge, 0...0.45 (capped well below 0.5 per
+    /// side so opposite insets can never cross into a zero/negative crop
+    /// rect; 0.45+0.45 = 0.9, leaving a minimum 10% of each dimension). All
+    /// 0 is identity (no crop). Expressed as fractions of the image's own
+    /// extent, not absolute pixel coordinates, so crop is
+    /// resolution-independent and serializes cleanly regardless of the
+    /// source image's pixel dimensions — see `EditPipeline`. NOTE: this
+    /// struct does not itself enforce the 0...0.45 range (e.g. a value
+    /// decoded from a future corrupted/out-of-range save file could exceed
+    /// it) — `EditPipeline.applyCrop` clamps on every use, so any future
+    /// direct consumer of this property must not assume it's pre-clamped.
+    var cropInsetTop: Double = 0
+    var cropInsetBottom: Double = 0
+    var cropInsetLeft: Double = 0
+    var cropInsetRight: Double = 0
+
     /// The no-op edit state: every adjustment at its default (identity) value.
     static let identity = EditState()
 }

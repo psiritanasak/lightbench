@@ -7,15 +7,15 @@ import CoreImage.CIFilterBuiltins
 /// decode → WB → exposure → contrast → curves → HSL → crop → output transform.
 /// Decode already happened before this point (the caller loads the file);
 /// output transform (display color space conversion) happens at render time,
-/// outside this type. WB, exposure, contrast, curves, and HSL exist today —
-/// only the crop stage is not implemented yet, and is intentionally absent
-/// rather than stubbed; it'll be inserted here, in order, once it's built.
+/// outside this type. Every stage of the fixed order now exists: WB,
+/// exposure, contrast, curves, HSL, and crop.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
         image = applyWhiteBalance(state, to: image)           // scene-linear, first
         image = applyExposure(state.exposureEV, to: image)    // scene-linear
         image = applyPerceptualAdjustments(state, to: image)  // sRGB-gamma domain
+        image = applyCrop(state, to: image)                   // geometric, last
         return image
     }
 
@@ -229,5 +229,49 @@ enum EditPipeline {
         let filter = CIFilter.sRGBToneCurveToLinear()
         filter.inputImage = image
         return filter.outputImage ?? image
+    }
+
+    // MARK: - Crop
+
+    /// Pure geometry, not color — runs after the perceptual sandwich, at the
+    /// very end of the pipeline, matching the fixed order. This is the only
+    /// stage that changes extent; `ImageRenderer.draw(in:)` was deliberately
+    /// built to fit/transform against the post-pipeline `edited.extent`
+    /// (not the source image's) specifically so this stage would work
+    /// without renderer changes.
+    private static let kMaxCropInset: Double = 0.45
+
+    private static func cropActive(_ state: EditState) -> Bool {
+        state.cropInsetTop != 0 || state.cropInsetBottom != 0
+            || state.cropInsetLeft != 0 || state.cropInsetRight != 0
+    }
+
+    /// Crops using `CIImage`'s own coordinate space directly: origin
+    /// bottom-left, y increases upward (the standard Core Image/Cartesian
+    /// convention — unrelated to the separate Metal-drawable-presentation
+    /// y-flip already resolved in `ImageRenderer`, which was about texture
+    /// storage order, not `CIImage`'s own semantics). So "top inset" trims
+    /// the HIGH-y portion of the extent, "bottom inset" the LOW-y portion —
+    /// verified live against a real photo, not just reasoned about (see
+    /// `testCropTopInsetRemovesTopContent` and its siblings for the
+    /// equivalent proof in a unit test). Insets are clamped to
+    /// `kMaxCropInset` per side so opposite insets can never cross into a
+    /// zero/negative-size rect.
+    private static func applyCrop(_ state: EditState, to image: CIImage) -> CIImage {
+        guard cropActive(state) else { return image }
+
+        let extent = image.extent
+        let top = min(max(state.cropInsetTop, 0), kMaxCropInset)
+        let bottom = min(max(state.cropInsetBottom, 0), kMaxCropInset)
+        let left = min(max(state.cropInsetLeft, 0), kMaxCropInset)
+        let right = min(max(state.cropInsetRight, 0), kMaxCropInset)
+
+        let cropRect = CGRect(
+            x: extent.minX + extent.width * left,
+            y: extent.minY + extent.height * bottom,
+            width: extent.width * (1 - left - right),
+            height: extent.height * (1 - top - bottom)
+        )
+        return image.cropped(to: cropRect)
     }
 }

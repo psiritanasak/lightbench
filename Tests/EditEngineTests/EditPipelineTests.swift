@@ -24,6 +24,63 @@ final class EditPipelineTests: XCTestCase {
         return CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: 1, height: 1))
     }
 
+    private func solidColorImage(_ value: Double, size: Int) -> CIImage {
+        let color = CIColor(red: value, green: value, blue: value, alpha: 1, colorSpace: linearSpace)!
+        return CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: size, height: size))
+    }
+
+    /// A synthetic image with four distinct solid-color quadrants (top-left
+    /// red, top-right green, bottom-left blue, bottom-right yellow — "top"
+    /// meaning what any normal viewer would show at the top). Built from raw
+    /// row-major pixel bytes (row 0 = visual top, the standard raster
+    /// convention) and loaded via `CIImage(cgImage:)`, which flips that into
+    /// `CIImage`'s own bottom-left-origin/y-up coordinate space — verified
+    /// empirically (not assumed) that high-y in the resulting `CIImage`
+    /// extent corresponds to visual top, matching `EditPipeline.applyCrop`'s
+    /// documented coordinate assumption.
+    private func quadrantImage(width: Int = 100, height: Int = 100) -> CIImage {
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                let i = (y * width + x) * 4
+                let visualTop = y < height / 2
+                let visualLeft = x < width / 2
+                switch (visualTop, visualLeft) {
+                case (true, true): pixels[i] = 255; pixels[i + 1] = 0; pixels[i + 2] = 0; pixels[i + 3] = 255
+                case (true, false): pixels[i] = 0; pixels[i + 1] = 255; pixels[i + 2] = 0; pixels[i + 3] = 255
+                case (false, true): pixels[i] = 0; pixels[i + 1] = 0; pixels[i + 2] = 255; pixels[i + 3] = 255
+                case (false, false): pixels[i] = 255; pixels[i + 1] = 255; pixels[i + 2] = 0; pixels[i + 3] = 255
+                }
+            }
+        }
+        let deviceSpace = CGColorSpaceCreateDeviceRGB()
+        let provider = CGDataProvider(data: Data(pixels) as CFData)!
+        let cgImage = CGImage(
+            width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: width * 4, space: deviceSpace,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        )!
+        return CIImage(cgImage: cgImage)
+    }
+
+    private func describeColor(of image: CIImage, at point: CGPoint) -> String {
+        let deviceSpace = CGColorSpaceCreateDeviceRGB()
+        guard let cg = CIContext().createCGImage(
+            image, from: CGRect(x: point.x, y: point.y, width: 1, height: 1),
+            format: .RGBA8, colorSpace: deviceSpace
+        ), let data = cg.dataProvider?.data, let ptr = CFDataGetBytePtr(data) else {
+            return "?"
+        }
+        switch (ptr[0], ptr[1], ptr[2]) {
+        case (255, 0, 0): return "red"
+        case (0, 255, 0): return "green"
+        case (0, 0, 255): return "blue"
+        case (255, 255, 0): return "yellow"
+        default: return "unknown(\(ptr[0]),\(ptr[1]),\(ptr[2]))"
+        }
+    }
+
     private func linearPixel(of image: CIImage) -> (r: Float, g: Float, b: Float, a: Float) {
         var buffer = [Float](repeating: 0, count: 4)
         context.render(
@@ -514,6 +571,87 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(linearPixel(of: hueOutput).r, 1.2, accuracy: accuracy)
     }
 
+    // MARK: - Crop geometry
+    //
+    // Crop is pure geometry (extent), not color, so — unlike every other
+    // Phase 2 feature — these values are hand-computable rather than
+    // measured from a Core Image diagnostic. The coordinate-direction tests
+    // still use empirically-verified ground truth (see quadrantImage's doc
+    // comment) rather than assumed conventions, matching this project's
+    // established discipline.
+
+    func testCropZeroIsIdentity() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(), to: input)
+
+        XCTAssertEqual(output.extent, input.extent)
+    }
+
+    func testCropInsetsShrinkExtent() {
+        let input = quadrantImage(width: 100, height: 100)
+        let output = EditPipeline.apply(EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1), to: input)
+
+        XCTAssertEqual(output.extent, CGRect(x: 10, y: 0, width: 90, height: 75))
+    }
+
+    func testCropTopInsetRemovesTopContent() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(cropInsetTop: 0.5), to: input)
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 25)), "blue")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 75, y: 25)), "yellow")
+    }
+
+    func testCropBottomInsetRemovesBottomContent() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(cropInsetBottom: 0.5), to: input)
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 75)), "red")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 75, y: 75)), "green")
+    }
+
+    func testCropLeftInsetRemovesLeftContent() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(cropInsetLeft: 0.5), to: input)
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 75, y: 75)), "green")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 75, y: 25)), "yellow")
+    }
+
+    func testCropRightInsetRemovesRightContent() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(cropInsetRight: 0.5), to: input)
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 75)), "red")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 25)), "blue")
+    }
+
+    func testCropInsetsClampToMaxPreventingInversion() {
+        // Insets well beyond the 0.45-per-side max must not cross and
+        // invert/corrupt the rect.
+        let input = quadrantImage(width: 100, height: 100)
+        let output = EditPipeline.apply(EditState(cropInsetLeft: 0.9, cropInsetRight: 0.9), to: input)
+
+        XCTAssertEqual(output.extent.width, 10, accuracy: 0.01)
+        XCTAssertGreaterThan(output.extent.width, 0)
+    }
+
+    func testCropPreservesColorMath() {
+        // Crop composed with exposure: the retained region's color still
+        // reflects the exposure adjustment, proving crop doesn't interfere
+        // with the rest of the pipeline.
+        let input = solidColorImage(0.2, size: 100)
+        let output = EditPipeline.apply(EditState(exposureEV: 1, cropInsetTop: 0.25, cropInsetRight: 0.25), to: input)
+
+        var buffer = [Float](repeating: 0, count: 4)
+        context.render(
+            output, toBitmap: &buffer, rowBytes: 16,
+            bounds: CGRect(x: 10, y: 10, width: 1, height: 1),
+            format: .RGBAf, colorSpace: linearSpace
+        )
+        XCTAssertEqual(buffer[0], 0.4, accuracy: accuracy)
+    }
+
     // MARK: - EditState
 
     func testEditStateDefaultIsIdentity() {
@@ -525,6 +663,10 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().curvesHighlights, 0)
         XCTAssertEqual(EditState().hslHue, 0)
         XCTAssertEqual(EditState().hslSaturation, 0)
+        XCTAssertEqual(EditState().cropInsetTop, 0)
+        XCTAssertEqual(EditState().cropInsetBottom, 0)
+        XCTAssertEqual(EditState().cropInsetLeft, 0)
+        XCTAssertEqual(EditState().cropInsetRight, 0)
 
         let input = solidColorImage(0.35)
         let output = EditPipeline.apply(EditState(), to: input)
@@ -540,7 +682,11 @@ final class EditPipelineTests: XCTestCase {
             curvesShadows: 0.6,
             curvesHighlights: -0.2,
             hslHue: 45,
-            hslSaturation: 0.3
+            hslSaturation: 0.3,
+            cropInsetTop: 0.1,
+            cropInsetBottom: 0.05,
+            cropInsetLeft: 0.15,
+            cropInsetRight: 0.2
         )
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(EditState.self, from: data)

@@ -23,6 +23,51 @@ as usual, one at a time. Phase 3 (non-destructive pipeline: param
 serialization, edit history, undo) remains after Phase 2's expanded scope is
 done, and also needs its own explicit go-ahead when reached.
 
+## Exact next step (paused here — resume next week)
+User picked backlog items **1-3 together: Brightness, Black Point, Brilliance**
+(the three missing "Light" group tone controls). A Plan agent fully
+investigated all three with real empirical diagnostics (not predictions) and
+a complete implementation plan was written and is sitting ready to execute at
+`/Users/praween/.claude/plans/purring-mapping-pizza.md`. **Nothing has been
+implemented yet — no code changes, nothing to commit.** To resume:
+
+1. Read that plan file first — it has the full approach plus real measured
+   numbers for every test case.
+2. Enter Plan Mode, re-present that plan (refresh if anything in the repo
+   drifted — check `git log` matches what the plan assumes), get the user's
+   go-ahead via `ExitPlanMode`, then implement.
+
+Summary of what the plan already resolved, so it doesn't need re-deriving:
+- **Brightness**: `CIColorControls.brightness`, applied in the perceptual
+  domain (documented deviation, same family as Contrast) — a linear-domain
+  additive offset was measured to be non-photographic (crushes shadows hard).
+  Placed FIRST in the perceptual sandwich (measured non-commuting with
+  Contrast). Span constant `kBrightnessSpan = 0.25`.
+- **Black Point**: extends the existing `applyCurves`'s `point0` (currently
+  hardcoded to `(0,0)`) along its X axis (verified, not assumed, to produce
+  the correct Levels-style clip-to-black behavior). Known, measured,
+  documented limitation: `CIToneCurve` extrapolates rather than hard-clamping
+  near `point0`, giving a mild deep-shadow overshoot — a "soft" black point,
+  same quality of limitation as the existing curve-clamp notes already in
+  the file. Span constant `kBlackPointSpan = 0.20`.
+- **Brilliance**: this app's OWN composite approximation (explicitly NOT
+  Apple's proprietary algorithm) — a pure render-time blend nudging
+  *effective* contrast/shadow-lift/highlight-protection/saturation, without
+  ever mutating the user's own slider values. Verified algebraically:
+  `EditState(brilliance: 1)` produces byte-identical output to manually
+  setting `contrast: 0.15, curvesShadows: 0.4, curvesHighlights: -0.3,
+  hslSaturation: 0.1` directly.
+
+All exact numbers for the ~14 new unit tests (identity, headroom
+preservation/clamping, ordering, alpha, the brilliance equivalence test) are
+written out in the plan file — don't re-run diagnostics, they're already
+measured.
+
+## Open reviewer issues
+None — last reviewer verdict was APPROVE (crop feature, Phase 2 Feature 6,
+the last of the original six). Nothing has been reviewed for
+Brightness/Black Point/Brilliance since nothing's been implemented yet.
+
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
 - Repo initialized, CLAUDE.md workflow rules in place (quota/safe-pause

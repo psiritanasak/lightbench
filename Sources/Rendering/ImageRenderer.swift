@@ -84,8 +84,26 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
             .concatenating(CGAffineTransform(translationX: fitRect.minX, y: fitRect.minY))
         let fittedImage = edited.transformed(by: transform)
 
+        // Composite over an explicit full-bounds black background before
+        // rendering. Without this, CIContext.render only guarantees pixels
+        // within the fitted image's own footprint — before crop existed, the
+        // fitted image always touched at least one full edge of the
+        // drawable (AspectFit always scales to fill one dimension), so the
+        // untouched-margin case was never really exercised. Crop is the
+        // first stage that can shrink the fitted image well below the
+        // drawable's size on BOTH axes at once (e.g. a narrow, tall crop
+        // fit into a wide window), leaving large margins. MTKView cycles
+        // through multiple buffered drawable textures across frames; without
+        // this explicit clear, dragging a crop slider left stale content
+        // from earlier frames visible in those margins (looked like tiled/
+        // repeated copies of the image) because each buffer in rotation
+        // only ever had its own footprint overwritten, never the margins
+        // around it.
+        let background = CIImage(color: .black).cropped(to: CGRect(origin: .zero, size: drawableSize))
+        let composited = fittedImage.composited(over: background)
+
         ciContext.render(
-            fittedImage,
+            composited,
             to: drawable.texture,
             commandBuffer: commandBuffer,
             bounds: CGRect(origin: .zero, size: drawableSize),

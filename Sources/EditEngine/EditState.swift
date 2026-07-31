@@ -13,6 +13,15 @@ struct EditState: Equatable, Codable {
     /// pixel values — see `EditPipeline`.
     var exposureEV: Double = 0
 
+    // MARK: - Contrast
+
+    /// Contrast adjustment. `0` is identity; positive increases contrast,
+    /// negative flattens it. Maps to a `CIColorControls` contrast factor of
+    /// `1 + contrast` (range -1...1 → factor 0...2), applied in the
+    /// perceptual sRGB-gamma domain around a middle-gray pivot, NOT
+    /// scene-linear — see `EditPipeline`. UI range: -1...1.
+    var contrast: Double = 0
+
     /// The no-op edit state: every adjustment at its default (identity) value.
     static let identity = EditState()
 }

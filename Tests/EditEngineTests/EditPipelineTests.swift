@@ -99,10 +99,91 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(pixel.r, 1.2, accuracy: accuracy)
     }
 
+    // MARK: - Contrast math
+    //
+    // Contrast is applied in the perceptual sRGB-gamma domain, not linear
+    // light (see EditPipeline's documented-deviation comment). Expected
+    // values below are measured from the diagnostic scripts that established
+    // this approach, using: encode s = x≤0.0031308 ? 12.92x : 1.055·x^(1/2.4)−0.055;
+    // decode is the inverse; contrast s' = (s−0.5)·factor+0.5 where
+    // factor = 1 + contrast.
+
+    func testContrastZeroIsIdentity() {
+        for value in [0.05, 0.3, 0.7, 1.2] {
+            let input = solidColorImage(value)
+            let output = EditPipeline.apply(EditState(contrast: 0), to: input)
+            XCTAssertEqual(linearPixel(of: output).r, Float(value), accuracy: accuracy, "at L=\(value)")
+        }
+    }
+
+    func testContrastPivotsAroundPerceptualMiddleGray() {
+        // The signature test: a LINEAR-domain pivot at 0.5 would crush
+        // photographic middle gray (linear ≈0.214) toward black (measured
+        // -0.072 in the diagnostic script). Pivoting in the perceptual
+        // domain instead leaves middle gray essentially unchanged.
+        let input = solidColorImage(0.214)
+        let output = EditPipeline.apply(EditState(contrast: 1), to: input) // factor 2.0
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.21396, accuracy: accuracy)
+    }
+
+    func testContrastPositiveMatchesGammaDomainMath() {
+        let cases: [(input: Double, expected: Float)] = [
+            (0.5, 0.93467),
+            (0.1, 0.03260),
+            (0.3, 0.40331)
+        ]
+        for testCase in cases {
+            let output = EditPipeline.apply(EditState(contrast: 1), to: solidColorImage(testCase.input))
+            XCTAssertEqual(linearPixel(of: output).r, testCase.expected, accuracy: accuracy, "at L=\(testCase.input)")
+        }
+    }
+
+    func testContrastPreservesHighlightHeadroom() {
+        // Mirrors testExposurePreservesHighlightHeadroom: proves the
+        // tone-curve encode/decode doesn't clamp values above 1.0.
+        let input = solidColorImage(0.7)
+        let output = EditPipeline.apply(EditState(contrast: 1), to: input) // factor 2.0
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 1.54194, accuracy: accuracy)
+    }
+
+    func testContrastNegativeFlattens() {
+        let cases: [(input: Double, expected: Float)] = [
+            (0.5, 0.33957),
+            (0.1, 0.15076),
+            (0.214, 0.21402) // mid-gray stays ~fixed regardless of factor
+        ]
+        for testCase in cases {
+            let output = EditPipeline.apply(EditState(contrast: -0.5), to: solidColorImage(testCase.input)) // factor 0.5
+            XCTAssertEqual(linearPixel(of: output).r, testCase.expected, accuracy: accuracy, "at L=\(testCase.input)")
+        }
+    }
+
+    func testContrastAppliedAfterExposure() {
+        // Proves ordering: exposure (scene-linear) runs before contrast
+        // (perceptual). 0.25 * 2^1 = 0.5 (exposure), then contrast factor
+        // 2.0 pivoted perceptually on 0.5 -> 0.93467 (matches
+        // testContrastPositiveMatchesGammaDomainMath's L=0.5 case).
+        let input = solidColorImage(0.25)
+        let output = EditPipeline.apply(EditState(exposureEV: 1, contrast: 1), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.93467, accuracy: accuracy)
+    }
+
+    func testContrastPreservesAlpha() {
+        let output = EditPipeline.apply(EditState(contrast: 1), to: solidColorImage(0.3))
+        XCTAssertEqual(linearPixel(of: output).a, 1.0, accuracy: accuracy)
+    }
+
     // MARK: - EditState
 
     func testEditStateDefaultIsIdentity() {
         XCTAssertEqual(EditState().exposureEV, 0)
+        XCTAssertEqual(EditState().contrast, 0)
 
         let input = solidColorImage(0.35)
         let output = EditPipeline.apply(EditState(), to: input)
@@ -110,7 +191,7 @@ final class EditPipelineTests: XCTestCase {
     }
 
     func testEditStateCodableRoundTrip() throws {
-        let original = EditState(exposureEV: 1.37)
+        let original = EditState(exposureEV: 1.37, contrast: -0.4)
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(EditState.self, from: data)
 

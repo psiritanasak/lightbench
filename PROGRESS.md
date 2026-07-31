@@ -1,7 +1,7 @@
 # Progress
 
 ## Current phase
-Phase 2 — Edit engine: exposure done; contrast, white balance, curves, HSL,
+Phase 2 — Edit engine: exposure and contrast done; white balance, curves, HSL,
 crop not yet started (build one feature per session, per roadmap order).
 
 ## Done
@@ -24,66 +24,70 @@ crop not yet started (build one feature per session, per roadmap order).
   rendering, which will target offscreen textures like the misleading test did.)
 
 ### Phase 2, Feature 1 — Exposure adjustment (complete, verified live)
-- `Sources/EditEngine/EditState.swift` (new) — `Codable`/`Equatable`, one field
-  `exposureEV: Double = 0`.
-- `Sources/EditEngine/EditPipeline.swift` (new) — `EditPipeline.apply(_:to:)`
-  applies exposure via Core Image's built-in `CIExposureAdjust`; comment marks
-  where WB/contrast/curves/HSL/crop slot in later (not stubbed out yet).
-- `Sources/Rendering/ImageRenderer.swift` — `CIContext` now explicitly sets
+- `Sources/EditEngine/EditState.swift` — `Codable`/`Equatable`, `exposureEV`.
+- `Sources/EditEngine/EditPipeline.swift` — applies exposure via Core Image's
+  built-in `CIExposureAdjust`.
+- `Sources/Rendering/ImageRenderer.swift` — `CIContext` explicitly sets
   `workingColorSpace` (extended-range linear sRGB) + `workingFormat` (`RGBAh`),
   satisfying CLAUDE.md's "linear light in a defined working color space"
   instead of relying on framework defaults; output stays sRGB, applied only at
   final render. `draw(in:)` applies the edit pipeline and uses the *edited*
-  image's extent throughout (forward-compatible with the future crop stage).
+  image's extent throughout (forward-compatible with crop).
 - `Sources/UI/ImageDocumentModel.swift` / `ContentView.swift` — exposure slider
   (bottom bar, −5…+5 EV, live readout, Reset button, disabled with no image);
   edit state resets per photo on load.
-- `Tests/EditEngineTests/EditPipelineTests.swift` (new, 9 tests) — linear-light
-  math verified by rendering through a `CIContext` pinned to the same working
-  space: identity, ×2/×0.5/×4 at whole EVs, √2 gain at +0.5 EV (proves genuine
-  `2^ev` math, not a lookup table), alpha preservation, and a highlight-headroom
-  case (0.6 + EV 1 → 1.2, not clamped) proving extended range is really in
-  effect.
-- All 15 tests pass (6 AspectFit + 9 EditPipeline); build succeeds; reviewer
-  APPROVE on the full diff (3 commits: color-math foundation, renderer wiring,
-  UI slider); user manually confirmed live in the running app — slider
-  brightens/darkens correctly, resets at 0, Reset button works, disabled state
-  correct.
-- 11 commits total on `master`.
+- Linear-light math verified by rendering through a `CIContext` pinned to the
+  same working space: identity, ×2/×0.5/×4, √2 gain at +0.5 EV, alpha
+  preservation, highlight-headroom preserved (not clamped).
+- Reviewer-approved; user manually confirmed live in the running app.
+
+### Phase 2, Feature 2 — Contrast adjustment (complete, verified live)
+- `Sources/EditEngine/EditState.swift` — added `contrast: Double = 0`
+  (-1...1, maps to `CIColorControls` factor `1 + contrast`).
+- `Sources/EditEngine/EditPipeline.swift` — contrast is applied in the
+  **perceptual sRGB-gamma domain, not linear light** — a documented deviation
+  from CLAUDE.md's default rule (which CLAUDE.md permits when documented).
+  Rationale: a linear-domain pivot at 0.5 sits at ~0.735 perceptual
+  brightness, so it crushes photographic middle gray (linear ≈0.214) toward
+  black at typical contrast factors — empirically verified against real
+  `CIColorControls` behavior before implementing, not just theorized.
+  Implementation: `CIColorControls` sandwiched between
+  `CILinearToSRGBToneCurve` (encode) and `CISRGBToneCurveToLinear` (decode),
+  applied after exposure. The tone-curve filters are exact inverses and don't
+  clamp values >1, so exposure's highlight headroom survives the round-trip.
+  This encode/decode boundary (`applyPerceptualAdjustments`) is a **shared
+  sandwich** — curves and HSL (next up) must be added *inside* it, not given
+  their own, since they have the identical perceptual-domain requirement.
+- `Sources/UI/ContentView.swift` — second slider (bottom bar, -1...1, live %
+  readout, Reset button), same pattern as exposure.
+- `Tests/EditEngineTests/EditPipelineTests.swift` — 8 new contrast tests;
+  values independently re-derived (not just re-checked) by the reviewer from
+  the stated sRGB transfer functions and confirmed correct to ~2e-6.
+- All 22 tests pass (6 AspectFit + 16 EditPipeline); build succeeds; reviewer
+  APPROVE (2 commits: color-math + tests, then UI); user manually confirmed
+  live — visible tonal separation change, no shadow-crushing, composes
+  correctly with exposure, Reset works, disabled state correct.
+- 13 commits total on `master`.
 
 ## In progress / blocked
-Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required to
-close Phase 1): window-resize re-fit behavior, opened-file mtime check.
+Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
+window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Paused mid-planning for Phase 2, Feature 2 (contrast) — nothing implemented
-yet, no code changes this round.** A full plan (with empirical color-science
-findings already worked out) is saved at
-`/Users/praween/.claude/plans/purring-mapping-pizza.md`. To resume:
+Both exposure and contrast are done and verified. Do not start the next Phase
+2 sub-feature (white balance, curves, HSL, or crop) without checking with the
+user first, per "one feature per session."
 
-1. Read that plan file first.
-2. Enter Plan Mode, present that plan (or refresh it if stale) via
-   `ExitPlanMode`, get the user's go-ahead, then implement.
-
-Summary of what the plan already resolved, so it doesn't need re-deriving:
-contrast can't just use `CIColorControls` directly in this app's linear
-working space — empirically verified that a linear-domain pivot (0.5) crushes
-photographic middle gray (linear ≈0.214) to black at contrast factor 2.0. The
-correct approach is a **perceptual sandwich**: encode linear→sRGB gamma
-(`CILinearToSRGBToneCurve`) → `CIColorControls(contrast:)` → decode back to
-linear (`CISRGBToneCurveToLinear`), applied after exposure. This is a
-*documented deviation* from CLAUDE.md's default linear-light rule (which
-CLAUDE.md explicitly permits). The tone-curve filters are exact inverses and
-don't clamp >1, so exposure's highlight headroom survives. The plan makes this
-encode/decode boundary reusable in `EditPipeline` — curves and HSL (the two
-features after this one) must be added *inside* the same sandwich, not given
-their own, since they have the identical "must be perceptual" property. Full
-worked test values and file-by-file changes are in the plan file.
-
-Do not start any other Phase 2 sub-feature (WB, curves, HSL, crop) instead of
-contrast without checking with the user, per "one feature per session."
+**Important architectural note for curves/HSL sessions**: the perceptual
+sandwich (`applyPerceptualAdjustments` in `Sources/EditEngine/EditPipeline.swift`)
+already exists for contrast — curves and HSL must extend the same sandwich's
+guard condition and run *inside* it (between the existing encode/decode
+calls), not build their own. Also: the curves session must independently
+re-verify highlight-headroom survival with whatever curve filter it uses —
+`CIToneCurve` (the likely candidate) clamps to [0,1] control points, unlike
+the unclamped tone-curve filters used for contrast, so this can't be assumed
+to carry over; may need a custom kernel per CLAUDE.md's Stack section.
 
 ## Open reviewer issues
-None outstanding — last reviewer verdict was APPROVE (exposure feature, Phase
-2 Feature 1). Contrast (Feature 2) has not been reviewed — it hasn't been
-implemented yet.
+None outstanding — last reviewer verdict was APPROVE (contrast feature, Phase
+2 Feature 2).

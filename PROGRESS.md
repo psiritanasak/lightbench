@@ -1,13 +1,22 @@
 # Progress
 
 ## Current phase
-**Phase 2 (Edit engine) is COMPLETE.** All six roadmap items shipped:
-exposure, contrast, white balance, curves, HSL, crop — each reviewer-approved
-and manually verified live. Phase 3 (non-destructive pipeline: param
-serialization, edit history, undo) is next per CLAUDE.md's roadmap, but has
-NOT been started and needs its own Plan Mode session + explicit user
-go-ahead — the "do it all" instruction covered Phase 2's remaining features
-specifically, not an open-ended continuation into Phase 3.
+Phase 2 (Edit engine) — **v1 of all six original roadmap items shipped**
+(exposure, contrast, white balance, curves, HSL, crop), each reviewer-approved
+and manually verified live. The roadmap in CLAUDE.md was just expanded (at
+the user's request) to spell out the fuller scope each of those items still
+has, plus a new item — none of the additions below are built yet:
+- Whites/blacks clipping-point sliders (rounds out Basic tone w/ exposure/contrast)
+- Curves v2: full interactive draggable point-curve editor (v1 = 2-slider approximation)
+- HSL v2: per-color-band panel, 8 bands × H/S/L = 24 params (v1 = global hue+sat)
+- Crop v2: interactive drag-handle overlay, aspect presets, straighten (v1 = 4 inset sliders)
+- Transform/Distort (new): perspective correction, lens distortion correction,
+  straighten/rotate — runs before crop in the fixed pipeline order
+
+Not yet decided which of these to build next — needs a Plan Mode session per
+feature as usual, one at a time. Phase 3 (non-destructive pipeline: param
+serialization, edit history, undo) remains after Phase 2's expanded scope is
+done, and also needs its own explicit go-ahead when reached.
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)

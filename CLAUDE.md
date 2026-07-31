@@ -18,14 +18,31 @@ Edits are stored as parameter sets and rendered live on the GPU.
 ## Architecture principles
 - Non-destructive: edit state = ordered list of adjustment params, serialized to the DB
   (and optionally XMP-style sidecars). Replaying the same params must be deterministic.
-- Edit pipeline order is fixed: decode → WB → exposure → contrast → curves → HSL → crop → output transform.
+- Edit pipeline order is fixed: decode → WB → exposure → contrast → curves → HSL → transform/distort → crop → output transform.
 - All image math in linear light in a defined working color space; convert to display/sRGB only at output. Document any deviation.
 - DB access never blocks the main thread. Thumbnails generate on a background queue.
 - Keep modules separated: Catalog / EditEngine / Rendering / UI. No UI imports in EditEngine.
 
 ## Roadmap (build strictly in this order)
 1. Foundation: Xcode project, open + display an image in a Metal-backed view
-2. Edit engine: exposure, contrast, white balance, curves, HSL, crop
+2. Edit engine: exposure, contrast, white balance, curves, HSL, crop, transform/distort
+   - Basic tone: exposure ✅, contrast ✅. Whites/blacks clipping-point sliders —
+     not built (would round out the Basic tone group alongside exposure/contrast).
+   - White balance: temperature + tint ✅.
+   - Curves: ✅ v1 shipped as simplified parametric Shadows/Highlights sliders
+     (2 control points of a tone-curve spline). v2 (not built): full interactive
+     draggable point-curve editor.
+   - HSL: ✅ v1 shipped as global Hue + Saturation sliders. v2 (not built):
+     per-color-band panel (8 bands × Hue/Saturation/Luminance = 24 params),
+     matching Lightroom's HSL panel.
+   - Crop: ✅ v1 shipped as four numeric inset sliders (top/bottom/left/right).
+     v2 (not built): interactive drag-handle crop rectangle overlaid on the
+     image, aspect-ratio presets, straighten.
+   - Transform/Distort — not built: perspective correction, lens distortion
+     correction, straighten/rotate. Geometric like crop; runs before crop in
+     the fixed pipeline order (see Architecture principles above).
+   - Not in scope for Phase 2 unless added explicitly later: sharpening, noise
+     reduction, vignette, dehaze/clarity — none are named in this roadmap today.
 3. Non-destructive pipeline: param serialization, edit history, undo
 4. Library: import, catalog DB, thumbnail grid, ratings/flags, collections
 5. Presets + export: save/apply presets, batch export (resize, quality, format)

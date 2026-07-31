@@ -6,6 +6,22 @@ import Foundation
 /// `Codable` so it can eventually be serialized to the catalog DB (Phase 3/4)
 /// without any changes to this type; no persistence is implemented yet.
 struct EditState: Equatable, Codable {
+    // MARK: - White Balance
+
+    /// Apparent color temperature in Kelvin, `3500...9500`. `6500` (daylight)
+    /// is neutral. Follows the same on-screen convention as Lightroom/Camera
+    /// Raw: a HIGHER Kelvin value makes the image look WARMER (more
+    /// orange), a lower value makes it look cooler (more blue) — the
+    /// opposite of literal blackbody physics, but what every photographer
+    /// expects from a "Temperature" slider. See `EditPipeline` for how this
+    /// is mapped onto Core Image's filter, whose own raw semantics run the
+    /// other direction.
+    var whiteBalanceTemperature: Double = 6500
+
+    /// Tint adjustment, relative, `0` is neutral, `-100...100`. Positive
+    /// shifts magenta, negative shifts green — see `EditPipeline`.
+    var whiteBalanceTint: Double = 0
+
     // MARK: - Exposure
 
     /// Exposure adjustment in stops (EV). `0` is identity (no change).

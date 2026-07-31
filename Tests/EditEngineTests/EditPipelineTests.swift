@@ -16,7 +16,11 @@ final class EditPipelineTests: XCTestCase {
     ])
 
     private func solidColorImage(_ value: Double) -> CIImage {
-        let color = CIColor(red: value, green: value, blue: value, alpha: 1, colorSpace: linearSpace)!
+        solidColorImage(r: value, g: value, b: value)
+    }
+
+    private func solidColorImage(r: Double, g: Double, b: Double, a: Double = 1) -> CIImage {
+        let color = CIColor(red: r, green: g, blue: b, alpha: a, colorSpace: linearSpace)!
         return CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: 1, height: 1))
     }
 
@@ -179,11 +183,127 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(linearPixel(of: output).a, 1.0, accuracy: accuracy)
     }
 
+    // MARK: - White balance math
+    //
+    // White balance is applied in scene-linear light (not a deviation, unlike
+    // contrast) via CITemperatureAndTint. Expected values below are measured
+    // from the diagnostic script that established the sign/span constants —
+    // they are not hand-derived, since chromatic adaptation is a black-box
+    // matrix, not a simple closed-form transfer function.
+    //
+    // whiteBalanceTemperature is user-facing Kelvin (Lightroom convention:
+    // higher K = warmer on screen), which EditPipeline maps through a
+    // reflection (2*6500 - temperature) onto the filter's own targetNeutral.x
+    // (where LOWER values warm). So "temperature: 9500" below is the
+    // warmest UI setting, feeding targetNeutral.x = 3500 into the filter —
+    // the pixel values are unchanged from that underlying filter input,
+    // only the EditState value used to reach it is inverted.
+
+    func testWhiteBalanceZeroIsIdentity() {
+        for value in [0.05, 0.18, 0.3, 0.5, 0.7, 1.2] {
+            let input = solidColorImage(value)
+            let output = EditPipeline.apply(EditState(whiteBalanceTemperature: 6500, whiteBalanceTint: 0), to: input)
+            XCTAssertEqual(linearPixel(of: output).r, Float(value), accuracy: accuracy, "at L=\(value)")
+        }
+    }
+
+    func testWhiteBalanceWarmsAtMaxTemperature() {
+        let input = solidColorImage(0.18)
+        let output = EditPipeline.apply(EditState(whiteBalanceTemperature: 9500), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.27041, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.16434, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.07076, accuracy: accuracy)
+        XCTAssertGreaterThan(pixel.r, pixel.b)
+    }
+
+    func testWhiteBalanceWarmsPartiallyAtMidHighTemperature() {
+        // Proves the temperature mapping is continuous, not a step function.
+        let input = solidColorImage(0.18)
+        let output = EditPipeline.apply(EditState(whiteBalanceTemperature: 8000), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.20944, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.17664, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.13250, accuracy: accuracy)
+    }
+
+    func testWhiteBalanceCoolsAtMinTemperature() {
+        let input = solidColorImage(0.18)
+        let output = EditPipeline.apply(EditState(whiteBalanceTemperature: 3500), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.15289, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.18052, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.24144, accuracy: accuracy)
+        XCTAssertGreaterThan(pixel.b, pixel.r)
+    }
+
+    func testWhiteBalanceMagentaAtPlus100() {
+        let input = solidColorImage(0.18)
+        let output = EditPipeline.apply(EditState(whiteBalanceTint: 100), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.26302, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.14090, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.24938, accuracy: accuracy)
+        XCTAssertGreaterThan(pixel.r, pixel.g)
+        XCTAssertGreaterThan(pixel.b, pixel.g)
+    }
+
+    func testWhiteBalanceGreenAtMinus100() {
+        let input = solidColorImage(0.18)
+        let output = EditPipeline.apply(EditState(whiteBalanceTint: -100), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.10683, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.21446, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.11886, accuracy: accuracy)
+        XCTAssertGreaterThan(pixel.g, pixel.r)
+        XCTAssertGreaterThan(pixel.g, pixel.b)
+    }
+
+    func testWhiteBalancePreservesAlpha() {
+        let input = solidColorImage(r: 0.18, g: 0.18, b: 0.18, a: 0.5)
+        let output = EditPipeline.apply(EditState(whiteBalanceTemperature: 9500), to: input)
+
+        XCTAssertEqual(linearPixel(of: output).a, 0.5, accuracy: accuracy)
+    }
+
+    func testWhiteBalancePreservesHighlightHeadroom() {
+        // Base already has a channel >1.0 (as if boosted by a prior exposure
+        // adjustment) — proves WB doesn't clamp it away.
+        let input = solidColorImage(r: 1.4, g: 0.5, b: 0.2, a: 1)
+        let output = EditPipeline.apply(EditState(whiteBalanceTemperature: 9500), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 1.80724, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.43033, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.04813, accuracy: accuracy)
+        XCTAssertGreaterThan(pixel.r, 1.0)
+    }
+
+    func testWhiteBalanceAppliedBeforeContrast() {
+        // WB and exposure both being linear operations commute, so this
+        // ordering test uses contrast (nonlinear/perceptual, order-sensitive)
+        // to actually prove white balance runs first in the pipeline.
+        let input = solidColorImage(0.18)
+        let output = EditPipeline.apply(EditState(whiteBalanceTemperature: 9500, contrast: 1), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.33460, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.12211, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.00853, accuracy: accuracy)
+    }
+
     // MARK: - EditState
 
     func testEditStateDefaultIsIdentity() {
         XCTAssertEqual(EditState().exposureEV, 0)
         XCTAssertEqual(EditState().contrast, 0)
+        XCTAssertEqual(EditState().whiteBalanceTemperature, 6500)
+        XCTAssertEqual(EditState().whiteBalanceTint, 0)
 
         let input = solidColorImage(0.35)
         let output = EditPipeline.apply(EditState(), to: input)
@@ -191,7 +311,7 @@ final class EditPipelineTests: XCTestCase {
     }
 
     func testEditStateCodableRoundTrip() throws {
-        let original = EditState(exposureEV: 1.37, contrast: -0.4)
+        let original = EditState(whiteBalanceTemperature: 5200, whiteBalanceTint: -10, exposureEV: 1.37, contrast: -0.4)
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(EditState.self, from: data)
 

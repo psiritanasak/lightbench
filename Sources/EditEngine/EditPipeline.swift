@@ -7,15 +7,67 @@ import CoreImage.CIFilterBuiltins
 /// decode → WB → exposure → contrast → curves → HSL → crop → output transform.
 /// Decode already happened before this point (the caller loads the file);
 /// output transform (display color space conversion) happens at render time,
-/// outside this type. Only exposure and contrast exist today — WB, curves,
-/// HSL, and crop stages are not implemented yet and are intentionally absent
+/// outside this type. WB, exposure, and contrast exist today — curves, HSL,
+/// and crop stages are not implemented yet and are intentionally absent
 /// rather than stubbed; they'll be inserted here, in order, as they're built.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
-        image = applyExposure(state.exposureEV, to: image)   // scene-linear
-        image = applyPerceptualAdjustments(state, to: image) // sRGB-gamma domain
+        image = applyWhiteBalance(state, to: image)           // scene-linear, first
+        image = applyExposure(state.exposureEV, to: image)    // scene-linear
+        image = applyPerceptualAdjustments(state, to: image)  // sRGB-gamma domain
         return image
+    }
+
+    // MARK: - White Balance
+
+    /// Chromatic-adaptation white points, in Kelvin, for Core Image's
+    /// temperature/tint filter. `kNeutralTemp` is the assumed neutral
+    /// illuminant (6500K, "daylight") both `neutral` and `targetNeutral`
+    /// default to. `kTintSpan` scales the UI's -100...100 tint slider to a
+    /// visually strong-but-plausible shift; measured against the real filter
+    /// (see the doc comment on `applyWhiteBalance`), not picked arbitrarily.
+    private static let kNeutralTemp: Double = 6500
+    private static let kTintSpan: Double = 100
+
+    /// White balance is applied in scene-linear light — unlike contrast,
+    /// this is NOT a deviation from CLAUDE.md's default rule, it's the
+    /// straightforward case. `CITemperatureAndTint` performs a per-pixel
+    /// chromatic-adaptation matrix multiply, which is physically a linear
+    /// operation; empirically confirmed (identity round-trips exactly across
+    /// a range of linear gray values, and values already >1.0 from a prior
+    /// exposure boost stay finite and un-clamped through this filter).
+    ///
+    /// Two independent sign inversions are in play here, both MEASURED, not
+    /// assumed:
+    /// 1. Core Image's own filter: lowering `targetNeutral.x` below
+    ///    `kNeutralTemp` warms the image; negative `targetNeutral.y` shifts
+    ///    magenta. Both are the opposite of naive intuition about the raw
+    ///    filter parameters.
+    /// 2. `EditState.whiteBalanceTemperature` is deliberately exposed to the
+    ///    UI using the OPPOSITE-of-the-raw-filter, Lightroom/Camera-Raw
+    ///    convention: a HIGHER Kelvin value should look WARMER on screen
+    ///    (matching what every photographer expects from a "Temperature"
+    ///    slider), even though that's backwards from both blackbody physics
+    ///    and this filter's own `targetNeutral.x` semantics. So the mapping
+    ///    from `state.whiteBalanceTemperature` to `targetNeutral.x` here is a
+    ///    reflection around `kNeutralTemp` (`2 * kNeutralTemp - temperature`),
+    ///    not a direct pass-through — this is intentional, not a bug.
+    ///
+    /// This stage stays fully separate from, and runs before,
+    /// `applyPerceptualAdjustments` — do NOT fold it into that guard, WB has
+    /// no perceptual-domain requirement the way contrast/curves/HSL do.
+    private static func applyWhiteBalance(_ state: EditState, to image: CIImage) -> CIImage {
+        guard state.whiteBalanceTemperature != kNeutralTemp || state.whiteBalanceTint != 0 else { return image }
+
+        let filter = CIFilter.temperatureAndTint()
+        filter.inputImage = image
+        filter.neutral = CIVector(x: kNeutralTemp, y: 0)
+        filter.targetNeutral = CIVector(
+            x: 2 * kNeutralTemp - state.whiteBalanceTemperature,
+            y: -(state.whiteBalanceTint / 100) * kTintSpan
+        )
+        return filter.outputImage ?? image
     }
 
     // MARK: - Exposure

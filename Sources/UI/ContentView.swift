@@ -7,7 +7,7 @@ struct ContentView: View {
         MetalImageView(image: document.currentImage, editState: document.editState)
             .frame(minWidth: 480, minHeight: 360)
             .safeAreaInset(edge: .bottom) {
-                exposureControls
+                editControls
             }
             .toolbar {
                 ToolbarItem(placement: .automatic) {
@@ -33,17 +33,30 @@ struct ContentView: View {
             }
     }
 
-    private var exposureControls: some View {
-        HStack {
-            Text("Exposure")
-            Slider(value: $document.editState.exposureEV, in: -5...5)
-            Text(String(format: "%+.2f EV", document.editState.exposureEV))
-                .monospacedDigit()
-                .frame(width: 70, alignment: .trailing)
-            Button("Reset") {
-                document.editState.exposureEV = 0
+    private var editControls: some View {
+        VStack {
+            HStack {
+                Text("Exposure")
+                Slider(value: $document.editState.exposureEV, in: -5...5)
+                Text(String(format: "%+.2f EV", document.editState.exposureEV))
+                    .monospacedDigit()
+                    .frame(width: 70, alignment: .trailing)
+                Button("Reset") {
+                    document.editState.exposureEV = 0
+                }
+                .disabled(document.editState.exposureEV == 0)
             }
-            .disabled(document.editState.exposureEV == 0)
+            HStack {
+                Text("Contrast")
+                Slider(value: $document.editState.contrast, in: -1...1)
+                Text(String(format: "%+.0f%%", document.editState.contrast * 100))
+                    .monospacedDigit()
+                    .frame(width: 70, alignment: .trailing)
+                Button("Reset") {
+                    document.editState.contrast = 0
+                }
+                .disabled(document.editState.contrast == 0)
+            }
         }
         .padding()
         .disabled(document.currentImage == nil)

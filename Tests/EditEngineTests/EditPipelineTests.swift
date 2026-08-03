@@ -689,6 +689,148 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(linearPixel(of: hueOutput).r, 1.2, accuracy: accuracy)
     }
 
+    // MARK: - Vibrance math
+    //
+    // Vibrance is a selective saturation (CIVibrance) that boosts muted
+    // colors far more than already-saturated ones. Expected values are
+    // measured from the diagnostic script, in the same style as HSL above.
+    // `hsvSaturation` reports relative (HSV) saturation, (max-min)/max — the
+    // metric that shows vibrance's selectivity; plain chroma (max-min)
+    // alone does not.
+
+    private func hsvSaturation(_ pixel: (r: Float, g: Float, b: Float, a: Float)) -> Float {
+        let maxV = max(pixel.r, max(pixel.g, pixel.b))
+        let minV = min(pixel.r, min(pixel.g, pixel.b))
+        guard maxV != 0 else { return 0 }
+        return (maxV - minV) / maxV
+    }
+
+    func testVibranceZeroIsIdentity() {
+        for value in [0.05, 0.214, 0.5, 0.7, 1.2] {
+            let input = solidColorImage(value)
+            let output = EditPipeline.apply(EditState(vibrance: 0), to: input)
+            XCTAssertEqual(linearPixel(of: output).r, Float(value), accuracy: accuracy, "at L=\(value)")
+        }
+
+        let mutedInput = solidColorImage(r: 0.40, g: 0.34, b: 0.30)
+        let mutedOutput = linearPixel(of: EditPipeline.apply(EditState(vibrance: 0), to: mutedInput))
+        XCTAssertEqual(mutedOutput.r, 0.40000, accuracy: accuracy)
+        XCTAssertEqual(mutedOutput.g, 0.34000, accuracy: accuracy)
+        XCTAssertEqual(mutedOutput.b, 0.30000, accuracy: accuracy)
+    }
+
+    func testVibranceProtectsSaturatedBoostsMuted() {
+        // The defining property: at the same +0.5 amount, a muted color
+        // gains far more RELATIVE (HSV) saturation than an already-saturated
+        // one — vibrance's selectivity vs plain saturation's uniform ~2.3x
+        // ratio between the same two inputs.
+        let mutedInput = solidColorImage(r: 0.40, g: 0.34, b: 0.30)
+        let mutedOutput = linearPixel(of: EditPipeline.apply(EditState(vibrance: 0.5), to: mutedInput))
+        XCTAssertEqual(mutedOutput.r, 0.45057, accuracy: accuracy)
+        XCTAssertEqual(mutedOutput.g, 0.33555, accuracy: accuracy)
+        XCTAssertEqual(mutedOutput.b, 0.26423, accuracy: accuracy)
+
+        let saturatedInput = solidColorImage(r: 0.80, g: 0.05, b: 0.05)
+        let saturatedOutput = linearPixel(of: EditPipeline.apply(EditState(vibrance: 0.5), to: saturatedInput))
+        XCTAssertEqual(saturatedOutput.r, 0.90828, accuracy: accuracy)
+        XCTAssertEqual(saturatedOutput.g, 0.04027, accuracy: accuracy)
+        XCTAssertEqual(saturatedOutput.b, 0.04027, accuracy: accuracy)
+
+        let mutedDelta = hsvSaturation(mutedOutput) - hsvSaturation(linearPixel(of: mutedInput))
+        let saturatedDelta = hsvSaturation(saturatedOutput) - hsvSaturation(linearPixel(of: saturatedInput))
+        XCTAssertEqual(mutedDelta, 0.16357, accuracy: accuracy)
+        XCTAssertEqual(saturatedDelta, 0.01816, accuracy: accuracy)
+        XCTAssertGreaterThan(mutedDelta, saturatedDelta * 5, "muted should gain far more saturation than already-saturated")
+    }
+
+    func testVibranceNegativeIsAsymmetricWithPositiveProtection() {
+        // Pins the negative side of the -1...1 range (only positive amounts
+        // were covered above). MEASURED, and notably NOT a mirror image of
+        // testVibranceProtectsSaturatedBoostsMuted: "protects already-
+        // saturated tones" is a property of BOOSTING (positive amount) only.
+        // At vibrance -1, the already-saturated color actually loses MORE
+        // absolute HSV-saturation (0.938 -> 0.753, a 0.184 drop) than the
+        // muted one (0.250 -> 0.110, a 0.140 drop) — CIVibrance's protection
+        // curve is one-directional, not a symmetric "leave saturated tones
+        // alone" guarantee. Documented here so a future reader doesn't
+        // assume symmetry that isn't there.
+        let mutedInput = solidColorImage(r: 0.40, g: 0.34, b: 0.30)
+        let mutedOutput = linearPixel(of: EditPipeline.apply(EditState(vibrance: -1), to: mutedInput))
+        XCTAssertEqual(mutedOutput.r, 0.36684, accuracy: accuracy)
+        XCTAssertEqual(mutedOutput.g, 0.34312, accuracy: accuracy)
+        XCTAssertEqual(mutedOutput.b, 0.32649, accuracy: accuracy)
+
+        let saturatedInput = solidColorImage(r: 0.80, g: 0.05, b: 0.05)
+        let saturatedOutput = linearPixel(of: EditPipeline.apply(EditState(vibrance: -1), to: saturatedInput))
+        XCTAssertEqual(saturatedOutput.r, 0.42727, accuracy: accuracy)
+        XCTAssertEqual(saturatedOutput.g, 0.10552, accuracy: accuracy)
+        XCTAssertEqual(saturatedOutput.b, 0.10552, accuracy: accuracy)
+
+        let mutedSaturationDrop = hsvSaturation(linearPixel(of: mutedInput)) - hsvSaturation(mutedOutput)
+        let saturatedSaturationDrop = hsvSaturation(linearPixel(of: saturatedInput)) - hsvSaturation(saturatedOutput)
+        XCTAssertGreaterThan(saturatedSaturationDrop, mutedSaturationDrop, "unlike the positive side, saturated should NOT be protected here")
+    }
+
+    func testVibrancePreservesAlpha() {
+        let input = solidColorImage(r: 0.6, g: 0.2, b: 0.2, a: 0.5)
+        let output = EditPipeline.apply(EditState(vibrance: 0.5), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.31711, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.09562, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.09562, accuracy: accuracy)
+        XCTAssertEqual(pixel.a, 0.5, accuracy: accuracy)
+    }
+
+    func testVibrancePreservesHighlightHeadroom() {
+        // Unlike curves, an active vibrance adjustment does NOT clamp values
+        // above linear 1.0 — CIVibrance is a blend operation with no
+        // internal [0,1] LUT.
+        let input = solidColorImage(r: 1.4, g: 0.5, b: 0.2)
+        let output = EditPipeline.apply(EditState(vibrance: 0.5), to: input)
+        XCTAssertEqual(linearPixel(of: output).r, 1.40025, accuracy: accuracy)
+    }
+
+    func testVibranceSaturationOrderIsFixed() {
+        // Vibrance and plain saturation do NOT commute — the reversed
+        // (saturation-first) order measures (1.41929, 0.02660, 0.02660) for
+        // the same saturated input, a 0.243 gap far past this file's 0.002
+        // tolerance. This pins the canonical vibrance-then-saturation order.
+        let saturatedInput = solidColorImage(r: 0.80, g: 0.05, b: 0.05)
+        let saturatedOutput = linearPixel(
+            of: EditPipeline.apply(EditState(hslSaturation: 0.5, vibrance: 0.5), to: saturatedInput)
+        )
+        XCTAssertEqual(saturatedOutput.r, 1.66190, accuracy: accuracy)
+        XCTAssertEqual(saturatedOutput.g, 0.01813, accuracy: accuracy)
+        XCTAssertEqual(saturatedOutput.b, 0.01813, accuracy: accuracy)
+
+        let mutedInput = solidColorImage(r: 0.40, g: 0.34, b: 0.30)
+        let mutedOutput = linearPixel(
+            of: EditPipeline.apply(EditState(hslSaturation: 0.5, vibrance: 0.5), to: mutedInput)
+        )
+        XCTAssertEqual(mutedOutput.r, 0.50483, accuracy: accuracy)
+        XCTAssertEqual(mutedOutput.g, 0.32718, accuracy: accuracy)
+        XCTAssertEqual(mutedOutput.b, 0.22550, accuracy: accuracy)
+    }
+
+    func testVibranceSpanStrengthAtExtremes() {
+        // Documents why vibrance maps 1:1 to its -1...1 slider with no span
+        // constant: at the same +1 amount, vibrance stays contained on an
+        // already-saturated color while plain saturation runs away — proof
+        // the raw filter range is already well-scaled for a direct map.
+        let saturatedInput = solidColorImage(r: 0.80, g: 0.05, b: 0.05)
+
+        let vibranceOutput = linearPixel(of: EditPipeline.apply(EditState(vibrance: 1), to: saturatedInput))
+        XCTAssertEqual(vibranceOutput.r, 0.91398, accuracy: accuracy)
+        XCTAssertEqual(vibranceOutput.g, 0.03981, accuracy: accuracy)
+        XCTAssertEqual(vibranceOutput.b, 0.03981, accuracy: accuracy)
+
+        let saturationOutput = linearPixel(of: EditPipeline.apply(EditState(hslSaturation: 1), to: saturatedInput))
+        XCTAssertEqual(saturationOutput.r, 2.25304, accuracy: accuracy)
+        XCTAssertEqual(saturationOutput.g, 0.01129, accuracy: accuracy)
+        XCTAssertEqual(saturationOutput.b, 0.01129, accuracy: accuracy)
+    }
+
     // MARK: - Crop geometry
     //
     // Crop is pure geometry (extent), not color, so — unlike every other
@@ -863,6 +1005,7 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().brilliance, 0)
         XCTAssertEqual(EditState().hslHue, 0)
         XCTAssertEqual(EditState().hslSaturation, 0)
+        XCTAssertEqual(EditState().vibrance, 0)
         XCTAssertEqual(EditState().cropInsetTop, 0)
         XCTAssertEqual(EditState().cropInsetBottom, 0)
         XCTAssertEqual(EditState().cropInsetLeft, 0)
@@ -886,6 +1029,7 @@ final class EditPipelineTests: XCTestCase {
             brilliance: 0.5,
             hslHue: 45,
             hslSaturation: 0.3,
+            vibrance: 0.4,
             cropInsetTop: 0.1,
             cropInsetBottom: 0.05,
             cropInsetLeft: 0.15,

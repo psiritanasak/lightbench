@@ -114,6 +114,24 @@ struct EditState: Equatable, Codable {
     /// (measured).
     var hslSaturation: Double = 0
 
+    // MARK: - Vibrance
+
+    /// Global vibrance, -1...1, 0 is identity. A "smart" saturation that
+    /// boosts muted colors far more than already-saturated ones (and
+    /// protects skin tones), as opposed to `hslSaturation`, which scales all
+    /// colors uniformly — a genuinely different algorithm, not a rename.
+    /// Maps 1:1 (no span constant) to Core Image's `CIVibrance.amount`,
+    /// applied in the perceptual sRGB-gamma domain immediately BEFORE plain
+    /// saturation — see `EditPipeline`. Measured selectivity at +0.5: a
+    /// muted (0.40,0.34,0.30) gains +0.164 HSV-saturation while an
+    /// already-saturated (0.80,0.05,0.05) gains only +0.018 (~9x less) — vs
+    /// plain saturation's ~2.3x ratio. Unlike curves, does NOT clamp
+    /// highlight headroom (measured: a 1.4 linear channel survives at
+    /// 1.400). Independent of Brilliance by design — Brilliance already
+    /// nudges plain saturation; also routing it into vibrance would
+    /// double-count a single slider's "pop".
+    var vibrance: Double = 0
+
     // MARK: - Crop
 
     /// Fractional inset from each edge, 0...0.45 (capped well below 0.5 per

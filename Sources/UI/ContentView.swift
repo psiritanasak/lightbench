@@ -80,6 +80,10 @@ struct ContentView: View {
                     range: -180...180, identity: 0
                 ) { String(format: "%+.0f°", $0) }
                 EditSliderRow(
+                    label: "Vibrance", value: $document.editState.vibrance,
+                    range: -1...1, identity: 0
+                ) { String(format: "%+.0f%%", $0 * 100) }
+                EditSliderRow(
                     label: "Saturation", value: $document.editState.hslSaturation,
                     range: -1...1, identity: 0
                 ) { String(format: "%+.0f%%", $0 * 100) }

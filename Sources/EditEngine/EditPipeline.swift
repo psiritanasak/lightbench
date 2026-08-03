@@ -8,10 +8,10 @@ import CoreImage.CIFilterBuiltins
 /// Decode already happened before this point (the caller loads the file);
 /// output transform (display color space conversion) happens at render time,
 /// outside this type. Every stage of the fixed order now exists: WB,
-/// exposure, contrast, curves, HSL, and crop — plus three additional
-/// Light-group tone controls (Brightness, Black Point, Brilliance) folded
-/// into the existing perceptual sandwich rather than the fixed order list,
-/// since they're refinements of stages that already exist there.
+/// exposure, contrast, curves, HSL, and crop — plus four additional
+/// controls (Brightness, Black Point, Brilliance, Vibrance) folded into the
+/// existing perceptual sandwich rather than the fixed order list, since
+/// they're refinements of/companions to stages that already exist there.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
@@ -147,6 +147,7 @@ enum EditPipeline {
             || effective.contrast != 0
             || curvesActive(effective, state.blackPoint)
             || state.hslHue != 0
+            || state.vibrance != 0
             || effective.saturation != 0
         else { return image }
 
@@ -155,6 +156,7 @@ enum EditPipeline {
         if effective.contrast != 0 { img = applyContrast(effective.contrast, to: img) }
         if curvesActive(effective, state.blackPoint) { img = applyCurves(effective, state.blackPoint, to: img) }
         if state.hslHue != 0 { img = applyHue(state.hslHue, to: img) }
+        if state.vibrance != 0 { img = applyVibrance(state.vibrance, to: img) }
         if effective.saturation != 0 { img = applySaturation(effective.saturation, to: img) }
         img = decodeToLinear(img)
         return img
@@ -308,6 +310,34 @@ enum EditPipeline {
         filter.angle = Float(degrees * .pi / 180)
         return filter.outputImage ?? image
     }
+
+    // MARK: - Vibrance
+
+    /// A saturation that protects already-saturated tones and skin tones,
+    /// via Core Image's `CIVibrance` — a distinct algorithm, NOT a rescaled
+    /// `applySaturation`. Runs in the perceptual sRGB-gamma domain
+    /// (measured: perceptual vs linear diverge up to ~0.05/channel, and
+    /// vibrance must judge saturation on the same encoded values its
+    /// neighbor `applySaturation` sees). `vibrance` (-1...1) maps 1:1 to the
+    /// filter's native `amount` — no span constant needed; measured
+    /// strong-but-graceful at ±1 (a saturated red stays at 0.914 vs plain
+    /// saturation +1's runaway 2.253). Selective by design: +0.5 lifts a
+    /// muted color's HSV-saturation by +0.164 but an already-saturated
+    /// color by only +0.018. Does NOT clamp headroom (measured: a 1.4
+    /// linear channel survives at 1.400). Runs immediately BEFORE
+    /// `applySaturation`: the two do NOT commute (measured max delta 0.243
+    /// on a saturated color, far past the 0.002 tolerance), so this order is
+    /// a fixed requirement, with plain saturation kept as the final uniform
+    /// global scaler. Deliberately independent of Brilliance — see
+    /// `EditState.vibrance`.
+    private static func applyVibrance(_ vibrance: Double, to image: CIImage) -> CIImage {
+        let filter = CIFilter.vibrance()
+        filter.inputImage = image
+        filter.amount = Float(vibrance)
+        return filter.outputImage ?? image
+    }
+
+    // MARK: - Saturation
 
     /// Global saturation via Core Image's color-controls filter — a
     /// SEPARATE instance from `applyContrast`'s, since fusing the two into

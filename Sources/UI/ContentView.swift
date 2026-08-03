@@ -3,14 +3,56 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var document = ImageDocumentModel()
 
+    /// Ephemeral view-presentation state — whether the crop overlay is
+    /// active. Deliberately NOT part of `EditState`/the document: it's not
+    /// an edit, it's a UI mode, and doesn't need to persist or serialize.
+    @State private var isCroppingActive = false
+
+    /// What's actually rendered on screen. While cropping, the crop insets
+    /// are zeroed so the FULL image is visible (with every other edit still
+    /// applied) and the user can see what the crop would cut away; the
+    /// `CropOverlayView` itself reads the REAL `document.editState.cropInset*`
+    /// for the rectangle it draws/drags. `document.editState` remains the
+    /// single source of truth — this is a presentation-only substitution,
+    /// `EditState`/`EditPipeline` are untouched.
+    private var displayEditState: EditState {
+        guard isCroppingActive else { return document.editState }
+        var state = document.editState
+        state.cropInsetTop = 0
+        state.cropInsetBottom = 0
+        state.cropInsetLeft = 0
+        state.cropInsetRight = 0
+        return state
+    }
+
     var body: some View {
         HSplitView {
-            MetalImageView(image: document.currentImage, editState: document.editState)
-                .frame(minWidth: 480, minHeight: 360)
-                .layoutPriority(1)
+            GeometryReader { proxy in
+                ZStack {
+                    MetalImageView(image: document.currentImage, editState: displayEditState)
+                    if isCroppingActive, let image = document.currentImage {
+                        CropOverlayView(
+                            fitRect: AspectFit.rect(fitting: image.extent.size, in: proxy.size),
+                            cropInsetTop: $document.editState.cropInsetTop,
+                            cropInsetBottom: $document.editState.cropInsetBottom,
+                            cropInsetLeft: $document.editState.cropInsetLeft,
+                            cropInsetRight: $document.editState.cropInsetRight
+                        )
+                    }
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+            .frame(minWidth: 480, minHeight: 360)
+            .layoutPriority(1)
 
             editControls
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
+        }
+        // Opening a new photo resets `editState` (including crop) to
+        // identity; exit crop mode too so the overlay doesn't linger showing
+        // a stale (now-meaningless) full-frame rect over the new photo.
+        .onChange(of: document.currentFileName) { _, _ in
+            isCroppingActive = false
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
@@ -87,6 +129,14 @@ struct ContentView: View {
                     label: "Saturation", value: $document.editState.hslSaturation,
                     range: -1...1, identity: 0
                 ) { String(format: "%+.0f%%", $0 * 100) }
+                HStack {
+                    Text("Crop")
+                    Spacer()
+                    Button(isCroppingActive ? "Done" : "Crop") {
+                        isCroppingActive.toggle()
+                    }
+                    .disabled(document.currentImage == nil)
+                }
                 EditSliderRow(
                     label: "Crop Top", value: $document.editState.cropInsetTop,
                     range: 0...0.45, identity: 0

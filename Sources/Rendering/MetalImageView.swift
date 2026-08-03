@@ -17,9 +17,20 @@ struct MetalImageView: NSViewRepresentable {
         return view
     }
 
+    /// Skips the redraw entirely when neither `image` nor `editState` actually
+    /// changed since the last call. SwiftUI re-invokes `updateNSView` on any
+    /// observed document change, but during an interactive crop drag the
+    /// image shown here (`ContentView`'s `displayEditState`, with crop insets
+    /// zeroed) is intentionally held constant while only the crop overlay
+    /// moves — this guard keeps those frames free of redundant Core Image
+    /// pipeline re-runs. `image` is compared by reference (`currentImage` is
+    /// only ever reassigned wholesale on load, never mutated in place) and
+    /// `editState` by value (`Equatable`).
     func updateNSView(_ nsView: MTKView, context: Context) {
-        context.coordinator.image = image
-        context.coordinator.editState = editState
+        let renderer = context.coordinator
+        guard image !== renderer.image || editState != renderer.editState else { return }
+        renderer.image = image
+        renderer.editState = editState
         nsView.setNeedsDisplay(nsView.bounds)
     }
 

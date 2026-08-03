@@ -1,27 +1,33 @@
 # Progress
 
 ## Current phase
-Phase 2 (Edit engine) — the original six roadmap items plus four backlog
-additions (Brightness, Black Point, Brilliance, Vibrance) are shipped, each
-reviewer-approved and manually verified live. The roadmap in CLAUDE.md was
-expanded three times at the user's request to spell out the fuller scope:
-first adding Transform/Distort and v2 notes for curves/HSL/crop, then using
-Apple Photos' adjustment panel (screenshots the user shared) as a
-completeness reference, then again refining Transform/Distort and Crop v2
-against Photos' specific Crop-panel controls (Straighten, Vertical/Horizontal
-perspective, Flip, concrete aspect-ratio preset list). Full detail lives in
-CLAUDE.md's "Phase 2 edit engine backlog" section — do not duplicate it here,
-just read it there. Summary of what's NOT built yet: Cast, Black & White
-mode, Red-Eye removal, a WB neutral-gray eyedropper, Levels,
-Definition/Clarity, Selective Color (= HSL v2, per-band panel), Noise
-Reduction, Sharpen, Vignette, Transform/Distort (straighten +
-vertical/horizontal perspective + lens distortion), Flip, and Crop v2
-(interactive overlay + concrete aspect presets).
+Phase 2 (Edit engine) — the original six roadmap items plus five backlog
+additions (Brightness, Black Point, Brilliance, Vibrance, Vignette) are
+shipped, each reviewer-approved and manually verified live. The roadmap in
+CLAUDE.md was expanded three times at the user's request to spell out the
+fuller scope: first adding Transform/Distort and v2 notes for
+curves/HSL/crop, then using Apple Photos' adjustment panel (screenshots the
+user shared) as a completeness reference, then again refining
+Transform/Distort and Crop v2 against Photos' specific Crop-panel controls
+(Straighten, Vertical/Horizontal perspective, Flip, concrete aspect-ratio
+preset list). Full detail lives in CLAUDE.md's "Phase 2 edit engine backlog"
+section — do not duplicate it here, just read it there. Summary of what's
+NOT built yet: Cast (deliberately deferred — see below), Black & White mode,
+Red-Eye removal, a WB neutral-gray eyedropper, Levels, Definition/Clarity,
+Selective Color (= HSL v2, per-band panel), Noise Reduction, Sharpen,
+Transform/Distort (straighten + vertical/horizontal perspective + lens
+distortion), Flip, and Crop v2 (interactive overlay + concrete aspect
+presets — user has explicitly asked for this next, see below).
 
-Not yet decided which to build next — needs a Plan Mode session per feature
-as usual, one at a time. Phase 3 (non-destructive pipeline: param
-serialization, edit history, undo) remains after Phase 2's expanded scope is
-done, and also needs its own explicit go-ahead when reached.
+**Currently in progress: Crop v2, drag-handle interactive rectangle only**
+(aspect-ratio presets explicitly deferred to a follow-up per the user).
+Replaces the four numeric inset sliders with click-and-drag handles overlaid
+on the image, matching normal photo-editor UX. Not yet planned/implemented —
+this is the very next step when resuming.
+
+Phase 3 (non-destructive pipeline: param serialization, edit history, undo)
+remains after Phase 2's expanded scope is done, and also needs its own
+explicit go-ahead when reached.
 
 ### Backlog items — Brightness, Black Point, Brilliance (complete, verified live)
 - `Sources/EditEngine/EditState.swift` — `brightness` (-1...1, after
@@ -96,10 +102,41 @@ restructure. 1 commit.
 - 84 tests total (6 AspectFit + 78 EditPipeline, +7 new Vibrance tests). 1
   commit (color-math + tests + UI together, single reviewed diff).
 
+### Backlog item — Vignette (complete, verified live)
+- `Sources/EditEngine/EditState.swift` — `vignetteStrength` (-1...1, default
+  0) and `vignetteRadius` (0...1, default 0.5 — non-zero on purpose, since it
+  has no effect while strength is 0), both appended after `cropInsetRight`,
+  own `// MARK: - Vignette` section.
+- `Sources/EditEngine/EditPipeline.swift` — new TRUE FINAL pipeline stage,
+  running AFTER `applyCrop` (everything else runs before or inside the
+  perceptual sandwich) — center/radius are derived from the CURRENT
+  (post-crop) `image.extent`, so the vignette correctly follows a crop
+  instead of the original frame (measured on an offset extent: all four crop
+  corners darken equally). Uses `CIVignetteEffect` (explicit center + pixel
+  radius), not `CIVignette` (an opaque, saturating normalized radius unit) —
+  both auto-center correctly on a cropped extent, so this was a control/
+  predictability choice, not a centering-bug fix. Applied in SCENE-LINEAR
+  light, no perceptual encode/decode wrap (measured: wrapping it crushes
+  corners toward black, 0.030 vs linear's graceful 0.130). Asymmetric
+  strength→intensity map (darken span 1.0, lighten span 0.25) because the
+  filter's negative intensity was measured to brighten ~8x harder than
+  positive intensity darkens — kept both slider extremes comparably
+  strong-but-graceful. Does not clamp highlight headroom; preserves alpha.
+- Reviewer traced the pipeline call order directly (not just the doc
+  comment) to confirm `applyVignette` genuinely reads the post-crop extent,
+  and confirmed the non-zero `vignetteRadius` default can't violate the
+  `EditState.identity` no-op invariant (guard is on `vignetteStrength` only).
+  APPROVE on first pass.
+- 91 tests total (6 AspectFit + 85 EditPipeline, +7 new Vignette tests). New
+  test helpers added: `solidColorImage(r:g:b:a:size:)` and `pixel(of:at:)`
+  (arbitrary-coordinate sampler — vignette is the first spatial/radial
+  filter, so the existing origin-only `linearPixel(of:)` couldn't show
+  falloff). 1 commit (color-math + tests + UI together).
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Vibrance, second pass after one
-FIX FIRST round). Every shipped Phase 2 feature and backlog addition has a
-clean final reviewer verdict.
+None — last reviewer verdict was APPROVE (Vignette, first pass, no issues
+found). Every shipped Phase 2 feature and backlog addition has a clean final
+reviewer verdict.
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
@@ -291,14 +328,30 @@ window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
 **The original six Phase 2 roadmap items are done; backlog work continues.**
-Brightness, Black Point, Brilliance, and Vibrance have since shipped (see
-above). Remaining not-built backlog: Cast, Black & White mode, Red-Eye
-removal, WB neutral-gray eyedropper, Levels, Definition/Clarity, Selective
-Color (HSL v2), Noise Reduction, Sharpen, Vignette, Transform/Distort, Flip,
-Crop v2 — no next item chosen yet, needs the user's pick each time. Do not
-start Phase 3 (non-destructive pipeline: param serialization, edit history,
-undo) without the user's explicit go-ahead — starting a new phase always
-needs its own Plan Mode session per CLAUDE.md's roadmap-order rule.
+Brightness, Black Point, Brilliance, Vibrance, and Vignette have since
+shipped (see above). **User has explicitly chosen the next item: Crop v2's
+interactive drag-handle crop rectangle** (replacing the four numeric inset
+sliders with click-and-drag handles overlaid on the image, matching normal
+photo-editor UX), with aspect-ratio presets EXPLICITLY DEFERRED to a
+follow-up session. Not yet planned or implemented — resume by entering Plan
+Mode for this specifically.
+
+Cast was deliberately passed over (not forgotten) when picking a feature
+after Vibrance: it's the one remaining backlog item that breaks the
+established pure-per-pixel-filter architecture — its distinction from White
+Balance is *content-awareness* (neutralizing a DETECTED cast, needing
+per-image statistics like a gray-world average, not just a stateless
+per-pixel transform), which deserves its own deliberate design pass rather
+than reusing the existing pattern. Still not built; pick it up when ready to
+design that content-aware machinery properly.
+
+Remaining not-yet-built backlog after Crop v2's drag rectangle: Cast, Black &
+White mode, Red-Eye removal, WB neutral-gray eyedropper, Levels,
+Definition/Clarity, Selective Color (HSL v2), Noise Reduction, Sharpen,
+Transform/Distort, Flip, and Crop v2's aspect-ratio presets. Do not start
+Phase 3 (non-destructive pipeline: param serialization, edit history, undo)
+without the user's explicit go-ahead — starting a new phase always needs its
+own Plan Mode session per CLAUDE.md's roadmap-order rule.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

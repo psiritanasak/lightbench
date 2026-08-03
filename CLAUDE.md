@@ -71,7 +71,9 @@ each gets its own Plan Mode session per the workflow rules below.
   duplicate Exposure/Curves). v2 = Selective Color above.
 - **Noise Reduction:** not built.
 - **Sharpen:** not built — parametric (Intensity/Edges/Falloff-style).
-- **Vignette:** not built — parametric (Strength/Radius/Softness-style).
+- **Vignette:** ✅ Strength + Radius shipped (via Core Image's `CIVignetteEffect`,
+  centered on the post-crop extent so it correctly follows a crop). Softness
+  (falloff) not built — fixed at a measured constant for now.
 - **Transform/Distort:** not built — refined against Apple Photos' Crop panel
   (2026-07-31 reference): Straighten (rotation angle, degrees), Vertical and Horizontal
   perspective/keystone correction (two independent axes, not one combined "distort"

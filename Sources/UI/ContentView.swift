@@ -129,6 +129,8 @@ struct ContentView: View {
                     label: "Saturation", value: $document.editState.hslSaturation,
                     range: -1...1, identity: 0
                 ) { String(format: "%+.0f%%", $0 * 100) }
+                EditToggleRow(label: "Flip Horizontal", value: $document.editState.flipHorizontal)
+                EditToggleRow(label: "Flip Vertical", value: $document.editState.flipVertical)
                 HStack {
                     Text("Crop")
                     Spacer()
@@ -194,6 +196,18 @@ private struct EditSliderRow: View {
             }
             Slider(value: $value, in: range)
         }
+    }
+}
+
+/// A single boolean edit-adjustment control: label + `Toggle` on one line.
+/// No Reset button — unlike a continuous slider, a boolean is already
+/// trivially reversible with a single click either direction.
+private struct EditToggleRow: View {
+    let label: String
+    @Binding var value: Bool
+
+    var body: some View {
+        Toggle(label, isOn: $value)
     }
 }
 

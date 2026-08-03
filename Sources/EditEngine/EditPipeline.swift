@@ -4,23 +4,26 @@ import CoreImage.CIFilterBuiltins
 /// Applies an `EditState` to a `CIImage`.
 ///
 /// The edit pipeline order is fixed (see CLAUDE.md):
-/// decode → WB → exposure → contrast → curves → HSL → crop → output transform.
-/// Decode already happened before this point (the caller loads the file);
-/// output transform (display color space conversion) happens at render time,
-/// outside this type. Every stage of the fixed order now exists: WB,
-/// exposure, contrast, curves, HSL, and crop — plus four additional
-/// controls (Brightness, Black Point, Brilliance, Vibrance) folded into the
-/// existing perceptual sandwich rather than the fixed order list, since
-/// they're refinements of/companions to stages that already exist there.
-/// Vignette is a new true final stage, AFTER crop: it's a radial darkening
-/// tied to the final on-screen framing, so it must see the post-crop
-/// extent, not the fixed-order list's pre-crop stages.
+/// decode → WB → exposure → contrast → curves → HSL → transform/distort →
+/// crop → output transform. Decode already happened before this point (the
+/// caller loads the file); output transform (display color space
+/// conversion) happens at render time, outside this type. Every stage of the
+/// fixed order now exists: WB, exposure, contrast, curves, HSL, crop — plus
+/// four additional controls (Brightness, Black Point, Brilliance, Vibrance)
+/// folded into the existing perceptual sandwich rather than the fixed order
+/// list, since they're refinements of/companions to stages that already
+/// exist there. Flip is the first "transform/distort" stage: pure geometry,
+/// runs after the perceptual sandwich and BEFORE crop, matching the fixed
+/// order. Vignette is a new true final stage, AFTER crop: it's a radial
+/// darkening tied to the final on-screen framing, so it must see the
+/// post-crop extent, not the fixed-order list's pre-crop stages.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
         image = applyWhiteBalance(state, to: image)           // scene-linear, first
         image = applyExposure(state.exposureEV, to: image)    // scene-linear
         image = applyPerceptualAdjustments(state, to: image)  // sRGB-gamma domain
+        image = applyFlip(state, to: image)                   // geometric, before crop
         image = applyCrop(state, to: image)                   // geometric
         image = applyVignette(state, to: image)               // radial, scene-linear, truly last
         return image
@@ -368,6 +371,34 @@ enum EditPipeline {
         let filter = CIFilter.sRGBToneCurveToLinear()
         filter.inputImage = image
         return filter.outputImage ?? image
+    }
+
+    // MARK: - Flip
+
+    /// Mirrors the image around the CURRENT extent's own center — not
+    /// assumed to be at `(0,0)` (same discipline `applyCrop` below already
+    /// follows for its rect math). Runs BEFORE crop: `x ↦ (minX+maxX) - x`
+    /// for horizontal, `y ↦ (minY+maxY) - y` for vertical, so the
+    /// transformed extent lands back on the exact same rect — only the
+    /// content mirrors, not the geometry. Pure geometry, no color-space
+    /// concerns; no headroom/domain considerations the way color filters
+    /// have.
+    private static func applyFlip(_ state: EditState, to image: CIImage) -> CIImage {
+        guard state.flipHorizontal || state.flipVertical else { return image }
+
+        let extent = image.extent
+        var transform = CGAffineTransform.identity
+        if state.flipHorizontal {
+            transform = transform
+                .concatenating(CGAffineTransform(scaleX: -1, y: 1))
+                .concatenating(CGAffineTransform(translationX: extent.minX + extent.maxX, y: 0))
+        }
+        if state.flipVertical {
+            transform = transform
+                .concatenating(CGAffineTransform(scaleX: 1, y: -1))
+                .concatenating(CGAffineTransform(translationX: 0, y: extent.minY + extent.maxY))
+        }
+        return image.transformed(by: transform)
     }
 
     // MARK: - Crop

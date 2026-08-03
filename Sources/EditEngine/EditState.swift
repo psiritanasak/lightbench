@@ -132,6 +132,19 @@ struct EditState: Equatable, Codable {
     /// double-count a single slider's "pop".
     var vibrance: Double = 0
 
+    // MARK: - Flip
+
+    /// Mirror the image horizontally (left-right) / vertically (top-bottom).
+    /// Pure geometry, no color-space concerns — reflects around the CURRENT
+    /// image extent's own center, so it works regardless of the extent's
+    /// origin. Runs BEFORE crop in the pipeline (grouped with Transform/
+    /// Distort in the fixed pipeline order), so crop's insets always apply
+    /// to the already-flipped framing — "visual top/bottom/left/right"
+    /// stays anchored to whatever is currently on screen — see
+    /// `EditPipeline`.
+    var flipHorizontal: Bool = false
+    var flipVertical: Bool = false
+
     // MARK: - Crop
 
     /// Fractional inset from each edge, 0...0.45 (capped well below 0.5 per

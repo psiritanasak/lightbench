@@ -853,6 +853,80 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(saturationOutput.b, 0.01129, accuracy: accuracy)
     }
 
+    // MARK: - Flip geometry
+    //
+    // Flip is pure geometry (mirrors around the extent's own center), not
+    // color, so — like crop below — these values are hand-computable rather
+    // than measured from a Core Image diagnostic. Direction proofs use the
+    // same empirically-verified quadrantImage ground truth crop's own tests
+    // use (top-left red, top-right green, bottom-left blue, bottom-right
+    // yellow).
+
+    func testFlipFalseIsIdentity() {
+        let input = solidColorImage(0.35)
+        let output = EditPipeline.apply(EditState(flipHorizontal: false, flipVertical: false), to: input)
+        XCTAssertEqual(linearPixel(of: output).r, linearPixel(of: input).r, accuracy: accuracy)
+    }
+
+    func testFlipHorizontalMirrorsLeftRight() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(flipHorizontal: true), to: input)
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 75)), "green", "was top-left, now shows top-right's original color")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 75, y: 75)), "red", "was top-right, now shows top-left's original color")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 25)), "yellow", "was bottom-left, now shows bottom-right's original color")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 75, y: 25)), "blue", "was bottom-right, now shows bottom-left's original color")
+    }
+
+    func testFlipVerticalMirrorsTopBottom() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(flipVertical: true), to: input)
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 75)), "blue", "was top-left, now shows bottom-left's original color")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 25)), "red", "was bottom-left, now shows top-left's original color")
+    }
+
+    func testFlipBothAxesMirrorsDiagonally() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(flipHorizontal: true, flipVertical: true), to: input)
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 75)), "yellow", "top-left now shows the diagonally-opposite bottom-right color")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 75, y: 25)), "red", "bottom-right now shows the diagonally-opposite top-left color")
+    }
+
+    func testFlipPreservesExtent() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(flipHorizontal: true, flipVertical: true), to: input)
+        XCTAssertEqual(output.extent, input.extent)
+    }
+
+    func testFlipAppliedBeforeCrop() {
+        // Proves pipeline ORDERING (flip, then crop), not just each stage in
+        // isolation: crop-then-flip (the wrong order) would read green/
+        // yellow at these exact points instead — see the plan's derivation.
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(flipHorizontal: true, cropInsetLeft: 0.5), to: input)
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 60, y: 75)), "red")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 60, y: 25)), "blue")
+    }
+
+    func testFlipPreservesColorMath() {
+        // Flip composed with exposure: the mirrored region's color still
+        // reflects the exposure adjustment, proving flip doesn't interfere
+        // with the rest of the pipeline.
+        let input = solidColorImage(0.2, size: 100)
+        let output = EditPipeline.apply(EditState(exposureEV: 1, flipHorizontal: true), to: input)
+
+        var buffer = [Float](repeating: 0, count: 4)
+        context.render(
+            output, toBitmap: &buffer, rowBytes: 16,
+            bounds: CGRect(x: 10, y: 10, width: 1, height: 1),
+            format: .RGBAf, colorSpace: linearSpace
+        )
+        XCTAssertEqual(buffer[0], 0.4, accuracy: accuracy)
+    }
+
     // MARK: - Crop geometry
     //
     // Crop is pure geometry (extent), not color, so — unlike every other
@@ -1148,6 +1222,8 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().hslHue, 0)
         XCTAssertEqual(EditState().hslSaturation, 0)
         XCTAssertEqual(EditState().vibrance, 0)
+        XCTAssertEqual(EditState().flipHorizontal, false)
+        XCTAssertEqual(EditState().flipVertical, false)
         XCTAssertEqual(EditState().cropInsetTop, 0)
         XCTAssertEqual(EditState().cropInsetBottom, 0)
         XCTAssertEqual(EditState().cropInsetLeft, 0)
@@ -1174,6 +1250,8 @@ final class EditPipelineTests: XCTestCase {
             hslHue: 45,
             hslSaturation: 0.3,
             vibrance: 0.4,
+            flipHorizontal: true,
+            flipVertical: false,
             cropInsetTop: 0.1,
             cropInsetBottom: 0.05,
             cropInsetLeft: 0.15,

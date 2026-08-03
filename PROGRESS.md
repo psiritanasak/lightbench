@@ -1,29 +1,34 @@
 # Progress
 
 ## Current phase
-Phase 2 (Edit engine) — the original six roadmap items plus five backlog
-additions (Brightness, Black Point, Brilliance, Vibrance, Vignette) are
-shipped, each reviewer-approved and manually verified live. The roadmap in
-CLAUDE.md was expanded three times at the user's request to spell out the
-fuller scope: first adding Transform/Distort and v2 notes for
-curves/HSL/crop, then using Apple Photos' adjustment panel (screenshots the
-user shared) as a completeness reference, then again refining
-Transform/Distort and Crop v2 against Photos' specific Crop-panel controls
-(Straighten, Vertical/Horizontal perspective, Flip, concrete aspect-ratio
-preset list). Full detail lives in CLAUDE.md's "Phase 2 edit engine backlog"
-section — do not duplicate it here, just read it there. Summary of what's
-NOT built yet: Cast (deliberately deferred — see below), Black & White mode,
-Red-Eye removal, a WB neutral-gray eyedropper, Levels, Definition/Clarity,
-Selective Color (= HSL v2, per-band panel), Noise Reduction, Sharpen,
-Transform/Distort (straighten + vertical/horizontal perspective + lens
-distortion), Flip, and Crop v2 (interactive overlay + concrete aspect
-presets — user has explicitly asked for this next, see below).
+Phase 2 (Edit engine) — the original six roadmap items, five backlog
+tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
+Vignette), and Crop v2's drag-handle rectangle are shipped, each
+reviewer-approved and manually verified live. The roadmap in CLAUDE.md was
+expanded three times at the user's request to spell out the fuller scope:
+first adding Transform/Distort and v2 notes for curves/HSL/crop, then using
+Apple Photos' adjustment panel (screenshots the user shared) as a
+completeness reference, then again refining Transform/Distort and Crop v2
+against Photos' specific Crop-panel controls (Straighten, Vertical/Horizontal
+perspective, Flip, concrete aspect-ratio preset list). Full detail lives in
+CLAUDE.md's "Phase 2 edit engine backlog" section — do not duplicate it here,
+just read it there. Summary of what's NOT built yet: Cast (deliberately
+deferred — see below), Black & White mode, Red-Eye removal, a WB
+neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color (= HSL
+v2, per-band panel), Noise Reduction, Sharpen, Transform/Distort (straighten
++ vertical/horizontal perspective + lens distortion), Flip, and Crop v2's
+aspect-ratio presets (explicitly deferred, see below).
 
-**Currently in progress: Crop v2, drag-handle interactive rectangle only**
-(aspect-ratio presets explicitly deferred to a follow-up per the user).
-Replaces the four numeric inset sliders with click-and-drag handles overlaid
-on the image, matching normal photo-editor UX. Not yet planned/implemented —
-this is the very next step when resuming.
+**Currently pending user decision: a layout redesign** matching an Apple
+Photos Crop-tool screenshot the user shared (dark theme, top tab bar —
+Adjust/Filters/Crop/Clean Up — right-side per-tool panel with
+Straighten/Vertical/Horizontal/Flip/Aspect controls, Auto/Reset/Done
+buttons). This bundles a visual restyle with several NOT-YET-BUILT features
+(Straighten/Vertical/Horizontal = Transform/Distort, Flip, Aspect presets).
+Asked the user to scope it — visual-only restyle of what exists today vs.
+adding the structural tab-bar shell (with placeholders for unbuilt tools) vs.
+building the full feature set to match the screenshot exactly — no answer
+yet. Do not start implementing any part of this until scope is confirmed.
 
 Phase 3 (non-destructive pipeline: param serialization, edit history, undo)
 remains after Phase 2's expanded scope is done, and also needs its own
@@ -133,10 +138,61 @@ restructure. 1 commit.
   filter, so the existing origin-only `linearPixel(of:)` couldn't show
   falloff). 1 commit (color-math + tests + UI together).
 
+### Crop v2 — interactive drag-handle rectangle (complete, verified live; aspect presets still deferred)
+- NEW `Sources/UI/CropOverlayView.swift` — click-and-drag crop rectangle
+  overlaid on the full image. 8 handles (4 corners drive their two adjacent
+  insets, 4 edge midpoints drive one each) plus dragging the interior to
+  translate the whole rect. Presentation-only: reads/writes the SAME
+  `EditState.cropInsetTop/Bottom/Left/Right` fields the numeric sliders
+  already bind to (four individual `@Binding`s, not the whole `EditState`,
+  so it structurally cannot touch any other field) — **zero changes to
+  `EditState.swift` or `EditPipeline.swift`**, confirmed by both reviewer
+  passes.
+- **Crux coordinate-math risk, resolved by direct verification, not
+  reasoning**: `cropInsetTop` was confirmed (re-reading
+  `testCropTopInsetRemovesTopContent`) to trim the image's VISUAL top. In
+  `CIImage`'s own bottom-left/y-up space that's the HIGH-y region; in
+  SwiftUI's top-left/y-down point space (where the overlay lives) visual top
+  is LOW-y. The two spaces agree on what "visual top" MEANS even though the
+  y-VALUE representing it differs — so the on-screen mapping is a direct add
+  (`y = fitRect.minY + fitRect.height * top`) with no flip, despite this
+  project having shipped two real y-flip bugs before. `AspectFit.rect(fitting:in:)`
+  (already used by the renderer) is reused as-is with the SwiftUI container's
+  point-size, so the overlay and the Metal view always agree on where the
+  image sits on screen.
+- **Crop-editing mode** is a local, ephemeral `@State` in `ContentView`
+  (deliberately NOT part of `EditState`/the document — it's a UI mode, not an
+  edit). While active, a computed `displayEditState` zeroes the crop insets
+  only for what's rendered (so the full frame shows with every other edit
+  still applied); the overlay itself reads the REAL insets for its rectangle.
+  Exits automatically when a new photo loads (`onChange(of: currentFileName)`).
+  The four numeric sliders remain and stay in sync for free (both read/write
+  the same fields) — no slider removal.
+- `Sources/Rendering/MetalImageView.swift` — small equality guard added in
+  `updateNSView` (skip `setNeedsDisplay` when `image`/`editState` are
+  unchanged) so a crop drag, where `displayEditState` is constant
+  frame-to-frame, doesn't re-run the full Core Image pipeline for no reason —
+  benefits every slider, not just crop.
+- **First reviewer pass was FIX FIRST — one real bug**: dragging the
+  rectangle's interior clamped the translation to preserve the
+  `left+right`/`top+bottom` sums (preventing inversion) but didn't stop that
+  sum from piling onto a single side past the enforced 0.45 max, silently
+  desyncing the overlay from what `EditPipeline.applyCrop`'s own independent
+  per-side clamp would actually render. Fixed by bounding the interior-drag
+  translation to each side's individual headroom under the max; second
+  reviewer pass independently re-derived the bound algebraically (checked
+  all four cross-inequalities) and APPROVEd. A doc-comment imprecision
+  (claimed "visual top is low-y in both spaces" — true only for SwiftUI's
+  space) was also caught and corrected in the same pass.
+- No new unit tests — confirmed appropriate both times: this is UI/gesture
+  code with zero `EditEngine` changes, and `applyCrop`'s existing
+  coordinate-direction tests already cover the geometry the overlay drives.
+  91 tests still pass unchanged. 1 commit.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Vignette, first pass, no issues
-found). Every shipped Phase 2 feature and backlog addition has a clean final
-reviewer verdict.
+None — last reviewer verdict was APPROVE (Crop v2 drag rectangle, second
+pass after one FIX FIRST round). Every shipped Phase 2 feature and backlog
+addition has a clean final reviewer verdict.
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
@@ -327,14 +383,31 @@ Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**The original six Phase 2 roadmap items are done; backlog work continues.**
-Brightness, Black Point, Brilliance, Vibrance, and Vignette have since
-shipped (see above). **User has explicitly chosen the next item: Crop v2's
-interactive drag-handle crop rectangle** (replacing the four numeric inset
-sliders with click-and-drag handles overlaid on the image, matching normal
-photo-editor UX), with aspect-ratio presets EXPLICITLY DEFERRED to a
-follow-up session. Not yet planned or implemented — resume by entering Plan
-Mode for this specifically.
+**Waiting on user scope decision for a layout redesign — do not start
+implementing yet.** The user shared a screenshot of Apple Photos' Crop-tool
+panel (dark theme; top tab bar Adjust/Filters/Crop/Clean Up; right-side
+per-tool panel with Straighten/Vertical/Horizontal/Flip/Aspect-preset
+controls, Auto/Reset/Done buttons) and asked to "apply this layout" to this
+app. Responded by asking which of three scopes they want, since the
+screenshot bundles a visual restyle with several backlog items that aren't
+built yet (Straighten/Vertical/Horizontal = Transform/Distort, Flip, and
+Aspect presets — none exist in this codebase):
+1. Visual-only restyle of what already exists (dark theme applied to current
+   sidebar/crop UI, no new tabs or controls).
+2. Structural — add the tab-bar shell (Adjust/Filters/Crop/Clean Up) and
+   reorganize existing controls into per-tool panels, with Filters/Clean Up
+   as inert placeholders (neither is built at all).
+3. Full feature parity with the screenshot — build Straighten/Vertical/
+   Horizontal perspective (Transform/Distort), Flip, and Aspect presets to
+   actually populate the Crop panel as shown.
+No answer yet as of this write-up. **Resume by checking for the user's reply
+to this scoping question before touching any UI files.**
+
+Once that's resolved (or if the user instead picks a different next
+backlog item), remaining not-yet-built work: Cast (deliberately deferred —
+see below), Black & White mode, Red-Eye removal, WB neutral-gray eyedropper,
+Levels, Definition/Clarity, Selective Color (HSL v2), Noise Reduction,
+Sharpen, Transform/Distort, Flip, and Crop v2's aspect-ratio presets.
 
 Cast was deliberately passed over (not forgotten) when picking a feature
 after Vibrance: it's the one remaining backlog item that breaks the
@@ -345,13 +418,9 @@ per-pixel transform), which deserves its own deliberate design pass rather
 than reusing the existing pattern. Still not built; pick it up when ready to
 design that content-aware machinery properly.
 
-Remaining not-yet-built backlog after Crop v2's drag rectangle: Cast, Black &
-White mode, Red-Eye removal, WB neutral-gray eyedropper, Levels,
-Definition/Clarity, Selective Color (HSL v2), Noise Reduction, Sharpen,
-Transform/Distort, Flip, and Crop v2's aspect-ratio presets. Do not start
-Phase 3 (non-destructive pipeline: param serialization, edit history, undo)
-without the user's explicit go-ahead — starting a new phase always needs its
-own Plan Mode session per CLAUDE.md's roadmap-order rule.
+Do not start Phase 3 (non-destructive pipeline: param serialization, edit
+history, undo) without the user's explicit go-ahead — starting a new phase
+always needs its own Plan Mode session per CLAUDE.md's roadmap-order rule.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

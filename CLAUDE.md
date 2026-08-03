@@ -83,8 +83,9 @@ each gets its own Plan Mode session per the workflow rules below.
   Simple/cheap relative to everything else in this backlog (no parameters, just two
   toggles) — candidate for a quick session if a small win is wanted between bigger
   features.
-- **Crop:** ✅ v1 shipped as four numeric inset sliders (Top/Bottom/Left/Right). v2 not
-  built: interactive drag-handle crop rectangle overlaid on the image; aspect-ratio
+- **Crop:** ✅ v1 shipped as four numeric inset sliders (Top/Bottom/Left/Right). ✅ v2's
+  interactive drag-handle crop rectangle also shipped (overlaid on the full image, 8
+  handles + interior drag, numeric sliders kept and stay in sync). Not built: aspect-ratio
   presets, concretely (from the same reference): Original, Freeform, Square, 16:9, 4:5,
   5:7, 4:3, 3:5, 3:2, Custom. Straighten/Vertical/Horizontal live under Transform/Distort
   above, not duplicated here, even though Photos surfaces them in the same Crop panel.

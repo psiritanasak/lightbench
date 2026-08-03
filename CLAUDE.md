@@ -41,16 +41,18 @@ completeness — a mature, shipping editor's full control set). ✅ = shipped (v
 a simplified version — see note); everything else is not built yet. Pick ONE at a time,
 each gets its own Plan Mode session per the workflow rules below.
 
-- **Light (tone):** Exposure ✅, Contrast ✅. Not built: Brightness (additive lightness,
-  distinct from Exposure's multiplicative linear-light gain), Black Point (shadow
-  clipping point), Brilliance (Apple's composite auto-adjustment blending several tone
-  controls at once — lowest priority, may skip as redundant with the others).
+- **Light (tone):** Exposure ✅, Contrast ✅, Brightness ✅ (additive lightness,
+  distinct from Exposure's multiplicative linear-light gain, applied in the
+  perceptual domain), Black Point ✅ (shadow clipping point, implemented by
+  moving Curves' point0 along its X axis), Brilliance ✅ (this app's own
+  composite approximation — NOT Apple's proprietary algorithm — a render-time
+  blend of effective contrast/shadow-lift/highlight-protection/saturation).
   Shadows/Highlights currently live under Curves v1 below rather than as dedicated
   Light-group sliders — revisit whether to split them out once Levels/Curves v2 lands.
-- **Color:** Saturation ✅ (global, under HSL v1 below). Not built: Vibrance (saturation
-  that protects already-saturated tones and skin tones — a different algorithm from
-  plain saturation, not just a rename), Cast (color-cast neutralization, distinct from
-  White Balance's temperature/tint).
+- **Color:** Saturation ✅ (global, under HSL v1 below), Vibrance ✅ (saturation
+  that protects already-saturated tones and skin tones — a genuinely different
+  algorithm from plain saturation, via Core Image's `CIVibrance`). Not built:
+  Cast (color-cast neutralization, distinct from White Balance's temperature/tint).
 - **Black & White:** not built — monochrome conversion mode.
 - **Red-Eye:** not built — likely needs a point-and-click UI, a different interaction
   model from every slider-based adjustment built so far.

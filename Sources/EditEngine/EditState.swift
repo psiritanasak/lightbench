@@ -29,6 +29,17 @@ struct EditState: Equatable, Codable {
     /// pixel values — see `EditPipeline`.
     var exposureEV: Double = 0
 
+    // MARK: - Brightness
+
+    /// Perceptual brightness offset, -1...1, 0 is identity. Unlike Exposure
+    /// (a linear-light multiplicative stops gain), this is an additive
+    /// offset applied in the perceptual sRGB-gamma domain — a documented
+    /// deviation, same family as Contrast. A linear-domain additive offset
+    /// was measured to be non-photographic (crushes shadows hard, barely
+    /// moves highlights); the perceptual-domain version degrades gracefully
+    /// near black and preserves highlight headroom — see `EditPipeline`.
+    var brightness: Double = 0
+
     // MARK: - Contrast
 
     /// Contrast adjustment. `0` is identity; positive increases contrast,
@@ -57,6 +68,31 @@ struct EditState: Equatable, Codable {
     /// highlight headroom above linear 1.0 to white (measured, documented
     /// limitation — see `EditPipeline` and the curve headroom tests).
     var curvesHighlights: Double = 0
+
+    /// Black-point / shadow-clipping control, -1...1, 0 is identity.
+    /// Negative deepens (crushes) the darkest tones toward pure black — the
+    /// Levels black-point behavior — by moving point0 of the same
+    /// `CIToneCurve` spline `curvesShadows`/`curvesHighlights` use, along
+    /// its X (input) axis. Positive gently lifts/fades blacks (subtle by
+    /// design). Applied in the perceptual domain, inside the curve stage.
+    /// NOTE: like any active curve, clamps highlight headroom above 1.0
+    /// when active, and `CIToneCurve`'s extrapolation (not hard clamping)
+    /// near point0 gives a mild deep-shadow overshoot on the crush side —
+    /// measured and documented in `EditPipeline`, a "soft" black point
+    /// rather than a razor clip.
+    var blackPoint: Double = 0
+
+    // MARK: - Brilliance (composite)
+
+    /// A single-slider "overall pop" control, -1...1, 0 is identity. THIS
+    /// IS THIS APP'S OWN APPROXIMATION — Apple's actual Photos "Brilliance"
+    /// algorithm is proprietary and undocumented; this is not a
+    /// reproduction of it. Implemented as a pure render-time blend that
+    /// nudges the *effective* contrast/shadow-lift/highlight-protection/
+    /// saturation used during rendering, WITHOUT changing what the
+    /// Contrast/Shadows/Highlights/Saturation sliders themselves display —
+    /// see `EditPipeline` for the exact weights.
+    var brilliance: Double = 0
 
     // MARK: - HSL (global hue & saturation)
 

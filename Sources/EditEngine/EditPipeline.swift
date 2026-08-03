@@ -8,7 +8,10 @@ import CoreImage.CIFilterBuiltins
 /// Decode already happened before this point (the caller loads the file);
 /// output transform (display color space conversion) happens at render time,
 /// outside this type. Every stage of the fixed order now exists: WB,
-/// exposure, contrast, curves, HSL, and crop.
+/// exposure, contrast, curves, HSL, and crop — plus three additional
+/// Light-group tone controls (Brightness, Black Point, Brilliance) folded
+/// into the existing perceptual sandwich rather than the fixed order list,
+/// since they're refinements of stages that already exist there.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
@@ -83,55 +86,145 @@ enum EditPipeline {
         return filter.outputImage ?? image
     }
 
-    // MARK: - Perceptual domain (contrast, curves, HSL)
+    // MARK: - Perceptual domain (brightness, contrast, curves, HSL)
 
-    /// Contrast, curves, and HSL are applied in the sRGB gamma-encoded
-    /// (perceptual / display-referred) domain, not scene-linear light. This
-    /// is a DOCUMENTED DEVIATION from CLAUDE.md's default "all image math in
-    /// linear light" rule (which CLAUDE.md itself permits when documented).
-    /// Rationale, verified empirically against Core Image's real behavior in
-    /// this app's working space: a linear-light pivot of 0.5 sits at ~0.735
-    /// perceptual brightness, so a linear-domain contrast pivot crushes
-    /// photographic middle gray (linear ≈0.214) toward black — wrong, and
-    /// unlike every real photo editor. Encoding to sRGB gamma first puts the
-    /// pivot at perceptual middle gray instead. The encode/decode tone-curve
-    /// filters (`encodeToPerceptual`/`decodeToLinear`) are exact inverses of
-    /// each other and do NOT clamp values above 1.0, so highlight headroom
-    /// created by exposure (which runs before this step) survives the
-    /// round-trip back to linear — as long as no stage in between clamps it
-    /// itself. `CIToneCurve` (used by `applyCurves` below) DOES clamp to
-    /// [0,1] once active — see that method's comment; the headroom guarantee
-    /// above is conditional on curves being inactive. HSL's filters
-    /// (`CIHueAdjust`, `CIColorControls.saturation`), by contrast, do NOT
+    /// Brightness, contrast, curves, and HSL are applied in the sRGB
+    /// gamma-encoded (perceptual / display-referred) domain, not scene-linear
+    /// light. This is a DOCUMENTED DEVIATION from CLAUDE.md's default "all
+    /// image math in linear light" rule (which CLAUDE.md itself permits when
+    /// documented). Rationale, verified empirically against Core Image's real
+    /// behavior in this app's working space: a linear-light pivot of 0.5 sits
+    /// at ~0.735 perceptual brightness, so a linear-domain contrast pivot
+    /// crushes photographic middle gray (linear ≈0.214) toward black — wrong,
+    /// and unlike every real photo editor. The same reasoning applies to
+    /// Brightness: a linear-domain additive offset was measured to be
+    /// non-photographic (crushes shadows hard, e.g. 0.05-0.25 = -0.20, barely
+    /// moves highlights), while the perceptual-domain version degrades
+    /// gracefully near black. Encoding to sRGB gamma first puts these
+    /// operations where they behave like every real photo editor. The
+    /// encode/decode tone-curve filters (`encodeToPerceptual`/
+    /// `decodeToLinear`) are exact inverses of each other and do NOT clamp
+    /// values above 1.0, so highlight headroom created by exposure (which
+    /// runs before this step) survives the round-trip back to linear — as
+    /// long as no stage in between clamps it itself. `CIToneCurve` (used by
+    /// `applyCurves` below, which now also implements Black Point) DOES clamp
+    /// to [0,1] once active — see that method's comment; the headroom
+    /// guarantee above is conditional on curves/black point being inactive.
+    /// Brightness and HSL's filters (`CIColorControls.brightness`,
+    /// `CIHueAdjust`, `CIColorControls.saturation`), by contrast, do NOT
     /// clamp — measured: saturation +1 on a 1.4 linear channel reads back as
-    /// 2.57770, not 1.0. Don't assume one adjustment's clamp behavior
-    /// carries to another; each was verified independently.
+    /// 2.57770, not 1.0, and brightness +1 on a 0.7 linear channel reads back
+    /// as 1.25392. Don't assume one adjustment's clamp behavior carries to
+    /// another; each was verified independently.
     ///
-    /// Order inside the sandwich matters and is NOT arbitrary: contrast runs
-    /// before curves because the two do not commute (measured — the same
-    /// inputs give different results depending on order), and HSL runs after
-    /// curves for the same reason (measured non-commuting case). This
-    /// matches the fixed pipeline (…→contrast→curves→HSL→…). Within HSL,
-    /// hue and saturation ALSO do not commute in general — they only agree
-    /// to within this project's 0.002 test tolerance at modest slider
+    /// Order inside the sandwich matters and is NOT arbitrary: brightness
+    /// runs FIRST (right after encode) — measured non-commuting with contrast
+    /// (brightness→contrast = 0.56524 vs contrast→brightness = 0.41565 for
+    /// the same inputs) — placing it adjacent to Exposure in "overall
+    /// lightness" role, before contrast/curves/HSL shape tones further.
+    /// Contrast then runs before curves (measured non-commuting), and HSL
+    /// runs after curves (measured non-commuting). This matches the fixed
+    /// pipeline (…→contrast→curves→HSL→…) with brightness prepended. Within
+    /// HSL, hue and saturation ALSO do not commute in general — they only
+    /// agree to within this project's 0.002 test tolerance at modest slider
     /// values; at wider (still in-range) settings they diverge measurably
     /// (e.g. hue -90°/saturation +1 on a saturated red gives (0.42335,
     /// 0.18309, 1.09968) hue-first vs (0.42582, 0.18283, 1.10397)
     /// saturation-first — a 0.0043 gap). hue-then-saturation is therefore a
     /// real, fixed requirement, not a discretionary clarity choice — see
     /// `testHueSaturationOrderIsFixed`.
+    ///
+    /// Brilliance is NOT its own filter stage — it's a pure render-time blend
+    /// that nudges the *effective* contrast/shadows/highlights/saturation
+    /// computed by `effectiveTone(_:)` below, without ever mutating the
+    /// user's own stored slider values. See that function's comment for the
+    /// exact weights; it's this app's own approximation of the "brilliance"
+    /// concept, not a reproduction of Apple's (undocumented, proprietary)
+    /// Photos algorithm.
     private static func applyPerceptualAdjustments(_ state: EditState, to image: CIImage) -> CIImage {
-        guard state.contrast != 0 || curvesActive(state) || hslActive(state) else { return image }
+        let effective = effectiveTone(state)
+        guard state.brightness != 0
+            || effective.contrast != 0
+            || curvesActive(effective, state.blackPoint)
+            || state.hslHue != 0
+            || effective.saturation != 0
+        else { return image }
 
         var img = encodeToPerceptual(image)
-        if state.contrast != 0 { img = applyContrast(state.contrast, to: img) }
-        if curvesActive(state) { img = applyCurves(state, to: img) }
-        if hslActive(state) {
-            if state.hslHue != 0 { img = applyHue(state.hslHue, to: img) }
-            if state.hslSaturation != 0 { img = applySaturation(state.hslSaturation, to: img) }
-        }
+        if state.brightness != 0 { img = applyBrightness(state.brightness, to: img) }
+        if effective.contrast != 0 { img = applyContrast(effective.contrast, to: img) }
+        if curvesActive(effective, state.blackPoint) { img = applyCurves(effective, state.blackPoint, to: img) }
+        if state.hslHue != 0 { img = applyHue(state.hslHue, to: img) }
+        if effective.saturation != 0 { img = applySaturation(effective.saturation, to: img) }
         img = decodeToLinear(img)
         return img
+    }
+
+    // MARK: - Brightness
+
+    /// Slider-to-filter-parameter span, measured to give a strong-but-graceful
+    /// perceptual brightness shift across the full -1...1 slider range
+    /// without visibly clipping shadows or losing highlight headroom.
+    private static let kBrightnessSpan: Double = 0.25
+
+    /// A raw additive offset in the perceptual domain via Core Image's
+    /// color-controls filter — a SEPARATE instance from `applyContrast`'s
+    /// and `applySaturation`'s, since fusing them would apply all three
+    /// simultaneously rather than in the pipeline's required
+    /// brightness-then-contrast-then-…-then-saturation order. Does NOT clamp
+    /// highlight headroom (measured, unlike `applyCurves`).
+    private static func applyBrightness(_ brightness: Double, to image: CIImage) -> CIImage {
+        let filter = CIFilter.colorControls()
+        filter.inputImage = image
+        filter.brightness = Float(brightness * kBrightnessSpan)
+        return filter.outputImage ?? image
+    }
+
+    // MARK: - Brilliance (composite)
+
+    /// Weights for Brilliance's render-time blend into the effective tone
+    /// values below. Chosen so that, STARTING FROM A BASE SLIDER AT 0, even
+    /// brilliance = ±1 doesn't push any single underlying effect (contrast,
+    /// shadow lift, highlight protection, saturation) to its own extreme —
+    /// a tasteful "pop," not a maxed-out stack. This does NOT hold if the
+    /// user has also independently dialed up the base slider (e.g.
+    /// contrast=1 AND brilliance=1 together clamp effContrast to its own
+    /// extreme via `clamped()`, correctly — the user asked for both). THIS
+    /// IS THIS APP'S OWN APPROXIMATION of the "brilliance" concept, not a
+    /// reproduction of Apple's proprietary, undocumented Photos algorithm —
+    /// see `EditState.brilliance`.
+    private static let kBrillianceContrastWeight: Double = 0.15
+    private static let kBrillianceShadowWeight: Double = 0.40
+    private static let kBrillianceHighlightWeight: Double = 0.30
+    private static let kBrillianceSaturationWeight: Double = 0.10
+
+    /// The tone values actually used for rendering, after blending in
+    /// Brilliance's contribution. This is the ONLY place Brilliance has any
+    /// effect — it never mutates `state.contrast`/`curvesShadows`/
+    /// `curvesHighlights`/`hslSaturation` themselves, so those sliders keep
+    /// displaying exactly what the user set them to; Brilliance's influence
+    /// is purely a render-time blend. Each component is clamped to -1...1 so
+    /// the downstream filters' native factors (e.g. contrast's `1 + x`)
+    /// never go negative or unboundedly high.
+    private struct EffectiveTone {
+        let contrast: Double
+        let shadows: Double
+        let highlights: Double
+        let saturation: Double
+    }
+
+    private static func effectiveTone(_ state: EditState) -> EffectiveTone {
+        let b = state.brilliance
+        return EffectiveTone(
+            contrast: clamped(state.contrast + b * kBrillianceContrastWeight),
+            shadows: clamped(state.curvesShadows + b * kBrillianceShadowWeight),
+            highlights: clamped(state.curvesHighlights - b * kBrillianceHighlightWeight),
+            saturation: clamped(state.hslSaturation + b * kBrillianceSaturationWeight)
+        )
+    }
+
+    private static func clamped(_ value: Double, to range: ClosedRange<Double> = -1...1) -> Double {
+        min(max(value, range.lowerBound), range.upperBound)
     }
 
     // MARK: - Contrast
@@ -147,51 +240,63 @@ enum EditPipeline {
         return filter.outputImage ?? image
     }
 
-    // MARK: - Curves
+    // MARK: - Curves (also implements Black Point, via point0)
 
     /// Slider-to-control-point span, measured to give a strong-but-monotone
     /// curve across the full -1...1 slider range.
     private static let kCurvePointSpan: Double = 0.15
 
-    private static func curvesActive(_ state: EditState) -> Bool {
-        state.curvesShadows != 0 || state.curvesHighlights != 0
+    /// Slider-to-control-point span for Black Point's point0 move, measured
+    /// to give a strong-but-plausible Levels-style black-clip/lift range.
+    private static let kBlackPointSpan: Double = 0.20
+
+    private static func curvesActive(_ effective: EffectiveTone, _ blackPoint: Double) -> Bool {
+        effective.shadows != 0 || effective.highlights != 0 || blackPoint != 0
     }
 
-    /// A simplified, Lightroom-Basic-panel-style parametric tone curve: two
-    /// sliders (Shadows, Highlights) each move one control point of a
-    /// 5-point `CIToneCurve` spline, rather than exposing a full interactive
-    /// point-based curve editor (out of scope for this feature; see
-    /// EditState's doc comments for the field-level rationale).
+    /// A simplified, Lightroom-Basic-panel-style parametric tone curve:
+    /// Shadows/Highlights (now driven by Brilliance-blended effective
+    /// values, not the raw slider values directly) move `point1`/`point3` of
+    /// a 5-point `CIToneCurve` spline, and Black Point moves `point0` along
+    /// its X (input) axis — reusing the same curve infrastructure rather
+    /// than a separate stage. Axis verified empirically, not assumed: moving
+    /// point0 on X produces the correct Levels-style "clip to black"
+    /// behavior (measured: deep tones clip to 0, shadows darken/stretch).
+    /// Rather than exposing a full interactive point-based curve editor
+    /// (out of scope for this feature; see EditState's doc comments for the
+    /// field-level rationale).
     ///
-    /// KNOWN, MEASURED, DOCUMENTED LIMITATION: `CIToneCurve` builds an
-    /// internal LUT clamped to [0,1] the moment it's non-identity, so any
-    /// active curve adjustment collapses linear values above 1.0 (e.g.
-    /// highlight headroom created by a prior exposure boost) to white. This
-    /// includes headroom contrast itself would otherwise have preserved (see
-    /// `applyPerceptualAdjustments`'s comment) — enabling curves changes
-    /// contrast's headroom guarantee. Accepted for this feature: it only
-    /// affects already-very-bright pixels, only when a curve is actively
-    /// engaged, and behaves like a defensible highlight-recovery clip rather
-    /// than a visible artifact. A custom Metal kernel with linear
-    /// extrapolation beyond x=1 (anticipated by CLAUDE.md's Stack note:
-    /// "custom kernels for curves, HSL, WB") would remove this limitation
-    /// and is explicitly deferred as future work, not built now.
-    private static func applyCurves(_ state: EditState, to image: CIImage) -> CIImage {
+    /// KNOWN, MEASURED, DOCUMENTED LIMITATIONS:
+    /// 1. `CIToneCurve` builds an internal LUT clamped to [0,1] the moment
+    ///    it's non-identity, so any active curve/black-point adjustment
+    ///    collapses linear values above 1.0 (e.g. highlight headroom created
+    ///    by a prior exposure/brightness boost) to white. This includes
+    ///    headroom contrast itself would otherwise have preserved (see
+    ///    `applyPerceptualAdjustments`'s comment) — enabling curves changes
+    ///    contrast's headroom guarantee. Accepted: it only affects
+    ///    already-very-bright pixels, only when a curve is actively engaged,
+    ///    and behaves like a defensible highlight-recovery clip rather than
+    ///    a visible artifact.
+    /// 2. `CIToneCurve` extrapolates (does not hard-clamp) inputs just below
+    ///    point0.x, producing a mild deep-shadow spline OVERSHOOT on Black
+    ///    Point's crush side (measured: point0=(0.20,0), a very dark input
+    ///    lifts slightly instead of stepping straight to 0). Net effect is a
+    ///    "soft" black point, not a razor clip.
+    /// A custom Metal kernel with linear extrapolation beyond x=1 (anticipated
+    /// by CLAUDE.md's Stack note: "custom kernels for curves, HSL, WB") would
+    /// remove both limitations and is explicitly deferred as future work.
+    private static func applyCurves(_ effective: EffectiveTone, _ blackPoint: Double, to image: CIImage) -> CIImage {
         let filter = CIFilter.toneCurve()
         filter.inputImage = image
-        filter.point0 = CGPoint(x: 0, y: 0)
-        filter.point1 = CGPoint(x: 0.25, y: 0.25 + state.curvesShadows * kCurvePointSpan)
+        filter.point0 = CGPoint(x: max(0, -blackPoint) * kBlackPointSpan, y: max(0, blackPoint) * kBlackPointSpan)
+        filter.point1 = CGPoint(x: 0.25, y: 0.25 + effective.shadows * kCurvePointSpan)
         filter.point2 = CGPoint(x: 0.5, y: 0.5)
-        filter.point3 = CGPoint(x: 0.75, y: 0.75 + state.curvesHighlights * kCurvePointSpan)
+        filter.point3 = CGPoint(x: 0.75, y: 0.75 + effective.highlights * kCurvePointSpan)
         filter.point4 = CGPoint(x: 1, y: 1)
         return filter.outputImage ?? image
     }
 
     // MARK: - HSL (global hue & saturation)
-
-    private static func hslActive(_ state: EditState) -> Bool {
-        state.hslHue != 0 || state.hslSaturation != 0
-    }
 
     /// Global hue rotation. `degrees` maps directly to `CIHueAdjust`'s
     /// `angle` (converted to radians) — no sign inversion needed, unlike

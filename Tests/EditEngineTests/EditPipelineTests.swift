@@ -160,6 +160,64 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(pixel.r, 1.2, accuracy: accuracy)
     }
 
+    // MARK: - Brightness math
+    //
+    // Brightness is a perceptual-domain additive offset (see EditPipeline's
+    // documented-deviation comment) — measured, not hand-derived, since it's
+    // a Core Image filter operating on real gamma-encoded tone response.
+
+    func testBrightnessZeroIsIdentity() {
+        for value in [0.05, 0.2, 0.5, 0.7, 1.2] {
+            let input = solidColorImage(value)
+            let output = EditPipeline.apply(EditState(brightness: 0), to: input)
+            XCTAssertEqual(linearPixel(of: output).r, Float(value), accuracy: accuracy, "at L=\(value)")
+        }
+    }
+
+    func testBrightnessPositiveLifts() {
+        let cases: [(input: Double, expected: Float)] = [(0.05, 0.21201), (0.2, 0.49874), (0.5, 0.96701)]
+        for testCase in cases {
+            let output = EditPipeline.apply(EditState(brightness: 1), to: solidColorImage(testCase.input))
+            XCTAssertEqual(linearPixel(of: output).r, testCase.expected, accuracy: accuracy, "at L=\(testCase.input)")
+        }
+    }
+
+    func testBrightnessNegativeDarkens() {
+        let cases: [(input: Double, expected: Float)] = [(0.2, 0.04490), (0.5, 0.20074)]
+        for testCase in cases {
+            let output = EditPipeline.apply(EditState(brightness: -1), to: solidColorImage(testCase.input))
+            XCTAssertEqual(linearPixel(of: output).r, testCase.expected, accuracy: accuracy, "at L=\(testCase.input)")
+        }
+    }
+
+    func testBrightnessPreservesHighlightHeadroom() {
+        // Unlike an active curve/black-point, CIColorControls.brightness has
+        // no internal [0,1] clamp.
+        let input = solidColorImage(0.7)
+        let output = EditPipeline.apply(EditState(brightness: 1), to: input)
+        XCTAssertEqual(linearPixel(of: output).r, 1.25392, accuracy: accuracy)
+    }
+
+    func testBrightnessAppliedAfterExposure() {
+        let input = solidColorImage(0.25)
+        let output = EditPipeline.apply(EditState(exposureEV: 1, brightness: 0.8), to: input)
+        XCTAssertEqual(linearPixel(of: output).r, 0.85920, accuracy: accuracy)
+    }
+
+    func testBrightnessAppliedBeforeContrast() {
+        // Proves ordering: brightness runs before contrast (not commutative
+        // — the reversed order measures 0.41565 for the same inputs).
+        let input = solidColorImage(0.2)
+        let output = EditPipeline.apply(EditState(brightness: 0.8, contrast: 0.5), to: input)
+        XCTAssertEqual(linearPixel(of: output).r, 0.56524, accuracy: accuracy)
+    }
+
+    func testBrightnessPreservesAlpha() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 0.5)
+        let output = EditPipeline.apply(EditState(brightness: 1), to: input)
+        XCTAssertEqual(linearPixel(of: output).a, 0.5, accuracy: accuracy)
+    }
+
     // MARK: - Contrast math
     //
     // Contrast is applied in the perceptual sRGB-gamma domain, not linear
@@ -453,6 +511,66 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(linearPixel(of: contrastPlusCurve).r, 1.0, accuracy: accuracy)
     }
 
+    // MARK: - Black Point math
+    //
+    // Black Point extends the same CIToneCurve applyCurves uses, moving
+    // point0 along its X axis. Measured, not hand-derived — chromatic spline
+    // behavior has no closed-form transfer function.
+
+    func testBlackPointZeroIsIdentity() {
+        for value in [0.05, 0.214, 0.5, 1.2] {
+            let input = solidColorImage(value)
+            let output = EditPipeline.apply(EditState(blackPoint: 0), to: input)
+            XCTAssertEqual(linearPixel(of: output).r, Float(value), accuracy: accuracy, "at L=\(value)")
+        }
+    }
+
+    func testBlackPointNegativeCrushesShadows() {
+        let cases: [(input: Double, expected: Float)] = [
+            (0.05, 0.04130), (0.1, 0.07703), (0.2, 0.19089), (0.3, 0.31425), (0.5, 0.53498)
+        ]
+        for testCase in cases {
+            let output = EditPipeline.apply(EditState(blackPoint: -1), to: solidColorImage(testCase.input))
+            XCTAssertEqual(linearPixel(of: output).r, testCase.expected, accuracy: accuracy, "at L=\(testCase.input)")
+        }
+    }
+
+    func testBlackPointDeepClip() {
+        // Genuinely near-black input clips fully to 0.
+        let output = EditPipeline.apply(EditState(blackPoint: -1), to: solidColorImage(0.002))
+        XCTAssertEqual(linearPixel(of: output).r, 0, accuracy: accuracy)
+    }
+
+    func testBlackPointCrushOvershoot() {
+        // Documented limitation, not a failure: CIToneCurve extrapolates
+        // rather than hard-clamping just below point0.x, so a very dark
+        // (but not fully clipped) input lifts slightly instead of stepping
+        // straight to 0 — a "soft" black point.
+        let output = EditPipeline.apply(EditState(blackPoint: -1), to: solidColorImage(0.01))
+        XCTAssertEqual(linearPixel(of: output).r, 0.03381, accuracy: accuracy)
+    }
+
+    func testBlackPointPositiveLiftsGently() {
+        let cases: [(input: Double, expected: Float)] = [(0.05, 0.05109), (0.2, 0.20106), (0.3, 0.29841)]
+        for testCase in cases {
+            let output = EditPipeline.apply(EditState(blackPoint: 1), to: solidColorImage(testCase.input))
+            XCTAssertEqual(linearPixel(of: output).r, testCase.expected, accuracy: accuracy, "at L=\(testCase.input)")
+        }
+    }
+
+    func testBlackPointClampHighlightHeadroom() {
+        // Documented limitation, same family as curves: an active black
+        // point clamps highlight headroom above linear 1.0.
+        let output = EditPipeline.apply(EditState(blackPoint: -1), to: solidColorImage(1.2))
+        XCTAssertEqual(linearPixel(of: output).r, 1.0, accuracy: accuracy)
+    }
+
+    func testBlackPointPreservesAlpha() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 0.5)
+        let output = EditPipeline.apply(EditState(blackPoint: -1), to: input)
+        XCTAssertEqual(linearPixel(of: output).a, 0.5, accuracy: accuracy)
+    }
+
     // MARK: - HSL math
     //
     // Hue/saturation math is applied inside the same perceptual sandwich as
@@ -652,15 +770,97 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(buffer[0], 0.4, accuracy: accuracy)
     }
 
+    // MARK: - Brilliance math
+    //
+    // Brilliance is this app's own composite (NOT Apple's algorithm) — a
+    // pure render-time blend into effective contrast/shadows/highlights/
+    // saturation. Values are hand-derivable from the documented formula
+    // (unlike the black-box filters above), confirmed by measurement.
+
+    func testBrillianceZeroIsIdentity() {
+        let input = solidColorImage(0.35)
+        let output = EditPipeline.apply(EditState(brilliance: 0), to: input)
+        XCTAssertEqual(linearPixel(of: output).r, linearPixel(of: input).r, accuracy: accuracy)
+    }
+
+    func testBrillianceEquivalentToManualSliderCombination() {
+        // The defining test: brilliance=1 must produce EXACTLY the same
+        // output as manually dialing in its constituent weighted deltas
+        // (contrast+0.15, shadows+0.4, highlights-0.3, saturation+0.1) —
+        // proving the blend formula does what it's documented to do, and
+        // that it never mutates the underlying sliders themselves (both
+        // EditState values below are independently constructed).
+        let grayInput = solidColorImage(0.3)
+        let brillianceOnly = EditPipeline.apply(EditState(brilliance: 1), to: grayInput)
+        let manualEquivalent = EditPipeline.apply(
+            EditState(contrast: 0.15, curvesShadows: 0.4, curvesHighlights: -0.3, hslSaturation: 0.1),
+            to: grayInput
+        )
+        XCTAssertEqual(linearPixel(of: brillianceOnly).r, linearPixel(of: manualEquivalent).r, accuracy: accuracy)
+        XCTAssertEqual(linearPixel(of: brillianceOnly).r, 0.24033, accuracy: accuracy)
+
+        let colorInput = solidColorImage(r: 0.6, g: 0.2, b: 0.2)
+        let brillianceColorOnly = EditPipeline.apply(EditState(brilliance: 1), to: colorInput)
+        let manualColorEquivalent = EditPipeline.apply(
+            EditState(contrast: 0.15, curvesShadows: 0.4, curvesHighlights: -0.3, hslSaturation: 0.1),
+            to: colorInput
+        )
+        let brillPixel = linearPixel(of: brillianceColorOnly)
+        let manualPixel = linearPixel(of: manualColorEquivalent)
+        XCTAssertEqual(brillPixel.r, manualPixel.r, accuracy: accuracy)
+        XCTAssertEqual(brillPixel.g, manualPixel.g, accuracy: accuracy)
+        XCTAssertEqual(brillPixel.b, manualPixel.b, accuracy: accuracy)
+        XCTAssertEqual(brillPixel.r, 0.66467, accuracy: accuracy)
+        XCTAssertEqual(brillPixel.g, 0.14018, accuracy: accuracy)
+        XCTAssertEqual(brillPixel.b, 0.14018, accuracy: accuracy)
+    }
+
+    func testBrilliancePartialAndNegative() {
+        let halfOutput = EditPipeline.apply(EditState(brilliance: 0.5), to: solidColorImage(0.3))
+        XCTAssertEqual(linearPixel(of: halfOutput).r, 0.26848, accuracy: accuracy)
+
+        let negativeOutput = EditPipeline.apply(EditState(brilliance: -1), to: solidColorImage(0.3))
+        XCTAssertEqual(linearPixel(of: negativeOutput).r, 0.37444, accuracy: accuracy)
+    }
+
+    func testBrillianceClampsHighlightHeadroomWhenCurveActive() {
+        // Once brilliance is non-zero, effective shadows/highlights become
+        // non-zero too, engaging the curve stage — which clamps headroom,
+        // same documented limitation as curves/black point.
+        let output = EditPipeline.apply(EditState(brilliance: 1), to: solidColorImage(1.3))
+        XCTAssertEqual(linearPixel(of: output).r, 1.0, accuracy: accuracy)
+    }
+
+    func testBriliancePreservesAlpha() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 0.5)
+        let output = EditPipeline.apply(EditState(brilliance: 1), to: input)
+        XCTAssertEqual(linearPixel(of: output).a, 0.5, accuracy: accuracy)
+    }
+
+    func testBrillianceDoesNotMutateUnderlyingSliderValues() {
+        // Structural check: brilliance's effect is purely a render-time
+        // blend — EditState itself must still report the raw slider values
+        // the user set, not brilliance-adjusted ones.
+        var state = EditState(brilliance: 1)
+        state.contrast = 0.2
+        XCTAssertEqual(state.contrast, 0.2)
+        XCTAssertEqual(state.curvesShadows, 0)
+        XCTAssertEqual(state.curvesHighlights, 0)
+        XCTAssertEqual(state.hslSaturation, 0)
+    }
+
     // MARK: - EditState
 
     func testEditStateDefaultIsIdentity() {
         XCTAssertEqual(EditState().exposureEV, 0)
+        XCTAssertEqual(EditState().brightness, 0)
         XCTAssertEqual(EditState().contrast, 0)
         XCTAssertEqual(EditState().whiteBalanceTemperature, 6500)
         XCTAssertEqual(EditState().whiteBalanceTint, 0)
         XCTAssertEqual(EditState().curvesShadows, 0)
         XCTAssertEqual(EditState().curvesHighlights, 0)
+        XCTAssertEqual(EditState().blackPoint, 0)
+        XCTAssertEqual(EditState().brilliance, 0)
         XCTAssertEqual(EditState().hslHue, 0)
         XCTAssertEqual(EditState().hslSaturation, 0)
         XCTAssertEqual(EditState().cropInsetTop, 0)
@@ -678,9 +878,12 @@ final class EditPipelineTests: XCTestCase {
             whiteBalanceTemperature: 5200,
             whiteBalanceTint: -10,
             exposureEV: 1.37,
+            brightness: 0.25,
             contrast: -0.4,
             curvesShadows: 0.6,
             curvesHighlights: -0.2,
+            blackPoint: -0.3,
+            brilliance: 0.5,
             hslHue: 45,
             hslSaturation: 0.3,
             cropInsetTop: 0.1,

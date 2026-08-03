@@ -1,8 +1,8 @@
 # Progress
 
 ## Current phase
-Phase 2 (Edit engine) — the original six roadmap items plus three backlog
-additions (Brightness, Black Point, Brilliance) are shipped, each
+Phase 2 (Edit engine) — the original six roadmap items plus four backlog
+additions (Brightness, Black Point, Brilliance, Vibrance) are shipped, each
 reviewer-approved and manually verified live. The roadmap in CLAUDE.md was
 expanded three times at the user's request to spell out the fuller scope:
 first adding Transform/Distort and v2 notes for curves/HSL/crop, then using
@@ -11,8 +11,8 @@ completeness reference, then again refining Transform/Distort and Crop v2
 against Photos' specific Crop-panel controls (Straighten, Vertical/Horizontal
 perspective, Flip, concrete aspect-ratio preset list). Full detail lives in
 CLAUDE.md's "Phase 2 edit engine backlog" section — do not duplicate it here,
-just read it there. Summary of what's NOT built yet: Vibrance, Cast, Black &
-White mode, Red-Eye removal, a WB neutral-gray eyedropper, Levels,
+just read it there. Summary of what's NOT built yet: Cast, Black & White
+mode, Red-Eye removal, a WB neutral-gray eyedropper, Levels,
 Definition/Clarity, Selective Color (= HSL v2, per-band panel), Noise
 Reduction, Sharpen, Vignette, Transform/Distort (straighten +
 vertical/horizontal perspective + lens distortion), Flip, and Crop v2
@@ -61,10 +61,45 @@ label/binding/range/identity/format pairings for transposition errors (none
 found) and confirmed toolbar/title/alert placement is unaffected by the
 restructure. 1 commit.
 
+### Backlog item — Vibrance (complete, verified live)
+- `Sources/EditEngine/EditState.swift` — `vibrance` (-1...1, default 0, own
+  `// MARK: - Vibrance` section, after `hslSaturation`).
+- `Sources/EditEngine/EditPipeline.swift` — new `applyVibrance` via Core
+  Image's `CIVibrance` (`filter.amount`, 1:1 map, no span constant needed).
+  Runs in the perceptual sandwich immediately BEFORE plain saturation
+  (measured non-commuting with it — max delta 0.243 on a saturated color).
+  Selective by design: +0.5 lifts a muted color's HSV-saturation by +0.164
+  but an already-saturated color by only +0.018 (~9x less) — the defining
+  "protects already-saturated tones" property, measured not assumed. Does
+  NOT clamp highlight headroom. Kept independent of Brilliance (Brilliance
+  already nudges plain saturation; routing it into vibrance too would
+  double-count one slider's "pop").
+- **Notable asymmetry, caught by the reviewer's own re-measurement**: vibrance's
+  "protection" is a positive-amount-only property. At `vibrance: -1`, the
+  already-saturated test color actually loses MORE absolute HSV-saturation
+  (0.184 drop) than the muted one (0.140 drop) — the opposite of the
+  positive-side story. First test-writing attempt assumed false symmetry and
+  failed against the real `xcodebuild test` run; corrected to assert the
+  actual measured relationship and documented the asymmetry in a comment so
+  a future reader doesn't assume it's mirrored.
+- First reviewer pass was FIX FIRST: missing dedicated MARK sections in both
+  `EditState.swift` and `EditPipeline.swift` (vibrance had been appended
+  under the HSL/Saturation headings instead of getting its own), and no test
+  covered the negative side of the slider at all. All fixed; second pass
+  independently re-derived every new numeric assertion end-to-end (not just
+  trusted the write-up) and APPROVEd. One pre-existing, non-blocking
+  observation carried forward from that review: `EditState`'s synthesized
+  `Codable` doesn't apply field defaults to missing JSON keys — a landmine
+  for Phase 3/4 persistence once any `EditState` blob predates a newly added
+  field; needs a custom `init(from:)` before persistence is wired up, not
+  before then.
+- 84 tests total (6 AspectFit + 78 EditPipeline, +7 new Vibrance tests). 1
+  commit (color-math + tests + UI together, single reviewed diff).
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (sidebar UI restructure). Both the
-Brightness/Black Point/Brilliance color-math and the sidebar UI diffs were
-reviewed and approved separately.
+None — last reviewer verdict was APPROVE (Vibrance, second pass after one
+FIX FIRST round). Every shipped Phase 2 feature and backlog addition has a
+clean final reviewer verdict.
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
@@ -255,11 +290,15 @@ Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Phase 2 is done.** Do not start Phase 3 (non-destructive pipeline: param
-serialization, edit history, undo) without the user's explicit go-ahead — the
-"do it all" instruction this session was scoped to Phase 2's remaining
-features specifically, and starting a new phase always needs its own Plan
-Mode session per CLAUDE.md's roadmap-order rule regardless.
+**The original six Phase 2 roadmap items are done; backlog work continues.**
+Brightness, Black Point, Brilliance, and Vibrance have since shipped (see
+above). Remaining not-built backlog: Cast, Black & White mode, Red-Eye
+removal, WB neutral-gray eyedropper, Levels, Definition/Clarity, Selective
+Color (HSL v2), Noise Reduction, Sharpen, Vignette, Transform/Distort, Flip,
+Crop v2 — no next item chosen yet, needs the user's pick each time. Do not
+start Phase 3 (non-destructive pipeline: param serialization, edit history,
+undo) without the user's explicit go-ahead — starting a new phase always
+needs its own Plan Mode session per CLAUDE.md's roadmap-order rule.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't
@@ -287,7 +326,16 @@ Mode session per CLAUDE.md's roadmap-order rule regardless.
   spend-limit sensitivity. Use judgment: color-math/domain questions need
   empirical Plan-agent investigation; pure-geometry or already-established
   patterns (like `AspectFit`) don't.
+- **Don't assume symmetry.** Vibrance's positive-side "protects
+  already-saturated tones" property does NOT mirror at negative amounts
+  (measured: the saturated test color loses MORE absolute saturation than
+  the muted one when desaturating). A test written from that false
+  assumption failed against the real `xcodebuild test` run, not just review
+  — a useful reminder that even with per-feature empirical Plan-agent
+  diagnostics up front, a NEW slider direction/sign/extremum still needs its
+  own explicit measurement, not an inference from the opposite direction's
+  behavior.
 
-## Open reviewer issues
-None outstanding — last reviewer verdict was APPROVE (crop feature + the
-rendering fix, Phase 2 Feature 6 — the final Phase 2 feature).
+(See "Open reviewer issues" near the top of this file for current status —
+that section is kept up to date per-feature; this trailing one is historical
+and intentionally not duplicated further.)

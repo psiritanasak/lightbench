@@ -1,20 +1,20 @@
 # Progress
 
 ## Current phase
-Phase 2 (Edit engine) — **v1 of all six original roadmap items shipped**
-(exposure, contrast, white balance, curves, HSL, crop), each reviewer-approved
-and manually verified live. The roadmap in CLAUDE.md was expanded three times
-at the user's request to spell out the fuller scope: first adding
-Transform/Distort and v2 notes for curves/HSL/crop, then using Apple Photos'
-adjustment panel (screenshots the user shared) as a completeness reference,
-then again refining Transform/Distort and Crop v2 against Photos' specific
-Crop-panel controls (Straighten, Vertical/Horizontal perspective, Flip,
-concrete aspect-ratio preset list). Full detail lives in CLAUDE.md's "Phase 2
-edit engine backlog" section — do not duplicate it here, just read it there.
-Summary of what's NOT built yet: Brightness, Black Point, Brilliance,
-Vibrance, Cast, Black & White mode, Red-Eye removal, a WB neutral-gray
-eyedropper, Levels, Definition/Clarity, Selective Color (= HSL v2, per-band
-panel), Noise Reduction, Sharpen, Vignette, Transform/Distort (straighten +
+Phase 2 (Edit engine) — the original six roadmap items plus three backlog
+additions (Brightness, Black Point, Brilliance) are shipped, each
+reviewer-approved and manually verified live. The roadmap in CLAUDE.md was
+expanded three times at the user's request to spell out the fuller scope:
+first adding Transform/Distort and v2 notes for curves/HSL/crop, then using
+Apple Photos' adjustment panel (screenshots the user shared) as a
+completeness reference, then again refining Transform/Distort and Crop v2
+against Photos' specific Crop-panel controls (Straighten, Vertical/Horizontal
+perspective, Flip, concrete aspect-ratio preset list). Full detail lives in
+CLAUDE.md's "Phase 2 edit engine backlog" section — do not duplicate it here,
+just read it there. Summary of what's NOT built yet: Vibrance, Cast, Black &
+White mode, Red-Eye removal, a WB neutral-gray eyedropper, Levels,
+Definition/Clarity, Selective Color (= HSL v2, per-band panel), Noise
+Reduction, Sharpen, Vignette, Transform/Distort (straighten +
 vertical/horizontal perspective + lens distortion), Flip, and Crop v2
 (interactive overlay + concrete aspect presets).
 
@@ -23,50 +23,48 @@ as usual, one at a time. Phase 3 (non-destructive pipeline: param
 serialization, edit history, undo) remains after Phase 2's expanded scope is
 done, and also needs its own explicit go-ahead when reached.
 
-## Exact next step (paused here — resume next week)
-User picked backlog items **1-3 together: Brightness, Black Point, Brilliance**
-(the three missing "Light" group tone controls). A Plan agent fully
-investigated all three with real empirical diagnostics (not predictions) and
-a complete implementation plan was written and is sitting ready to execute at
-`/Users/praween/.claude/plans/purring-mapping-pizza.md`. **Nothing has been
-implemented yet — no code changes, nothing to commit.** To resume:
+### Backlog items — Brightness, Black Point, Brilliance (complete, verified live)
+- `Sources/EditEngine/EditState.swift` — `brightness` (-1...1, after
+  `exposureEV`), `blackPoint` (-1...1, in the Curves section), `brilliance`
+  (-1...1, its own section before HSL). All default 0.
+- `Sources/EditEngine/EditPipeline.swift` — **Brightness**: `CIColorControls.brightness`,
+  perceptual domain (documented deviation, same family as Contrast) —
+  measured that a linear-domain additive offset is non-photographic (crushes
+  shadows hard); runs FIRST in the sandwich (measured non-commuting with
+  Contrast); does not clamp highlight headroom. **Black Point**: extends the
+  existing `applyCurves`'s `point0` (previously hardcoded `(0,0)`) along its
+  X axis — verified, not assumed, to produce Levels-style clip-to-black.
+  Known, documented limitation: `CIToneCurve` extrapolates rather than
+  hard-clamps near point0, giving a mild "soft" overshoot on the crush side,
+  same family as curves' existing clamp/crossover notes. **Brilliance**: this
+  app's OWN composite (explicitly not Apple's proprietary, undocumented
+  algorithm) — a pure render-time blend via a new `EffectiveTone` struct that
+  nudges *effective* contrast/shadows/highlights/saturation without ever
+  mutating the underlying slider values. Verified algebraically:
+  `brilliance: 1` produces byte-identical output to manually dialing in its
+  constituent weighted deltas.
+- Reviewer traced that `brilliance == 0` reduces to exactly the pre-existing
+  behavior for every already-shipped test (no regression), and independently
+  re-verified several of the ~35 new measured test values via a standalone
+  script rather than trusting the numbers because tests passed.
+- 77 tests total (35 new), all passing. 1 commit (color-math + tests, UI
+  folded into the sidebar restructure below).
 
-1. Read that plan file first — it has the full approach plus real measured
-   numbers for every test case.
-2. Enter Plan Mode, re-present that plan (refresh if anything in the repo
-   drifted — check `git log` matches what the plan assumes), get the user's
-   go-ahead via `ExitPlanMode`, then implement.
-
-Summary of what the plan already resolved, so it doesn't need re-deriving:
-- **Brightness**: `CIColorControls.brightness`, applied in the perceptual
-  domain (documented deviation, same family as Contrast) — a linear-domain
-  additive offset was measured to be non-photographic (crushes shadows hard).
-  Placed FIRST in the perceptual sandwich (measured non-commuting with
-  Contrast). Span constant `kBrightnessSpan = 0.25`.
-- **Black Point**: extends the existing `applyCurves`'s `point0` (currently
-  hardcoded to `(0,0)`) along its X axis (verified, not assumed, to produce
-  the correct Levels-style clip-to-black behavior). Known, measured,
-  documented limitation: `CIToneCurve` extrapolates rather than hard-clamping
-  near `point0`, giving a mild deep-shadow overshoot — a "soft" black point,
-  same quality of limitation as the existing curve-clamp notes already in
-  the file. Span constant `kBlackPointSpan = 0.20`.
-- **Brilliance**: this app's OWN composite approximation (explicitly NOT
-  Apple's proprietary algorithm) — a pure render-time blend nudging
-  *effective* contrast/shadow-lift/highlight-protection/saturation, without
-  ever mutating the user's own slider values. Verified algebraically:
-  `EditState(brilliance: 1)` produces byte-identical output to manually
-  setting `contrast: 0.15, curvesShadows: 0.4, curvesHighlights: -0.3,
-  hslSaturation: 0.1` directly.
-
-All exact numbers for the ~14 new unit tests (identity, headroom
-preservation/clamping, ordering, alpha, the brilliance equivalence test) are
-written out in the plan file — don't re-run diagnostics, they're already
-measured.
+### UI — moved to a resizable right-hand sidebar (complete, verified live)
+User requested (after seeing the 3 new sliders land in the old bottom bar)
+moving the whole panel to a Lightroom/Photos-style right-hand sidebar, then
+moving each row's label above its slider instead of beside it. Implemented
+as `HSplitView` (image canvas + resizable sidebar, 260-380pt) and a new
+reusable `EditSliderRow` component replacing 15 near-identical
+label/slider/readout/reset blocks. Reviewer cross-checked all 15
+label/binding/range/identity/format pairings for transposition errors (none
+found) and confirmed toolbar/title/alert placement is unaffected by the
+restructure. 1 commit.
 
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (crop feature, Phase 2 Feature 6,
-the last of the original six). Nothing has been reviewed for
-Brightness/Black Point/Brilliance since nothing's been implemented yet.
+None — last reviewer verdict was APPROVE (sidebar UI restructure). Both the
+Brightness/Black Point/Brilliance color-math and the sidebar UI diffs were
+reviewed and approved separately.
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)

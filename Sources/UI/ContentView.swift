@@ -103,6 +103,14 @@ struct ContentView: View {
                     label: "Crop Right", value: $document.editState.cropInsetRight,
                     range: 0...0.45, identity: 0
                 ) { String(format: "%.0f%%", $0 * 100) }
+                EditSliderRow(
+                    label: "Vignette", value: $document.editState.vignetteStrength,
+                    range: -1...1, identity: 0
+                ) { String(format: "%+.0f%%", $0 * 100) }
+                EditSliderRow(
+                    label: "Vignette Radius", value: $document.editState.vignetteRadius,
+                    range: 0...1, identity: 0.5
+                ) { String(format: "%.0f%%", $0 * 100) }
             }
             .padding()
         }

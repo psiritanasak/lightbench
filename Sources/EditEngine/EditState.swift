@@ -150,6 +150,32 @@ struct EditState: Equatable, Codable {
     var cropInsetLeft: Double = 0
     var cropInsetRight: Double = 0
 
+    // MARK: - Vignette
+
+    /// Radial vignette strength, -1...1, 0 is identity. Positive DARKENS the
+    /// frame corners (classic photographic vignette); negative brightens
+    /// them (a "white"/high-key vignette). Applied as the pipeline's FINAL
+    /// stage, AFTER crop, in scene-linear light, via Core Image's
+    /// `CIVignetteEffect` centered on the CURRENT (post-crop) extent — see
+    /// `EditPipeline`. The slider→filter mapping is deliberately ASYMMETRIC
+    /// (measured): the filter's negative intensity brightens the corner
+    /// ~8x harder than its positive intensity darkens it, so strength maps
+    /// to `intensity` at 1.0 span on the darken side and 0.25 span on the
+    /// lighten side, keeping both extremes strong-but-graceful. Unlike
+    /// curves, does NOT clamp highlight headroom (measured: a 1.4 linear
+    /// center survives at 1.399). This struct does not enforce the -1...1
+    /// range; `EditPipeline` reads it directly.
+    var vignetteStrength: Double = 0
+
+    /// Vignette radius / reach, 0...1, default 0.5 (balanced). Controls how
+    /// far the darkening extends inward: 0 is tight (strong, reaches toward
+    /// center), 1 is wide (only the extreme corners). Maps to a scale of
+    /// 0.7...1.3 on the frame's half-diagonal pixel radius — see
+    /// `EditPipeline`. Has NO effect when `vignetteStrength` is 0 (the stage
+    /// is guarded off on strength), so its non-zero default is intentional
+    /// and not an identity violation.
+    var vignetteRadius: Double = 0.5
+
     /// The no-op edit state: every adjustment at its default (identity) value.
     static let identity = EditState()
 }

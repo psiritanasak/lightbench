@@ -12,13 +12,17 @@ import CoreImage.CIFilterBuiltins
 /// controls (Brightness, Black Point, Brilliance, Vibrance) folded into the
 /// existing perceptual sandwich rather than the fixed order list, since
 /// they're refinements of/companions to stages that already exist there.
+/// Vignette is a new true final stage, AFTER crop: it's a radial darkening
+/// tied to the final on-screen framing, so it must see the post-crop
+/// extent, not the fixed-order list's pre-crop stages.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
         image = applyWhiteBalance(state, to: image)           // scene-linear, first
         image = applyExposure(state.exposureEV, to: image)    // scene-linear
         image = applyPerceptualAdjustments(state, to: image)  // sRGB-gamma domain
-        image = applyCrop(state, to: image)                   // geometric, last
+        image = applyCrop(state, to: image)                   // geometric
+        image = applyVignette(state, to: image)               // radial, scene-linear, truly last
         return image
     }
 
@@ -408,5 +412,70 @@ enum EditPipeline {
             height: extent.height * (1 - top - bottom)
         )
         return image.cropped(to: cropRect)
+    }
+
+    // MARK: - Vignette
+
+    /// Slider-to-filter spans, MEASURED against `CIVignetteEffect` in this
+    /// app's linear working space. The darken and lighten spans DIFFER on
+    /// purpose: the filter's negative intensity brightens the corner ~8x
+    /// harder than its positive intensity darkens it (measured on solid
+    /// 0.5: strength +1 → corner 0.130 (~0.26x), raw -1 → corner 4.13
+    /// (~8x)), so the lighten side is scaled down to 0.25 to keep strength
+    /// ±1 comparably strong-but-graceful. The filter's intensity also
+    /// SATURATES at 1.0 (intensity 1 and 2 measure identical), so the
+    /// darken span uses its full natural range.
+    private static let kVignetteDarkenSpan: Double = 1.0
+    private static let kVignetteLightenSpan: Double = 0.25
+
+    /// Radius scale bounds on the frame's half-diagonal, and the fixed
+    /// falloff. radius 0→0.7 (tight, corner 0.015), 0.5→1.0 (default, corner
+    /// 0.130), 1→1.3 (wide, corner 0.254) — all measured on solid 0.5.
+    /// Falloff 0.5 is a measured sweet spot: 0.0 confines darkening to the
+    /// extreme corners, 1.0 begins darkening the CENTER itself (0.458 —
+    /// wrong). Softness (a falloff slider) is deferred future work.
+    private static let kVignetteRadiusMin: Double = 0.7
+    private static let kVignetteRadiusMax: Double = 1.3
+    private static let kVignetteFalloff: Double = 0.5
+
+    private static func vignetteActive(_ state: EditState) -> Bool {
+        state.vignetteStrength != 0
+    }
+
+    /// A radial corner darkening (or, for negative strength, brightening)
+    /// tied to the FINAL framing — the classic photographic vignette. Runs
+    /// dead last, after crop, so its center and radius derive from the
+    /// CURRENT (post-crop) `image.extent`, not the original image: `center`
+    /// is the extent's midpoint, radius is half the extent's diagonal
+    /// scaled by the Radius slider. Verified on a cropped/offset extent
+    /// (10,0,90,75): all four crop corners darken equally and the crop's
+    /// own center stays pristine — the vignette follows the crop, not the
+    /// original frame. Uses `CIVignetteEffect` (explicit center + pixel
+    /// radius) rather than `CIVignette`: both auto-center correctly on an
+    /// offset extent (measured), but `CIVignetteEffect`'s pixel radius maps
+    /// deterministically to the crop geometry whereas `CIVignette`'s radius
+    /// is an opaque normalized unit that saturates ~2.0. Applied in
+    /// SCENE-LINEAR light, NOT wrapped in the perceptual encode/decode
+    /// sandwich: measured, a perceptual-domain vignette crushes corners
+    /// toward black (corner 0.030 vs linear's graceful 0.130). Does NOT
+    /// clamp highlight headroom (measured: a 1.4 linear center survives at
+    /// 1.399) and preserves alpha (measured). The strength→intensity map is
+    /// asymmetric — see the span constants above.
+    private static func applyVignette(_ state: EditState, to image: CIImage) -> CIImage {
+        guard vignetteActive(state) else { return image }
+
+        let extent = image.extent
+        let radiusScale = kVignetteRadiusMin + state.vignetteRadius * (kVignetteRadiusMax - kVignetteRadiusMin)
+        let intensity = state.vignetteStrength >= 0
+            ? state.vignetteStrength * kVignetteDarkenSpan
+            : state.vignetteStrength * kVignetteLightenSpan
+
+        let filter = CIFilter.vignetteEffect()
+        filter.inputImage = image
+        filter.center = CGPoint(x: extent.midX, y: extent.midY)
+        filter.radius = Float(0.5 * hypot(extent.width, extent.height) * radiusScale)
+        filter.intensity = Float(intensity)
+        filter.falloff = Float(kVignetteFalloff)
+        return filter.outputImage ?? image
     }
 }

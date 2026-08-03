@@ -29,6 +29,11 @@ final class EditPipelineTests: XCTestCase {
         return CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: size, height: size))
     }
 
+    private func solidColorImage(r: Double, g: Double, b: Double, a: Double, size: Int) -> CIImage {
+        let color = CIColor(red: r, green: g, blue: b, alpha: a, colorSpace: linearSpace)!
+        return CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: size, height: size))
+    }
+
     /// A synthetic image with four distinct solid-color quadrants (top-left
     /// red, top-right green, bottom-left blue, bottom-right yellow — "top"
     /// meaning what any normal viewer would show at the top). Built from raw
@@ -88,6 +93,23 @@ final class EditPipelineTests: XCTestCase {
             toBitmap: &buffer,
             rowBytes: 16,
             bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+            format: .RGBAf,
+            colorSpace: linearSpace
+        )
+        return (buffer[0], buffer[1], buffer[2], buffer[3])
+    }
+
+    /// Samples an arbitrary single pixel of a (typically multi-pixel, sized)
+    /// image at integer coordinates in `CIImage`'s own coordinate space —
+    /// used for spatial filters like vignette where `linearPixel(of:)`'s
+    /// fixed origin-pixel sample can't show radial variation.
+    private func pixel(of image: CIImage, at x: Int, _ y: Int) -> (r: Float, g: Float, b: Float, a: Float) {
+        var buffer = [Float](repeating: 0, count: 4)
+        context.render(
+            image,
+            toBitmap: &buffer,
+            rowBytes: 16,
+            bounds: CGRect(x: x, y: y, width: 1, height: 1),
             format: .RGBAf,
             colorSpace: linearSpace
         )
@@ -912,6 +934,126 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(buffer[0], 0.4, accuracy: accuracy)
     }
 
+    // MARK: - Vignette math
+    //
+    // Vignette (CIVignetteEffect) is a radial darkening/brightening tied to
+    // the FINAL framing — it runs after crop and is centered on the
+    // post-crop extent. Expected values are measured from the diagnostic
+    // script on a sized solid-color image, since a 1x1 image can't show
+    // radial falloff.
+
+    func testVignetteZeroIsIdentity() {
+        for value in [0.05, 0.214, 0.5, 0.7, 1.2] {
+            let input = solidColorImage(value, size: 100)
+            let output = EditPipeline.apply(EditState(vignetteStrength: 0), to: input)
+            XCTAssertEqual(pixel(of: output, at: 50, 50).r, Float(value), accuracy: accuracy, "center at L=\(value)")
+            XCTAssertEqual(pixel(of: output, at: 2, 2).r, Float(value), accuracy: accuracy, "corner at L=\(value)")
+        }
+
+        let output = EditPipeline.apply(EditState(), to: solidColorImage(0.5, size: 100))
+        XCTAssertEqual(pixel(of: output, at: 50, 50).r, 0.5, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: output, at: 2, 2).r, 0.5, accuracy: accuracy)
+    }
+
+    func testVignetteDarkensCornersPreservesCenter() {
+        let input = solidColorImage(0.5, size: 100)
+        let output = EditPipeline.apply(EditState(vignetteStrength: 1), to: input)
+
+        let center = pixel(of: output, at: 50, 50).r
+        let quarter = pixel(of: output, at: 25, 25).r
+        let edgeMid = pixel(of: output, at: 50, 2).r
+        let corner = pixel(of: output, at: 2, 2).r
+
+        XCTAssertEqual(center, 0.49981, accuracy: accuracy)
+        XCTAssertEqual(quarter, 0.39546, accuracy: accuracy)
+        XCTAssertEqual(edgeMid, 0.29049, accuracy: accuracy)
+        XCTAssertEqual(corner, 0.12989, accuracy: accuracy)
+
+        // Monotone radial falloff toward the corner.
+        XCTAssertLessThan(corner, edgeMid)
+        XCTAssertLessThan(edgeMid, quarter)
+        XCTAssertLessThan(quarter, center)
+    }
+
+    func testVignetteCentersOnCroppedExtent() {
+        // Vignette must derive its center/radius from the CURRENT (post-crop)
+        // extent, not the original image — otherwise a crop would leave the
+        // vignette looking off-center. Crop to (10,0,90,75) (geometric center
+        // (55,37.5)) and confirm all four crop corners darken EQUALLY.
+        let input = solidColorImage(0.5, size: 100)
+        let output = EditPipeline.apply(
+            EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1, vignetteStrength: 1),
+            to: input
+        )
+
+        XCTAssertEqual(pixel(of: output, at: 55, 37).r, 0.49981, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: output, at: 12, 2).r, 0.13481, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: output, at: 97, 72).r, 0.13481, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: output, at: 97, 2).r, 0.13481, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: output, at: 12, 72).r, 0.13481, accuracy: accuracy)
+    }
+
+    func testVignetteNegativeLightensCorners() {
+        let input = solidColorImage(0.5, size: 100)
+        let output = EditPipeline.apply(EditState(vignetteStrength: -1), to: input)
+
+        let center = pixel(of: output, at: 50, 50).r
+        let edgeMid = pixel(of: output, at: 50, 2).r
+        let corner = pixel(of: output, at: 2, 2).r
+
+        XCTAssertEqual(center, 0.50000, accuracy: accuracy)
+        XCTAssertEqual(edgeMid, 0.92737, accuracy: accuracy)
+        XCTAssertEqual(corner, 1.40641, accuracy: accuracy)
+        XCTAssertGreaterThan(corner, center, "negative strength brightens, not darkens")
+    }
+
+    func testVignetteRadiusControlsReach() {
+        let input = solidColorImage(0.5, size: 100)
+
+        let tight = EditPipeline.apply(EditState(vignetteStrength: 1, vignetteRadius: 0), to: input)
+        XCTAssertEqual(pixel(of: tight, at: 2, 2).r, 0.01547, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: tight, at: 25, 25).r, 0.27299, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: tight, at: 50, 50).r, 0.49980, accuracy: accuracy)
+
+        let wide = EditPipeline.apply(EditState(vignetteStrength: 1, vignetteRadius: 1), to: input)
+        XCTAssertEqual(pixel(of: wide, at: 2, 2).r, 0.25390, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: wide, at: 25, 25).r, 0.44560, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: wide, at: 50, 50).r, 0.49981, accuracy: accuracy)
+
+        XCTAssertLessThan(
+            pixel(of: tight, at: 2, 2).r, pixel(of: wide, at: 2, 2).r,
+            "a smaller radius should darken the corner more (tighter/stronger reach)"
+        )
+    }
+
+    func testVignettePreservesHighlightHeadroom() {
+        // Unlike curves, an active vignette does NOT clamp values above
+        // linear 1.0 — CIVignetteEffect is a multiplicative blend with no
+        // internal [0,1] LUT.
+        let input = solidColorImage(1.4, size: 100)
+        let output = EditPipeline.apply(EditState(vignetteStrength: 1), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 50, 50).r, 1.39946, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: output, at: 2, 2).r, 0.36369, accuracy: accuracy)
+    }
+
+    func testVignettePreservesAlpha() {
+        let input = solidColorImage(r: 0.6, g: 0.2, b: 0.2, a: 0.5, size: 100)
+        let output = EditPipeline.apply(EditState(vignetteStrength: 1), to: input)
+
+        let center = pixel(of: output, at: 50, 50)
+        XCTAssertEqual(center.r, 0.29988, accuracy: accuracy)
+        XCTAssertEqual(center.g, 0.09996, accuracy: accuracy)
+        XCTAssertEqual(center.b, 0.09996, accuracy: accuracy)
+        XCTAssertEqual(center.a, 0.5, accuracy: accuracy)
+
+        let corner = pixel(of: output, at: 2, 2)
+        XCTAssertEqual(corner.r, 0.07793, accuracy: accuracy)
+        XCTAssertEqual(corner.g, 0.02598, accuracy: accuracy)
+        XCTAssertEqual(corner.b, 0.02598, accuracy: accuracy)
+        XCTAssertEqual(corner.a, 0.5, accuracy: accuracy)
+    }
+
     // MARK: - Brilliance math
     //
     // Brilliance is this app's own composite (NOT Apple's algorithm) — a
@@ -1010,6 +1152,8 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().cropInsetBottom, 0)
         XCTAssertEqual(EditState().cropInsetLeft, 0)
         XCTAssertEqual(EditState().cropInsetRight, 0)
+        XCTAssertEqual(EditState().vignetteStrength, 0)
+        XCTAssertEqual(EditState().vignetteRadius, 0.5)
 
         let input = solidColorImage(0.35)
         let output = EditPipeline.apply(EditState(), to: input)
@@ -1033,7 +1177,9 @@ final class EditPipelineTests: XCTestCase {
             cropInsetTop: 0.1,
             cropInsetBottom: 0.05,
             cropInsetLeft: 0.15,
-            cropInsetRight: 0.2
+            cropInsetRight: 0.2,
+            vignetteStrength: 0.7,
+            vignetteRadius: 0.3
         )
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(EditState.self, from: data)

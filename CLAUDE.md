@@ -79,10 +79,8 @@ each gets its own Plan Mode session per the workflow rules below.
   perspective/keystone correction (two independent axes, not one combined "distort"
   control), lens distortion correction. Geometric like crop; runs before crop in the
   fixed pipeline order (see Architecture principles above).
-- **Flip:** not built (new item, from the same reference) — mirror horizontal/vertical.
-  Simple/cheap relative to everything else in this backlog (no parameters, just two
-  toggles) — candidate for a quick session if a small win is wanted between bigger
-  features.
+- **Flip:** ✅ shipped — two independent toggles mirroring horizontal/vertical around
+  the image's own extent center, as a new Transform/Distort stage before crop.
 - **Crop:** ✅ v1 shipped as four numeric inset sliders (Top/Bottom/Left/Right). ✅ v2's
   interactive drag-handle crop rectangle also shipped (overlaid on the full image, 8
   handles + interior drag, numeric sliders kept and stay in sync). Not built: aspect-ratio

@@ -3,7 +3,7 @@
 ## Current phase
 Phase 2 (Edit engine) — the original six roadmap items, five backlog
 tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
-Vignette), and Crop v2's drag-handle rectangle are shipped, each
+Vignette), Crop v2's drag-handle rectangle, and Flip are shipped, each
 reviewer-approved and manually verified live. The roadmap in CLAUDE.md was
 expanded three times at the user's request to spell out the fuller scope:
 first adding Transform/Distort and v2 notes for curves/HSL/crop, then using
@@ -15,20 +15,28 @@ CLAUDE.md's "Phase 2 edit engine backlog" section — do not duplicate it here,
 just read it there. Summary of what's NOT built yet: Cast (deliberately
 deferred — see below), Black & White mode, Red-Eye removal, a WB
 neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color (= HSL
-v2, per-band panel), Noise Reduction, Sharpen, Transform/Distort (straighten
-+ vertical/horizontal perspective + lens distortion), Flip, and Crop v2's
-aspect-ratio presets (explicitly deferred, see below).
+v2, per-band panel), Noise Reduction, Sharpen, Transform/Distort's
+Straighten + Vertical/Horizontal perspective (lens distortion out of scope
+for now, see below), and Crop v2's aspect-ratio presets.
 
-**Currently pending user decision: a layout redesign** matching an Apple
-Photos Crop-tool screenshot the user shared (dark theme, top tab bar —
+**User has explicitly requested the FULL feature set** to match an Apple
+Photos Crop-tool screenshot they shared (dark theme, top tab bar —
 Adjust/Filters/Crop/Clean Up — right-side per-tool panel with
 Straighten/Vertical/Horizontal/Flip/Aspect controls, Auto/Reset/Done
-buttons). This bundles a visual restyle with several NOT-YET-BUILT features
-(Straighten/Vertical/Horizontal = Transform/Distort, Flip, Aspect presets).
-Asked the user to scope it — visual-only restyle of what exists today vs.
-adding the structural tab-bar shell (with placeholders for unbuilt tools) vs.
-building the full feature set to match the screenshot exactly — no answer
-yet. Do not start implementing any part of this until scope is confirmed.
+buttons) — not just a visual restyle. Sequenced as 5 separate features (one
+Plan Mode session/reviewer pass/commit each, per CLAUDE.md's one-feature-
+per-session rule), cheapest/foundational first:
+1. ✅ Flip — done (see below).
+2. Straighten (rotation angle) — NEXT.
+3. Vertical + Horizontal perspective correction (keystone) — most involved,
+   needs real geometric research.
+4. Crop v2 aspect-ratio presets.
+5. Layout redesign (dark theme + tab bar shell) — deliberately LAST, once
+   the tools it needs to display actually exist.
+Lens distortion correction (also listed under Transform/Distort in
+CLAUDE.md's backlog) is explicitly OUT of this batch — it wasn't in the
+screenshot and needs camera-profile data, a much bigger, separate concern;
+flag to the user if they want it included later.
 
 Phase 3 (non-destructive pipeline: param serialization, edit history, undo)
 remains after Phase 2's expanded scope is done, and also needs its own
@@ -189,10 +197,34 @@ restructure. 1 commit.
   coordinate-direction tests already cover the geometry the overlay drives.
   91 tests still pass unchanged. 1 commit.
 
+### Flip (complete, verified live) — feature 1 of 5 toward the full Photos-style set
+- `Sources/EditEngine/EditState.swift` — `flipHorizontal`/`flipVertical`
+  (`Bool`, default `false`), own `// MARK: - Flip` section, after `vibrance`
+  and before `// MARK: - Crop` (matches pipeline order — flip runs before
+  crop).
+- `Sources/EditEngine/EditPipeline.swift` — new `applyFlip` stage, inserted
+  between the perceptual color sandwich and crop. Mirrors around the
+  CURRENT extent's own center (`x ↦ (minX+maxX)-x`, `y ↦ (minY+maxY)-y`),
+  not assumed to be at the origin — same discipline `applyCrop` already
+  follows. Pure geometry, no color-space/domain questions to measure (unlike
+  every color-math feature so far); designed directly rather than via a
+  dispatched Plan agent, matching the established precedent for Crop v1.
+- Verified via `quadrantImage()` direction proofs (not diagnostic-script
+  numbers) — including `testFlipAppliedBeforeCrop`, which asserts specific
+  sample points chosen to DISCRIMINATE the correct flip-then-crop order from
+  the wrong crop-then-flip order (reviewer independently traced both
+  orderings by hand and confirmed the test would fail if the pipeline stages
+  were swapped — a real ordering proof, not just isolated-stage coverage).
+- Reviewer independently re-derived the `CGAffineTransform.concatenating`
+  composition algebra for all three cases (horizontal-only, vertical-only,
+  both) and confirmed each matches the claimed centerline-reflection
+  formula. APPROVE on first pass.
+- 98 tests total (7 new Flip tests). 1 commit.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Crop v2 drag rectangle, second
-pass after one FIX FIRST round). Every shipped Phase 2 feature and backlog
-addition has a clean final reviewer verdict.
+None — last reviewer verdict was APPROVE (Flip, first pass, no issues
+found). Every shipped Phase 2 feature and backlog addition has a clean final
+reviewer verdict.
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
@@ -383,31 +415,25 @@ Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Waiting on user scope decision for a layout redesign — do not start
-implementing yet.** The user shared a screenshot of Apple Photos' Crop-tool
-panel (dark theme; top tab bar Adjust/Filters/Crop/Clean Up; right-side
-per-tool panel with Straighten/Vertical/Horizontal/Flip/Aspect-preset
-controls, Auto/Reset/Done buttons) and asked to "apply this layout" to this
-app. Responded by asking which of three scopes they want, since the
-screenshot bundles a visual restyle with several backlog items that aren't
-built yet (Straighten/Vertical/Horizontal = Transform/Distort, Flip, and
-Aspect presets — none exist in this codebase):
-1. Visual-only restyle of what already exists (dark theme applied to current
-   sidebar/crop UI, no new tabs or controls).
-2. Structural — add the tab-bar shell (Adjust/Filters/Crop/Clean Up) and
-   reorganize existing controls into per-tool panels, with Filters/Clean Up
-   as inert placeholders (neither is built at all).
-3. Full feature parity with the screenshot — build Straighten/Vertical/
-   Horizontal perspective (Transform/Distort), Flip, and Aspect presets to
-   actually populate the Crop panel as shown.
-No answer yet as of this write-up. **Resume by checking for the user's reply
-to this scoping question before touching any UI files.**
+**User chose option 3 (full feature parity) for the Apple Photos-style
+layout request — build Straighten, Vertical/Horizontal perspective, Flip,
+and Aspect presets, then the visual/tab-bar redesign.** Sequenced into 5
+features per CLAUDE.md's one-feature-per-session rule (see "Current phase"
+above for the full list). **Flip is done (feature 1/5). NEXT: Straighten
+(rotation angle) — feature 2/5, not yet planned.** Resume by entering Plan
+Mode for Straighten specifically. Likely approach: `CGAffineTransform`
+rotation around the extent center (same family as Flip, extend
+`applyFlip`'s "before crop" placement or give Straighten its own adjacent
+stage), degrees slider, needs to decide whether/how to handle the
+enlarged-then-cropped canvas edge artifacts a rotation produces (a real
+design question worth Plan Mode time, unlike Flip's zero-artifact mirror).
 
-Once that's resolved (or if the user instead picks a different next
-backlog item), remaining not-yet-built work: Cast (deliberately deferred —
-see below), Black & White mode, Red-Eye removal, WB neutral-gray eyedropper,
-Levels, Definition/Clarity, Selective Color (HSL v2), Noise Reduction,
-Sharpen, Transform/Distort, Flip, and Crop v2's aspect-ratio presets.
+After the 5-feature sequence, remaining not-yet-built backlog: Cast
+(deliberately deferred — see below), Black & White mode, Red-Eye removal, WB
+neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color (HSL
+v2), Noise Reduction, Sharpen, and lens distortion correction (explicitly
+left out of the current 5-feature batch — wasn't in the user's screenshot,
+needs camera-profile data, a separate concern).
 
 Cast was deliberately passed over (not forgotten) when picking a feature
 after Vibrance: it's the one remaining backlog item that breaks the

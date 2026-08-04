@@ -3,17 +3,10 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var document = ImageDocumentModel()
 
-    /// Ephemeral view-presentation state — whether the crop overlay is
-    /// active. Deliberately NOT part of `EditState`/the document: it's not
-    /// an edit, it's a UI mode, and doesn't need to persist or serialize.
-    @State private var isCroppingActive = false
-
-    /// Ephemeral view-presentation state — whether a Straighten/Vertical/
-    /// Horizontal slider is actively being dragged, so a guideline grid can
-    /// show while adjusting (matches Apple Photos' behavior) without
-    /// persisting once the user lets go. Not part of `EditState`, same
-    /// reasoning as `isCroppingActive`.
-    @State private var isAdjustingTransform = false
+    /// Which top-level editing tool is active — Apple Photos-style tab bar.
+    /// Selecting `.crop` IS entering crop-editing mode (see `isCroppingActive`
+    /// below); there's no separate in-sidebar toggle anymore.
+    @State private var selectedTab: EditorTab = .adjust
 
     /// Tracks the image pane's actual on-screen size (from the
     /// `GeometryReader` in `body`), so `fitRect` can be computed from
@@ -24,14 +17,21 @@ struct ContentView: View {
     @State private var containerSize: CGSize = .zero
 
     /// Which aspect-ratio preset is locked for the crop rectangle.
-    /// Presentation-only, same reasoning as `isCroppingActive` — a lock
-    /// only changes how `CropOverlayView`'s drag handles behave; the final
-    /// crop is still just the same four `cropInset*` fields.
+    /// Presentation-only, same reasoning as `selectedTab` — a lock only
+    /// changes how `CropOverlayView`'s drag handles behave; the final crop
+    /// is still just the same four `cropInset*` fields.
     @State private var selectedAspect: CropAspectPreset = .freeform
 
     /// Captured when `.custom` is selected: the crop rect's ratio AT THAT
     /// MOMENT, then held fixed — see `CropAspectPreset.custom`.
     @State private var customAspectRatio: Double?
+
+    /// Whether the crop overlay is active. Derived from `selectedTab`
+    /// rather than its own state — the Crop TAB being selected IS crop
+    /// mode now (matching Apple Photos: no separate toggle). Kept as a
+    /// named computed property, not inlined at each call site, since it
+    /// reads more clearly at each of its several use sites below.
+    private var isCroppingActive: Bool { selectedTab == .crop }
 
     /// The on-screen rect the image currently occupies, fit against the
     /// ACTUAL displayed extent (post-straighten/perspective, crop-zeroed) —
@@ -90,6 +90,26 @@ struct ContentView: View {
         document.editState.cropInsetRight = snapped.right
     }
 
+    /// Resets everything in the Crop tab back to identity — Straighten,
+    /// Vertical/Horizontal perspective, Flip, the crop rectangle, and the
+    /// aspect lock. A real, implementable analog to the screenshot's
+    /// "Reset" button. ("Auto" is deliberately not implemented — it would
+    /// need actual auto-straighten/auto-crop detection, which doesn't
+    /// exist in this app; skipped rather than faked.)
+    private func resetCropTab() {
+        document.editState.straightenAngle = 0
+        document.editState.verticalPerspective = 0
+        document.editState.horizontalPerspective = 0
+        document.editState.flipHorizontal = false
+        document.editState.flipVertical = false
+        document.editState.cropInsetTop = 0
+        document.editState.cropInsetBottom = 0
+        document.editState.cropInsetLeft = 0
+        document.editState.cropInsetRight = 0
+        selectedAspect = .freeform
+        customAspectRatio = nil
+    }
+
     /// What's actually rendered on screen. While cropping, the crop insets
     /// are zeroed so the FULL image is visible (with every other edit still
     /// applied) and the user can see what the crop would cut away; the
@@ -109,47 +129,44 @@ struct ContentView: View {
 
     var body: some View {
         HSplitView {
-            GeometryReader { proxy in
-                ZStack {
-                    MetalImageView(image: document.currentImage, editState: displayEditState)
-                    // Fit against the ACTUAL displayed extent (post-
-                    // straighten/perspective, crop-zeroed), not the raw
-                    // `image.extent`. Every feature before Straighten
-                    // preserved extent exactly, so those were equal by
-                    // coincidence; Straighten grows the extent (measured
-                    // +padding from resampling), so this distinction is
-                    // load-bearing — using the raw extent here would
-                    // misalign the overlay against a straightened photo.
-                    // (Perspective correction, added later, was verified to
-                    // preserve extent exactly since its corners only move
-                    // inward — it doesn't newly exercise this path, but
-                    // this computation still correctly reflects whatever
-                    // extent the pipeline actually produces.) Building the
-                    // filter graph to read `.extent` is cheap (Core Image
-                    // doesn't render pixels for it). `currentFitRect` is
-                    // shared with the aspect-picker action in the sidebar
-                    // (outside this GeometryReader's scope), via
-                    // `containerSize`.
-                    if isCroppingActive, let fitRect = currentFitRect {
-                        CropOverlayView(
-                            fitRect: fitRect,
-                            cropInsetTop: $document.editState.cropInsetTop,
-                            cropInsetBottom: $document.editState.cropInsetBottom,
-                            cropInsetLeft: $document.editState.cropInsetLeft,
-                            cropInsetRight: $document.editState.cropInsetRight,
-                            aspectRatio: effectiveAspectRatio
-                        )
+            VStack(spacing: 0) {
+                EditorTabBar(selectedTab: $selectedTab)
+                GeometryReader { proxy in
+                    ZStack {
+                        MetalImageView(image: document.currentImage, editState: displayEditState)
+                        // Fit against the ACTUAL displayed extent (post-
+                        // straighten/perspective, crop-zeroed), not the raw
+                        // `image.extent`. Every feature before Straighten
+                        // preserved extent exactly, so those were equal by
+                        // coincidence; Straighten grows the extent (measured
+                        // +padding from resampling), so this distinction is
+                        // load-bearing — using the raw extent here would
+                        // misalign the overlay against a straightened photo.
+                        // (Perspective correction, added later, was verified to
+                        // preserve extent exactly since its corners only move
+                        // inward — it doesn't newly exercise this path, but
+                        // this computation still correctly reflects whatever
+                        // extent the pipeline actually produces.) Building the
+                        // filter graph to read `.extent` is cheap (Core Image
+                        // doesn't render pixels for it). `currentFitRect` is
+                        // shared with the aspect-picker action in the sidebar
+                        // (outside this GeometryReader's scope), via
+                        // `containerSize`.
+                        if isCroppingActive, let fitRect = currentFitRect {
+                            CropOverlayView(
+                                fitRect: fitRect,
+                                cropInsetTop: $document.editState.cropInsetTop,
+                                cropInsetBottom: $document.editState.cropInsetBottom,
+                                cropInsetLeft: $document.editState.cropInsetLeft,
+                                cropInsetRight: $document.editState.cropInsetRight,
+                                aspectRatio: effectiveAspectRatio
+                            )
+                        }
                     }
-                    if isAdjustingTransform, !isCroppingActive, let fitRect = currentFitRect {
-                        // Suppressed while cropping: CropOverlayView already
-                        // shows its own thirds grid over the crop rect, so a
-                        // second full-frame grid would be redundant.
-                        GridGuidelineView(fitRect: fitRect)
-                    }
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .onAppear { containerSize = proxy.size }
+                    .onChange(of: proxy.size) { _, newSize in containerSize = newSize }
                 }
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .onAppear { containerSize = proxy.size }
-                .onChange(of: proxy.size) { _, newSize in containerSize = newSize }
             }
             .frame(minWidth: 480, minHeight: 360)
             .layoutPriority(1)
@@ -157,13 +174,14 @@ struct ContentView: View {
             editControls
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
         }
+        .preferredColorScheme(.dark)
         // Opening a new photo resets `editState` (including crop) to
-        // identity; exit crop mode too so the overlay doesn't linger showing
-        // a stale (now-meaningless) full-frame rect over the new photo, and
-        // reset the aspect lock (a fresh photo has no meaningful "current"
-        // ratio to keep enforcing).
+        // identity; return to the Adjust tab too so the crop overlay
+        // doesn't linger showing a stale (now-meaningless) full-frame rect
+        // over the new photo, and reset the aspect lock (a fresh photo has
+        // no meaningful "current" ratio to keep enforcing).
         .onChange(of: document.currentFileName) { _, _ in
-            isCroppingActive = false
+            selectedTab = .adjust
             selectedAspect = .freeform
             customAspectRatio = nil
         }
@@ -171,6 +189,13 @@ struct ContentView: View {
             ToolbarItem(placement: .automatic) {
                 Button("Open…") {
                     document.openImage()
+                }
+            }
+            if selectedTab == .crop {
+                ToolbarItem(placement: .automatic) {
+                    Button("Done") { selectedTab = .adjust }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.yellow)
                 }
             }
         }
@@ -193,118 +218,158 @@ struct ContentView: View {
 
     private var editControls: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                EditSliderRow(
-                    label: "Temperature", value: $document.editState.whiteBalanceTemperature,
-                    range: 3500...9500, identity: 6500
-                ) { String(format: "%.0fK", $0) }
-                EditSliderRow(
-                    label: "Tint", value: $document.editState.whiteBalanceTint,
-                    range: -100...100, identity: 0
-                ) { String(format: "%+.0f", $0) }
-                EditSliderRow(
-                    label: "Exposure", value: $document.editState.exposureEV,
-                    range: -5...5, identity: 0
-                ) { String(format: "%+.2f EV", $0) }
-                EditSliderRow(
-                    label: "Brightness", value: $document.editState.brightness,
-                    range: -1...1, identity: 0
-                ) { String(format: "%+.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Brilliance", value: $document.editState.brilliance,
-                    range: -1...1, identity: 0
-                ) { String(format: "%+.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Contrast", value: $document.editState.contrast,
-                    range: -1...1, identity: 0
-                ) { String(format: "%+.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Highlights", value: $document.editState.curvesHighlights,
-                    range: -1...1, identity: 0
-                ) { String(format: "%+.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Shadows", value: $document.editState.curvesShadows,
-                    range: -1...1, identity: 0
-                ) { String(format: "%+.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Black Point", value: $document.editState.blackPoint,
-                    range: -1...1, identity: 0
-                ) { String(format: "%+.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Hue", value: $document.editState.hslHue,
-                    range: -180...180, identity: 0
-                ) { String(format: "%+.0f°", $0) }
-                EditSliderRow(
-                    label: "Vibrance", value: $document.editState.vibrance,
-                    range: -1...1, identity: 0
-                ) { String(format: "%+.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Saturation", value: $document.editState.hslSaturation,
-                    range: -1...1, identity: 0
-                ) { String(format: "%+.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Straighten", value: $document.editState.straightenAngle,
-                    range: -45...45, identity: 0,
-                    onEditingChanged: { isAdjustingTransform = $0 }
-                ) { String(format: "%+.1f°", $0) }
-                EditSliderRow(
-                    label: "Vertical", value: $document.editState.verticalPerspective,
-                    range: -1...1, identity: 0,
-                    onEditingChanged: { isAdjustingTransform = $0 }
-                ) { String(format: "%+.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Horizontal", value: $document.editState.horizontalPerspective,
-                    range: -1...1, identity: 0,
-                    onEditingChanged: { isAdjustingTransform = $0 }
-                ) { String(format: "%+.0f%%", $0 * 100) }
-                EditToggleRow(label: "Flip Horizontal", value: $document.editState.flipHorizontal)
-                EditToggleRow(label: "Flip Vertical", value: $document.editState.flipVertical)
-                HStack {
-                    Text("Crop")
-                    Spacer()
-                    Button(isCroppingActive ? "Done" : "Crop") {
-                        isCroppingActive.toggle()
-                    }
-                    .disabled(document.currentImage == nil)
+            Group {
+                switch selectedTab {
+                case .adjust: adjustTabContent
+                case .crop: cropTabContent
+                case .filters: placeholderTab("Filters aren't available yet.")
+                case .cleanUp: placeholderTab("Clean Up isn't available yet.")
                 }
-                HStack {
-                    Text("Aspect")
-                    Spacer()
-                    Menu(selectedAspect.label) {
-                        ForEach(CropAspectPreset.allCases, id: \.self) { preset in
-                            Button(preset.label) { selectAspect(preset) }
-                        }
-                    }
-                    .disabled(document.currentImage == nil)
-                }
-                EditSliderRow(
-                    label: "Crop Top", value: $document.editState.cropInsetTop,
-                    range: 0...0.45, identity: 0
-                ) { String(format: "%.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Crop Bottom", value: $document.editState.cropInsetBottom,
-                    range: 0...0.45, identity: 0
-                ) { String(format: "%.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Crop Left", value: $document.editState.cropInsetLeft,
-                    range: 0...0.45, identity: 0
-                ) { String(format: "%.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Crop Right", value: $document.editState.cropInsetRight,
-                    range: 0...0.45, identity: 0
-                ) { String(format: "%.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Vignette", value: $document.editState.vignetteStrength,
-                    range: -1...1, identity: 0
-                ) { String(format: "%+.0f%%", $0 * 100) }
-                EditSliderRow(
-                    label: "Vignette Radius", value: $document.editState.vignetteRadius,
-                    range: 0...1, identity: 0.5
-                ) { String(format: "%.0f%%", $0 * 100) }
             }
             .padding()
         }
         .disabled(document.currentImage == nil)
+        .background(Color(white: 0.11))
+    }
+
+    private var adjustTabContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            EditSliderRow(
+                label: "Temperature", value: $document.editState.whiteBalanceTemperature,
+                range: 3500...9500, identity: 6500
+            ) { String(format: "%.0fK", $0) }
+            EditSliderRow(
+                label: "Tint", value: $document.editState.whiteBalanceTint,
+                range: -100...100, identity: 0
+            ) { String(format: "%+.0f", $0) }
+            EditSliderRow(
+                label: "Exposure", value: $document.editState.exposureEV,
+                range: -5...5, identity: 0
+            ) { String(format: "%+.2f EV", $0) }
+            EditSliderRow(
+                label: "Brightness", value: $document.editState.brightness,
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Brilliance", value: $document.editState.brilliance,
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Contrast", value: $document.editState.contrast,
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Highlights", value: $document.editState.curvesHighlights,
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Shadows", value: $document.editState.curvesShadows,
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Black Point", value: $document.editState.blackPoint,
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Hue", value: $document.editState.hslHue,
+                range: -180...180, identity: 0
+            ) { String(format: "%+.0f°", $0) }
+            EditSliderRow(
+                label: "Vibrance", value: $document.editState.vibrance,
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Saturation", value: $document.editState.hslSaturation,
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Vignette", value: $document.editState.vignetteStrength,
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Vignette Radius", value: $document.editState.vignetteRadius,
+                range: 0...1, identity: 0.5
+            ) { String(format: "%.0f%%", $0 * 100) }
+        }
+    }
+
+    private var cropTabContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            EditSliderRow(
+                label: "Straighten", value: $document.editState.straightenAngle,
+                range: -45...45, identity: 0
+            ) { String(format: "%+.1f°", $0) }
+            EditSliderRow(
+                label: "Vertical", value: $document.editState.verticalPerspective,
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Horizontal", value: $document.editState.horizontalPerspective,
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditToggleRow(label: "Flip Horizontal", value: $document.editState.flipHorizontal)
+            EditToggleRow(label: "Flip Vertical", value: $document.editState.flipVertical)
+
+            Divider()
+            aspectSection
+            Divider()
+
+            EditSliderRow(
+                label: "Crop Top", value: $document.editState.cropInsetTop,
+                range: 0...0.45, identity: 0
+            ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Crop Bottom", value: $document.editState.cropInsetBottom,
+                range: 0...0.45, identity: 0
+            ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Crop Left", value: $document.editState.cropInsetLeft,
+                range: 0...0.45, identity: 0
+            ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Crop Right", value: $document.editState.cropInsetRight,
+                range: 0...0.45, identity: 0
+            ) { String(format: "%.0f%%", $0 * 100) }
+
+            Button("Reset") { resetCropTab() }
+                .disabled(document.currentImage == nil)
+        }
+    }
+
+    /// The Aspect preset list — a full always-visible vertical list (not a
+    /// compact dropdown), matching Apple Photos' own Crop-panel layout now
+    /// that it has a dedicated tab to live in. Each row is tappable; the
+    /// selected preset shows a checkmark.
+    private var aspectSection: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Aspect")
+                .font(.headline)
+                .padding(.bottom, 2)
+            ForEach(CropAspectPreset.allCases, id: \.self) { preset in
+                Button {
+                    selectAspect(preset)
+                } label: {
+                    HStack {
+                        Text(preset.label)
+                        Spacer()
+                        if preset == selectedAspect {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private func placeholderTab(_ message: String) -> some View {
+        Text(message)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 40)
     }
 }
 
@@ -317,7 +382,6 @@ private struct EditSliderRow: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
     let identity: Double
-    var onEditingChanged: (Bool) -> Void = { _ in }
     let format: (Double) -> String
 
     var body: some View {
@@ -333,7 +397,7 @@ private struct EditSliderRow: View {
                 }
                 .disabled(value == identity)
             }
-            Slider(value: $value, in: range, onEditingChanged: onEditingChanged)
+            Slider(value: $value, in: range)
         }
     }
 }

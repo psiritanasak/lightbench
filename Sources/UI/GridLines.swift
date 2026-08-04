@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// Shared rule-of-thirds grid-drawing math, used by `CropOverlayView`'s
+/// own crop-rect grid. (A separate always-visible guideline overlay for
+/// Straighten/Vertical/Horizontal existed briefly but was removed once
+/// those controls moved into the Crop tab — at that point they're only
+/// ever visible while the crop overlay's own grid is already showing, so a
+/// second grid would have been redundant. This matches Apple Photos' own
+/// behavior: no separate guideline, the crop tool's grid IS the guideline.)
 enum GridLines {
     /// Major (rule-of-thirds) grid lines: 2 lines each direction, at 1/3 and
     /// 2/3, in the given rect's own LOCAL coordinate space (caller
@@ -32,34 +39,5 @@ enum GridLines {
                 path.addLine(to: CGPoint(x: rect.maxX, y: y))
             }
         }
-    }
-}
-
-/// Non-interactive rule-of-thirds guideline (major + minor grid) shown over
-/// the full displayed image while actively dragging Straighten/Vertical/
-/// Horizontal — helps align horizons/verticals. No handles, no dimming, no
-/// gestures (unlike `CropOverlayView`, which this shares its grid-drawing
-/// math with via `GridLines`).
-struct GridGuidelineView: View {
-    let fitRect: CGRect
-
-    var body: some View {
-        let local = CGRect(origin: .zero, size: fitRect.size)
-        ZStack {
-            // Dark "shadow" stroke under each line so it stays legible over
-            // bright image content, not just dark — the white line alone
-            // washes out against light backgrounds.
-            GridLines.minor(in: local)
-                .stroke(Color.black.opacity(0.5), lineWidth: 1.5)
-            GridLines.minor(in: local)
-                .stroke(Color.white.opacity(0.6), lineWidth: 0.5)
-            GridLines.major(in: local)
-                .stroke(Color.black.opacity(0.6), lineWidth: 2.5)
-            GridLines.major(in: local)
-                .stroke(Color.white.opacity(0.9), lineWidth: 1)
-        }
-        .frame(width: fitRect.width, height: fitRect.height)
-        .position(x: fitRect.midX, y: fitRect.midY)
-        .allowsHitTesting(false)
     }
 }

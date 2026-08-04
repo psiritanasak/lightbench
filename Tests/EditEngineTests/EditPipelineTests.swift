@@ -853,6 +853,101 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(saturationOutput.b, 0.01129, accuracy: accuracy)
     }
 
+    // MARK: - Straighten geometry
+    //
+    // Straighten is pure geometry (rotation around the extent's own center),
+    // not color, so — like flip/crop below — these values are hand-derived
+    // rather than measured from a Core Image diagnostic. The direction proof
+    // uses an exact 90° rotation (avoids resampling ambiguity that an
+    // arbitrary small angle would introduce) against quadrantImage's known
+    // layout (top-left red, top-right green, bottom-left blue, bottom-right
+    // yellow).
+
+    func testStraightenZeroIsIdentity() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(straightenAngle: 0), to: input)
+
+        XCTAssertEqual(output.extent, input.extent)
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 75)), "red")
+    }
+
+    func testStraightenIncreasesExtent() {
+        // The pure rotated-bounding-box math (W|cosθ| + H|sinθ|) predicts
+        // ≈136.60 for a 100x100 square at 30° — but the ACTUAL, MEASURED
+        // CIImage extent is 138.0, a few pixels larger. Core Image pads a
+        // transformed image's extent for its resampling/interpolation
+        // kernel, a real implementation detail the pure geometry doesn't
+        // predict — pinned here to the measured value, not the idealized
+        // one, matching this project's measure-don't-assume discipline. The
+        // test still proves the core claim (extent grows well beyond the
+        // untransformed 100, roughly matching the rotated-bounding-box
+        // scale) without over-trusting a derivation Core Image doesn't
+        // exactly follow.
+        let input = quadrantImage(width: 100, height: 100)
+        let output = EditPipeline.apply(EditState(straightenAngle: 30), to: input)
+
+        XCTAssertEqual(output.extent.width, 138.0, accuracy: 0.5)
+        XCTAssertEqual(output.extent.height, 138.0, accuracy: 0.5)
+        XCTAssertGreaterThan(output.extent.width, 136.60, "should be at least the pure-geometry bounding-box size")
+    }
+
+    func testStraightenPreservesCenterOfExtent() {
+        // Rotating a rectangle around its own center always yields a
+        // bounding box centered at that SAME point (provable by symmetry) —
+        // this is what lets applyFlip (which runs next) still mirror around
+        // the correct center after straighten grows the extent.
+        let input = quadrantImage(width: 100, height: 100)
+        let output = EditPipeline.apply(EditState(straightenAngle: 30), to: input)
+
+        XCTAssertEqual(output.extent.midX, input.extent.midX, accuracy: 0.01)
+        XCTAssertEqual(output.extent.midY, input.extent.midY, accuracy: 0.01)
+    }
+
+    func testStraightenRotatesCounterclockwise() {
+        // Derived: at θ=90°, (x,y) ↦ (100-y, x) for a 100x100 image rotated
+        // around its center (50,50). So content at output (25,75) is
+        // original(75,75) = green (top-right sweeps to top-left under a CCW
+        // turn); output (75,75) is original(75,25) = yellow (bottom-right
+        // sweeps to top-right).
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(straightenAngle: 90), to: input)
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 75)), "green")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 75, y: 75)), "yellow")
+    }
+
+    func testStraightenAppliedBeforeFlip() {
+        // Proves pipeline ORDERING (straighten, then flip), not just each
+        // stage in isolation. At θ=90° on a 100x100 square, both stages'
+        // extents stay exactly 100x100 (a lucky, exact property of a square
+        // rotated by precisely 90°), making the composed math exact:
+        // straighten-then-flip gives (x,y) ↦ (y,x), so output(75,75) reads
+        // original(75,75) = green. The reversed (wrong) order would give
+        // (x,y) ↦ (100-y,100-x), reading original(25,25) = blue at the same
+        // point — a real discriminator, same pattern as
+        // testFlipAppliedBeforeCrop.
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(straightenAngle: 90, flipHorizontal: true), to: input)
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 75, y: 75)), "green")
+    }
+
+    func testStraightenPreservesColorMath() {
+        // Straighten composed with exposure: the rotated region's color
+        // still reflects the exposure adjustment, proving straighten
+        // doesn't interfere with the rest of the pipeline.
+        let input = solidColorImage(0.2, size: 100)
+        let output = EditPipeline.apply(EditState(exposureEV: 1, straightenAngle: 30), to: input)
+
+        var buffer = [Float](repeating: 0, count: 4)
+        context.render(
+            output, toBitmap: &buffer, rowBytes: 16,
+            bounds: CGRect(x: 50, y: 50, width: 1, height: 1),
+            format: .RGBAf, colorSpace: linearSpace
+        )
+        XCTAssertEqual(buffer[0], 0.4, accuracy: accuracy)
+    }
+
     // MARK: - Flip geometry
     //
     // Flip is pure geometry (mirrors around the extent's own center), not
@@ -1222,6 +1317,7 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().hslHue, 0)
         XCTAssertEqual(EditState().hslSaturation, 0)
         XCTAssertEqual(EditState().vibrance, 0)
+        XCTAssertEqual(EditState().straightenAngle, 0)
         XCTAssertEqual(EditState().flipHorizontal, false)
         XCTAssertEqual(EditState().flipVertical, false)
         XCTAssertEqual(EditState().cropInsetTop, 0)
@@ -1250,6 +1346,7 @@ final class EditPipelineTests: XCTestCase {
             hslHue: 45,
             hslSaturation: 0.3,
             vibrance: 0.4,
+            straightenAngle: 12.5,
             flipHorizontal: true,
             flipVertical: false,
             cropInsetTop: 0.1,

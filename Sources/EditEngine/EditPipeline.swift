@@ -12,17 +12,20 @@ import CoreImage.CIFilterBuiltins
 /// four additional controls (Brightness, Black Point, Brilliance, Vibrance)
 /// folded into the existing perceptual sandwich rather than the fixed order
 /// list, since they're refinements of/companions to stages that already
-/// exist there. Flip is the first "transform/distort" stage: pure geometry,
-/// runs after the perceptual sandwich and BEFORE crop, matching the fixed
-/// order. Vignette is a new true final stage, AFTER crop: it's a radial
-/// darkening tied to the final on-screen framing, so it must see the
-/// post-crop extent, not the fixed-order list's pre-crop stages.
+/// exist there. Straighten and Flip are "transform/distort" stages: pure
+/// geometry, run after the perceptual sandwich and BEFORE crop, matching the
+/// fixed order — Straighten runs first (matching the Photos reference panel
+/// order), then Flip (they don't commute in general, so this order is a
+/// real, tested requirement). Vignette is a new true final stage, AFTER
+/// crop: it's a radial darkening tied to the final on-screen framing, so it
+/// must see the post-crop extent, not the fixed-order list's pre-crop stages.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
         image = applyWhiteBalance(state, to: image)           // scene-linear, first
         image = applyExposure(state.exposureEV, to: image)    // scene-linear
         image = applyPerceptualAdjustments(state, to: image)  // sRGB-gamma domain
+        image = applyStraighten(state, to: image)             // geometric, before flip
         image = applyFlip(state, to: image)                   // geometric, before crop
         image = applyCrop(state, to: image)                   // geometric
         image = applyVignette(state, to: image)               // radial, scene-linear, truly last
@@ -371,6 +374,38 @@ enum EditPipeline {
         let filter = CIFilter.sRGBToneCurveToLinear()
         filter.inputImage = image
         return filter.outputImage ?? image
+    }
+
+    // MARK: - Straighten
+
+    /// Rotates the image around the CURRENT extent's own center via the
+    /// standard "translate to origin → rotate → translate back" recipe.
+    /// Positive `straightenAngle` rotates COUNTERCLOCKWISE — derived from
+    /// `CGAffineTransform(rotationAngle:)`'s standard matrix
+    /// `(x,y) ↦ (x·cosθ − y·sinθ, x·sinθ + y·cosθ)`, the CCW-positive form in
+    /// a y-up coordinate system (which `CIImage`'s own space is) — verified,
+    /// not just derived, by a 90° test against `quadrantImage`'s known
+    /// layout. Rotating a rectangle around its own center always produces a
+    /// bounding box centered at that SAME point (provable by symmetry, and
+    /// pinned by a test) — so `applyFlip`, which runs next, still mirrors
+    /// around the correct center even after this stage grows the extent.
+    /// KNOWN, DOCUMENTED v1 LIMITATION: any nonzero angle grows the
+    /// bounding-box extent (except at 0/90/180/270°); the corners of that
+    /// box outside the actual rotated content are undefined/transparent,
+    /// composited to black by `ImageRenderer`'s existing black background —
+    /// the standard "rotate reveals corners" behavior, same tradeoff
+    /// philosophy as curves' headroom clamp or black point's soft overshoot.
+    /// No auto-fit-to-inscribed-rectangle in v1; the already-shipped Crop
+    /// tool is the documented way to remove the resulting gaps.
+    private static func applyStraighten(_ state: EditState, to image: CIImage) -> CIImage {
+        guard state.straightenAngle != 0 else { return image }
+
+        let extent = image.extent
+        let radians = state.straightenAngle * .pi / 180
+        let transform = CGAffineTransform(translationX: -extent.midX, y: -extent.midY)
+            .concatenating(CGAffineTransform(rotationAngle: radians))
+            .concatenating(CGAffineTransform(translationX: extent.midX, y: extent.midY))
+        return image.transformed(by: transform)
     }
 
     // MARK: - Flip

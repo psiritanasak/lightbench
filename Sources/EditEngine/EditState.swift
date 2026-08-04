@@ -132,6 +132,27 @@ struct EditState: Equatable, Codable {
     /// double-count a single slider's "pop".
     var vibrance: Double = 0
 
+    // MARK: - Straighten
+
+    /// Rotation angle in degrees, 0 is identity. Positive rotates the image
+    /// COUNTERCLOCKWISE (derived from `CGAffineTransform(rotationAngle:)`'s
+    /// standard matrix in `CIImage`'s y-up coordinate space, verified with a
+    /// 90° test against `quadrantImage` — not assumed). Rotates around the
+    /// CURRENT image extent's own center, so it works regardless of the
+    /// extent's origin — see `EditPipeline`. Runs BEFORE Flip in the
+    /// Transform/Distort group (matching the Photos reference panel order),
+    /// still before crop. KNOWN, DOCUMENTED v1 LIMITATION: any nonzero angle
+    /// grows the image's bounding-box extent (except at 0/90/180/270°); the
+    /// resulting corners outside the actual rotated content render as black
+    /// (the existing renderer's black background composite) — this is the
+    /// standard "rotate reveals corners" behavior every photo editor
+    /// produces before cropping. No auto-fit-to-inscribed-rectangle in v1;
+    /// use the already-shipped Crop tool to remove the gaps. Not
+    /// runtime-clamped (matches `exposureEV`/`hslHue`'s convention — only
+    /// crop's insets and factor-style color params are clamped where
+    /// mathematically required).
+    var straightenAngle: Double = 0
+
     // MARK: - Flip
 
     /// Mirror the image horizontally (left-right) / vertically (top-bottom).

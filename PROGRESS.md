@@ -3,11 +3,12 @@
 ## Current phase
 Phase 2 (Edit engine) — the original six roadmap items, five backlog
 tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
-Vignette), Crop v2's drag-handle rectangle, Flip, and Straighten are shipped,
-each reviewer-approved and manually verified live. The roadmap in CLAUDE.md
-was expanded three times at the user's request to spell out the fuller
-scope: first adding Transform/Distort and v2 notes for curves/HSL/crop, then
-using Apple Photos' adjustment panel (screenshots the user shared) as a
+Vignette), Crop v2's drag-handle rectangle, Flip, Straighten, and
+Vertical/Horizontal perspective correction are shipped, each
+reviewer-approved and manually verified live. The roadmap in CLAUDE.md was
+expanded three times at the user's request to spell out the fuller scope:
+first adding Transform/Distort and v2 notes for curves/HSL/crop, then using
+Apple Photos' adjustment panel (screenshots the user shared) as a
 completeness reference, then again refining Transform/Distort and Crop v2
 against Photos' specific Crop-panel controls (Straighten, Vertical/Horizontal
 perspective, Flip, concrete aspect-ratio preset list). Full detail lives in
@@ -15,23 +16,34 @@ CLAUDE.md's "Phase 2 edit engine backlog" section — do not duplicate it here,
 just read it there. Summary of what's NOT built yet: Cast (deliberately
 deferred — see below), Black & White mode, Red-Eye removal, a WB
 neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color (= HSL
-v2, per-band panel), Noise Reduction, Sharpen, Transform/Distort's
-Vertical/Horizontal perspective (lens distortion out of scope for now, see
-below), and Crop v2's aspect-ratio presets.
+v2, per-band panel), Noise Reduction, Sharpen, and Crop v2's aspect-ratio
+presets.
 
 **User has explicitly requested the FULL feature set** to match an Apple
 Photos Crop-tool screenshot they shared (dark theme, top tab bar —
 Adjust/Filters/Crop/Clean Up — right-side per-tool panel with
 Straighten/Vertical/Horizontal/Flip/Aspect controls, Auto/Reset/Done
-buttons) — not just a visual restyle. Sequenced as 5 separate features (one
+buttons) — not just a visual restyle. Sequenced as separate features (one
 Plan Mode session/reviewer pass/commit each, per CLAUDE.md's one-feature-
 per-session rule), cheapest/foundational first:
 1. ✅ Flip — done (see below).
 2. ✅ Straighten (rotation angle) — done (see below).
-3. Vertical + Horizontal perspective correction (keystone) — NEXT, most
-   involved, needs real geometric research.
-4. Crop v2 aspect-ratio presets.
-5. Layout redesign (dark theme + tab bar shell) — deliberately LAST, once
+3. ✅ Vertical + Horizontal perspective correction (keystone) — done (see below).
+4. **Grid guideline overlay for Straighten/Vertical/Horizontal — NEXT.** User
+   explicitly requested this right after confirming perspective correction
+   works: a rule-of-thirds-style guideline grid (matching the one already
+   shown during Crop mode via `CropOverlayView`) should ALSO appear while
+   adjusting Straighten/Vertical/Horizontal, to help align horizons/verticals
+   while dragging. Not yet planned — needs a design decision on WHEN it
+   shows (e.g. only while actively dragging one of those specific sliders,
+   via `Slider`'s `onEditingChanged`, vs. whenever any of those three values
+   is non-default) and whether it reuses/extracts `CropOverlayView`'s
+   existing `thirdsGrid` logic or is a new lightweight grid-only overlay.
+   Small, UI-only, low risk — direct-design session like Flip/Straighten
+   (no Plan agent dispatch needed), but still needs its own Plan Mode entry
+   per CLAUDE.md's rule.
+5. Crop v2 aspect-ratio presets.
+6. Layout redesign (dark theme + tab bar shell) — deliberately LAST, once
    the tools it needs to display actually exist.
 Lens distortion correction (also listed under Transform/Distort in
 CLAUDE.md's backlog) is explicitly OUT of this batch — it wasn't in the
@@ -273,10 +285,41 @@ restructure. 1 commit.
   purely a UI-facing convention choice, not a bug, didn't block approval.
 - 104 tests total (7 new Straighten tests). APPROVE on first pass. 1 commit.
 
+### Vertical + Horizontal perspective correction (complete, verified live) — feature 3 of 5
+- `Sources/EditEngine/EditState.swift` — `verticalPerspective`/
+  `horizontalPerspective` (-1...1, default 0), own
+  `// MARK: - Perspective (keystone)` section, between `straightenAngle` and
+  `// MARK: - Flip` (matches pipeline order).
+- `Sources/EditEngine/EditPipeline.swift` — new `applyPerspective` stage,
+  between Straighten and Flip. Unlike Flip/Straighten's closed-form affine
+  math, this genuinely needed empirical investigation — a Plan agent ran
+  real Core Image diagnostics (`scratchpad/perspdiag*.swift`) and determined:
+  `CIPerspectiveTransform` (maps the extent's 4 corners to an arbitrary
+  output quad), NOT `CIPerspectiveCorrection` (the inverse — rectifies an
+  existing quad into a rectangle, measured to change extent to
+  `(0,0,100,170)` for the same corners — wrong tool); the corner-name
+  convention (`topLeft=(minX,maxY)` etc., matching `CIImage`'s established
+  y-up "top=high-y" space, measured via a quadrant identity map); that
+  corners moving strictly INWARD preserve the extent EXACTLY (measured
+  `output.extent == input.extent`, genuinely different from Straighten's
+  measured +1.4px resampling padding); `kMaxPerspectiveShift = 0.25` (the
+  combined dual-axis worst case goes non-convex above ~0.34, measured via a
+  sweep); and that both axes must be applied as ONE combined filter call,
+  not two sequential ones (measured to double-warp shared corners
+  otherwise). Runs before Flip (measured non-commuting).
+- Reviewer did NOT just trust the design agent's numbers or the fact that
+  tests passed — independently re-ran every measured claim with its own
+  standalone Core Image diagnostic scripts (corner semantics, extent
+  preservation, the 0.25 cap's convexity margin including its own additional
+  full sign/magnitude sweep, Flip non-commutativity, hand-traced the
+  combined corner math) before approving. APPROVE on first pass.
+- 115 tests total (11 new perspective tests, all passed on first run — the
+  design agent's measured values held up exactly). 1 commit.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Straighten, first pass, no issues
-found). Every shipped Phase 2 feature and backlog addition has a clean final
-reviewer verdict.
+None — last reviewer verdict was APPROVE (Vertical/Horizontal perspective
+correction, first pass, no issues found). Every shipped Phase 2 feature and
+backlog addition has a clean final reviewer verdict.
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
@@ -469,28 +512,40 @@ window-resize re-fit behavior, opened-file mtime check.
 ## Exact next step
 **User chose option 3 (full feature parity) for the Apple Photos-style
 layout request — build Straighten, Vertical/Horizontal perspective, Flip,
-and Aspect presets, then the visual/tab-bar redesign.** Sequenced into 5
-features per CLAUDE.md's one-feature-per-session rule (see "Current phase"
-above for the full list). **Flip and Straighten are done (features 1-2/5).
-NEXT: Vertical + Horizontal perspective correction (keystone) — feature
-3/5, not yet planned.** Resume by entering Plan Mode for this specifically.
-This is the most involved of the 5 — unlike Flip/Straighten (simple affine
-transforms), keystone correction needs real geometric research: likely
-`CIPerspectiveTransform` or `CIPerspectiveCorrection`, mapping a
-vertical/horizontal "amount" slider pair to the four corner points those
-filters expect, and (per CLAUDE.md's Transform/Distort note) two INDEPENDENT
-axes, not one combined "distort" control. Will also grow the extent like
-Straighten did — reuse the same `fitRect`-from-actual-post-pipeline-extent
-fix already made in `ContentView.swift` (no new fix needed, just confirm it
-still holds). Needs a genuine empirical/geometric investigation, not a
-direct-design session like Flip/Straighten/Crop v1 were.
+and Aspect presets, then the visual/tab-bar redesign.** Flip, Straighten,
+and Vertical/Horizontal perspective correction are done (see "Current phase"
+above for the full sequence). **NEXT (added mid-sequence, at the user's
+explicit request right after confirming perspective correction worked): a
+grid guideline overlay for Straighten/Vertical/Horizontal.** Not yet
+planned — needs a Plan Mode session (direct-design, no agent dispatch
+needed — this is UI-only with no color/geometry-math risk, same category as
+Flip/Straighten). Open design questions to resolve in that session:
+- **When does it show?** Options: (a) only while actively dragging one of
+  the three sliders, via `Slider`'s `onEditingChanged` callback, hiding
+  again on release (closest to Apple Photos' own behavior); (b) whenever any
+  of the three values is non-default, persistent until reset. Lean toward
+  (a) unless there's a reason to prefer (b) — worth a quick think, not
+  necessarily worth an `AskUserQuestion`.
+- **Reuse vs. new component**: `CropOverlayView.swift`'s existing
+  `thirdsGrid` (a `Path`-based rule-of-thirds drawing, currently only shown
+  when `isCroppingActive`) is the natural thing to extract/reuse rather than
+  duplicating grid-drawing code — but this new overlay needs no drag
+  handles/dimming, just the grid lines, so it's likely a new small,
+  lightweight view (or a stripped-down mode of the existing one) rather than
+  reusing `CropOverlayView` wholesale.
+- **Geometry**: needs the same `fitRect` (post-pipeline, crop-zeroed extent
+  fit into the SwiftUI container) that `CropOverlayView` and `displayEditState`
+  already compute in `ContentView.swift` — reuse that pattern, don't
+  re-derive it.
 
-After the 5-feature sequence, remaining not-yet-built backlog: Cast
-(deliberately deferred — see below), Black & White mode, Red-Eye removal, WB
-neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color (HSL
-v2), Noise Reduction, Sharpen, and lens distortion correction (explicitly
-left out of the current 5-feature batch — wasn't in the user's screenshot,
-needs camera-profile data, a separate concern).
+After that, remaining sequence: Crop v2 aspect-ratio presets, then the
+layout/tab-bar redesign (deliberately last). Beyond this batch, remaining
+not-yet-built backlog: Cast (deliberately deferred — see below), Black &
+White mode, Red-Eye removal, WB neutral-gray eyedropper, Levels,
+Definition/Clarity, Selective Color (HSL v2), Noise Reduction, Sharpen, and
+lens distortion correction (explicitly left out of the current batch —
+wasn't in the user's screenshot, needs camera-profile data, a separate
+concern).
 
 Cast was deliberately passed over (not forgotten) when picking a feature
 after Vibrance: it's the one remaining backlog item that breaks the

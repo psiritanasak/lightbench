@@ -5,8 +5,9 @@ Phase 2 (Edit engine) — the original six roadmap items, five backlog
 tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
 Straighten, Vertical/Horizontal perspective correction, the full Apple
-Photos-style layout (dark theme + top tab bar), Black & White, and Sharpen
-are shipped, each reviewer-approved and manually verified live. The Apple
+Photos-style layout (dark theme + top tab bar), Black & White, Sharpen, and
+Noise Reduction are shipped, each reviewer-approved and manually verified
+live. The Apple
 Photos Crop-panel batch (6 features, see below) completed first; the user
 then asked to work through the REST of the Phase 2 backlog. The roadmap in
 CLAUDE.md was expanded three times at the user's request to spell out the
@@ -41,8 +42,8 @@ first, new-interaction-paradigm items next, biggest-scope items last, Cast
 deliberately last since it needs a different content-aware architecture):**
 1. ✅ Black & White (monochrome mode) — done (see below).
 2. ✅ Sharpen (parametric) — done (see below).
-3. Noise Reduction (parametric) — NEXT.
-4. Definition/Clarity (local-contrast enhancement).
+3. ✅ Noise Reduction (parametric) — done (see below).
+4. Definition/Clarity (local-contrast enhancement) — NEXT.
 5. Levels (black/white-point/gamma sliders + a live histogram — a genuinely
    new UI capability, not just more sliders).
 6. WB neutral-gray eyedropper (first point-and-click interaction in the app).
@@ -549,10 +550,65 @@ restructure. 1 commit.
 - 135 tests total (7 new Sharpen tests, all passed on first run — the
   design agent's measured values held up exactly). 1 commit.
 
+### Noise Reduction (complete, verified live) — backlog item 3 of 9
+- `Sources/EditEngine/EditState.swift` — `noiseReduction: Double = 0` (0...1,
+  one-directional, same family as Vignette Radius/Sharpen). Declared BEFORE
+  the existing Sharpen field — declaration order deliberately mirrors
+  pipeline order, and Noise Reduction runs before Sharpen.
+- `Sources/EditEngine/EditPipeline.swift` — new `applyNoiseReduction`,
+  inserted between Vignette and Sharpen (the pipeline's "detail" pair,
+  standard denoise-then-sharpen order). A genuine new filter, so a Plan
+  agent ran real empirical diagnostics rather than reusing proven math.
+  **Two notable measured findings**: (1) `CINoiseReduction`'s own
+  `inputSharpness` parameter is a re-sharpen that ADDS noise back — at the
+  filter's own default (0.4) it raised a flat noisy patch's residual std to
+  136% of baseline — so it's explicitly pinned to 0, with only
+  `inputNoiseLevel` driven by the slider. (2) UNLIKE Sharpen, whose radius
+  needed `extent`-derived scaling (absolute pixels, looked wildly different
+  across image sizes), Noise Reduction's `noiseLevel` needed NO resolution
+  scaling — measured near-identical residual std and byte-identical edge
+  ramps at 400/800/1600px, because noise is inherently per-pixel rather
+  than a frame-relative feature like an edge halo. Runs in SCENE-LINEAR
+  light (not Sharpen's perceptual sandwich) — measured to denoise evenly
+  across tones (24% residual at all three test brightnesses), whereas the
+  perceptual domain under-denoises shadows (47%) because the sRGB encode
+  lifts shadow noise above the filter's threshold. Does not clamp highlight
+  headroom, preserves alpha and extent exactly (measured).
+- v1 scope: single Amount slider only — same scope-cut pattern as every
+  other v1 feature.
+- **Two reviewer passes, both catching/confirming real issues** (not a
+  clean first-pass APPROVE like Sharpen): first pass was FIX FIRST — the
+  shipped `testNoiseReductionSharpnessPinnedToZero` used `noiseReduction: 0`,
+  which short-circuits the pipeline stage's guard before the filter (and its
+  sharpness pin) is ever constructed, making the test pass regardless of
+  whether the pin exists. Investigated before accepting the reviewer's
+  suggested fix at face value (per this project's measure-don't-assume
+  discipline): confirmed empirically that a flat SOLID test image can't
+  discriminate this at all (nothing for a re-sharpen to act on regardless of
+  its parameter), so the test was rewritten to use a moderately-denoised
+  NOISY patch instead (slider 0.5, enough residual noise left for an
+  un-pinned default sharpness to measurably amplify — verified by
+  temporarily removing the pin and confirming the rewritten test fails hard,
+  0.05930 vs an expected 0.04378, then restoring it). Second pass: APPROVE,
+  independently re-reproduced the same removed-pin failure before signing
+  off, confirmed the overlap with the pre-existing `testNoiseReductionReducesFlatNoise`
+  is intentional belt-and-suspenders, not blocking.
+- New test helpers `noisyGray(base:amp:size:seed:alpha:)` (deterministic
+  seeded-LCG per-pixel noise) and `regionStd(_:x:y:w:h:)` (mean/std over a
+  pixel region) — noise reduction's effect is a std reduction over an area,
+  not a single-pixel value shift, so the existing single-pixel samplers
+  couldn't measure it.
+- 143 tests total (8 new Noise Reduction tests). 1 commit.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Sharpen, first pass, one minor
-non-blocking test-rigor nit only). Every shipped Phase 2 feature and
-backlog addition has a clean final reviewer verdict.
+None — last reviewer verdict was APPROVE (Noise Reduction, second pass,
+after one FIX FIRST round on a test-rigor issue: the sharpness-pin
+regression guard originally couldn't fail even if the pin were removed).
+
+Prior: Sharpen (first pass, one minor non-blocking test-rigor nit only).
+Every shipped Phase 2 feature and backlog addition has a clean final
+reviewer verdict (Noise Reduction's FIX FIRST round was resolved before
+commit, per workflow rules).
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
@@ -747,22 +803,24 @@ window-resize re-fit behavior, opened-file mtime check.
 the REST of the Phase 2 backlog next (Undo/Revert stays queued/deferred,
 per the user's own instruction — do not start it without being asked
 again).** Sequence (see "Current phase" above for the full list and
-reasoning): Black & White is done, Sharpen is done. **NEXT: Noise
-Reduction (parametric) — item 3 of 9.** Not yet planned. Likely
-`CINoiseReduction` (`noiseLevel`/`sharpness` params) — will need real
-empirical Core Image investigation (parameter domain/ranges, does it need
-the same resolution-dependence fix Sharpen needed, does it clamp
-headroom, linear vs perceptual domain, interaction with Sharpen given
-they're conceptually opposite operations placed at opposite ends of
-the pipeline) similar in kind to Vignette/Perspective/Sharpen's own
-Plan-agent dispatches — a genuine new filter, not a reuse of
-already-proven mechanics.
+reasoning): Black & White is done, Sharpen is done, Noise Reduction is
+done. **NEXT: Definition/Clarity (local-contrast enhancement) — item 4 of
+9.** Not yet planned. Likely `CIHighlightShadowAdjust` or an unsharp-mask-
+at-a-larger-radius approach (local contrast is conventionally implemented
+as a wide-radius, low-amount unsharp mask, distinct from Sharpen's
+fine-detail radius) — will need real empirical Core Image investigation
+(exact filter/technique, parameter span, does it need Sharpen's kind of
+resolution-dependent radius scaling, domain, headroom/alpha, where it sits
+relative to the existing Light-group tone stages vs the new Noise
+Reduction/Sharpen detail pair) similar in kind to
+Vignette/Perspective/Sharpen/Noise Reduction's own Plan-agent dispatches —
+a genuine new filter/technique, not a reuse of already-proven mechanics.
 
-Remaining after Noise Reduction: Definition/Clarity, Levels (+
-live histogram), WB neutral-gray eyedropper (first point-and-click
-interaction), Selective Color (HSL v2), Red-Eye removal, Cast (last,
-deliberately — see below). Lens distortion correction remains explicitly
-OUT of scope (wasn't in either screenshot, needs camera-profile data, a
+Remaining after Definition/Clarity: Levels (+ live histogram), WB
+neutral-gray eyedropper (first point-and-click interaction), Selective
+Color (HSL v2), Red-Eye removal, Cast (last, deliberately — see below).
+Lens distortion correction remains explicitly OUT of scope (wasn't in
+either screenshot, needs camera-profile data, a
 separate concern) unless the user asks for it specifically.
 
 Do not start Phase 3 (non-destructive pipeline: param serialization, edit

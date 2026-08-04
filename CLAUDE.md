@@ -72,7 +72,11 @@ each gets its own Plan Mode session per the workflow rules below.
   global-only).
 - **HSL:** ✅ v1 shipped as global Hue + Saturation sliders (no Lightness — would
   duplicate Exposure/Curves). v2 = Selective Color above.
-- **Noise Reduction:** not built.
+- **Noise Reduction:** ✅ shipped — a single Amount slider via `CINoiseReduction`,
+  runs scene-linear just before Sharpen (`inputSharpness` pinned to 0 — its own
+  default is a re-sharpen that adds noise back, measured). Unlike Sharpen's
+  radius, `noiseLevel` needed no extent-derived scaling (measured
+  resolution-independent). v1 scope: single Amount slider only.
 - **Sharpen:** ✅ shipped — a single Amount slider via `CISharpenLuminance`, the
   pipeline's true final stage (radius scales with the image's own min
   dimension — measured necessity, the filter's radius is in absolute pixels).

@@ -32,6 +32,15 @@ struct CropOverlayView: View {
     @Binding var cropInsetLeft: Double
     @Binding var cropInsetRight: Double
 
+    /// When non-nil, locks the crop rect to this width:height ratio: only
+    /// the 4 corner handles stay interactive (resizing while maintaining
+    /// the ratio, anchored at the opposite corner — see
+    /// `CropAspectMath.cornerResize`), and the 4 edge handles are hidden
+    /// (a single-edge drag can't preserve a fixed ratio without also
+    /// changing the perpendicular dimension). `nil` (freeform) leaves all
+    /// existing behavior completely unchanged.
+    let aspectRatio: Double?
+
     /// Mirrors `EditPipeline.kMaxCropInset` (private there, so duplicated
     /// here as a named constant rather than a magic number). Clamping to
     /// this on every drag frame — not just relying on `applyCrop`'s own
@@ -131,33 +140,89 @@ struct CropOverlayView: View {
     private var handles: some View {
         ZStack {
             handle(.topLeft, x: cropRect.minX, y: cropRect.minY)
-            handle(.top, x: cropRect.midX, y: cropRect.minY)
             handle(.topRight, x: cropRect.maxX, y: cropRect.minY)
-            handle(.left, x: cropRect.minX, y: cropRect.midY)
-            handle(.right, x: cropRect.maxX, y: cropRect.midY)
             handle(.bottomLeft, x: cropRect.minX, y: cropRect.maxY)
-            handle(.bottom, x: cropRect.midX, y: cropRect.maxY)
             handle(.bottomRight, x: cropRect.maxX, y: cropRect.maxY)
+            if aspectRatio == nil {
+                handle(.top, x: cropRect.midX, y: cropRect.minY)
+                handle(.left, x: cropRect.minX, y: cropRect.midY)
+                handle(.right, x: cropRect.maxX, y: cropRect.midY)
+                handle(.bottom, x: cropRect.midX, y: cropRect.maxY)
+            }
         }
     }
 
-    /// A 12pt visible marker with a larger (30pt) invisible hit target, so
-    /// the handle is comfortable to grab with a mouse without needing to be
-    /// visually oversized.
+    /// Matches Apple Photos' crop-handle style: white L-shaped brackets at
+    /// each corner (legs running along the two edges meeting there, into
+    /// the rect) and short bars at edge midpoints — not a plain circular
+    /// dot. A dark shadow stroke underneath (same technique as the grid
+    /// guideline's own contrast fix) keeps it visible over any image
+    /// content. A larger (30pt) invisible hit target still makes the
+    /// handle comfortable to grab with a mouse.
     private func handle(_ kind: Handle, x: CGFloat, y: CGFloat) -> some View {
-        Circle()
-            .fill(Color.white)
-            .frame(width: 12, height: 12)
-            .frame(width: 30, height: 30)
-            .contentShape(Rectangle())
-            .position(x: x - fitRect.minX, y: y - fitRect.minY)
-            .gesture(dragGesture(for: kind))
+        ZStack {
+            handleMark(kind).stroke(Color.black.opacity(0.6), style: StrokeStyle(lineWidth: 4.5, lineCap: .round))
+            handleMark(kind).stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+        }
+        .frame(width: 30, height: 30)
+        .contentShape(Rectangle())
+        .position(x: x - fitRect.minX, y: y - fitRect.minY)
+        .gesture(dragGesture(for: kind))
+    }
+
+    /// The bracket/bar shape for a given handle, in its own 30x30 local
+    /// frame centered on the handle's actual on-screen position (matching
+    /// the `.position` modifier applied to it above).
+    private func handleMark(_ kind: Handle) -> Path {
+        let legLength: CGFloat = 10
+        let barHalfLength: CGFloat = 10
+        let center = CGPoint(x: 15, y: 15)
+
+        return Path { path in
+            switch kind {
+            case .topLeft:
+                path.move(to: center); path.addLine(to: CGPoint(x: center.x + legLength, y: center.y))
+                path.move(to: center); path.addLine(to: CGPoint(x: center.x, y: center.y + legLength))
+            case .topRight:
+                path.move(to: center); path.addLine(to: CGPoint(x: center.x - legLength, y: center.y))
+                path.move(to: center); path.addLine(to: CGPoint(x: center.x, y: center.y + legLength))
+            case .bottomLeft:
+                path.move(to: center); path.addLine(to: CGPoint(x: center.x + legLength, y: center.y))
+                path.move(to: center); path.addLine(to: CGPoint(x: center.x, y: center.y - legLength))
+            case .bottomRight:
+                path.move(to: center); path.addLine(to: CGPoint(x: center.x - legLength, y: center.y))
+                path.move(to: center); path.addLine(to: CGPoint(x: center.x, y: center.y - legLength))
+            case .top, .bottom:
+                path.move(to: CGPoint(x: center.x - barHalfLength, y: center.y))
+                path.addLine(to: CGPoint(x: center.x + barHalfLength, y: center.y))
+            case .left, .right:
+                path.move(to: CGPoint(x: center.x, y: center.y - barHalfLength))
+                path.addLine(to: CGPoint(x: center.x, y: center.y + barHalfLength))
+            case .interior:
+                break // never used as a handle mark
+            }
+        }
     }
 
     private func dragGesture(for handle: Handle) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in onChanged(value, handle: handle) }
             .onEnded { _ in start = nil }
+    }
+
+    /// Maps a corner `Handle` case to `CropAspectMath.Corner`, or `nil` for
+    /// the edge/interior cases (which never reach the aspect-locked branch
+    /// below — edge handles aren't shown when locked, and interior drag
+    /// stays on the shared unchanged path since translating a rect
+    /// preserves its ratio trivially).
+    private func aspectCorner(for handle: Handle) -> CropAspectMath.Corner? {
+        switch handle {
+        case .topLeft: return .topLeft
+        case .topRight: return .topRight
+        case .bottomLeft: return .bottomLeft
+        case .bottomRight: return .bottomRight
+        default: return nil
+        }
     }
 
     private func onChanged(_ value: DragGesture.Value, handle: Handle) {
@@ -168,6 +233,18 @@ struct CropOverlayView: View {
 
         let dx = fitRect.width > 0 ? value.translation.width / fitRect.width : 0
         let dy = fitRect.height > 0 ? value.translation.height / fitRect.height : 0
+
+        if let ratio = aspectRatio, let corner = aspectCorner(for: handle) {
+            let result = CropAspectMath.cornerResize(
+                corner, start: start, dx: dx, ratio: ratio,
+                containerSize: fitRect.size, maxInset: maxInset
+            )
+            cropInsetTop = result.top
+            cropInsetBottom = result.bottom
+            cropInsetLeft = result.left
+            cropInsetRight = result.right
+            return
+        }
 
         func clamp(_ x: Double) -> Double {
             min(max(x, 0), maxInset)

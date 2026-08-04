@@ -15,6 +15,81 @@ struct ContentView: View {
     /// reasoning as `isCroppingActive`.
     @State private var isAdjustingTransform = false
 
+    /// Tracks the image pane's actual on-screen size (from the
+    /// `GeometryReader` in `body`), so `fitRect` can be computed from
+    /// OUTSIDE that scope too — specifically, the aspect-ratio picker's
+    /// action (in the sidebar, a sibling of the image pane in the
+    /// `HSplitView`) needs it to snap the crop rect immediately on
+    /// selection. `.zero` until the first layout pass.
+    @State private var containerSize: CGSize = .zero
+
+    /// Which aspect-ratio preset is locked for the crop rectangle.
+    /// Presentation-only, same reasoning as `isCroppingActive` — a lock
+    /// only changes how `CropOverlayView`'s drag handles behave; the final
+    /// crop is still just the same four `cropInset*` fields.
+    @State private var selectedAspect: CropAspectPreset = .freeform
+
+    /// Captured when `.custom` is selected: the crop rect's ratio AT THAT
+    /// MOMENT, then held fixed — see `CropAspectPreset.custom`.
+    @State private var customAspectRatio: Double?
+
+    /// The on-screen rect the image currently occupies, fit against the
+    /// ACTUAL displayed extent (post-straighten/perspective, crop-zeroed) —
+    /// see the historical note on this distinction in the crop-overlay
+    /// block below. `nil` until an image is loaded and the pane has been
+    /// laid out at least once.
+    private var currentFitRect: CGRect? {
+        guard let image = document.currentImage, containerSize.width > 0, containerSize.height > 0 else {
+            return nil
+        }
+        return AspectFit.rect(
+            fitting: EditPipeline.apply(displayEditState, to: image).extent.size,
+            in: containerSize
+        )
+    }
+
+    /// Resolves `selectedAspect` to an actual width:height ratio, or `nil`
+    /// for freeform (no constraint).
+    private var effectiveAspectRatio: Double? {
+        switch selectedAspect {
+        case .freeform: return nil
+        case .original: return currentFitRect.map { $0.width / $0.height }
+        case .custom: return customAspectRatio
+        default: return selectedAspect.fixedRatio
+        }
+    }
+
+    /// Sets the aspect lock and immediately reshapes the current crop rect
+    /// to the largest inscribed, centered rect of that ratio — see
+    /// `CropAspectMath.snappedInsets`. `.custom` first captures the
+    /// CURRENT crop ratio (so re-selecting it after a freeform resize
+    /// re-locks to whatever's currently shown).
+    private func selectAspect(_ preset: CropAspectPreset) {
+        selectedAspect = preset
+        guard let fitRect = currentFitRect else { return }
+
+        if preset == .custom {
+            let width = fitRect.width * (1 - document.editState.cropInsetLeft - document.editState.cropInsetRight)
+            let height = fitRect.height * (1 - document.editState.cropInsetTop - document.editState.cropInsetBottom)
+            customAspectRatio = height > 0 ? width / height : 1
+        }
+
+        guard let ratio = effectiveAspectRatio else { return }
+        let snapped = CropAspectMath.snappedInsets(
+            top: document.editState.cropInsetTop,
+            bottom: document.editState.cropInsetBottom,
+            left: document.editState.cropInsetLeft,
+            right: document.editState.cropInsetRight,
+            targetRatio: ratio,
+            containerSize: fitRect.size,
+            maxInset: 0.45 // mirrors EditPipeline.kMaxCropInset / CropOverlayView.maxInset
+        )
+        document.editState.cropInsetTop = snapped.top
+        document.editState.cropInsetBottom = snapped.bottom
+        document.editState.cropInsetLeft = snapped.left
+        document.editState.cropInsetRight = snapped.right
+    }
+
     /// What's actually rendered on screen. While cropping, the crop insets
     /// are zeroed so the FULL image is visible (with every other edit still
     /// applied) and the user can see what the crop would cut away; the
@@ -37,47 +112,44 @@ struct ContentView: View {
             GeometryReader { proxy in
                 ZStack {
                     MetalImageView(image: document.currentImage, editState: displayEditState)
-                    if isCroppingActive, let image = document.currentImage {
-                        // Fit against the ACTUAL displayed extent (post-
-                        // straighten/perspective, crop-zeroed), not the raw
-                        // `image.extent`. Every feature before Straighten
-                        // preserved extent exactly, so those were equal by
-                        // coincidence; Straighten grows the extent (measured
-                        // +padding from resampling), so this distinction is
-                        // load-bearing — using the raw extent here would
-                        // misalign the overlay against a straightened
-                        // photo. (Perspective correction, added later, was
-                        // verified to preserve extent exactly since its
-                        // corners only move inward — it doesn't newly
-                        // exercise this path, but this computation still
-                        // correctly reflects whatever extent the pipeline
-                        // actually produces.) Building the filter graph to
-                        // read `.extent` is cheap (Core Image doesn't
-                        // render pixels for it).
+                    // Fit against the ACTUAL displayed extent (post-
+                    // straighten/perspective, crop-zeroed), not the raw
+                    // `image.extent`. Every feature before Straighten
+                    // preserved extent exactly, so those were equal by
+                    // coincidence; Straighten grows the extent (measured
+                    // +padding from resampling), so this distinction is
+                    // load-bearing — using the raw extent here would
+                    // misalign the overlay against a straightened photo.
+                    // (Perspective correction, added later, was verified to
+                    // preserve extent exactly since its corners only move
+                    // inward — it doesn't newly exercise this path, but
+                    // this computation still correctly reflects whatever
+                    // extent the pipeline actually produces.) Building the
+                    // filter graph to read `.extent` is cheap (Core Image
+                    // doesn't render pixels for it). `currentFitRect` is
+                    // shared with the aspect-picker action in the sidebar
+                    // (outside this GeometryReader's scope), via
+                    // `containerSize`.
+                    if isCroppingActive, let fitRect = currentFitRect {
                         CropOverlayView(
-                            fitRect: AspectFit.rect(
-                                fitting: EditPipeline.apply(displayEditState, to: image).extent.size,
-                                in: proxy.size
-                            ),
+                            fitRect: fitRect,
                             cropInsetTop: $document.editState.cropInsetTop,
                             cropInsetBottom: $document.editState.cropInsetBottom,
                             cropInsetLeft: $document.editState.cropInsetLeft,
-                            cropInsetRight: $document.editState.cropInsetRight
+                            cropInsetRight: $document.editState.cropInsetRight,
+                            aspectRatio: effectiveAspectRatio
                         )
                     }
-                    if isAdjustingTransform, !isCroppingActive, let image = document.currentImage {
+                    if isAdjustingTransform, !isCroppingActive, let fitRect = currentFitRect {
                         // Suppressed while cropping: CropOverlayView already
                         // shows its own thirds grid over the crop rect, so a
                         // second full-frame grid would be redundant.
-                        GridGuidelineView(
-                            fitRect: AspectFit.rect(
-                                fitting: EditPipeline.apply(displayEditState, to: image).extent.size,
-                                in: proxy.size
-                            )
-                        )
+                        GridGuidelineView(fitRect: fitRect)
                     }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
+                .onAppear { containerSize = proxy.size }
+                .onChange(of: proxy.size) { _, newSize in containerSize = newSize }
             }
             .frame(minWidth: 480, minHeight: 360)
             .layoutPriority(1)
@@ -87,9 +159,13 @@ struct ContentView: View {
         }
         // Opening a new photo resets `editState` (including crop) to
         // identity; exit crop mode too so the overlay doesn't linger showing
-        // a stale (now-meaningless) full-frame rect over the new photo.
+        // a stale (now-meaningless) full-frame rect over the new photo, and
+        // reset the aspect lock (a fresh photo has no meaningful "current"
+        // ratio to keep enforcing).
         .onChange(of: document.currentFileName) { _, _ in
             isCroppingActive = false
+            selectedAspect = .freeform
+            customAspectRatio = nil
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
@@ -188,6 +264,16 @@ struct ContentView: View {
                     Spacer()
                     Button(isCroppingActive ? "Done" : "Crop") {
                         isCroppingActive.toggle()
+                    }
+                    .disabled(document.currentImage == nil)
+                }
+                HStack {
+                    Text("Aspect")
+                    Spacer()
+                    Menu(selectedAspect.label) {
+                        ForEach(CropAspectPreset.allCases, id: \.self) { preset in
+                            Button(preset.label) { selectAspect(preset) }
+                        }
                     }
                     .disabled(document.currentImage == nil)
                 }

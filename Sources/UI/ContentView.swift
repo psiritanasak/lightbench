@@ -291,6 +291,10 @@ struct ContentView: View {
                 label: "Vignette Radius", value: $document.editState.vignetteRadius,
                 range: 0...1, identity: 0.5
             ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Sharpen", value: $document.editState.sharpness,
+                range: 0...1, identity: 0
+            ) { String(format: "%.0f%%", $0 * 100) }
         }
     }
 

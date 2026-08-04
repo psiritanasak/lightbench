@@ -34,6 +34,20 @@ final class EditPipelineTests: XCTestCase {
         return CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: size, height: size))
     }
 
+    /// A square image with a sharp vertical step edge at x = size/2: the
+    /// low-x half is `lo`, the high-x half is `hi` (true linear values, no
+    /// 8-bit gamma quantization, unlike `quadrantImage`'s device-RGB
+    /// construction — needed for sub-0.002 sharpening assertions).
+    /// Sharpening needs a real edge to measure — a flat solid shows zero
+    /// effect — and a step gives a hand-checkable overshoot/undershoot.
+    private func stepEdgeImage(lo: Double, hi: Double, size: Int, alpha: Double = 1) -> CIImage {
+        let left = CIColor(red: lo, green: lo, blue: lo, alpha: alpha, colorSpace: linearSpace)!
+        let right = CIColor(red: hi, green: hi, blue: hi, alpha: alpha, colorSpace: linearSpace)!
+        let leftHalf = CIImage(color: left).cropped(to: CGRect(x: 0, y: 0, width: size / 2, height: size))
+        let rightHalf = CIImage(color: right).cropped(to: CGRect(x: size / 2, y: 0, width: size / 2, height: size))
+        return leftHalf.composited(over: rightHalf)
+    }
+
     /// A synthetic image with four distinct solid-color quadrants (top-left
     /// red, top-right green, bottom-left blue, bottom-right yellow — "top"
     /// meaning what any normal viewer would show at the top). Built from raw
@@ -1527,6 +1541,106 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(state.hslSaturation, 0)
     }
 
+    // MARK: - Sharpen math
+    //
+    // Sharpen is a genuine new Core Image filter (CISharpenLuminance), so
+    // — unlike Black & White, which reused already-proven math — these
+    // values are measured against the real filter, not derived. Sharpening
+    // needs a real edge to show any effect (a flat solid is unaffected),
+    // so tests use `stepEdgeImage` and sample specific columns on the
+    // center row rather than the single-pixel `linearPixel(of:)` helper.
+
+    private func edgePixel(of image: CIImage, x: Int, size: Int) -> (r: Float, g: Float, b: Float, a: Float) {
+        pixel(of: image, at: x, size / 2)
+    }
+
+    func testSharpenZeroIsIdentity() {
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let output = EditPipeline.apply(EditState(sharpness: 0), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 0.5, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 398, size: 800).r, 0.2, accuracy: accuracy)
+    }
+
+    func testSharpenIncreasesEdgeContrast() {
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+
+        let full = EditPipeline.apply(EditState(sharpness: 1), to: input)
+        let bright = edgePixel(of: full, x: 401, size: 800).r
+        let dark = edgePixel(of: full, x: 398, size: 800).r
+        XCTAssertEqual(bright, 0.63963, accuracy: accuracy)
+        XCTAssertEqual(dark, 0.13242, accuracy: accuracy)
+        XCTAssertGreaterThan(bright - dark, 0.3, "sharpened edge contrast should exceed the unsharpened 0.3 baseline")
+
+        // Flats away from the edge stay close to their original value.
+        XCTAssertEqual(edgePixel(of: full, x: 200, size: 800).r, 0.2, accuracy: 0.005)
+        XCTAssertEqual(edgePixel(of: full, x: 600, size: 800).r, 0.5, accuracy: 0.005)
+
+        // Monotonic growth vs a half-strength slider.
+        let half = EditPipeline.apply(EditState(sharpness: 0.5), to: input)
+        let halfBright = edgePixel(of: half, x: 401, size: 800).r
+        XCTAssertEqual(halfBright, 0.56731, accuracy: accuracy)
+        XCTAssertLessThan(halfBright, bright)
+    }
+
+    func testSharpenRadiusScalesWithResolution() {
+        // A FIXED pixel radius would give an IDENTICAL peak regardless of
+        // image size; measured peaks strictly increase with resolution,
+        // proving the radius scales with the image's own dimensions.
+        let sizes = [400, 800, 1600]
+        let expected: [Float] = [0.53896, 0.63963, 0.72959]
+
+        var peaks: [Float] = []
+        for size in sizes {
+            let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: size)
+            let output = EditPipeline.apply(EditState(sharpness: 1), to: input)
+            peaks.append(edgePixel(of: output, x: size / 2 + 1, size: size).r)
+        }
+
+        for (peak, expectedValue) in zip(peaks, expected) {
+            XCTAssertEqual(peak, expectedValue, accuracy: accuracy)
+        }
+        XCTAssertLessThan(peaks[0], peaks[1])
+        XCTAssertLessThan(peaks[1], peaks[2])
+    }
+
+    func testSharpenPreservesHighlightHeadroom() {
+        let input = stepEdgeImage(lo: 0.8, hi: 1.4, size: 800)
+        let output = EditPipeline.apply(EditState(sharpness: 1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 1.65193, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 600, size: 800).r, 1.40238, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 398, size: 800).r, 0.63947, accuracy: accuracy)
+    }
+
+    func testSharpenPreservesAlpha() {
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800, alpha: 0.5)
+        let output = EditPipeline.apply(EditState(sharpness: 1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 200, size: 800).a, 0.5, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).a, 0.5, accuracy: accuracy)
+    }
+
+    func testSharpenFlatImageUnaffected() {
+        let input = solidColorImage(0.35, size: 800)
+        let output = EditPipeline.apply(EditState(sharpness: 1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 400, size: 800).r, 0.35, accuracy: accuracy)
+    }
+
+    func testSharpenCommutesWithVignette() {
+        // Documents the measured order-independence (≤0.00100, below this
+        // file's tolerance) that justifies running Sharpen after Vignette
+        // without needing a dedicated ordering-discriminator test the way
+        // Straighten/Flip needed one (those genuinely don't commute).
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let output = EditPipeline.apply(EditState(vignetteStrength: 1, sharpness: 1), to: input)
+        let bright = edgePixel(of: output, x: 401, size: 800)
+
+        XCTAssertFalse(bright.r.isNaN)
+        XCTAssertEqual(bright.r, 0.63963, accuracy: 0.01)
+    }
+
     // MARK: - EditState
 
     func testEditStateDefaultIsIdentity() {
@@ -1554,6 +1668,7 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().cropInsetRight, 0)
         XCTAssertEqual(EditState().vignetteStrength, 0)
         XCTAssertEqual(EditState().vignetteRadius, 0.5)
+        XCTAssertEqual(EditState().sharpness, 0)
 
         let input = solidColorImage(0.35)
         let output = EditPipeline.apply(EditState(), to: input)
@@ -1585,7 +1700,8 @@ final class EditPipelineTests: XCTestCase {
             cropInsetLeft: 0.15,
             cropInsetRight: 0.2,
             vignetteStrength: 0.7,
-            vignetteRadius: 0.3
+            vignetteRadius: 0.3,
+            sharpness: 0.6
         )
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(EditState.self, from: data)

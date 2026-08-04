@@ -234,8 +234,8 @@ struct EditState: Equatable, Codable {
 
     /// Radial vignette strength, -1...1, 0 is identity. Positive DARKENS the
     /// frame corners (classic photographic vignette); negative brightens
-    /// them (a "white"/high-key vignette). Applied as the pipeline's FINAL
-    /// stage, AFTER crop, in scene-linear light, via Core Image's
+    /// them (a "white"/high-key vignette). Applied AFTER crop, in
+    /// scene-linear light, via Core Image's
     /// `CIVignetteEffect` centered on the CURRENT (post-crop) extent — see
     /// `EditPipeline`. The slider→filter mapping is deliberately ASYMMETRIC
     /// (measured): the filter's negative intensity brightens the corner
@@ -255,6 +255,42 @@ struct EditState: Equatable, Codable {
     /// is guarded off on strength), so its non-zero default is intentional
     /// and not an identity violation.
     var vignetteRadius: Double = 0.5
+
+    // MARK: - Sharpen
+
+    /// Detail/edge sharpening amount, 0...1, default 0 (identity).
+    /// One-directional (0 = none, positive = sharpen) — unlike the bipolar
+    /// tone/color sliders — matching Crop insets/Vignette Radius's 0...1
+    /// convention rather than the -1...1 family. Applied as the pipeline's
+    /// TRUE FINAL stage, AFTER Vignette, in the perceptual sRGB-gamma
+    /// domain, via Core Image's `CISharpenLuminance` — see `EditPipeline`.
+    ///
+    /// MEASURED findings (this app's extendedLinearSRGB/RGBAf working
+    /// space, not assumed):
+    /// - Filter: `CISharpenLuminance` and `CIUnsharpMask` are NUMERICALLY
+    ///   IDENTICAL at matched parameters here (grayscale AND color edges,
+    ///   to 5 decimals) — the textbook "luminance sharpen avoids color
+    ///   fringing" claim does NOT hold in this working space; both
+    ///   overshoot per-channel. `CISharpenLuminance` is chosen only for
+    ///   its single `sharpness` param and exact sharpness=0 no-op, not for
+    ///   any measured fringing benefit.
+    /// - Span: slider maps to `sharpness = amount * 1.5`. At slider 1.0 a
+    ///   0.2/0.5 edge overshoots to 0.63963 / undershoots to 0.13242
+    ///   (strong, dark side stays well positive).
+    /// - Resolution: the filter's radius is in ABSOLUTE PIXELS (a fixed
+    ///   radius gives an identical pixel-halo on 400px and 1600px images,
+    ///   both peak 0.63963), so it MUST scale with image size; radius =
+    ///   0.0025 * min(width,height) makes the halo track the frame (peak
+    ///   0.53896/0.63963/0.72959 at 400/800/1600px) — mirrors
+    ///   vignette/perspective deriving geometry from `image.extent`.
+    /// - Domain: perceptual sandwich (measured more even edge response
+    ///   than linear: bright 0.61349 vs 0.58325).
+    /// - Headroom/alpha: does NOT clamp above 1.0 (a 1.4 flat survives at
+    ///   1.40238) and preserves alpha exactly (measured).
+    /// v1 scope: single Amount slider only — Radius/Detail/Masking
+    /// (Photos/Lightroom expose more) are deferred, same scope-cut
+    /// pattern as Vignette's Softness and Black & White's tone/grain.
+    var sharpness: Double = 0
 
     /// The no-op edit state: every adjustment at its default (identity) value.
     static let identity = EditState()

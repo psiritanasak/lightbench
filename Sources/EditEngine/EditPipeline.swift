@@ -17,9 +17,15 @@ import CoreImage.CIFilterBuiltins
 /// matching the fixed order — Straighten runs first, then Perspective, then
 /// Flip (matching the Photos reference panel order; none of these commute
 /// with each other in general, so this order is a real, tested requirement).
-/// Vignette is a new true final stage, AFTER crop: it's a radial darkening
-/// tied to the final on-screen framing, so it must see the post-crop extent,
-/// not the fixed-order list's pre-crop stages.
+/// Vignette runs AFTER crop: it's a radial darkening tied to the final
+/// on-screen framing, so it must see the post-crop extent, not the
+/// fixed-order list's pre-crop stages. Sharpen is the pipeline's true FINAL
+/// stage, after Vignette: it must sharpen the actual final framed/stylized
+/// pixels, not content that gets discarded (crop) or resampled (geometric
+/// stages) afterward — running it any earlier would let a later stage
+/// soften or discard its work. Measured to commute with Vignette (order
+/// between those two specifically doesn't matter), but running dead last
+/// overall does.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
@@ -30,7 +36,8 @@ enum EditPipeline {
         image = applyPerspective(state, to: image)            // geometric, before flip
         image = applyFlip(state, to: image)                   // geometric, before crop
         image = applyCrop(state, to: image)                   // geometric
-        image = applyVignette(state, to: image)               // radial, scene-linear, truly last
+        image = applyVignette(state, to: image)               // radial, scene-linear
+        image = applySharpen(state, to: image)                // detail, perceptual, truly last
         return image
     }
 
@@ -629,5 +636,62 @@ enum EditPipeline {
         filter.intensity = Float(intensity)
         filter.falloff = Float(kVignetteFalloff)
         return filter.outputImage ?? image
+    }
+
+    // MARK: - Sharpen
+
+    /// Slider-to-`CISharpenLuminance.sharpness` span, MEASURED
+    /// strong-but-graceful: slider 1.0 → sharpness 1.5 overshoots a
+    /// 0.2/0.5 edge to 0.63963 and undershoots to 0.13242 (dark side stays
+    /// positive; larger spans start driving grayscale edges toward
+    /// clipping).
+    private static let kSharpenAmountSpan: Double = 1.5
+
+    /// Radius as a fraction of the CURRENT extent's MIN dimension —
+    /// MEASURED necessity: the filter's radius is in absolute pixels
+    /// (a fixed radius gives an identical pixel-halo on 400px vs 1600px
+    /// images, peak 0.63963 both), so a fixed radius would look wildly
+    /// different across resolutions. 0.0025 → 2.5px at a 1000px
+    /// min-dimension (a conventional fine-detail radius); using
+    /// `min(width,height)` makes portrait/landscape of equal pixel count
+    /// sharpen identically. Mirrors vignette/perspective deriving geometry
+    /// from `image.extent`.
+    private static let kSharpenRadiusFraction: Double = 0.0025
+
+    private static func sharpenActive(_ state: EditState) -> Bool {
+        state.sharpness != 0
+    }
+
+    /// Detail/edge sharpening via `CISharpenLuminance`, the pipeline's
+    /// TRUE FINAL stage — after crop AND vignette, so it sharpens exactly
+    /// the final framed, stylized pixels (resampling after sharpening
+    /// would soften the halos; measured to commute with vignette to
+    /// within 0.00100, below test tolerance, so ordering between those two
+    /// specifically doesn't matter). Applied in the PERCEPTUAL sRGB-gamma
+    /// domain (measured more even edge response than scene-linear, and the
+    /// conventional domain for unsharp masking), in its own encode/decode
+    /// sandwich (self-contained; the encode/decode tone curves are exact
+    /// inverses and do NOT clamp >1.0). `CISharpenLuminance` is measured
+    /// NUMERICALLY IDENTICAL to `CIUnsharpMask` here and is NOT
+    /// luminance-only in this working space (both fringe per-channel) —
+    /// chosen only for its single `sharpness` param and exact sharpness=0
+    /// no-op, not for any measured fringing benefit. Radius scales with
+    /// `min(extent)` — see `kSharpenRadiusFraction`. Does NOT clamp
+    /// highlight headroom (a 1.4 flat survives at 1.40238) and preserves
+    /// alpha (measured). Guarded off at sharpness 0 (exact no-op,
+    /// measured max diff 0.0).
+    private static func applySharpen(_ state: EditState, to image: CIImage) -> CIImage {
+        guard sharpenActive(state) else { return image }
+
+        let extent = image.extent
+        let radius = kSharpenRadiusFraction * Double(min(extent.width, extent.height))
+
+        let encoded = encodeToPerceptual(image)
+        let filter = CIFilter.sharpenLuminance()
+        filter.inputImage = encoded
+        filter.sharpness = Float(state.sharpness * kSharpenAmountSpan)
+        filter.radius = Float(radius)
+        let sharpened = filter.outputImage ?? encoded
+        return decodeToLinear(sharpened)
     }
 }

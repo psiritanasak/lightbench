@@ -73,7 +73,10 @@ each gets its own Plan Mode session per the workflow rules below.
 - **HSL:** ✅ v1 shipped as global Hue + Saturation sliders (no Lightness — would
   duplicate Exposure/Curves). v2 = Selective Color above.
 - **Noise Reduction:** not built.
-- **Sharpen:** not built — parametric (Intensity/Edges/Falloff-style).
+- **Sharpen:** ✅ shipped — a single Amount slider via `CISharpenLuminance`, the
+  pipeline's true final stage (radius scales with the image's own min
+  dimension — measured necessity, the filter's radius is in absolute pixels).
+  v1 scope: no separate Radius/Detail/Masking controls.
 - **Vignette:** ✅ Strength + Radius shipped (via Core Image's `CIVignetteEffect`,
   centered on the post-crop extent so it correctly follows a crop). Softness
   (falloff) not built — fixed at a measured constant for now.

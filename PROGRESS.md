@@ -5,8 +5,8 @@ Phase 2 (Edit engine) — the original six roadmap items, five backlog
 tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
 Straighten, Vertical/Horizontal perspective correction, the full Apple
-Photos-style layout (dark theme + top tab bar), and Black & White are
-shipped, each reviewer-approved and manually verified live. The Apple
+Photos-style layout (dark theme + top tab bar), Black & White, and Sharpen
+are shipped, each reviewer-approved and manually verified live. The Apple
 Photos Crop-panel batch (6 features, see below) completed first; the user
 then asked to work through the REST of the Phase 2 backlog. The roadmap in
 CLAUDE.md was expanded three times at the user's request to spell out the
@@ -40,8 +40,8 @@ flag to the user if they want it included later.
 first, new-interaction-paradigm items next, biggest-scope items last, Cast
 deliberately last since it needs a different content-aware architecture):**
 1. ✅ Black & White (monochrome mode) — done (see below).
-2. Sharpen (parametric) — NEXT.
-3. Noise Reduction (parametric).
+2. ✅ Sharpen (parametric) — done (see below).
+3. Noise Reduction (parametric) — NEXT.
 4. Definition/Clarity (local-contrast enhancement).
 5. Levels (black/white-point/gamma sliders + a live histogram — a genuinely
    new UI capability, not just more sliders).
@@ -502,10 +502,57 @@ restructure. 1 commit.
   result wasn't already a known measurement). 1 commit (+1 comment-only
   follow-up fixed before commit, not a separate commit).
 
+### Sharpen (complete, verified live) — backlog item 2 of 9 remaining
+- `Sources/EditEngine/EditState.swift` — `sharpness: Double = 0` (0...1,
+  one-directional like Vignette Radius/Crop insets, not the bipolar
+  -1...1 family), own `// MARK: - Sharpen` section, at the END of
+  declaration order (after Vignette, before `static let identity`).
+- `Sources/EditEngine/EditPipeline.swift` — new `applySharpen`, the
+  pipeline's new TRUE FINAL stage (after Vignette, which was previously
+  final) via `CISharpenLuminance`. A genuinely new filter (unlike Black &
+  White, which reused already-proven math), so a Plan agent ran real
+  empirical diagnostics. **Notable finding**: the textbook claim that
+  `CISharpenLuminance` avoids color fringing (vs a naive per-channel
+  unsharp mask) does NOT hold in this app's linear working space — measured
+  `CISharpenLuminance` and `CIUnsharpMask` to be numerically IDENTICAL on
+  both grayscale and color test edges. `CISharpenLuminance` is still the
+  right choice, but for its clean single-parameter API, not a fringing
+  advantage that doesn't actually exist here. **Also caught and fixed a
+  real resolution-dependence problem before it shipped**: the filter's
+  `radius` is in absolute pixels — a fixed radius gives an identical
+  pixel-halo regardless of image size (measured: same peak on a 400px and
+  a 1600px image), meaning it would look wildly different on a 12MP vs
+  48MP photo. Fixed via `kSharpenRadiusFraction = 0.0025 * min(extent.width,
+  extent.height)`, mirroring how Vignette/Perspective already derive their
+  own geometry from `image.extent` rather than fixed constants. Runs in
+  the perceptual domain (measured more even edge response than linear);
+  does not clamp headroom; preserves alpha; measured to commute with
+  Vignette within 0.00100 (so placement between those two specifically
+  doesn't matter, but running dead last overall does — after all
+  geometric/resampling stages so nothing softens its work afterward).
+- v1 scope: single Amount slider only, no Radius/Detail/Masking controls
+  — documented scope cut, same pattern as every other v1 feature.
+- Reviewer independently re-derived ALL FIVE empirical claims (filter
+  equivalence, resolution-scaling, domain choice, headroom/alpha,
+  placement/commutativity) from fresh standalone diagnostic scripts, not
+  by re-running the shipped tests or trusting the design agent's numbers.
+  APPROVE on first pass. One non-blocking nit noted for a future pass: the
+  shipped `testSharpenCommutesWithVignette` samples only the image's dead
+  center (which happens to be near a no-op for `CIVignetteEffect`) with a
+  looser tolerance — a weak discriminator on its own, though the
+  underlying claim was independently confirmed true by the reviewer's own
+  corner-sampling stress test.
+- New test helper `stepEdgeImage(lo:hi:size:alpha:)` — sharpening needs
+  real edges to measure (a flat solid shows zero effect); `quadrantImage()`'s
+  8-bit device-RGB construction was unsuitable for the required sub-0.002
+  precision, so this uses true linear-space compositing instead.
+- 135 tests total (7 new Sharpen tests, all passed on first run — the
+  design agent's measured values held up exactly). 1 commit.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Black & White, second pass after
-one FIX FIRST round on a doc-comment accuracy issue). Every shipped Phase 2
-feature and backlog addition has a clean final reviewer verdict.
+None — last reviewer verdict was APPROVE (Sharpen, first pass, one minor
+non-blocking test-rigor nit only). Every shipped Phase 2 feature and
+backlog addition has a clean final reviewer verdict.
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
@@ -700,16 +747,18 @@ window-resize re-fit behavior, opened-file mtime check.
 the REST of the Phase 2 backlog next (Undo/Revert stays queued/deferred,
 per the user's own instruction — do not start it without being asked
 again).** Sequence (see "Current phase" above for the full list and
-reasoning): Black & White is done. **NEXT: Sharpen (parametric,
-Intensity/Edges/Falloff-style) — item 2 of 9.** Not yet planned. Likely
-`CISharpenLuminance` or `CIUnsharpMask` — will need real empirical
-Core Image investigation (which filter, parameter ranges/spans, does it
-clamp headroom, does it need to run in linear or perceptual domain) similar
-in kind to Vignette/Perspective's own Plan-agent dispatches, not a
-direct-design session like Flip/Black & White — this is a genuine new
-filter, not a reuse of already-proven mechanics.
+reasoning): Black & White is done, Sharpen is done. **NEXT: Noise
+Reduction (parametric) — item 3 of 9.** Not yet planned. Likely
+`CINoiseReduction` (`noiseLevel`/`sharpness` params) — will need real
+empirical Core Image investigation (parameter domain/ranges, does it need
+the same resolution-dependence fix Sharpen needed, does it clamp
+headroom, linear vs perceptual domain, interaction with Sharpen given
+they're conceptually opposite operations placed at opposite ends of
+the pipeline) similar in kind to Vignette/Perspective/Sharpen's own
+Plan-agent dispatches — a genuine new filter, not a reuse of
+already-proven mechanics.
 
-Remaining after Sharpen: Noise Reduction, Definition/Clarity, Levels (+
+Remaining after Noise Reduction: Definition/Clarity, Levels (+
 live histogram), WB neutral-gray eyedropper (first point-and-click
 interaction), Selective Color (HSL v2), Red-Eye removal, Cast (last,
 deliberately — see below). Lens distortion correction remains explicitly

@@ -12,20 +12,22 @@ import CoreImage.CIFilterBuiltins
 /// four additional controls (Brightness, Black Point, Brilliance, Vibrance)
 /// folded into the existing perceptual sandwich rather than the fixed order
 /// list, since they're refinements of/companions to stages that already
-/// exist there. Straighten and Flip are "transform/distort" stages: pure
-/// geometry, run after the perceptual sandwich and BEFORE crop, matching the
-/// fixed order — Straighten runs first (matching the Photos reference panel
-/// order), then Flip (they don't commute in general, so this order is a
-/// real, tested requirement). Vignette is a new true final stage, AFTER
-/// crop: it's a radial darkening tied to the final on-screen framing, so it
-/// must see the post-crop extent, not the fixed-order list's pre-crop stages.
+/// exist there. Straighten, Perspective, and Flip are "transform/distort"
+/// stages: pure geometry, run after the perceptual sandwich and BEFORE crop,
+/// matching the fixed order — Straighten runs first, then Perspective, then
+/// Flip (matching the Photos reference panel order; none of these commute
+/// with each other in general, so this order is a real, tested requirement).
+/// Vignette is a new true final stage, AFTER crop: it's a radial darkening
+/// tied to the final on-screen framing, so it must see the post-crop extent,
+/// not the fixed-order list's pre-crop stages.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
         image = applyWhiteBalance(state, to: image)           // scene-linear, first
         image = applyExposure(state.exposureEV, to: image)    // scene-linear
         image = applyPerceptualAdjustments(state, to: image)  // sRGB-gamma domain
-        image = applyStraighten(state, to: image)             // geometric, before flip
+        image = applyStraighten(state, to: image)             // geometric, before perspective
+        image = applyPerspective(state, to: image)            // geometric, before flip
         image = applyFlip(state, to: image)                   // geometric, before crop
         image = applyCrop(state, to: image)                   // geometric
         image = applyVignette(state, to: image)               // radial, scene-linear, truly last
@@ -406,6 +408,67 @@ enum EditPipeline {
             .concatenating(CGAffineTransform(rotationAngle: radians))
             .concatenating(CGAffineTransform(translationX: extent.midX, y: extent.midY))
         return image.transformed(by: transform)
+    }
+
+    // MARK: - Perspective (keystone)
+
+    /// Max fraction of the extent's width/height a single corner may move
+    /// inward. 0.25 (MEASURED): single-axis max leaves a tapered edge at
+    /// 50% width (strong keystone); the COMBINED dual-max case (both axes
+    /// at ±1) shares the top-right corner and goes non-convex above ~0.34
+    /// (measured: f=0.33 convex, f=0.35 blanks the center), so 0.25 keeps
+    /// even the worst case safely convex with the center covered. No
+    /// NaN/crash anywhere in range (measured).
+    private static let kMaxPerspectiveShift: Double = 0.25
+
+    private static func perspectiveActive(_ state: EditState) -> Bool {
+        state.verticalPerspective != 0 || state.horizontalPerspective != 0
+    }
+
+    /// Manual vertical+horizontal keystone via `CIPerspectiveTransform`
+    /// (NOT `CIPerspectiveCorrection`, which is the inverse rectify-a-quad-
+    /// to-rect tool — measured to change a 100×100 extent to `(0,0,100,170)`
+    /// for the same corners). One combined filter call maps the extent's 4
+    /// corners to a trapezoid: positive vertical tapers the TOP edge
+    /// inward, positive horizontal tapers the RIGHT edge inward (directions
+    /// measured against `quadrantImage`; the filter's topLeft/topRight/
+    /// bottomLeft/bottomRight corners align with `CIImage`'s y-up
+    /// "top = high y" space — no inversion needed). Corners are moved
+    /// INWARD only and clamped to `kMaxPerspectiveShift`, so the extent is
+    /// preserved EXACTLY (measured) and the quad never self-intersects.
+    /// Applying both axes in a SINGLE call, not two sequential
+    /// `CIPerspectiveTransform` calls, avoids double-warping shared corners
+    /// (measured to differ near corners). Pure geometry: no color/tone
+    /// effect, no domain question, preserves highlight headroom and alpha
+    /// (all measured). Revealed black corners are the accepted
+    /// Straighten-style tradeoff, trimmed with Crop.
+    private static func applyPerspective(_ state: EditState, to image: CIImage) -> CIImage {
+        guard perspectiveActive(state) else { return image }
+
+        let extent = image.extent
+        let width = extent.width, height = extent.height
+        let vertical = min(max(state.verticalPerspective, -1), 1)
+        let horizontal = min(max(state.horizontalPerspective, -1), 1)
+
+        var topLeft = CGPoint(x: extent.minX, y: extent.maxY)
+        var topRight = CGPoint(x: extent.maxX, y: extent.maxY)
+        var bottomLeft = CGPoint(x: extent.minX, y: extent.minY)
+        var bottomRight = CGPoint(x: extent.maxX, y: extent.minY)
+
+        let dv = vertical * kMaxPerspectiveShift * width
+        let dh = horizontal * kMaxPerspectiveShift * height
+        topLeft.x += max(dv, 0); topRight.x -= max(dv, 0)
+        bottomLeft.x += max(-dv, 0); bottomRight.x -= max(-dv, 0)
+        topRight.y -= max(dh, 0); bottomRight.y += max(dh, 0)
+        topLeft.y -= max(-dh, 0); bottomLeft.y += max(-dh, 0)
+
+        let filter = CIFilter.perspectiveTransform()
+        filter.inputImage = image
+        filter.topLeft = topLeft
+        filter.topRight = topRight
+        filter.bottomLeft = bottomLeft
+        filter.bottomRight = bottomRight
+        return filter.outputImage ?? image
     }
 
     // MARK: - Flip

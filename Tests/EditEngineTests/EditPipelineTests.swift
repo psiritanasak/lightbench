@@ -82,8 +82,20 @@ final class EditPipelineTests: XCTestCase {
         case (0, 255, 0): return "green"
         case (0, 0, 255): return "blue"
         case (255, 255, 0): return "yellow"
+        case (0, 0, 0): return "black"
         default: return "unknown(\(ptr[0]),\(ptr[1]),\(ptr[2]))"
         }
+    }
+
+    /// Composites `image` over an opaque black background matching its own
+    /// extent — mirrors `ImageRenderer`'s own black-background composite, so
+    /// a spatial transform's undefined/transparent regions (e.g. the
+    /// corners a perspective taper reveals) read as "black" via
+    /// `describeColor` instead of an ambiguous "unknown(0,0,0,a=0)".
+    private func overBlack(_ image: CIImage) -> CIImage {
+        let background = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1, colorSpace: linearSpace)!)
+            .cropped(to: image.extent)
+        return image.composited(over: background)
     }
 
     private func linearPixel(of image: CIImage) -> (r: Float, g: Float, b: Float, a: Float) {
@@ -948,6 +960,146 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(buffer[0], 0.4, accuracy: accuracy)
     }
 
+    // MARK: - Perspective geometry
+    //
+    // Perspective (keystone) correction is pure geometry, via
+    // CIPerspectiveTransform, so — like straighten/flip/crop — these values
+    // are pinned to the real filter's measured behavior (a Plan agent ran
+    // throwaway Core Image diagnostics), not just derived from projective-
+    // geometry theory, per this project's discipline. Direction proofs
+    // composite the pipeline's OUTPUT over black (overBlack, mirroring
+    // ImageRenderer's own background) so the corners a taper reveals read
+    // "black" rather than an ambiguous transparent pixel.
+
+    func testPerspectiveZeroIsIdentity() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(), to: input)
+
+        XCTAssertEqual(output.extent, input.extent)
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 75)), "red")
+    }
+
+    func testPerspectivePreservesExtent() {
+        // Unlike Straighten (which measurably grows the extent by ~1.4px
+        // from resampling padding), perspective correction's corners only
+        // move INWARD, so the extent is preserved EXACTLY — measured, not
+        // assumed.
+        let input = quadrantImage(width: 100, height: 100)
+
+        let vOutput = EditPipeline.apply(EditState(verticalPerspective: 1), to: input)
+        XCTAssertEqual(vOutput.extent, CGRect(x: 0, y: 0, width: 100, height: 100))
+
+        let hOutput = EditPipeline.apply(EditState(horizontalPerspective: 1), to: input)
+        XCTAssertEqual(hOutput.extent, CGRect(x: 0, y: 0, width: 100, height: 100))
+
+        let bothOutput = EditPipeline.apply(EditState(verticalPerspective: 1, horizontalPerspective: 1), to: input)
+        XCTAssertEqual(bothOutput.extent, CGRect(x: 0, y: 0, width: 100, height: 100))
+        XCTAssertEqual(pixel(of: bothOutput, at: 50, 50).a, 1, "center should stay covered/convex even at the combined cap")
+    }
+
+    func testPerspectiveVerticalDirection() {
+        let input = quadrantImage()
+
+        let plusOutput = overBlack(EditPipeline.apply(EditState(verticalPerspective: 1), to: input))
+        XCTAssertEqual(describeColor(of: plusOutput, at: CGPoint(x: 10, y: 90)), "black", "top tapers in")
+        XCTAssertEqual(describeColor(of: plusOutput, at: CGPoint(x: 10, y: 10)), "blue")
+        XCTAssertEqual(describeColor(of: plusOutput, at: CGPoint(x: 90, y: 90)), "black", "top tapers in")
+        XCTAssertEqual(describeColor(of: plusOutput, at: CGPoint(x: 90, y: 10)), "yellow")
+
+        let minusOutput = overBlack(EditPipeline.apply(EditState(verticalPerspective: -1), to: input))
+        XCTAssertEqual(describeColor(of: minusOutput, at: CGPoint(x: 10, y: 90)), "red")
+        XCTAssertEqual(describeColor(of: minusOutput, at: CGPoint(x: 10, y: 10)), "black", "bottom tapers in")
+        XCTAssertEqual(describeColor(of: minusOutput, at: CGPoint(x: 90, y: 10)), "black", "bottom tapers in")
+    }
+
+    func testPerspectiveHorizontalDirection() {
+        let input = quadrantImage()
+
+        let plusOutput = overBlack(EditPipeline.apply(EditState(horizontalPerspective: 1), to: input))
+        XCTAssertEqual(describeColor(of: plusOutput, at: CGPoint(x: 90, y: 90)), "black", "right tapers in")
+        XCTAssertEqual(describeColor(of: plusOutput, at: CGPoint(x: 10, y: 90)), "red")
+        XCTAssertEqual(describeColor(of: plusOutput, at: CGPoint(x: 90, y: 10)), "black", "right tapers in")
+        XCTAssertEqual(describeColor(of: plusOutput, at: CGPoint(x: 10, y: 10)), "blue")
+
+        let minusOutput = overBlack(EditPipeline.apply(EditState(horizontalPerspective: -1), to: input))
+        XCTAssertEqual(describeColor(of: minusOutput, at: CGPoint(x: 10, y: 90)), "black", "left tapers in")
+        XCTAssertEqual(describeColor(of: minusOutput, at: CGPoint(x: 90, y: 90)), "green")
+        XCTAssertEqual(describeColor(of: minusOutput, at: CGPoint(x: 10, y: 10)), "black", "left tapers in")
+    }
+
+    func testPerspectiveCombinedIsSingleQuad() {
+        // Documents that both axes compose in ONE filter call without
+        // blanking the center, even at the combined cap.
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(verticalPerspective: 1, horizontalPerspective: 1), to: input)
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 50, y: 50)), "blue")
+        XCTAssertEqual(output.extent, CGRect(x: 0, y: 0, width: 100, height: 100))
+    }
+
+    func testPerspectiveIsGeometryOnly() {
+        let input = solidColorImage(0.5, size: 100)
+        let output = EditPipeline.apply(EditState(verticalPerspective: 1), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 50, 50).r, 0.5, accuracy: accuracy)
+    }
+
+    func testPerspectivePreservesHighlightHeadroom() {
+        let input = solidColorImage(r: 1.4, g: 0.5, b: 0.2, a: 1, size: 100)
+        let output = EditPipeline.apply(EditState(verticalPerspective: 1), to: input)
+        let center = pixel(of: output, at: 50, 50)
+
+        XCTAssertEqual(center.r, 1.4, accuracy: accuracy)
+        XCTAssertGreaterThan(center.r, 1.0, "should not be clamped, unlike curves")
+    }
+
+    func testPerspectivePreservesAlpha() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 0.5, size: 100)
+        let output = EditPipeline.apply(EditState(verticalPerspective: 1), to: input)
+        let center = pixel(of: output, at: 50, 50)
+
+        XCTAssertEqual(center.r, 0.15, accuracy: accuracy)
+        XCTAssertEqual(center.a, 0.5, accuracy: accuracy)
+    }
+
+    func testPerspectiveMaxIsSafe() {
+        // Proves the chosen kMaxPerspectiveShift (0.25) keeps even the
+        // worst-case combined setting (both axes at the cap, sharing a
+        // corner) convex — no NaN, no blanked center.
+        let input = solidColorImage(0.5, size: 100)
+        let output = EditPipeline.apply(EditState(verticalPerspective: 1, horizontalPerspective: 1), to: input)
+        let center = pixel(of: output, at: 50, 50)
+
+        XCTAssertEqual(output.extent, CGRect(x: 0, y: 0, width: 100, height: 100))
+        XCTAssertFalse(center.r.isNaN)
+        XCTAssertEqual(center.a, 1, "center should stay covered, not blanked")
+    }
+
+    func testPerspectiveAppliedBeforeFlip() {
+        // Proves pipeline ORDERING (perspective, then flip), not just each
+        // stage in isolation — same pattern as
+        // testStraightenAppliedBeforeFlip/testFlipAppliedBeforeCrop. The
+        // reversed (wrong) order would read green/black instead of
+        // black/red at these same points (measured).
+        let input = quadrantImage()
+        let output = overBlack(
+            EditPipeline.apply(EditState(horizontalPerspective: 1, flipHorizontal: true), to: input)
+        )
+
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 10, y: 90)), "black")
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 90, y: 90)), "red")
+    }
+
+    func testPerspectivePreservesColorMath() {
+        // Perspective composed with exposure: a covered interior pixel
+        // still reflects the exposure adjustment, proving perspective
+        // doesn't interfere with the rest of the pipeline.
+        let input = solidColorImage(0.2, size: 100)
+        let output = EditPipeline.apply(EditState(exposureEV: 1, verticalPerspective: 1), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 50, 20).r, 0.4, accuracy: accuracy)
+    }
+
     // MARK: - Flip geometry
     //
     // Flip is pure geometry (mirrors around the extent's own center), not
@@ -1318,6 +1470,8 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().hslSaturation, 0)
         XCTAssertEqual(EditState().vibrance, 0)
         XCTAssertEqual(EditState().straightenAngle, 0)
+        XCTAssertEqual(EditState().verticalPerspective, 0)
+        XCTAssertEqual(EditState().horizontalPerspective, 0)
         XCTAssertEqual(EditState().flipHorizontal, false)
         XCTAssertEqual(EditState().flipVertical, false)
         XCTAssertEqual(EditState().cropInsetTop, 0)
@@ -1347,6 +1501,8 @@ final class EditPipelineTests: XCTestCase {
             hslSaturation: 0.3,
             vibrance: 0.4,
             straightenAngle: 12.5,
+            verticalPerspective: 0.3,
+            horizontalPerspective: -0.4,
             flipHorizontal: true,
             flipVertical: false,
             cropInsetTop: 0.1,

@@ -32,14 +32,19 @@ struct ContentView: View {
                     MetalImageView(image: document.currentImage, editState: displayEditState)
                     if isCroppingActive, let image = document.currentImage {
                         // Fit against the ACTUAL displayed extent (post-
-                        // straighten, crop-zeroed), not the raw
+                        // straighten/perspective, crop-zeroed), not the raw
                         // `image.extent`. Every feature before Straighten
                         // preserved extent exactly, so those were equal by
-                        // coincidence; Straighten (and later, perspective
-                        // correction) grows the extent, so this distinction
-                        // is now load-bearing — using the raw extent here
-                        // would misalign the overlay against a
-                        // straightened photo. Building the filter graph to
+                        // coincidence; Straighten grows the extent (measured
+                        // +padding from resampling), so this distinction is
+                        // load-bearing — using the raw extent here would
+                        // misalign the overlay against a straightened
+                        // photo. (Perspective correction, added later, was
+                        // verified to preserve extent exactly since its
+                        // corners only move inward — it doesn't newly
+                        // exercise this path, but this computation still
+                        // correctly reflects whatever extent the pipeline
+                        // actually produces.) Building the filter graph to
                         // read `.extent` is cheap (Core Image doesn't
                         // render pixels for it).
                         CropOverlayView(
@@ -147,6 +152,14 @@ struct ContentView: View {
                     label: "Straighten", value: $document.editState.straightenAngle,
                     range: -45...45, identity: 0
                 ) { String(format: "%+.1f°", $0) }
+                EditSliderRow(
+                    label: "Vertical", value: $document.editState.verticalPerspective,
+                    range: -1...1, identity: 0
+                ) { String(format: "%+.0f%%", $0 * 100) }
+                EditSliderRow(
+                    label: "Horizontal", value: $document.editState.horizontalPerspective,
+                    range: -1...1, identity: 0
+                ) { String(format: "%+.0f%%", $0 * 100) }
                 EditToggleRow(label: "Flip Horizontal", value: $document.editState.flipHorizontal)
                 EditToggleRow(label: "Flip Vertical", value: $document.editState.flipVertical)
                 HStack {

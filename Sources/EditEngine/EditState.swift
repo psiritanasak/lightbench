@@ -153,6 +153,35 @@ struct EditState: Equatable, Codable {
     /// mathematically required).
     var straightenAngle: Double = 0
 
+    // MARK: - Perspective (keystone)
+
+    /// Vertical keystone correction, -1...1, 0 is identity. Positive TAPERS
+    /// THE TOP edge inward (top edge narrows relative to the bottom);
+    /// negative tapers the BOTTOM edge inward. Simulates correcting
+    /// vertical-line convergence (e.g. a building shot from below). Pure
+    /// geometry via `CIPerspectiveTransform`, applied as ONE combined quad
+    /// together with the Horizontal axis (measured: two sequential filter
+    /// calls double-warp content near shared corners — see `EditPipeline`).
+    /// Runs after Straighten, before Flip (matching the Photos panel order;
+    /// measured non-commuting with Flip, so the order is a real
+    /// requirement). Corners move INWARD only, so the image extent is
+    /// preserved EXACTLY (measured: unchanged, unlike Straighten's growth);
+    /// black corners revealed by the taper are composited by the renderer's
+    /// existing black background (same accepted tradeoff as Straighten —
+    /// trim with Crop). Direction is measured against `quadrantImage`, not
+    /// assumed. Clamped to `kMaxPerspectiveShift` in the pipeline; this
+    /// struct does not itself enforce range (matches crop/vignette).
+    var verticalPerspective: Double = 0
+
+    /// Horizontal keystone correction, -1...1, 0 is identity. Positive
+    /// TAPERS THE RIGHT edge inward (right edge shortens relative to the
+    /// left); negative tapers the LEFT edge inward. Simulates correcting
+    /// horizontal-line convergence (e.g. a document photographed
+    /// off-axis). Same mechanism/domain/extent/black-corner notes as
+    /// `verticalPerspective`; combined with it into a single
+    /// `CIPerspectiveTransform` call — see `EditPipeline`.
+    var horizontalPerspective: Double = 0
+
     // MARK: - Flip
 
     /// Mirror the image horizontally (left-right) / vertically (top-bottom).

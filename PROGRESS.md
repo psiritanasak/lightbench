@@ -3,21 +3,21 @@
 ## Current phase
 Phase 2 (Edit engine) — the original six roadmap items, five backlog
 tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
-Vignette), Crop v2's drag-handle rectangle, Flip, Straighten,
-Vertical/Horizontal perspective correction, and a grid guideline overlay
-are shipped, each reviewer-approved and manually verified live. The roadmap
-in CLAUDE.md was expanded three times at the user's request to spell out
-the fuller scope: first adding Transform/Distort and v2 notes for
-curves/HSL/crop, then using Apple Photos' adjustment panel (screenshots the
-user shared) as a completeness reference, then again refining
-Transform/Distort and Crop v2 against Photos' specific Crop-panel controls
-(Straighten, Vertical/Horizontal perspective, Flip, concrete aspect-ratio
-preset list). Full detail lives in CLAUDE.md's "Phase 2 edit engine
-backlog" section — do not duplicate it here, just read it there. Summary of
-what's NOT built yet: Cast (deliberately deferred — see below), Black &
-White mode, Red-Eye removal, a WB neutral-gray eyedropper, Levels,
+Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
+Straighten, Vertical/Horizontal perspective correction, and a grid
+guideline overlay are shipped, each reviewer-approved and manually verified
+live. The roadmap in CLAUDE.md was expanded three times at the user's
+request to spell out the fuller scope: first adding Transform/Distort and
+v2 notes for curves/HSL/crop, then using Apple Photos' adjustment panel
+(screenshots the user shared) as a completeness reference, then again
+refining Transform/Distort and Crop v2 against Photos' specific Crop-panel
+controls (Straighten, Vertical/Horizontal perspective, Flip, concrete
+aspect-ratio preset list). Full detail lives in CLAUDE.md's "Phase 2 edit
+engine backlog" section — do not duplicate it here, just read it there.
+Summary of what's NOT built yet: Cast (deliberately deferred — see below),
+Black & White mode, Red-Eye removal, a WB neutral-gray eyedropper, Levels,
 Definition/Clarity, Selective Color (= HSL v2, per-band panel), Noise
-Reduction, Sharpen, and Crop v2's aspect-ratio presets.
+Reduction, Sharpen.
 
 **User has explicitly requested the FULL feature set** to match an Apple
 Photos Crop-tool screenshot they shared (dark theme, top tab bar —
@@ -36,21 +36,27 @@ per-session rule), cheapest/foundational first:
    transformed shape — checked against the real Apple Photos app and
    confirmed the grid stays static while the photo moves underneath it, so
    no additional geometry work was needed.
-5. **Crop v2 aspect-ratio presets — NEXT.** User shared a second Photos
-   screenshot (the Crop panel with Straighten/Vertical/Horizontal/Flip/
-   Aspect all visible, "Freeform" checked) and asked to match that look AND
-   switch the app to dark mode. This bundles TWO remaining queued features —
-   the aspect-ratio preset list needs to actually work (Original, Freeform,
-   Square, 16:9, 4:5, 5:7, 4:3, 3:5, 3:2, Custom, constraining the existing
-   `CropOverlayView` drag rectangle to a fixed ratio) before the dark-theme
-   layout can meaningfully display it. Doing presets first, then the layout.
-6. Layout redesign (dark theme + tab bar shell) — once presets exist to
-   display; the immediate trigger for tackling this now was the user's
-   screenshot + explicit "change app color to dark mode" request.
+5. ✅ Crop v2 aspect-ratio presets — done (see below), including a follow-up
+   visual tweak (crop handles restyled from plain circles to Apple-Photos-
+   style L-shaped corner brackets + edge bars, per user feedback).
+6. **Layout redesign (dark theme + tab bar shell) — NEXT and LAST of this
+   batch.** The immediate trigger for tackling this whole batch was the
+   user's second screenshot + explicit "change app color to dark mode"
+   request; presets (step 5) now exist to actually populate the Crop panel
+   shown in that screenshot.
 Lens distortion correction (also listed under Transform/Distort in
 CLAUDE.md's backlog) is explicitly OUT of this batch — it wasn't in the
 screenshot and needs camera-profile data, a much bigger, separate concern;
 flag to the user if they want it included later.
+
+**User also asked about Undo / "Revert to Original" (2026-08-04) — held off
+for now, explicitly deferred, not started.** Clarified the scope split for
+next time: a simple "Revert to Original" button (reset `editState` to
+identity, same as what already happens on new-photo load) is trivial and
+could be added standalone anytime; full Undo/Redo with edit history is
+Phase 3 work ("non-destructive pipeline: param serialization, edit history,
+undo" in CLAUDE.md) and needs its own explicit go-ahead as a new phase, per
+CLAUDE.md's roadmap-order rule — same gating as always for Phase 3.
 
 Phase 3 (non-destructive pipeline: param serialization, edit history, undo)
 remains after Phase 2's expanded scope is done, and also needs its own
@@ -355,10 +361,64 @@ restructure. 1 commit.
   are the exact pre-existing set, unaffected. 1 commit (grid overlay +
   contrast fix bundled, reviewed together).
 
+### Crop v2 aspect-ratio presets (complete, verified live) — feature 5, done
+- NEW `Sources/UI/CropAspectMath.swift` — `CropAspectPreset` enum
+  (Original, Freeform, Square, 16:9, 4:5, 5:7, 4:3, 3:5, 3:2, Custom) plus
+  pure, SwiftUI-independent geometry: `snappedInsets` (reshapes the crop to
+  the largest rect of a target ratio, INSCRIBED and CENTERED within the
+  current crop, on preset selection) and `cornerResize` (ratio-preserving
+  corner drag, anchored at the opposite corner — the standard editor
+  convention). Presentation-layer only — **zero `EditState`/`EditPipeline`
+  changes**, confirmed by the reviewer via `git diff --stat`; the final
+  crop is still just the same four `cropInset*` fields `applyCrop` already
+  consumed before this feature existed.
+- Deliberately extracted the math into a plain, non-SwiftUI file so it gets
+  real unit test coverage despite living in the UI layer (8 new tests,
+  `Tests/EditEngineTests/CropAspectMathTests.swift`) — matching this
+  project's standing preference for testing real arithmetic wherever it
+  lives, not just in `EditEngine`.
+- `Sources/UI/CropOverlayView.swift` — while a ratio is locked, only the 4
+  corner handles stay interactive (edge handles hidden, since a single-edge
+  drag can't preserve a fixed ratio); corner drags route through
+  `cornerResize` instead of the freeform independent-per-axis math, which
+  is otherwise completely UNCHANGED (byte-for-byte, confirmed by reviewer)
+  when no ratio is locked.
+- `Sources/UI/ContentView.swift` — new compact `Menu`-based Aspect picker
+  in the sidebar (the full always-expanded vertical list from the
+  screenshot is deliberately deferred to the layout redesign, feature 6);
+  `.custom` captures the CURRENT crop ratio at selection time (not a
+  numeric-entry field — documented v1 scope cut); `.original` resolves to
+  the CURRENT displayed frame's ratio (reflects Straighten/Perspective/Flip
+  already applied, not the raw file). Also hoisted the crop pane's
+  `fitRect` computation (previously duplicated inline in three places) into
+  one shared `currentFitRect`, tracked via a new `containerSize` state
+  synced from the `GeometryReader`.
+- Reviewer independently re-derived the `snappedInsets` and `cornerResize`
+  algebra by hand (not just re-running tests) and spot-checked several test
+  values for genuine correctness, not just internal self-consistency.
+  APPROVE on first pass, with three minor non-blocking notes for a future
+  pass: (1) `snappedInsets`'s per-side clamp can desync from the requested
+  ratio at extreme mismatches — unreachable via the shipped presets, only
+  via a manually-extreme Custom ratio, worth a doc-comment note next time
+  this file is touched; (2) `containerSize` refresh via `onAppear`/
+  `onChange` introduces a technically-possible one-frame lag vs the
+  previous synchronous `proxy.size` read, imperceptible in practice; (3)
+  `maxInset = 0.45` is now triplicated across `EditPipeline`/
+  `CropOverlayView`/`ContentView` with no compiler-enforced consistency —
+  matches this project's existing `kMaxCropInset` duplication precedent, so
+  accepted, just flagged.
+- **Follow-up visual tweak** (same session, user feedback after trying it
+  live): crop handles restyled from plain white circles to Apple-Photos-
+  style L-shaped corner brackets + short edge bars (with the same dark-
+  shadow-stroke contrast technique already used for the grid guideline).
+  Bundled into the same reviewed diff/commit.
+- 123 tests total (8 new `CropAspectMath` tests). 1 commit (math + UI +
+  handle restyle together, single reviewed diff).
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (grid guideline overlay + contrast
-fix, first pass, no issues found). Every shipped Phase 2 feature and
-backlog addition has a clean final reviewer verdict.
+None — last reviewer verdict was APPROVE (Crop v2 aspect-ratio presets,
+first pass, three minor non-blocking notes only). Every shipped Phase 2
+feature and backlog addition has a clean final reviewer verdict.
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
@@ -551,27 +611,25 @@ window-resize re-fit behavior, opened-file mtime check.
 ## Exact next step
 **User chose option 3 (full feature parity) for the Apple Photos-style
 layout request.** Flip, Straighten, Vertical/Horizontal perspective
-correction, and the grid guideline overlay are all done (see "Current
-phase" above for the full sequence). **NEXT: Crop v2 aspect-ratio
-presets — feature 5.** Triggered by the user sharing a second Photos
-screenshot (the full Crop panel: Straighten/Vertical/Horizontal/Flip/Aspect,
-"Freeform" checked) and asking to match that look plus switch the app to
-dark mode. Not yet planned. Needs a real design session: how a preset
-constrains the ALREADY-SHIPPED `CropOverlayView` drag rectangle (locking
-the aspect ratio while still allowing drag-to-resize/reposition — e.g.
-dragging a corner handle should resize proportionally rather than freely),
-the exact preset list (Original, Freeform, Square, 16:9, 4:5, 5:7, 4:3,
-3:5, 3:2, Custom — concrete list already pinned in CLAUDE.md's backlog),
-and how "Original" should behave when the photo has already been rotated/
-keystoned (constrain to the CURRENT displayed aspect ratio, not the raw
-file's). UI-only, no color-math risk, but real interaction-design work —
-likely direct-design like Flip/Crop v1 (closed-form geometry: constraining
-a drag rectangle to a fixed ratio), not needing a Plan agent dispatch.
-
-**Then: the dark theme + tab-bar layout redesign — feature 6, the
-immediate trigger for revisiting this area was the user's explicit "change
-app color to dark mode" + screenshot request.** Once aspect presets exist
-to actually populate the Crop panel shown in the screenshot.
+correction, the grid guideline overlay, and Crop v2 aspect-ratio presets
+are all done (see "Current phase" above for the full sequence). **NEXT AND
+LAST: the dark theme + tab-bar layout redesign — feature 6.** Not yet
+planned. The immediate trigger for this whole batch was the user's second
+screenshot (the full Crop panel: Straighten/Vertical/Horizontal/Flip/Aspect
+list, "Freeform" checked) + explicit "change app color to dark mode"
+request — with presets now shipped, there's finally something real to
+populate that panel with. Needs a real design session covering: the top
+tab bar (Adjust/Filters/Crop/Clean Up — Filters/Clean Up are inert
+placeholders, neither is built), reorganizing the sidebar's ~24 rows into
+per-tool panels (Adjust tab = all tone/color sliders; Crop tab = crop
+rectangle + insets + the just-shipped Aspect menu, expanded to the full
+always-visible vertical list style from the screenshot, + Straighten/
+Vertical/Horizontal/Flip), and a genuine dark color scheme (not just
+flipping `.preferredColorScheme` — matching the screenshot's specific dark
+panel/toolbar look). This is real UI/UX design work, not closed-form
+geometry — likely worth being deliberate about scope (e.g. does "dark
+mode" mean following the system appearance, or forcing dark regardless?
+worth confirming with the user during that Plan Mode session, not assumed).
 
 Beyond this batch, remaining not-yet-built backlog: Cast (deliberately
 deferred — see below), Black & White mode, Red-Eye removal, WB

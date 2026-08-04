@@ -89,10 +89,13 @@ each gets its own Plan Mode session per the workflow rules below.
   the image's own extent center, as a new Transform/Distort stage before crop.
 - **Crop:** ✅ v1 shipped as four numeric inset sliders (Top/Bottom/Left/Right). ✅ v2's
   interactive drag-handle crop rectangle also shipped (overlaid on the full image, 8
-  handles + interior drag, numeric sliders kept and stay in sync). Not built: aspect-ratio
-  presets, concretely (from the same reference): Original, Freeform, Square, 16:9, 4:5,
-  5:7, 4:3, 3:5, 3:2, Custom. Straighten/Vertical/Horizontal live under Transform/Distort
-  above, not duplicated here, even though Photos surfaces them in the same Crop panel.
+  handles + interior drag, numeric sliders kept and stay in sync; handles styled as
+  Apple-Photos-style L-shaped corner brackets + edge bars). ✅ Aspect-ratio presets also
+  shipped: Original, Freeform, Square, 16:9, 4:5, 5:7, 4:3, 3:5, 3:2, Custom — selecting one
+  snaps the crop to the largest inscribed/centered rect of that ratio; while locked, only
+  the 4 corner handles stay interactive (ratio-preserving resize, anchored at the opposite
+  corner). Straighten/Vertical/Horizontal live under Transform/Distort above, not
+  duplicated here, even though Photos surfaces them in the same Crop panel.
 
 ## Workflow rules (important)
 - Model is `opusplan`: ALWAYS enter Plan Mode before starting a new feature so the

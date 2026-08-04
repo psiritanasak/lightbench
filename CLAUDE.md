@@ -74,11 +74,15 @@ each gets its own Plan Mode session per the workflow rules below.
 - **Vignette:** ✅ Strength + Radius shipped (via Core Image's `CIVignetteEffect`,
   centered on the post-crop extent so it correctly follows a crop). Softness
   (falloff) not built — fixed at a measured constant for now.
-- **Transform/Distort:** not built — refined against Apple Photos' Crop panel
-  (2026-07-31 reference): Straighten (rotation angle, degrees), Vertical and Horizontal
+- **Transform/Distort:** refined against Apple Photos' Crop panel (2026-07-31
+  reference): Straighten (rotation angle, degrees), Vertical and Horizontal
   perspective/keystone correction (two independent axes, not one combined "distort"
   control), lens distortion correction. Geometric like crop; runs before crop in the
-  fixed pipeline order (see Architecture principles above).
+  fixed pipeline order (see Architecture principles above). ✅ Straighten shipped
+  (rotates around the extent's own center; growing the extent on a nonzero angle is a
+  documented v1 limitation — use Crop to remove the resulting corner gaps). Not built:
+  Vertical/Horizontal perspective correction, lens distortion correction (the latter
+  explicitly out of the current feature batch — needs camera-profile data).
 - **Flip:** ✅ shipped — two independent toggles mirroring horizontal/vertical around
   the image's own extent center, as a new Transform/Distort stage before crop.
 - **Crop:** ✅ v1 shipped as four numeric inset sliders (Top/Bottom/Left/Right). ✅ v2's

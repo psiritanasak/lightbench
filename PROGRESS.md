@@ -3,11 +3,11 @@
 ## Current phase
 Phase 2 (Edit engine) — the original six roadmap items, five backlog
 tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
-Vignette), Crop v2's drag-handle rectangle, and Flip are shipped, each
-reviewer-approved and manually verified live. The roadmap in CLAUDE.md was
-expanded three times at the user's request to spell out the fuller scope:
-first adding Transform/Distort and v2 notes for curves/HSL/crop, then using
-Apple Photos' adjustment panel (screenshots the user shared) as a
+Vignette), Crop v2's drag-handle rectangle, Flip, and Straighten are shipped,
+each reviewer-approved and manually verified live. The roadmap in CLAUDE.md
+was expanded three times at the user's request to spell out the fuller
+scope: first adding Transform/Distort and v2 notes for curves/HSL/crop, then
+using Apple Photos' adjustment panel (screenshots the user shared) as a
 completeness reference, then again refining Transform/Distort and Crop v2
 against Photos' specific Crop-panel controls (Straighten, Vertical/Horizontal
 perspective, Flip, concrete aspect-ratio preset list). Full detail lives in
@@ -16,8 +16,8 @@ just read it there. Summary of what's NOT built yet: Cast (deliberately
 deferred — see below), Black & White mode, Red-Eye removal, a WB
 neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color (= HSL
 v2, per-band panel), Noise Reduction, Sharpen, Transform/Distort's
-Straighten + Vertical/Horizontal perspective (lens distortion out of scope
-for now, see below), and Crop v2's aspect-ratio presets.
+Vertical/Horizontal perspective (lens distortion out of scope for now, see
+below), and Crop v2's aspect-ratio presets.
 
 **User has explicitly requested the FULL feature set** to match an Apple
 Photos Crop-tool screenshot they shared (dark theme, top tab bar —
@@ -27,9 +27,9 @@ buttons) — not just a visual restyle. Sequenced as 5 separate features (one
 Plan Mode session/reviewer pass/commit each, per CLAUDE.md's one-feature-
 per-session rule), cheapest/foundational first:
 1. ✅ Flip — done (see below).
-2. Straighten (rotation angle) — NEXT.
-3. Vertical + Horizontal perspective correction (keystone) — most involved,
-   needs real geometric research.
+2. ✅ Straighten (rotation angle) — done (see below).
+3. Vertical + Horizontal perspective correction (keystone) — NEXT, most
+   involved, needs real geometric research.
 4. Crop v2 aspect-ratio presets.
 5. Layout redesign (dark theme + tab bar shell) — deliberately LAST, once
    the tools it needs to display actually exist.
@@ -221,8 +221,60 @@ restructure. 1 commit.
   formula. APPROVE on first pass.
 - 98 tests total (7 new Flip tests). 1 commit.
 
+### Straighten (complete, verified live) — feature 2 of 5
+- `Sources/EditEngine/EditState.swift` — `straightenAngle: Double = 0`
+  (degrees), own `// MARK: - Straighten` section, after `vibrance` and
+  before `// MARK: - Flip` (matches pipeline order — straighten runs before
+  flip).
+- `Sources/EditEngine/EditPipeline.swift` — new `applyStraighten` stage,
+  rotates around the current extent's own center via the standard
+  translate-rotate-translate-back recipe. Positive angle rotates
+  COUNTERCLOCKWISE — derived from `CGAffineTransform(rotationAngle:)`'s
+  standard matrix in `CIImage`'s y-up space, verified (not just derived)
+  with an exact-90° test against `quadrantImage`'s known layout. Runs before
+  Flip (matches the Photos reference panel order); rotation and reflection
+  don't commute in general, so this order is real and pinned by an ordering
+  discriminator test, same pattern as Flip's own `testFlipAppliedBeforeCrop`.
+  Rotating a rectangle around its own center always yields a bounding box
+  centered at that same point (provable by symmetry, pinned by a test) — so
+  Flip, running next, still mirrors around the correct center even after
+  Straighten grows the extent.
+- **Known, documented v1 limitation**: any nonzero angle grows the
+  bounding-box extent (except at 0/90/180/270°); the resulting corners
+  outside the actual rotated content render black (existing renderer
+  background composite) — the standard "rotate reveals corners" behavior.
+  No auto-fit-to-inscribed-rectangle; the already-shipped Crop tool removes
+  the gaps. Same tradeoff philosophy as curves' headroom clamp.
+- **A real measure-vs-derive gap caught by the test run itself**: the pure
+  rotated-bounding-box formula predicted a 100×100 image at 30° would grow
+  to ≈136.60px; the ACTUAL `xcodebuild test` run measured 138.0px — Core
+  Image pads a transformed extent for its resampling kernel, a real
+  implementation detail the closed-form geometry doesn't predict. Fixed by
+  asserting the measured value (with a supplementary lower-bound assertion
+  still anchored to the pure-geometry prediction) rather than the idealized
+  one. Reviewer independently reproduced 138.0 via a standalone probe before
+  approving — didn't just trust the write-up.
+- **A real latent bug in ALREADY-SHIPPED Crop v2 code, caught proactively
+  while designing this feature, not after shipping**: the crop overlay's
+  `fitRect` was computed from the raw, pre-edit `currentImage.extent.size`.
+  Every feature shipped before Straighten happened to preserve extent
+  exactly, so this was silently correct by coincidence — Straighten is the
+  first to grow the extent, which would have misaligned the overlay during
+  crop-editing mode. Fixed in `Sources/UI/ContentView.swift` to compute
+  `fitRect` from the actual post-pipeline (crop-zeroed) extent instead.
+  Reviewer traced the full call graph (both `MetalImageView`/`ImageRenderer`
+  and the overlay's new `EditPipeline.apply` call) and confirmed they're
+  provably consistent, and confirmed no eager-rendering performance concern.
+  Vertical/Horizontal perspective correction (next feature) will hit the
+  same extent-growth issue, so this fix pays forward.
+- One non-blocking product-sanity note from the reviewer: the CCW
+  convention is mathematically correct/consistent/tested, but some editors
+  define a Straighten slider's positive direction as clockwise instead —
+  purely a UI-facing convention choice, not a bug, didn't block approval.
+- 104 tests total (7 new Straighten tests). APPROVE on first pass. 1 commit.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Flip, first pass, no issues
+None — last reviewer verdict was APPROVE (Straighten, first pass, no issues
 found). Every shipped Phase 2 feature and backlog addition has a clean final
 reviewer verdict.
 
@@ -419,14 +471,19 @@ window-resize re-fit behavior, opened-file mtime check.
 layout request — build Straighten, Vertical/Horizontal perspective, Flip,
 and Aspect presets, then the visual/tab-bar redesign.** Sequenced into 5
 features per CLAUDE.md's one-feature-per-session rule (see "Current phase"
-above for the full list). **Flip is done (feature 1/5). NEXT: Straighten
-(rotation angle) — feature 2/5, not yet planned.** Resume by entering Plan
-Mode for Straighten specifically. Likely approach: `CGAffineTransform`
-rotation around the extent center (same family as Flip, extend
-`applyFlip`'s "before crop" placement or give Straighten its own adjacent
-stage), degrees slider, needs to decide whether/how to handle the
-enlarged-then-cropped canvas edge artifacts a rotation produces (a real
-design question worth Plan Mode time, unlike Flip's zero-artifact mirror).
+above for the full list). **Flip and Straighten are done (features 1-2/5).
+NEXT: Vertical + Horizontal perspective correction (keystone) — feature
+3/5, not yet planned.** Resume by entering Plan Mode for this specifically.
+This is the most involved of the 5 — unlike Flip/Straighten (simple affine
+transforms), keystone correction needs real geometric research: likely
+`CIPerspectiveTransform` or `CIPerspectiveCorrection`, mapping a
+vertical/horizontal "amount" slider pair to the four corner points those
+filters expect, and (per CLAUDE.md's Transform/Distort note) two INDEPENDENT
+axes, not one combined "distort" control. Will also grow the extent like
+Straighten did — reuse the same `fitRect`-from-actual-post-pipeline-extent
+fix already made in `ContentView.swift` (no new fix needed, just confirm it
+still holds). Needs a genuine empirical/geometric investigation, not a
+direct-design session like Flip/Straighten/Crop v1 were.
 
 After the 5-feature sequence, remaining not-yet-built backlog: Cast
 (deliberately deferred — see below), Black & White mode, Red-Eye removal, WB

@@ -19,13 +19,17 @@ import CoreImage.CIFilterBuiltins
 /// with each other in general, so this order is a real, tested requirement).
 /// Vignette runs AFTER crop: it's a radial darkening tied to the final
 /// on-screen framing, so it must see the post-crop extent, not the
-/// fixed-order list's pre-crop stages. Sharpen is the pipeline's true FINAL
-/// stage, after Vignette: it must sharpen the actual final framed/stylized
-/// pixels, not content that gets discarded (crop) or resampled (geometric
-/// stages) afterward — running it any earlier would let a later stage
-/// soften or discard its work. Measured to commute with Vignette (order
-/// between those two specifically doesn't matter), but running dead last
-/// overall does.
+/// fixed-order list's pre-crop stages. Noise Reduction and Sharpen are a
+/// "detail" pair at the pipeline's true end, after Vignette, in the
+/// standard denoise-then-sharpen order (measured: NR-first leaves less
+/// residual noise than the reverse) — both are extent-preserving so
+/// neither needs to run before crop, and running them last means they act
+/// on the actual final framed/stylized pixels, not content that gets
+/// discarded (crop) or resampled (geometric stages) afterward. Sharpen is
+/// the true FINAL stage: measured to commute with Vignette (order between
+/// those two specifically doesn't matter), but running dead last overall
+/// does, and it must come after Noise Reduction or it would re-amplify
+/// noise NR would otherwise have removed.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
@@ -37,6 +41,7 @@ enum EditPipeline {
         image = applyFlip(state, to: image)                   // geometric, before crop
         image = applyCrop(state, to: image)                   // geometric
         image = applyVignette(state, to: image)               // radial, scene-linear
+        image = applyNoiseReduction(state, to: image)         // detail, scene-linear, before sharpen
         image = applySharpen(state, to: image)                // detail, perceptual, truly last
         return image
     }
@@ -635,6 +640,53 @@ enum EditPipeline {
         filter.radius = Float(0.5 * hypot(extent.width, extent.height) * radiusScale)
         filter.intensity = Float(intensity)
         filter.falloff = Float(kVignetteFalloff)
+        return filter.outputImage ?? image
+    }
+
+    // MARK: - Noise Reduction
+
+    /// Slider-to-`CINoiseReduction.noiseLevel` span, MEASURED at the
+    /// filter's saturation onset: slider 1.0 → noiseLevel 0.15 drops a flat
+    /// noisy patch to the ~23.8% residual floor (0.05781 → 0.01378) while a
+    /// 0.2/0.5 step edge is preserved (softened over only ~4px). Beyond
+    /// ~0.15 the filter saturates (noiseLevel 0.15 and 0.40 measure
+    /// identical), so 0.15 is the useful maximum, not an arbitrary pick.
+    /// NOTE: unlike Sharpen's radius there is deliberately NO
+    /// `extent`-derived term here — noiseLevel is a per-pixel threshold and
+    /// measured resolution-INDEPENDENT (near-identical residual std at
+    /// 400/800/1600px, byte-identical edge ramps), which is correct
+    /// because noise is inherently per-pixel, unlike Sharpen's frame-
+    /// relative edge halo.
+    private static let kNoiseReductionSpan: Double = 0.15
+
+    private static func noiseReductionActive(_ state: EditState) -> Bool {
+        state.noiseReduction != 0
+    }
+
+    /// Luminance noise reduction via `CINoiseReduction`, run just BEFORE
+    /// Sharpen — the standard denoise-then-sharpen order (measured: NR
+    /// first leaves less residual noise than the reverse, 0.01336 vs
+    /// 0.01439 on a noisy edge). Applied in SCENE-LINEAR light, NOT the
+    /// perceptual sandwich Sharpen uses: measured, linear denoises evenly
+    /// across the tonal range (shadows/mids/highlights all ~24% residual)
+    /// whereas a perceptual-domain pass under-denoises shadows (47%,
+    /// because the sRGB encode lifts shadow noise above the threshold) —
+    /// the opposite of Sharpen's domain choice, matching Vignette's.
+    /// `inputSharpness` is PINNED to 0: the filter's own default (0.4) is a
+    /// re-sharpen that ADDS noise back (measured flat-patch std 136% of
+    /// baseline at that default), so this slider drives ONLY `noiseLevel`
+    /// (= amount * `kNoiseReductionSpan`). Extent-preserving (measured
+    /// exact, including on a cropped/offset extent), does NOT clamp
+    /// highlight headroom (a noisy 1.4 flat survives at 1.39988), and
+    /// preserves alpha (measured). Guarded off at amount 0 (exact no-op,
+    /// measured max diff 0.0).
+    private static func applyNoiseReduction(_ state: EditState, to image: CIImage) -> CIImage {
+        guard noiseReductionActive(state) else { return image }
+
+        let filter = CIFilter.noiseReduction()
+        filter.inputImage = image
+        filter.noiseLevel = Float(state.noiseReduction * kNoiseReductionSpan)
+        filter.sharpness = 0
         return filter.outputImage ?? image
     }
 

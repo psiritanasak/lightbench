@@ -1541,6 +1541,161 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(state.hslSaturation, 0)
     }
 
+    // MARK: - Noise Reduction math
+    //
+    // Noise Reduction is a genuine new Core Image filter (CINoiseReduction),
+    // so — like Sharpen, and unlike Black & White's reused math — these
+    // values are measured against the real filter, not derived. A flat
+    // noisy patch (not a solid color) is needed to show any effect;
+    // `noisyGray` reproduces the exact deterministic seeded-LCG noise the
+    // design probe used so the measured numbers below reproduce.
+
+    /// Deterministic per-pixel noisy gray image, matching the design probe's
+    /// exact seeded LCG so the measured std values below reproduce. `amp` is
+    /// the noise half-range around `base` (true linear values).
+    private func noisyGray(base: Double, amp: Double, size: Int, seed: UInt64 = 88, alpha: Double = 1) -> CIImage {
+        var state = seed
+        func rand() -> Double {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return Double(state >> 11) / Double(1 << 53)
+        }
+        var pixels = [Float](repeating: 0, count: size * size * 4)
+        for i in 0..<(size * size) {
+            let value = Float(base + (rand() * 2 - 1) * amp)
+            pixels[i * 4] = value
+            pixels[i * 4 + 1] = value
+            pixels[i * 4 + 2] = value
+            pixels[i * 4 + 3] = Float(alpha)
+        }
+        return CIImage(
+            bitmapData: pixels.withUnsafeBytes { Data($0) },
+            bytesPerRow: size * 16,
+            size: CGSize(width: size, height: size),
+            format: .RGBAf,
+            colorSpace: linearSpace
+        )
+    }
+
+    /// Mean and standard deviation of the red channel over a pixel region —
+    /// noise reduction's effect shows up as a std reduction, not a mean
+    /// shift, so tests need this rather than a single-pixel sample.
+    private func regionStd(_ image: CIImage, x: Int, y: Int, w: Int, h: Int) -> (mean: Float, std: Float) {
+        var buffer = [Float](repeating: 0, count: w * h * 4)
+        context.render(
+            image, toBitmap: &buffer, rowBytes: w * 16,
+            bounds: CGRect(x: x, y: y, width: w, height: h),
+            format: .RGBAf, colorSpace: linearSpace
+        )
+        var sum = 0.0
+        var sumSq = 0.0
+        let n = w * h
+        for i in 0..<n {
+            let value = Double(buffer[i * 4])
+            sum += value
+            sumSq += value * value
+        }
+        let mean = sum / Double(n)
+        let variance = max(0, sumSq / Double(n) - mean * mean)
+        return (Float(mean), Float(variance.squareRoot()))
+    }
+
+    func testNoiseReductionZeroIsIdentity() {
+        let input = noisyGray(base: 0.5, amp: 0.10, size: 600)
+        let output = EditPipeline.apply(EditState(noiseReduction: 0), to: input)
+
+        let baseline = regionStd(input, x: 0, y: 0, w: 600, h: 600)
+        let result = regionStd(output, x: 0, y: 0, w: 600, h: 600)
+        XCTAssertEqual(result.std, baseline.std, accuracy: 0.0005)
+        XCTAssertEqual(pixel(of: output, at: 300, 300).r, pixel(of: input, at: 300, 300).r, accuracy: accuracy)
+    }
+
+    func testNoiseReductionReducesFlatNoise() {
+        let input = noisyGray(base: 0.5, amp: 0.10, size: 600)
+        let baseline = regionStd(input, x: 0, y: 0, w: 600, h: 600).std
+
+        let half = EditPipeline.apply(EditState(noiseReduction: 0.5), to: input)
+        let full = EditPipeline.apply(EditState(noiseReduction: 1), to: input)
+        let halfStd = regionStd(half, x: 0, y: 0, w: 600, h: 600).std
+        let fullStd = regionStd(full, x: 0, y: 0, w: 600, h: 600).std
+
+        XCTAssertEqual(halfStd, 0.04378, accuracy: 0.004)
+        XCTAssertEqual(fullStd, 0.01378, accuracy: 0.004)
+        XCTAssertLessThan(fullStd, halfStd)
+        XCTAssertLessThan(halfStd, baseline)
+    }
+
+    func testNoiseReductionPreservesEdge() {
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let output = EditPipeline.apply(EditState(noiseReduction: 1), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 200, 400).r, 0.20000, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: output, at: 600, 400).r, 0.50000, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: output, at: 398, 400).r, 0.22979, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: output, at: 401, 400).r, 0.47021, accuracy: accuracy)
+    }
+
+    func testNoiseReductionResolutionIndependent() {
+        // UNLIKE Sharpen's radius, noiseLevel needs no extent-derived
+        // scaling: residual std stays near-constant across resolutions.
+        let sizes = [400, 800, 1600]
+        let expected: [Float] = [0.01381, 0.01372, 0.01375]
+
+        for (size, expectedStd) in zip(sizes, expected) {
+            let input = noisyGray(base: 0.5, amp: 0.10, size: size)
+            let output = EditPipeline.apply(EditState(noiseReduction: 1), to: input)
+            let std = regionStd(output, x: 0, y: 0, w: size, h: size).std
+            XCTAssertEqual(std, expectedStd, accuracy: 0.004)
+        }
+    }
+
+    func testNoiseReductionPreservesHighlightHeadroom() {
+        let input = noisyGray(base: 1.4, amp: 0.05, size: 400)
+        let output = EditPipeline.apply(EditState(noiseReduction: 1), to: input)
+
+        let result = regionStd(output, x: 0, y: 0, w: 400, h: 400)
+        XCTAssertEqual(result.mean, 1.39988, accuracy: accuracy)
+        XCTAssertGreaterThan(result.mean, 1.0)
+    }
+
+    func testNoiseReductionPreservesAlpha() {
+        let input = noisyGray(base: 0.5, amp: 0.10, size: 400, alpha: 0.5)
+        let output = EditPipeline.apply(EditState(noiseReduction: 1), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 200, 200).a, 0.5, accuracy: accuracy)
+    }
+
+    func testNoiseReductionPreservesExtent() {
+        let input = quadrantImage(width: 100, height: 100)
+        let output = EditPipeline.apply(
+            EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1, noiseReduction: 1),
+            to: input
+        )
+
+        XCTAssertEqual(output.extent, EditPipeline.apply(
+            EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1),
+            to: input
+        ).extent, "noise reduction must not change the extent crop already established")
+    }
+
+    func testNoiseReductionSharpnessPinnedToZero() {
+        // Regression guard for `filter.sharpness = 0` in `applyNoiseReduction`.
+        // A flat SOLID image can't discriminate this (verified): with
+        // nothing to sharpen (no edges, no residual noise), the output is
+        // unperturbed whether sharpness is pinned to 0 or left at the
+        // filter's own default (0.4) — a re-sharpen has nothing to act on.
+        // A moderately denoised NOISY patch does discriminate: at slider
+        // 0.5 enough residual noise remains for an un-pinned default
+        // sharpness to measurably amplify it back (measured, reverting the
+        // pin: std rises to 0.05930, an 0.015 jump — well past this test's
+        // 0.004 tolerance — and even violates monotonicity against the
+        // unfiltered baseline of 0.05781).
+        let input = noisyGray(base: 0.5, amp: 0.10, size: 600)
+        let output = EditPipeline.apply(EditState(noiseReduction: 0.5), to: input)
+
+        let result = regionStd(output, x: 0, y: 0, w: 600, h: 600)
+        XCTAssertEqual(result.std, 0.04378, accuracy: 0.004)
+    }
+
     // MARK: - Sharpen math
     //
     // Sharpen is a genuine new Core Image filter (CISharpenLuminance), so
@@ -1668,6 +1823,7 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().cropInsetRight, 0)
         XCTAssertEqual(EditState().vignetteStrength, 0)
         XCTAssertEqual(EditState().vignetteRadius, 0.5)
+        XCTAssertEqual(EditState().noiseReduction, 0)
         XCTAssertEqual(EditState().sharpness, 0)
 
         let input = solidColorImage(0.35)
@@ -1701,6 +1857,7 @@ final class EditPipelineTests: XCTestCase {
             cropInsetRight: 0.2,
             vignetteStrength: 0.7,
             vignetteRadius: 0.3,
+            noiseReduction: 0.45,
             sharpness: 0.6
         )
         let data = try JSONEncoder().encode(original)

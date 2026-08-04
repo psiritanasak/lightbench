@@ -295,6 +295,10 @@ struct ContentView: View {
                 label: "Sharpen", value: $document.editState.sharpness,
                 range: 0...1, identity: 0
             ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Noise Reduction", value: $document.editState.noiseReduction,
+                range: 0...1, identity: 0
+            ) { String(format: "%.0f%%", $0 * 100) }
         }
     }
 

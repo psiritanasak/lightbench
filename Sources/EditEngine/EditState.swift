@@ -256,6 +256,49 @@ struct EditState: Equatable, Codable {
     /// and not an identity violation.
     var vignetteRadius: Double = 0.5
 
+    // MARK: - Noise Reduction
+
+    /// Luminance noise reduction amount, 0...1, default 0 (identity).
+    /// One-directional (0 = none, positive = smoother) — same 0...1 family
+    /// as Vignette Radius and Sharpen, not the bipolar -1...1 tone/color
+    /// sliders. Applied just BEFORE Sharpen (standard denoise-then-sharpen
+    /// order), in SCENE-LINEAR light — NOT the perceptual sandwich Sharpen
+    /// uses — via Core Image's `CINoiseReduction`. See `EditPipeline`.
+    ///
+    /// MEASURED findings (this app's extendedLinearSRGB/RGBAf working
+    /// space, not assumed):
+    /// - Filter: `CINoiseReduction`. Its `inputSharpness` param is a
+    ///   re-sharpen that ADDS noise back (the filter's own default of 0.4
+    ///   raised a flat noisy patch's std to 136% of baseline), so it is
+    ///   PINNED to 0; only `inputNoiseLevel` is driven by this slider.
+    ///   `CIMedianFilter` (no parameter — can't drive a strength slider,
+    ///   and measured weaker) and `CIGaussianBlur` (not edge-aware —
+    ///   destroys a clean step edge) were measured and rejected.
+    /// - Span: slider maps to `noiseLevel = amount * 0.15`, the measured
+    ///   saturation onset (noiseLevel 0.15 and 0.40 measure identical). On
+    ///   amp±0.10 noise a flat patch drops from std 0.05781 to 0.04378
+    ///   (slider 0.5) / 0.01378 (slider 1.0, the ~23.8% residual floor),
+    ///   while a clean 0.2/0.5 step edge is preserved (softened over only
+    ///   ~4px). The knee is content-dependent (≈1.5x the image's own noise
+    ///   amplitude) — response stays monotone and slider 0 is an exact
+    ///   no-op regardless.
+    /// - Resolution: UNLIKE Sharpen's radius, `noiseLevel` needs NO
+    ///   extent-derived scaling — measured near-identical residual std
+    ///   (23.8-23.9%) and byte-identical edge ramps at 400/800/1600px. A
+    ///   fixed-pixel kernel is exactly correct here because noise is
+    ///   inherently per-pixel, unlike Sharpen's edge halo which is a
+    ///   frame-relative feature.
+    /// - Domain: scene-linear denoises evenly across the tonal range
+    ///   (shadows/mids/highlights all ~24% residual); the perceptual
+    ///   sandwich under-denoises shadows (47%) because the sRGB encode
+    ///   lifts shadow noise above the threshold — the opposite of
+    ///   Sharpen's domain choice, and matching Vignette's.
+    /// - Headroom/alpha: does NOT clamp above 1.0 (a noisy 1.4 flat
+    ///   survives at 1.39988) and preserves alpha exactly (measured).
+    /// v1 scope: single Amount slider (no per-channel/color-noise/detail
+    /// controls) — same scope-cut pattern as Sharpen's Amount-only.
+    var noiseReduction: Double = 0
+
     // MARK: - Sharpen
 
     /// Detail/edge sharpening amount, 0...1, default 0 (identity).

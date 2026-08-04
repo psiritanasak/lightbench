@@ -282,6 +282,7 @@ struct ContentView: View {
                 label: "Saturation", value: $document.editState.hslSaturation,
                 range: -1...1, identity: 0
             ) { String(format: "%+.0f%%", $0 * 100) }
+            EditToggleRow(label: "Black & White", value: $document.editState.blackAndWhite)
             EditSliderRow(
                 label: "Vignette", value: $document.editState.vignetteStrength,
                 range: -1...1, identity: 0

@@ -865,6 +865,79 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(saturationOutput.b, 0.01129, accuracy: accuracy)
     }
 
+    // MARK: - Black & White
+    //
+    // Black & White reuses the EXACT same saturation-zero mechanism
+    // hslSaturation's own -1 extreme already uses (proven grayscale by
+    // testSaturationMinusOneIsGrayscale above) — these tests focus on the
+    // NEW behavior (the override itself), not re-deriving Core Image
+    // numbers. Where the exact composed output value isn't already a
+    // known/reused measurement (e.g. after Hue/Vibrance also ran), tests
+    // assert the STRUCTURAL property (r==g==b) rather than a fabricated
+    // magic number.
+
+    func testBlackAndWhiteFalseIsIdentity() {
+        let input = solidColorImage(r: 0.6, g: 0.2, b: 0.2)
+        let output = EditPipeline.apply(EditState(blackAndWhite: false), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.6, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.2, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.2, accuracy: accuracy)
+    }
+
+    func testBlackAndWhiteProducesGrayscale() {
+        // Same input/mechanism as testSaturationMinusOneIsGrayscale, so
+        // the exact same measured value applies here.
+        let input = solidColorImage(r: 0.6, g: 0.2, b: 0.2)
+        let output = EditPipeline.apply(EditState(blackAndWhite: true), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.26441, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.26441, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.26441, accuracy: accuracy)
+    }
+
+    func testBlackAndWhiteOverridesSaturationVibranceHue() {
+        // Strongly non-default Saturation, Vibrance, AND Hue all set
+        // simultaneously — output must STILL be grayscale, proving the
+        // override takes precedence over all three, not just that B&W
+        // works in isolation.
+        let input = solidColorImage(r: 0.6, g: 0.2, b: 0.2)
+        let output = EditPipeline.apply(
+            EditState(hslHue: 45, hslSaturation: 0.8, vibrance: 0.8, blackAndWhite: true),
+            to: input
+        )
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, pixel.g, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, pixel.b, accuracy: accuracy)
+    }
+
+    func testBlackAndWhitePreservesContrast() {
+        // Contrast must still visibly apply to a B&W image, not be
+        // silently dropped once color is removed.
+        let input = solidColorImage(r: 0.6, g: 0.2, b: 0.2)
+        let plain = linearPixel(of: EditPipeline.apply(EditState(blackAndWhite: true), to: input))
+        let contrasted = linearPixel(
+            of: EditPipeline.apply(EditState(contrast: 0.5, blackAndWhite: true), to: input)
+        )
+
+        XCTAssertEqual(contrasted.r, contrasted.g, accuracy: accuracy, "still grayscale with contrast active")
+        XCTAssertEqual(contrasted.g, contrasted.b, accuracy: accuracy)
+        XCTAssertGreaterThan(abs(contrasted.r - plain.r), 0.01, "contrast should visibly change the B&W output")
+    }
+
+    func testBlackAndWhitePreservesAlpha() {
+        let input = solidColorImage(r: 0.6, g: 0.2, b: 0.2, a: 0.5)
+        let output = EditPipeline.apply(EditState(blackAndWhite: true), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, pixel.g, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, pixel.b, accuracy: accuracy)
+        XCTAssertEqual(pixel.a, 0.5, accuracy: accuracy)
+    }
+
     // MARK: - Straighten geometry
     //
     // Straighten is pure geometry (rotation around the extent's own center),
@@ -1469,6 +1542,7 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().hslHue, 0)
         XCTAssertEqual(EditState().hslSaturation, 0)
         XCTAssertEqual(EditState().vibrance, 0)
+        XCTAssertEqual(EditState().blackAndWhite, false)
         XCTAssertEqual(EditState().straightenAngle, 0)
         XCTAssertEqual(EditState().verticalPerspective, 0)
         XCTAssertEqual(EditState().horizontalPerspective, 0)
@@ -1500,6 +1574,7 @@ final class EditPipelineTests: XCTestCase {
             hslHue: 45,
             hslSaturation: 0.3,
             vibrance: 0.4,
+            blackAndWhite: true,
             straightenAngle: 12.5,
             verticalPerspective: 0.3,
             horizontalPerspective: -0.4,

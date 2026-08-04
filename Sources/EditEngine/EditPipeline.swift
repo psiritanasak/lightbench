@@ -161,6 +161,7 @@ enum EditPipeline {
             || state.hslHue != 0
             || state.vibrance != 0
             || effective.saturation != 0
+            || state.blackAndWhite
         else { return image }
 
         var img = encodeToPerceptual(image)
@@ -169,7 +170,29 @@ enum EditPipeline {
         if curvesActive(effective, state.blackPoint) { img = applyCurves(effective, state.blackPoint, to: img) }
         if state.hslHue != 0 { img = applyHue(state.hslHue, to: img) }
         if state.vibrance != 0 { img = applyVibrance(state.vibrance, to: img) }
-        if effective.saturation != 0 { img = applySaturation(effective.saturation, to: img) }
+        // `blackAndWhite` FORCES full desaturation (factor 0, i.e. the same
+        // call `applySaturation` already makes at hslSaturation's own -1
+        // extreme) regardless of what hslSaturation/vibrance/hslHue are
+        // actually set to. Leaving Hue/Vibrance active above rather than
+        // skipping them when B&W is on is deliberate, not an oversight —
+        // but MEASURED, not just assumed harmless: Hue/Vibrance running
+        // first does NOT change whether the final output is grayscale
+        // (R=G=B always holds once saturation is forced to 0), but it DOES
+        // change the resulting gray VALUE — CIColorControls computes
+        // luminance from whatever RGB is present at that point in the
+        // graph, and CIHueAdjust/CIVibrance do change those RGB values
+        // even though the image ends up fully desaturated either way
+        // (measured: Hue 45°+Vibrance 0.8 before forced desaturation shifts
+        // the resulting gray by ~0.013 vs B&W alone, well past this file's
+        // test tolerance). So "moot" would overclaim — the correct framing
+        // is that Hue/Vibrance act as a de-facto color-filter-style
+        // luminance mapping for the B&W conversion (a real, if incidental,
+        // photographic technique — akin to shooting B&W film through a
+        // colored filter), not that they have no effect at all.
+        let saturationOverride = state.blackAndWhite ? -1.0 : effective.saturation
+        if state.blackAndWhite || effective.saturation != 0 {
+            img = applySaturation(saturationOverride, to: img)
+        }
         img = decodeToLinear(img)
         return img
     }

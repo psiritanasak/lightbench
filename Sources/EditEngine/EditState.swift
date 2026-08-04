@@ -132,6 +132,23 @@ struct EditState: Equatable, Codable {
     /// double-count a single slider's "pop".
     var vibrance: Double = 0
 
+    // MARK: - Black & White
+
+    /// Monochrome mode, `false` is identity. Forces FULL desaturation
+    /// regardless of `hslSaturation`/`vibrance`/`hslHue`'s own values —
+    /// reuses the exact same `CIColorControls` saturation-zero mechanism
+    /// `hslSaturation` itself uses at its own -1 extreme (proven to produce
+    /// true R=G=B grayscale by `testSaturationMinusOneIsGrayscale`), just
+    /// forced on unconditionally rather than driven by the slider — see
+    /// `EditPipeline`. Does NOT affect contrast/tone controls (Contrast,
+    /// Highlights, Shadows, Black Point, Brilliance's non-saturation
+    /// nudges) — those still meaningfully apply to a monochrome image, a
+    /// deliberate choice matching how professional B&W conversions work.
+    /// v1 scope: on/off only, no Intensity/Neutrals/Tone/Grain sliders
+    /// (Photos' real B&W panel has several; documented scope cut, same
+    /// pattern as every other v1 feature in this project).
+    var blackAndWhite: Bool = false
+
     // MARK: - Straighten
 
     /// Rotation angle in degrees, 0 is identity. Positive rotates the image

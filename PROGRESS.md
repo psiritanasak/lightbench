@@ -4,46 +4,36 @@
 Phase 2 (Edit engine) — the original six roadmap items, five backlog
 tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
-Straighten, Vertical/Horizontal perspective correction, and a grid
-guideline overlay are shipped, each reviewer-approved and manually verified
-live. The roadmap in CLAUDE.md was expanded three times at the user's
-request to spell out the fuller scope: first adding Transform/Distort and
-v2 notes for curves/HSL/crop, then using Apple Photos' adjustment panel
-(screenshots the user shared) as a completeness reference, then again
-refining Transform/Distort and Crop v2 against Photos' specific Crop-panel
-controls (Straighten, Vertical/Horizontal perspective, Flip, concrete
-aspect-ratio preset list). Full detail lives in CLAUDE.md's "Phase 2 edit
-engine backlog" section — do not duplicate it here, just read it there.
-Summary of what's NOT built yet: Cast (deliberately deferred — see below),
-Black & White mode, Red-Eye removal, a WB neutral-gray eyedropper, Levels,
-Definition/Clarity, Selective Color (= HSL v2, per-band panel), Noise
-Reduction, Sharpen.
+Straighten, Vertical/Horizontal perspective correction, and the full Apple
+Photos-style layout (dark theme + top tab bar) are shipped, each
+reviewer-approved and manually verified live. **The full 6-feature batch
+the user requested is now COMPLETE.** The roadmap in CLAUDE.md was expanded
+three times at the user's request to spell out the fuller scope: first
+adding Transform/Distort and v2 notes for curves/HSL/crop, then using Apple
+Photos' adjustment panel (screenshots the user shared) as a completeness
+reference, then again refining Transform/Distort and Crop v2 against
+Photos' specific Crop-panel controls (Straighten, Vertical/Horizontal
+perspective, Flip, concrete aspect-ratio preset list). Full detail lives in
+CLAUDE.md's "Phase 2 edit engine backlog" section — do not duplicate it
+here, just read it there. Summary of what's NOT built yet: Cast
+(deliberately deferred — see below), Black & White mode, Red-Eye removal, a
+WB neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color
+(= HSL v2, per-band panel), Noise Reduction, Sharpen.
 
-**User has explicitly requested the FULL feature set** to match an Apple
-Photos Crop-tool screenshot they shared (dark theme, top tab bar —
-Adjust/Filters/Crop/Clean Up — right-side per-tool panel with
-Straighten/Vertical/Horizontal/Flip/Aspect controls, Auto/Reset/Done
-buttons) — not just a visual restyle. Sequenced as separate features (one
-Plan Mode session/reviewer pass/commit each, per CLAUDE.md's one-feature-
-per-session rule), cheapest/foundational first:
+**The batch, in the order it shipped:**
 1. ✅ Flip — done (see below).
 2. ✅ Straighten (rotation angle) — done (see below).
 3. ✅ Vertical + Horizontal perspective correction (keystone) — done (see below).
-4. ✅ Grid guideline overlay for Straighten/Vertical/Horizontal — done (see
-   below), including a follow-up contrast fix (dark shadow stroke under the
-   white lines so they stay legible over bright image content). User asked
-   whether the grid should also warp/rotate to follow the photo's
-   transformed shape — checked against the real Apple Photos app and
-   confirmed the grid stays static while the photo moves underneath it, so
-   no additional geometry work was needed.
+4. ✅ Grid guideline overlay for Straighten/Vertical/Horizontal — shipped,
+   then **REMOVED** by feature 6 below. Do not re-add without re-reading
+   feature 6's write-up first — it's not a regression, the functionality it
+   provided is now covered by `CropOverlayView`'s own always-visible grid.
 5. ✅ Crop v2 aspect-ratio presets — done (see below), including a follow-up
    visual tweak (crop handles restyled from plain circles to Apple-Photos-
    style L-shaped corner brackets + edge bars, per user feedback).
-6. **Layout redesign (dark theme + tab bar shell) — NEXT and LAST of this
-   batch.** The immediate trigger for tackling this whole batch was the
-   user's second screenshot + explicit "change app color to dark mode"
-   request; presets (step 5) now exist to actually populate the Crop panel
-   shown in that screenshot.
+6. ✅ Layout redesign (dark theme + top tab bar) — done (see below). Closes
+   out the batch triggered by the user's second screenshot + explicit
+   "change app color to dark mode" request.
 Lens distortion correction (also listed under Transform/Distort in
 CLAUDE.md's backlog) is explicitly OUT of this batch — it wasn't in the
 screenshot and needs camera-profile data, a much bigger, separate concern;
@@ -415,10 +405,61 @@ restructure. 1 commit.
 - 123 tests total (8 new `CropAspectMath` tests). 1 commit (math + UI +
   handle restyle together, single reviewed diff).
 
+### Layout redesign — dark theme + top tab bar (complete, verified live) — feature 6, LAST of the batch
+- Confirmed with the user (AskUserQuestion) before designing: the app
+  should be **permanently dark**, not following system appearance —
+  simpler (one palette) and matches the reference screenshot exactly.
+  `.preferredColorScheme(.dark)` applied at the `HSplitView` root, covering
+  the whole window; explicit darker-than-default charcoal backgrounds on
+  the sidebar and new tab bar layered on top.
+- NEW `Sources/UI/EditorTab.swift` (`.adjust, .filters, .crop, .cleanUp`)
+  and `Sources/UI/EditorTabBar.swift` (capsule-pill tab bar, matching the
+  screenshot's segmented look) — replaces the flat sidebar + standalone
+  Crop/Done toggle. `@State private var selectedTab` REPLACES the old
+  `@State private var isCroppingActive`; `isCroppingActive` becomes a
+  computed property (`selectedTab == .crop`) so every existing consumer
+  (`displayEditState`, the `CropOverlayView` gate) kept working with a
+  one-line change each rather than a broad rename.
+- Sidebar content now switches per tab: `.adjust` = the existing tone/color
+  sliders (Straighten/Vertical/Horizontal/Flip moved OUT, into `.crop`);
+  `.crop` = those moved controls + the Aspect list (upgraded from a compact
+  `Menu` to the full always-visible vertical list from the screenshot, with
+  a checkmark on the selected preset) + the 4 crop insets + a new
+  **Reset** button (clears straighten/perspective/flip/crop/aspect back to
+  identity); `.filters`/`.cleanUp` = inert placeholder text (selectable, no
+  functionality). **"Auto"** (also in the screenshot) was deliberately
+  skipped — it would need real auto-straighten/auto-crop detection, which
+  doesn't exist in this app; not faked, same policy as the top-right info/
+  heart/share/wand icons in the screenshot (none correspond to built
+  functionality, none were added).
+- **A real architectural consequence, caught while designing, not after
+  shipping**: moving Straighten/Vertical/Horizontal into the Crop tab means
+  they're now only ever visible while `selectedTab == .crop` — at which
+  point `CropOverlayView`'s own grid is already showing. This made the
+  separate grid-guideline-while-dragging feature (shipped as its own
+  feature earlier in this same batch) **unreachable dead code**. Removed
+  entirely — `Sources/UI/GridGuidelineView.swift` deleted, replaced by
+  `Sources/UI/GridLines.swift` (keeping only the shared line-drawing math
+  `CropOverlayView` still needs) — rather than leaving inert state/code
+  around. Reviewer independently traced this and found it's actually a
+  **strict improvement**, not a wash: `CropOverlayView`'s grid renders
+  unconditionally while the Crop tab is active, not just during an active
+  slider drag the way the old guideline did.
+- Pure UI/navigation restructuring — no `EditState`/`EditPipeline` changes.
+  Reviewer traced every claim in the diff against the actual code rather
+  than trusting the diff text (the `isCroppingActive` migration, the
+  dead-code-removal argument, the toolbar conditional's compile-and-behave
+  correctness, `.preferredColorScheme`'s actual scope) and ran the build/
+  test suite itself rather than trusting reported numbers. APPROVE on first
+  pass, one non-blocking note (a harmlessly-redundant double `.disabled`
+  check on the Reset button).
+- 123 tests total, unchanged (no EditEngine touched). 1 commit.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Crop v2 aspect-ratio presets,
-first pass, three minor non-blocking notes only). Every shipped Phase 2
-feature and backlog addition has a clean final reviewer verdict.
+None — last reviewer verdict was APPROVE (layout redesign, first pass, one
+minor non-blocking note only). Every shipped Phase 2 feature and backlog
+addition has a clean final reviewer verdict. **The full 6-feature Apple
+Photos-style batch is complete.**
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
@@ -609,34 +650,26 @@ Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**User chose option 3 (full feature parity) for the Apple Photos-style
-layout request.** Flip, Straighten, Vertical/Horizontal perspective
-correction, the grid guideline overlay, and Crop v2 aspect-ratio presets
-are all done (see "Current phase" above for the full sequence). **NEXT AND
-LAST: the dark theme + tab-bar layout redesign — feature 6.** Not yet
-planned. The immediate trigger for this whole batch was the user's second
-screenshot (the full Crop panel: Straighten/Vertical/Horizontal/Flip/Aspect
-list, "Freeform" checked) + explicit "change app color to dark mode"
-request — with presets now shipped, there's finally something real to
-populate that panel with. Needs a real design session covering: the top
-tab bar (Adjust/Filters/Crop/Clean Up — Filters/Clean Up are inert
-placeholders, neither is built), reorganizing the sidebar's ~24 rows into
-per-tool panels (Adjust tab = all tone/color sliders; Crop tab = crop
-rectangle + insets + the just-shipped Aspect menu, expanded to the full
-always-visible vertical list style from the screenshot, + Straighten/
-Vertical/Horizontal/Flip), and a genuine dark color scheme (not just
-flipping `.preferredColorScheme` — matching the screenshot's specific dark
-panel/toolbar look). This is real UI/UX design work, not closed-form
-geometry — likely worth being deliberate about scope (e.g. does "dark
-mode" mean following the system appearance, or forcing dark regardless?
-worth confirming with the user during that Plan Mode session, not assumed).
+**The full Apple Photos-style Crop panel batch (6 features, all of
+CLAUDE.md's Phase 2 backlog reachable from the user's two screenshots) is
+now COMPLETE.** No next feature has been chosen — resume by asking the
+user what's next, don't assume. Two known, explicitly-not-yet-started
+items worth surfacing when that conversation happens:
+- **Undo / "Revert to Original"** — user asked about this on 2026-08-04 and
+  said to hold off for now. Scope split already clarified (see the note
+  near the top of "Current phase"): a simple Revert button is trivial and
+  standalone; full Undo/Redo is Phase 3 work needing its own go-ahead.
+- **Remaining not-yet-built Phase 2 backlog**: Cast (deliberately deferred
+  — see below, needs content-aware gray-world-style statistics, a
+  different architecture from every other adjustment so far), Black &
+  White mode, Red-Eye removal, WB neutral-gray eyedropper, Levels,
+  Definition/Clarity, Selective Color (HSL v2), Noise Reduction, Sharpen,
+  and lens distortion correction (needs camera-profile data, a separate
+  concern, wasn't in either screenshot).
 
-Beyond this batch, remaining not-yet-built backlog: Cast (deliberately
-deferred — see below), Black & White mode, Red-Eye removal, WB
-neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color (HSL
-v2), Noise Reduction, Sharpen, and lens distortion correction (explicitly
-left out of the current batch — wasn't in the user's screenshot, needs
-camera-profile data, a separate concern).
+Do not start Phase 3 (non-destructive pipeline: param serialization, edit
+history, undo) without the user's explicit go-ahead — starting a new phase
+always needs its own Plan Mode session per CLAUDE.md's roadmap-order rule.
 
 Cast was deliberately passed over (not forgotten) when picking a feature
 after Vibrance: it's the one remaining backlog item that breaks the

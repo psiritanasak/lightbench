@@ -4,23 +4,20 @@
 Phase 2 (Edit engine) — the original six roadmap items, five backlog
 tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
-Straighten, Vertical/Horizontal perspective correction, and the full Apple
-Photos-style layout (dark theme + top tab bar) are shipped, each
-reviewer-approved and manually verified live. **The full 6-feature batch
-the user requested is now COMPLETE.** The roadmap in CLAUDE.md was expanded
-three times at the user's request to spell out the fuller scope: first
-adding Transform/Distort and v2 notes for curves/HSL/crop, then using Apple
-Photos' adjustment panel (screenshots the user shared) as a completeness
-reference, then again refining Transform/Distort and Crop v2 against
-Photos' specific Crop-panel controls (Straighten, Vertical/Horizontal
-perspective, Flip, concrete aspect-ratio preset list). Full detail lives in
-CLAUDE.md's "Phase 2 edit engine backlog" section — do not duplicate it
-here, just read it there. Summary of what's NOT built yet: Cast
-(deliberately deferred — see below), Black & White mode, Red-Eye removal, a
-WB neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color
-(= HSL v2, per-band panel), Noise Reduction, Sharpen.
+Straighten, Vertical/Horizontal perspective correction, the full Apple
+Photos-style layout (dark theme + top tab bar), and Black & White are
+shipped, each reviewer-approved and manually verified live. The Apple
+Photos Crop-panel batch (6 features, see below) completed first; the user
+then asked to work through the REST of the Phase 2 backlog. The roadmap in
+CLAUDE.md was expanded three times at the user's request to spell out the
+fuller scope: first adding Transform/Distort and v2 notes for
+curves/HSL/crop, then using Apple Photos' adjustment panel (screenshots the
+user shared) as a completeness reference, then again refining
+Transform/Distort and Crop v2 against Photos' specific Crop-panel controls.
+Full detail lives in CLAUDE.md's "Phase 2 edit engine backlog" section — do
+not duplicate it here, just read it there.
 
-**The batch, in the order it shipped:**
+**The Apple Photos Crop-panel batch (complete):**
 1. ✅ Flip — done (see below).
 2. ✅ Straighten (rotation angle) — done (see below).
 3. ✅ Vertical + Horizontal perspective correction (keystone) — done (see below).
@@ -31,13 +28,30 @@ WB neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color
 5. ✅ Crop v2 aspect-ratio presets — done (see below), including a follow-up
    visual tweak (crop handles restyled from plain circles to Apple-Photos-
    style L-shaped corner brackets + edge bars, per user feedback).
-6. ✅ Layout redesign (dark theme + top tab bar) — done (see below). Closes
+6. ✅ Layout redesign (dark theme + top tab bar) — done (see below). Closed
    out the batch triggered by the user's second screenshot + explicit
    "change app color to dark mode" request.
 Lens distortion correction (also listed under Transform/Distort in
-CLAUDE.md's backlog) is explicitly OUT of this batch — it wasn't in the
+CLAUDE.md's backlog) was explicitly OUT of that batch — it wasn't in the
 screenshot and needs camera-profile data, a much bigger, separate concern;
 flag to the user if they want it included later.
+
+**Remaining Phase 2 backlog, user-requested sequence (cheapest/foundational
+first, new-interaction-paradigm items next, biggest-scope items last, Cast
+deliberately last since it needs a different content-aware architecture):**
+1. ✅ Black & White (monochrome mode) — done (see below).
+2. Sharpen (parametric) — NEXT.
+3. Noise Reduction (parametric).
+4. Definition/Clarity (local-contrast enhancement).
+5. Levels (black/white-point/gamma sliders + a live histogram — a genuinely
+   new UI capability, not just more sliders).
+6. WB neutral-gray eyedropper (first point-and-click interaction in the app).
+7. Selective Color (HSL v2, per-band panel — 8 bands × 3 params, biggest
+   scope of the remaining items).
+8. Red-Eye removal (point-and-click + region-based correction).
+9. Cast (color-cast neutralization — content-aware gray-world-style
+   statistics, a different architecture from every other adjustment so
+   far; deliberately last, as established when it was first deferred).
 
 **User also asked about Undo / "Revert to Original" (2026-08-04) — held off
 for now, explicitly deferred, not started.** Clarified the scope split for
@@ -455,11 +469,43 @@ restructure. 1 commit.
   check on the Reset button).
 - 123 tests total, unchanged (no EditEngine touched). 1 commit.
 
+### Black & White (complete, verified live) — backlog item 1 of 9 remaining
+- `Sources/EditEngine/EditState.swift` — `blackAndWhite: Bool = false`, own
+  `// MARK: - Black & White` section, after `vibrance`.
+- `Sources/EditEngine/EditPipeline.swift` — NOT a new filter or pipeline
+  stage: a one-line override at the EXISTING `applySaturation` call site
+  inside `applyPerceptualAdjustments` — when `blackAndWhite` is true, the
+  call is forced to `-1` (factor 0) regardless of `hslSaturation`/
+  `vibrance`/`hslHue`'s own values. Reuses a mechanism ALREADY proven
+  grayscale by the pre-existing `testSaturationMinusOneIsGrayscale` (not
+  new Core Image behavior), so this was designed directly, no empirical
+  diagnostics needed for the mechanism itself. Contrast/Highlights/
+  Shadows/Black Point/Brilliance's non-saturation nudges all still apply
+  normally to a B&W image.
+- v1 scope: on/off only, no Intensity/Neutrals/Tone/Grain sliders (Photos'
+  fuller B&W panel) — documented scope cut, consistent with every other v1
+  feature in this project.
+- **First reviewer pass was FIX FIRST — one real doc-comment overclaim**:
+  a comment said leaving Hue/Vibrance active before the forced desaturation
+  was "moot." Reviewer MEASURED (not assumed) this to be inaccurate: while
+  the R=G=B grayscale invariant always holds, the resulting gray VALUE
+  shifts by up to ~0.013 depending on Hue/Vibrance (CIColorControls
+  computes luminance from whatever RGB is present in the graph at that
+  point) — well past the test suite's 0.002 tolerance. Fixed by rewording
+  to accurately describe this as an intentional (if incidental)
+  color-filter-style luminance mapping — like shooting B&W film through a
+  colored filter — not a no-op. Second pass APPROVEd.
+- 128 tests total (5 new Black & White tests, all passed on first run — the
+  reused-mechanism design meant no new magic numbers to get wrong for most
+  of them; two tests use structural assertions (`r==g==b`) rather than
+  fabricated exact values where the composed Hue+Vibrance+desaturation
+  result wasn't already a known measurement). 1 commit (+1 comment-only
+  follow-up fixed before commit, not a separate commit).
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (layout redesign, first pass, one
-minor non-blocking note only). Every shipped Phase 2 feature and backlog
-addition has a clean final reviewer verdict. **The full 6-feature Apple
-Photos-style batch is complete.**
+None — last reviewer verdict was APPROVE (Black & White, second pass after
+one FIX FIRST round on a doc-comment accuracy issue). Every shipped Phase 2
+feature and backlog addition has a clean final reviewer verdict.
 
 ## Done
 ### Phase 1 — Foundation (complete, verified live)
@@ -650,22 +696,25 @@ Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**The full Apple Photos-style Crop panel batch (6 features, all of
-CLAUDE.md's Phase 2 backlog reachable from the user's two screenshots) is
-now COMPLETE.** No next feature has been chosen — resume by asking the
-user what's next, don't assume. Two known, explicitly-not-yet-started
-items worth surfacing when that conversation happens:
-- **Undo / "Revert to Original"** — user asked about this on 2026-08-04 and
-  said to hold off for now. Scope split already clarified (see the note
-  near the top of "Current phase"): a simple Revert button is trivial and
-  standalone; full Undo/Redo is Phase 3 work needing its own go-ahead.
-- **Remaining not-yet-built Phase 2 backlog**: Cast (deliberately deferred
-  — see below, needs content-aware gray-world-style statistics, a
-  different architecture from every other adjustment so far), Black &
-  White mode, Red-Eye removal, WB neutral-gray eyedropper, Levels,
-  Definition/Clarity, Selective Color (HSL v2), Noise Reduction, Sharpen,
-  and lens distortion correction (needs camera-profile data, a separate
-  concern, wasn't in either screenshot).
+**The Apple Photos Crop-panel batch is complete; user asked to work through
+the REST of the Phase 2 backlog next (Undo/Revert stays queued/deferred,
+per the user's own instruction — do not start it without being asked
+again).** Sequence (see "Current phase" above for the full list and
+reasoning): Black & White is done. **NEXT: Sharpen (parametric,
+Intensity/Edges/Falloff-style) — item 2 of 9.** Not yet planned. Likely
+`CISharpenLuminance` or `CIUnsharpMask` — will need real empirical
+Core Image investigation (which filter, parameter ranges/spans, does it
+clamp headroom, does it need to run in linear or perceptual domain) similar
+in kind to Vignette/Perspective's own Plan-agent dispatches, not a
+direct-design session like Flip/Black & White — this is a genuine new
+filter, not a reuse of already-proven mechanics.
+
+Remaining after Sharpen: Noise Reduction, Definition/Clarity, Levels (+
+live histogram), WB neutral-gray eyedropper (first point-and-click
+interaction), Selective Color (HSL v2), Red-Eye removal, Cast (last,
+deliberately — see below). Lens distortion correction remains explicitly
+OUT of scope (wasn't in either screenshot, needs camera-profile data, a
+separate concern) unless the user asks for it specifically.
 
 Do not start Phase 3 (non-destructive pipeline: param serialization, edit
 history, undo) without the user's explicit go-ahead — starting a new phase

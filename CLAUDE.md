@@ -53,7 +53,10 @@ each gets its own Plan Mode session per the workflow rules below.
   that protects already-saturated tones and skin tones — a genuinely different
   algorithm from plain saturation, via Core Image's `CIVibrance`). Not built:
   Cast (color-cast neutralization, distinct from White Balance's temperature/tint).
-- **Black & White:** not built — monochrome conversion mode.
+- **Black & White:** ✅ shipped — a single toggle forcing full desaturation
+  (reuses the same `CIColorControls` saturation-zero mechanism `hslSaturation`'s
+  own -1 extreme uses). Not built: Intensity/Neutrals/Tone/Grain sliders
+  (Photos' fuller B&W panel — v1 is on/off only).
 - **Red-Eye:** not built — likely needs a point-and-click UI, a different interaction
   model from every slider-based adjustment built so far.
 - **White Balance:** Temperature + Tint ✅. Not built: "pick a neutral gray" eyedropper.

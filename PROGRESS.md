@@ -3,21 +3,21 @@
 ## Current phase
 Phase 2 (Edit engine) — the original six roadmap items, five backlog
 tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
-Vignette), Crop v2's drag-handle rectangle, Flip, Straighten, and
-Vertical/Horizontal perspective correction are shipped, each
-reviewer-approved and manually verified live. The roadmap in CLAUDE.md was
-expanded three times at the user's request to spell out the fuller scope:
-first adding Transform/Distort and v2 notes for curves/HSL/crop, then using
-Apple Photos' adjustment panel (screenshots the user shared) as a
-completeness reference, then again refining Transform/Distort and Crop v2
-against Photos' specific Crop-panel controls (Straighten, Vertical/Horizontal
-perspective, Flip, concrete aspect-ratio preset list). Full detail lives in
-CLAUDE.md's "Phase 2 edit engine backlog" section — do not duplicate it here,
-just read it there. Summary of what's NOT built yet: Cast (deliberately
-deferred — see below), Black & White mode, Red-Eye removal, a WB
-neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color (= HSL
-v2, per-band panel), Noise Reduction, Sharpen, and Crop v2's aspect-ratio
-presets.
+Vignette), Crop v2's drag-handle rectangle, Flip, Straighten,
+Vertical/Horizontal perspective correction, and a grid guideline overlay
+are shipped, each reviewer-approved and manually verified live. The roadmap
+in CLAUDE.md was expanded three times at the user's request to spell out
+the fuller scope: first adding Transform/Distort and v2 notes for
+curves/HSL/crop, then using Apple Photos' adjustment panel (screenshots the
+user shared) as a completeness reference, then again refining
+Transform/Distort and Crop v2 against Photos' specific Crop-panel controls
+(Straighten, Vertical/Horizontal perspective, Flip, concrete aspect-ratio
+preset list). Full detail lives in CLAUDE.md's "Phase 2 edit engine
+backlog" section — do not duplicate it here, just read it there. Summary of
+what's NOT built yet: Cast (deliberately deferred — see below), Black &
+White mode, Red-Eye removal, a WB neutral-gray eyedropper, Levels,
+Definition/Clarity, Selective Color (= HSL v2, per-band panel), Noise
+Reduction, Sharpen, and Crop v2's aspect-ratio presets.
 
 **User has explicitly requested the FULL feature set** to match an Apple
 Photos Crop-tool screenshot they shared (dark theme, top tab bar —
@@ -29,22 +29,24 @@ per-session rule), cheapest/foundational first:
 1. ✅ Flip — done (see below).
 2. ✅ Straighten (rotation angle) — done (see below).
 3. ✅ Vertical + Horizontal perspective correction (keystone) — done (see below).
-4. **Grid guideline overlay for Straighten/Vertical/Horizontal — NEXT.** User
-   explicitly requested this right after confirming perspective correction
-   works: a rule-of-thirds-style guideline grid (matching the one already
-   shown during Crop mode via `CropOverlayView`) should ALSO appear while
-   adjusting Straighten/Vertical/Horizontal, to help align horizons/verticals
-   while dragging. Not yet planned — needs a design decision on WHEN it
-   shows (e.g. only while actively dragging one of those specific sliders,
-   via `Slider`'s `onEditingChanged`, vs. whenever any of those three values
-   is non-default) and whether it reuses/extracts `CropOverlayView`'s
-   existing `thirdsGrid` logic or is a new lightweight grid-only overlay.
-   Small, UI-only, low risk — direct-design session like Flip/Straighten
-   (no Plan agent dispatch needed), but still needs its own Plan Mode entry
-   per CLAUDE.md's rule.
-5. Crop v2 aspect-ratio presets.
-6. Layout redesign (dark theme + tab bar shell) — deliberately LAST, once
-   the tools it needs to display actually exist.
+4. ✅ Grid guideline overlay for Straighten/Vertical/Horizontal — done (see
+   below), including a follow-up contrast fix (dark shadow stroke under the
+   white lines so they stay legible over bright image content). User asked
+   whether the grid should also warp/rotate to follow the photo's
+   transformed shape — checked against the real Apple Photos app and
+   confirmed the grid stays static while the photo moves underneath it, so
+   no additional geometry work was needed.
+5. **Crop v2 aspect-ratio presets — NEXT.** User shared a second Photos
+   screenshot (the Crop panel with Straighten/Vertical/Horizontal/Flip/
+   Aspect all visible, "Freeform" checked) and asked to match that look AND
+   switch the app to dark mode. This bundles TWO remaining queued features —
+   the aspect-ratio preset list needs to actually work (Original, Freeform,
+   Square, 16:9, 4:5, 5:7, 4:3, 3:5, 3:2, Custom, constraining the existing
+   `CropOverlayView` drag rectangle to a fixed ratio) before the dark-theme
+   layout can meaningfully display it. Doing presets first, then the layout.
+6. Layout redesign (dark theme + tab bar shell) — once presets exist to
+   display; the immediate trigger for tackling this now was the user's
+   screenshot + explicit "change app color to dark mode" request.
 Lens distortion correction (also listed under Transform/Distort in
 CLAUDE.md's backlog) is explicitly OUT of this batch — it wasn't in the
 screenshot and needs camera-profile data, a much bigger, separate concern;
@@ -316,9 +318,46 @@ restructure. 1 commit.
 - 115 tests total (11 new perspective tests, all passed on first run — the
   design agent's measured values held up exactly). 1 commit.
 
+### Grid guideline overlay (complete, verified live) — feature 4, added mid-sequence
+- NEW `Sources/UI/GridGuidelineView.swift` — a `GridLines` enum
+  (`major(in:)`: rule-of-thirds, 2 lines/direction; `minor(in:subdivisions:)`:
+  finer subdivisions, excluding the positions `major` already draws so the
+  two paths never overlap) plus `GridGuidelineView`, a non-interactive
+  overlay drawing both tiers over the full displayed image.
+- Shows only while ACTIVELY DRAGGING Straighten/Vertical/Horizontal (via
+  `Slider`'s `onEditingChanged`, wired through a new defaulted parameter on
+  `EditSliderRow` so the ~18 other slider call sites in `ContentView.swift`
+  are unaffected), appearing on drag start and disappearing on release —
+  matches Apple Photos' own behavior. Suppressed while `isCroppingActive`
+  (the two `if` conditions are structurally mutually exclusive, both grids
+  showing at once is impossible), since `CropOverlayView` already shows its
+  own grid.
+- `CropOverlayView`'s pre-existing single-tier `thirdsGrid` was refactored
+  to call the same shared `GridLines.major`/`.minor` (behavior-preserving
+  for the major tier, verified by the reviewer to be pixel-identical to the
+  old inline code; the minor tier is a pure addition).
+- **User asked mid-review whether the grid should also warp/rotate to
+  follow the photo's transformed shape** (a genuinely harder ask — would
+  have needed replicating the pipeline's rotation/perspective math, plus an
+  approximated bilinear warp, in the UI layer). Before committing to that
+  complexity, checked the real Apple Photos app and confirmed the grid
+  stays STATIC while the photo rotates/warps underneath it — matching what
+  was already built. No geometry work needed; request resolved by
+  verification, not extra engineering.
+- **Follow-up contrast fix**: user reported the (initially plain white,
+  low-opacity) grid lines were hard to see against bright image content.
+  Fixed by drawing a dark "shadow" stroke under each white line (both
+  tiers, both overlays) — reviewer confirmed the shadow strokes are wider
+  than the lines on top (visible halo, not fully occluded) and derived from
+  the same deterministic `Path` so they stay pixel-aligned.
+- No `EditState`/`EditPipeline` changes, no new unit tests (UI-only, no
+  color/geometry math changed) — reviewer confirmed all 115 existing tests
+  are the exact pre-existing set, unaffected. 1 commit (grid overlay +
+  contrast fix bundled, reviewed together).
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Vertical/Horizontal perspective
-correction, first pass, no issues found). Every shipped Phase 2 feature and
+None — last reviewer verdict was APPROVE (grid guideline overlay + contrast
+fix, first pass, no issues found). Every shipped Phase 2 feature and
 backlog addition has a clean final reviewer verdict.
 
 ## Done
@@ -511,41 +550,35 @@ window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
 **User chose option 3 (full feature parity) for the Apple Photos-style
-layout request — build Straighten, Vertical/Horizontal perspective, Flip,
-and Aspect presets, then the visual/tab-bar redesign.** Flip, Straighten,
-and Vertical/Horizontal perspective correction are done (see "Current phase"
-above for the full sequence). **NEXT (added mid-sequence, at the user's
-explicit request right after confirming perspective correction worked): a
-grid guideline overlay for Straighten/Vertical/Horizontal.** Not yet
-planned — needs a Plan Mode session (direct-design, no agent dispatch
-needed — this is UI-only with no color/geometry-math risk, same category as
-Flip/Straighten). Open design questions to resolve in that session:
-- **When does it show?** Options: (a) only while actively dragging one of
-  the three sliders, via `Slider`'s `onEditingChanged` callback, hiding
-  again on release (closest to Apple Photos' own behavior); (b) whenever any
-  of the three values is non-default, persistent until reset. Lean toward
-  (a) unless there's a reason to prefer (b) — worth a quick think, not
-  necessarily worth an `AskUserQuestion`.
-- **Reuse vs. new component**: `CropOverlayView.swift`'s existing
-  `thirdsGrid` (a `Path`-based rule-of-thirds drawing, currently only shown
-  when `isCroppingActive`) is the natural thing to extract/reuse rather than
-  duplicating grid-drawing code — but this new overlay needs no drag
-  handles/dimming, just the grid lines, so it's likely a new small,
-  lightweight view (or a stripped-down mode of the existing one) rather than
-  reusing `CropOverlayView` wholesale.
-- **Geometry**: needs the same `fitRect` (post-pipeline, crop-zeroed extent
-  fit into the SwiftUI container) that `CropOverlayView` and `displayEditState`
-  already compute in `ContentView.swift` — reuse that pattern, don't
-  re-derive it.
+layout request.** Flip, Straighten, Vertical/Horizontal perspective
+correction, and the grid guideline overlay are all done (see "Current
+phase" above for the full sequence). **NEXT: Crop v2 aspect-ratio
+presets — feature 5.** Triggered by the user sharing a second Photos
+screenshot (the full Crop panel: Straighten/Vertical/Horizontal/Flip/Aspect,
+"Freeform" checked) and asking to match that look plus switch the app to
+dark mode. Not yet planned. Needs a real design session: how a preset
+constrains the ALREADY-SHIPPED `CropOverlayView` drag rectangle (locking
+the aspect ratio while still allowing drag-to-resize/reposition — e.g.
+dragging a corner handle should resize proportionally rather than freely),
+the exact preset list (Original, Freeform, Square, 16:9, 4:5, 5:7, 4:3,
+3:5, 3:2, Custom — concrete list already pinned in CLAUDE.md's backlog),
+and how "Original" should behave when the photo has already been rotated/
+keystoned (constrain to the CURRENT displayed aspect ratio, not the raw
+file's). UI-only, no color-math risk, but real interaction-design work —
+likely direct-design like Flip/Crop v1 (closed-form geometry: constraining
+a drag rectangle to a fixed ratio), not needing a Plan agent dispatch.
 
-After that, remaining sequence: Crop v2 aspect-ratio presets, then the
-layout/tab-bar redesign (deliberately last). Beyond this batch, remaining
-not-yet-built backlog: Cast (deliberately deferred — see below), Black &
-White mode, Red-Eye removal, WB neutral-gray eyedropper, Levels,
-Definition/Clarity, Selective Color (HSL v2), Noise Reduction, Sharpen, and
-lens distortion correction (explicitly left out of the current batch —
-wasn't in the user's screenshot, needs camera-profile data, a separate
-concern).
+**Then: the dark theme + tab-bar layout redesign — feature 6, the
+immediate trigger for revisiting this area was the user's explicit "change
+app color to dark mode" + screenshot request.** Once aspect presets exist
+to actually populate the Crop panel shown in the screenshot.
+
+Beyond this batch, remaining not-yet-built backlog: Cast (deliberately
+deferred — see below), Black & White mode, Red-Eye removal, WB
+neutral-gray eyedropper, Levels, Definition/Clarity, Selective Color (HSL
+v2), Noise Reduction, Sharpen, and lens distortion correction (explicitly
+left out of the current batch — wasn't in the user's screenshot, needs
+camera-profile data, a separate concern).
 
 Cast was deliberately passed over (not forgotten) when picking a feature
 after Vibrance: it's the one remaining backlog item that breaks the

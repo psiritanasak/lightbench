@@ -101,18 +101,19 @@ struct CropOverlayView: View {
     }
 
     private var thirdsGrid: some View {
-        Path { path in
-            for i in 1...2 {
-                let x = cropRect.minX - fitRect.minX + cropRect.width * CGFloat(i) / 3
-                path.move(to: CGPoint(x: x, y: cropRect.minY - fitRect.minY))
-                path.addLine(to: CGPoint(x: x, y: cropRect.maxY - fitRect.minY))
-
-                let y = cropRect.minY - fitRect.minY + cropRect.height * CGFloat(i) / 3
-                path.move(to: CGPoint(x: cropRect.minX - fitRect.minX, y: y))
-                path.addLine(to: CGPoint(x: cropRect.maxX - fitRect.minX, y: y))
-            }
+        let local = cropRect.offsetBy(dx: -fitRect.minX, dy: -fitRect.minY)
+        return ZStack {
+            // Dark "shadow" stroke under each line so it stays legible over
+            // bright image content, not just dark.
+            GridLines.minor(in: local)
+                .stroke(Color.black.opacity(0.5), lineWidth: 1.5)
+            GridLines.minor(in: local)
+                .stroke(Color.white.opacity(0.6), lineWidth: 0.5)
+            GridLines.major(in: local)
+                .stroke(Color.black.opacity(0.6), lineWidth: 2.5)
+            GridLines.major(in: local)
+                .stroke(Color.white.opacity(0.9), lineWidth: 1)
         }
-        .stroke(Color.white.opacity(0.5), lineWidth: 1)
         .allowsHitTesting(false)
     }
 

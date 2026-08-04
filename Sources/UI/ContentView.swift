@@ -8,6 +8,13 @@ struct ContentView: View {
     /// an edit, it's a UI mode, and doesn't need to persist or serialize.
     @State private var isCroppingActive = false
 
+    /// Ephemeral view-presentation state — whether a Straighten/Vertical/
+    /// Horizontal slider is actively being dragged, so a guideline grid can
+    /// show while adjusting (matches Apple Photos' behavior) without
+    /// persisting once the user lets go. Not part of `EditState`, same
+    /// reasoning as `isCroppingActive`.
+    @State private var isAdjustingTransform = false
+
     /// What's actually rendered on screen. While cropping, the crop insets
     /// are zeroed so the FULL image is visible (with every other edit still
     /// applied) and the user can see what the crop would cut away; the
@@ -56,6 +63,17 @@ struct ContentView: View {
                             cropInsetBottom: $document.editState.cropInsetBottom,
                             cropInsetLeft: $document.editState.cropInsetLeft,
                             cropInsetRight: $document.editState.cropInsetRight
+                        )
+                    }
+                    if isAdjustingTransform, !isCroppingActive, let image = document.currentImage {
+                        // Suppressed while cropping: CropOverlayView already
+                        // shows its own thirds grid over the crop rect, so a
+                        // second full-frame grid would be redundant.
+                        GridGuidelineView(
+                            fitRect: AspectFit.rect(
+                                fitting: EditPipeline.apply(displayEditState, to: image).extent.size,
+                                in: proxy.size
+                            )
                         )
                     }
                 }
@@ -150,15 +168,18 @@ struct ContentView: View {
                 ) { String(format: "%+.0f%%", $0 * 100) }
                 EditSliderRow(
                     label: "Straighten", value: $document.editState.straightenAngle,
-                    range: -45...45, identity: 0
+                    range: -45...45, identity: 0,
+                    onEditingChanged: { isAdjustingTransform = $0 }
                 ) { String(format: "%+.1f°", $0) }
                 EditSliderRow(
                     label: "Vertical", value: $document.editState.verticalPerspective,
-                    range: -1...1, identity: 0
+                    range: -1...1, identity: 0,
+                    onEditingChanged: { isAdjustingTransform = $0 }
                 ) { String(format: "%+.0f%%", $0 * 100) }
                 EditSliderRow(
                     label: "Horizontal", value: $document.editState.horizontalPerspective,
-                    range: -1...1, identity: 0
+                    range: -1...1, identity: 0,
+                    onEditingChanged: { isAdjustingTransform = $0 }
                 ) { String(format: "%+.0f%%", $0 * 100) }
                 EditToggleRow(label: "Flip Horizontal", value: $document.editState.flipHorizontal)
                 EditToggleRow(label: "Flip Vertical", value: $document.editState.flipVertical)
@@ -210,6 +231,7 @@ private struct EditSliderRow: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
     let identity: Double
+    var onEditingChanged: (Bool) -> Void = { _ in }
     let format: (Double) -> String
 
     var body: some View {
@@ -225,7 +247,7 @@ private struct EditSliderRow: View {
                 }
                 .disabled(value == identity)
             }
-            Slider(value: $value, in: range)
+            Slider(value: $value, in: range, onEditingChanged: onEditingChanged)
         }
     }
 }

@@ -6,8 +6,8 @@ tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
 Straighten, Vertical/Horizontal perspective correction, the full Apple
 Photos-style layout (dark theme + top tab bar), Black & White, Sharpen,
-Noise Reduction, and Definition (Clarity) are shipped, each reviewer-approved
-and manually verified live. The Apple
+Noise Reduction, Definition (Clarity), and Levels (with a live histogram) are
+shipped, each reviewer-approved and manually verified live. The Apple
 Photos Crop-panel batch (6 features, see below) completed first; the user
 then asked to work through the REST of the Phase 2 backlog. The roadmap in
 CLAUDE.md was expanded three times at the user's request to spell out the
@@ -44,9 +44,9 @@ deliberately last since it needs a different content-aware architecture):**
 2. ✅ Sharpen (parametric) — done (see below).
 3. ✅ Noise Reduction (parametric) — done (see below).
 4. ✅ Definition/Clarity (local-contrast enhancement) — done (see below).
-5. Levels (black/white-point/gamma sliders + a live histogram — a genuinely
-   new UI capability, not just more sliders) — NEXT.
-6. WB neutral-gray eyedropper (first point-and-click interaction in the app).
+5. ✅ Levels (black/white-point/gamma sliders + a live histogram) — done
+   (see below).
+6. WB neutral-gray eyedropper (first point-and-click interaction in the app) — NEXT.
 7. Selective Color (HSL v2, per-band panel — 8 bands × 3 params, biggest
    scope of the remaining items).
 8. Red-Eye removal (point-and-click + region-based correction).
@@ -658,10 +658,116 @@ restructure. 1 commit.
   possible, but that's a real API decision, not a one-line addition.
 - 151 tests total (8 new Definition tests). 1 commit.
 
+### Levels + live histogram (complete, verified live) — backlog item 5 of 9
+- The first Phase 2 feature needing BOTH an `EditPipeline` math investigation
+  AND a UI-architecture design in the same session — CLAUDE.md flagged the
+  histogram as a genuinely new UI capability, not just more sliders. Two
+  Plan agents' worth of work: one investigated the filter math (grounding
+  every claim in this repo's own existing measurements, since plan-mode
+  agents can't execute code); the histogram data-flow architecture was
+  designed directly from reading `ImageRenderer.swift`/
+  `ImageDocumentModel.swift`/`MetalImageView.swift` — no filter-math
+  uncertainty there, a data-flow decision.
+- `Sources/EditEngine/EditState.swift` — `levelsBlackPoint: Double = 0`,
+  `levelsWhitePoint: Double = 1`, `levelsGamma: Double = 1`, inserted right
+  after `exposureEV`, before `brightness` (Levels runs first in the
+  perceptual sandwich). **Naming collision avoided deliberately**: this app
+  already has an unrelated `blackPoint` field (the Curves `point0` control,
+  -1...1) that shipped earlier — the new fields are named with a
+  `levels`-prefix specifically so they can't be confused with it; reviewer
+  independently confirmed no collision anywhere in the diff.
+- `Sources/EditEngine/EditPipeline.swift` — new `applyLevels`: classic
+  Photoshop/Lightroom remap, `CIColorMatrix` (global scale+bias, luminance-
+  style not per-channel) → `CIColorClamp` (0...1, BEFORE gamma) →
+  `CIGammaAdjust` (`power = 1/gamma`). **Real empirical probe run before any
+  constant was set** (same discipline as Sharpen/Noise Reduction/
+  Definition): confirmed (1) `power = 1/gamma` gives the correct sign
+  convention (gamma>1 brightens, monotonic, verified at several inputs);
+  (2) the clamp-before-gamma order genuinely prevents NaN — a below-black-
+  point input combined with a fractional gamma power (gamma=3 → power=1/3)
+  measured an exact, finite `0.0`, not NaN, both before and after the
+  encode/decode round-trip; (3) the degenerate black==white (or inverted
+  black>white) case stays finite via `kMinLevelsGap`, just steep; (4) Levels
+  does NOT commute with Brightness — a real, measured 0.0119 gap (smaller
+  than Brightness/Contrast's own 0.15 gap, but well above this file's 0.002
+  test tolerance) — confirming Levels should run FIRST in the sandwich,
+  before Brightness, as the corrective base-tone remap prior to "creative"
+  adjustments. **A genuinely important correctness finding surfaced by the
+  probe**: calling the raw filter chain unconditionally — even at identity
+  params (0, 1, 1) — clips headroom anyway, because `CIColorClamp` runs
+  regardless of the black/white/gamma values. The `levelsActive` guard
+  isn't just a performance optimization here the way it is for most other
+  stages; it's what makes "identity" actually mean zero-effect at all.
+  Levels intentionally clips highlight headroom once ACTIVE (that's what a
+  white point does) — an accepted, documented deviation from the
+  headroom-preserving family, same accepted category as active Curves' own
+  clamp-to-[0,1].
+- 9 new Levels tests, including `testLevelsRunsBeforeBrightness` (pins the
+  real pipeline's ordered value and asserts it does NOT match the reversed-
+  order value — reviewer independently re-derived both numbers by hand and
+  confirmed the 0.01187 delta matches the measured 0.0119 gap almost
+  exactly) and `testLevelsNegativeRemapNoNaN` (reviewer manually traced the
+  math and confirmed the test genuinely drives a negative value through the
+  matrix step before the clamp catches it — not just an assertion that
+  happens to pass).
+- **Live histogram** — `Sources/Rendering/Histogram.swift`'s new
+  `HistogramComputer`: its own independent, non-Metal `CIContext` (NOT
+  `ImageRenderer`'s `@MainActor`/Metal-drawable-bound one — this one must be
+  safely callable off the main thread), downsamples to 256px, computes a
+  256-bin Rec. 709 luminance histogram in DISPLAY sRGB (not this app's
+  scene-linear editing space — a histogram represents what a viewer sees,
+  matching every real photo editor and `ImageRenderer`'s own final
+  `outputColorSpace`). `Sources/UI/ImageDocumentModel.swift` triggers a
+  debounced (~150ms `DispatchWorkItem`) background recompute via
+  `Task.detached` on every `editState` change, publishing back via
+  `MainActor.run` guarded by a monotonic `histogramGeneration` counter
+  (chosen over `Task` cancellation, since Task cancellation is only
+  cooperative and neither `EditPipeline.apply` nor `HistogramComputer`
+  check for it — reviewer verified this race-guard is actually sound given
+  `ImageDocumentModel`'s `@MainActor` isolation serializes the
+  increment/compare). Satisfies CLAUDE.md's "DB access never blocks main
+  thread... background queue" principle, applied for the first time to a
+  UI computation rather than DB/thumbnails.
+- **What the histogram reflects — a deliberate v1 scope decision**: NOT a
+  literal "state before you touch Levels" (would need new `EditPipeline`
+  API surface to expose a pre-Levels intermediate). Instead, the full
+  pipeline output with the user's OWN not-yet-applied Levels adjustment
+  held at identity — stays stable while dragging the Levels sliders
+  themselves, correctly updates for every other edit (crop, exposure,
+  contrast, etc.), without new pipeline surface.
+- `Sources/UI/HistogramView.swift` (new) — a small `Canvas`-based bar chart,
+  purely presentational. UI group ("Levels" label + histogram + 3 sliders)
+  placed after the existing Black Point row and before Hue, grouping with
+  the other Light/tone tools per this app's established panel-grouping
+  convention — independent of the pipeline's own execution order.
+  `Tests/RenderingTests/HistogramComputerTests.swift` (new, 5 tests) follows
+  the established `AspectFitTests.swift` pattern (pure type in
+  `Sources/Rendering`, tested in `Tests/RenderingTests`).
+- Reviewer APPROVE on first pass — independently re-ran the full build/test
+  suite, hand-traced the color math for several tests to confirm they
+  weren't placeholders, and reasoned through the concurrency/race-safety of
+  the histogram's generation-counter guard rather than trusting the design
+  description. Three non-blocking notes, none requiring a fix-first round:
+  a doc-comment wording overstatement (fixed immediately, see below — "same
+  order as" the 0.15 gap was inaccurate for a 0.0119 gap, reworded to state
+  both numbers plainly), a corner-case invariant note (`levelsWhitePoint`
+  can be pushed fractionally above 1.0 by `kMinLevelsGap` when
+  `levelsBlackPoint` is very close to 1 — still finite/safe, just not
+  strictly bounded in that corner), and a latent NaN-propagation gap in
+  `levelsGamma`'s clamp shared with how every other numeric field in this
+  file already trusts its input (not a regression, not fixed).
+- 165 tests total (9 new Levels + 5 new HistogramComputer tests). 2 commits
+  (feature + the one wording fix, both before any reviewer re-pass was
+  needed since the note was non-blocking).
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Definition/Clarity, first pass,
-one non-blocking coverage gap noted above — no dedicated Vignette
-non-commutativity test, deliberately not force-added).
+None — last reviewer verdict was APPROVE (Levels + live histogram, first
+pass, three non-blocking notes — see write-up above; one already addressed
+by a same-commit-batch wording fix, two left as accepted, documented,
+non-regressive gaps).
+
+Prior: Definition/Clarity (first pass, one non-blocking coverage gap — no
+dedicated Vignette non-commutativity test, deliberately not force-added).
 
 Prior: Noise Reduction (second pass, after one FIX FIRST round on a
 test-rigor issue: the sharpness-pin regression guard originally couldn't
@@ -866,22 +972,25 @@ the REST of the Phase 2 backlog next (Undo/Revert stays queued/deferred,
 per the user's own instruction — do not start it without being asked
 again).** Sequence (see "Current phase" above for the full list and
 reasoning): Black & White is done, Sharpen is done, Noise Reduction is
-done, Definition (Clarity) is done. **NEXT: Levels (black/white-point/
-gamma sliders + a live histogram) — item 5 of 9.** Not yet planned. This
-is a genuinely new UI capability, not just more sliders — a live histogram
-needs a data pipeline from the rendered image back into SwiftUI (likely a
-downsampled luminance/RGB bucket count recomputed on each edit, off the
-main thread per CLAUDE.md's DB/thumbnail-style background-queue rule) —
-will need both a Core Image/math investigation (levels math itself is
-well-understood: black-point/white-point remap + gamma, similar in kind to
-the already-shipped Curves/Black Point) AND a UI-architecture investigation
-(how to compute and redraw a live histogram efficiently without janking
-the slider drag) — likely the first Phase 2 feature needing both an
-EditPipeline-side Plan-agent dispatch AND a separate UI-side design pass.
+done, Definition (Clarity) is done, Levels + live histogram is done.
+**NEXT: WB neutral-gray eyedropper — item 6 of 9.** Not yet planned. This
+is the app's first point-and-click interaction (every prior control has
+been a slider or toggle) — will need a UI-architecture pass (how a
+click/tap on the displayed image maps back to a source-image pixel
+coordinate through `MetalImageView`'s aspect-fit transform, likely
+reusing/adapting `AspectFit`'s math) AND a small color-math piece (sample
+the clicked pixel, compute the white-balance temperature/tint that would
+neutralize it to gray, feed into the existing `whiteBalanceTemperature`/
+`whiteBalanceTint` fields — no new EditState fields needed, this is a
+UI-driven WAY to set the two fields that already exist, not a new
+adjustment). Likely needs empirical verification of the exact inverse-map
+math from `CITemperatureAndTint`'s neutral-point convention (already
+documented as having two independent, MEASURED sign inversions in
+`EditPipeline.applyWhiteBalance`'s doc comment) — reuse that precedent
+rather than re-deriving from scratch.
 
-Remaining after Levels: WB neutral-gray eyedropper (first point-and-click
-interaction), Selective Color (HSL v2), Red-Eye removal, Cast (last,
-deliberately — see below).
+Remaining after WB eyedropper: Selective Color (HSL v2), Red-Eye removal,
+Cast (last, deliberately — see below).
 Lens distortion correction remains explicitly OUT of scope (wasn't in
 either screenshot, needs camera-profile data, a
 separate concern) unless the user asks for it specifically.

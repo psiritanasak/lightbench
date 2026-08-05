@@ -64,8 +64,13 @@ each gets its own Plan Mode session per the workflow rules below.
   control points of a `CIToneCurve` spline — known limitation: clamps highlight
   headroom above linear 1.0 when active, see `EditPipeline.applyCurves`). v2 not built:
   full interactive draggable RGB point-curve editor.
-- **Levels:** not built — black-point/white-point/gamma sliders with a live histogram;
-  distinct tool from Curves despite overlapping purpose.
+- **Levels:** ✅ shipped — `levelsBlackPoint`/`levelsWhitePoint`/`levelsGamma`
+  sliders (distinct fields from Curves' own `blackPoint`, despite overlapping
+  purpose) via `CIColorMatrix` → `CIColorClamp` → `CIGammaAdjust` (clamp
+  deliberately before gamma to avoid NaN below the black point), running
+  first in the perceptual sandwich (measured non-commuting with Brightness).
+  Live histogram (`HistogramComputer`, 256-bin luminance, independent
+  `CIContext`) computed off the main thread, debounced ~150ms.
 - **Definition (Clarity):** ✅ shipped — a single Amount slider via a large-radius
   `CIUnsharpMask` (16x Sharpen's radius fraction), runs after Vignette (measured
   non-commutative with it, unlike Sharpen) and before Noise Reduction/Sharpen.

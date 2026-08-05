@@ -6,8 +6,9 @@ tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
 Straighten, Vertical/Horizontal perspective correction, the full Apple
 Photos-style layout (dark theme + top tab bar), Black & White, Sharpen,
-Noise Reduction, Definition (Clarity), and Levels (with a live histogram) are
-shipped, each reviewer-approved and manually verified live. The Apple
+Noise Reduction, Definition (Clarity), Levels (with a live histogram), and
+the WB neutral-gray eyedropper are shipped, each reviewer-approved and
+manually verified live. The Apple
 Photos Crop-panel batch (6 features, see below) completed first; the user
 then asked to work through the REST of the Phase 2 backlog. The roadmap in
 CLAUDE.md was expanded three times at the user's request to spell out the
@@ -46,9 +47,10 @@ deliberately last since it needs a different content-aware architecture):**
 4. ✅ Definition/Clarity (local-contrast enhancement) — done (see below).
 5. ✅ Levels (black/white-point/gamma sliders + a live histogram) — done
    (see below).
-6. WB neutral-gray eyedropper (first point-and-click interaction in the app) — NEXT.
+6. ✅ WB neutral-gray eyedropper (first point-and-click interaction in the
+   app) — done (see below).
 7. Selective Color (HSL v2, per-band panel — 8 bands × 3 params, biggest
-   scope of the remaining items).
+   scope of the remaining items) — NEXT.
 8. Red-Eye removal (point-and-click + region-based correction).
 9. Cast (color-cast neutralization — content-aware gray-world-style
    statistics, a different architecture from every other adjustment so
@@ -760,11 +762,103 @@ restructure. 1 commit.
   (feature + the one wording fix, both before any reviewer re-pass was
   needed since the note was non-blocking).
 
+### WB neutral-gray eyedropper (complete, verified live) — backlog item 6 of 9
+- The app's FIRST point-and-click interaction — every prior control was a
+  slider or toggle. Architecturally different from every earlier feature:
+  `CITemperatureAndTint` (already used by the shipped `applyWhiteBalance`)
+  is a full 3×3 chromatic-adaptation matrix with no documented closed-form
+  inverse — MEASURED from this repo's own existing test values (a 0.18 gray
+  input's per-channel gains at temp=9500 do NOT predict the filter's real
+  output on a *different*, non-gray input run through the same transform:
+  gray-derived gains predict r≈2.10 on `(1.4,0.5,0.2)`, but the real,
+  already-tested value is `1.80724`). So instead of one probe-measured
+  constant baked in ahead of time, this needed a live NUMERICAL SEARCH at
+  tap-time — the measure-don't-assume discipline taken to its logical
+  extreme: the "probe" runs live, once per tap, against the actual sampled
+  color, via the real filter.
+- `Sources/EditEngine/EditPipeline.swift` — refactored (behavior-preserving,
+  confirmed by the pre-existing WB tests passing unmodified) to extract
+  `applyWhiteBalance`'s filter construction into an internal `static func
+  whiteBalanced(_:temperature:tint:)`, so the new solver calls the EXACT
+  same formula (both measured sign inversions intact) rather than a
+  duplicate that could drift from it.
+- `Sources/EditEngine/WhiteBalanceSolver.swift` (new) — coarse grid (7
+  temperature steps × 6 tint steps = 42 evaluations) + one local refine
+  pass (10 more), 52 evaluations total, each running the real filter and
+  minimizing a brightness-normalized neutrality error. **Real empirical
+  probe run before any constant was set** (same discipline as every prior
+  feature): confirmed the search converges correctly in direction (warm
+  cast → lower temperature, cool → higher, green → positive tint, magenta →
+  negative) and that solved parameters, fed back through the real filter on
+  the original sample, actually neutralize it. **A real, important
+  correctness finding the probe caught**: some strong casts (a saturated
+  orange, a saturated magenta) hit the edge of the search's temperature/
+  tint bounds WITHOUT actually reaching neutral — the naive design would
+  have silently presented a non-neutral result as if it were a clean fix.
+  Added a `solvedPartially` outcome (vs `solved`), classified by a
+  MEASURED, well-separated error threshold (good cases ~0.00009-0.0009,
+  boundary-clamped bad cases ~0.004-0.052 — over 4x higher than the worst
+  genuinely-good case). **Batching many search candidates into one
+  composited render, to amortize per-call overhead, was measured to be a
+  dramatic dead end**: 402ms vs ~15ms for the same 42 candidates via
+  separate small renders — Core Image's evaluation cost for a wide
+  `composited(over:)` chain scales badly with layer count, the opposite of
+  the intended optimization. Real per-call overhead (measured ~0.26ms per
+  1×1 render+readback) is what actually dominates cost, not the number of
+  separate filter objects. Runs via `Task.detached` (measured: even the
+  reduced 52-eval search takes ~13-30ms on real hardware — a real
+  main-thread-hitch risk if run synchronously from the tap handler).
+- `Sources/Rendering/PixelSampler.swift` (new) — averages a 5×5 pixel
+  neighborhood (not a single pixel — more robust against sensor noise/
+  compression artifacts), excluding any pixels below an alpha threshold so
+  a sample box overlapping a transparent margin (revealed by straighten/
+  perspective) isn't diluted by meaningless transparent content.
+- `Sources/UI/ImageDocumentModel.swift` — `pickWhiteBalance(normalizedX:
+  normalizedY:)` samples from a GEOMETRY-ONLY render (only straighten/
+  perspective/flip/crop copied from the real `editState`; every color/tone
+  field including WB itself left at identity) rather than the fully-edited
+  image: WB is pipeline stage 1, so the RAW front-of-pipeline chromaticity
+  is what actually needs to become neutral, and later color stages don't
+  commute with WB, so sampling post-those-stages would solve a subtly
+  different (wrong) problem. Since color stages don't change extent, this
+  still shares `currentFitRect`'s exact coordinate space — no geometric-
+  transform inversion needed. Uses the same y-flip convention already
+  established and tested elsewhere in this codebase (`quadrantImage`'s
+  "high-y = visual top" contract).
+- `Sources/UI/ContentView.swift` — new "Pick White Balance" button (SF
+  Symbol `eyedropper`), a tap-capture overlay gated `isPickingWhiteBalance
+  && !isCroppingActive` (mutually exclusive with `CropOverlayView`'s own
+  gestures BY CONSTRUCTION, not just convention, since each overlay only
+  exists under its own tab's condition), disarmed on tab change/new photo/
+  after a successful tap, and an alert for rejection feedback (too dark, or
+  couldn't fully correct).
+- **Two reviewer passes**: first pass FIX FIRST — three force-unwraps in
+  production code (`CGColorSpace(name:...)!` in two files, `CIColor(...)!`
+  inside the solver's hot search loop, run 52× per tap), a real violation
+  of CLAUDE.md's "no force-unwraps outside tests" and this codebase's own
+  established `Histogram.swift` precedent (a safe `??` fallback) for the
+  identical situation. Fixed by matching that precedent for the two
+  `CGColorSpace` sites, and — for the `CIColor` site — restructuring so the
+  sample image is built ONCE per tap (via a `guard let`, not force-unwrap)
+  rather than rebuilt on every one of the 52 search evaluations, which also
+  incidentally removed 52x redundant identical work per tap as a side
+  benefit of the correctness fix. Second pass: APPROVE, independently
+  confirmed all three sites were actually gone (not just moved), and that
+  the restructuring was output-preserving (all 10 solver tests still pin
+  the identical numeric expectations).
+- 181 tests total (10 new WhiteBalanceSolverTests + 6 new PixelSamplerTests).
+  2 commits (feature, force-unwrap fix folded into the same commit before
+  the second review pass rather than committed separately, since the first
+  commit hadn't landed yet).
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Levels + live histogram, first
-pass, three non-blocking notes — see write-up above; one already addressed
-by a same-commit-batch wording fix, two left as accepted, documented,
-non-regressive gaps).
+None — last reviewer verdict was APPROVE (WB eyedropper, second pass, after
+one FIX FIRST round on force-unwraps in production code — resolved before
+commit, per workflow rules).
+
+Prior: Levels + live histogram (first pass, three non-blocking notes — one
+addressed by a same-commit-batch wording fix, two left as accepted,
+documented, non-regressive gaps).
 
 Prior: Definition/Clarity (first pass, one non-blocking coverage gap — no
 dedicated Vignette non-commutativity test, deliberately not force-added).
@@ -972,25 +1066,25 @@ the REST of the Phase 2 backlog next (Undo/Revert stays queued/deferred,
 per the user's own instruction — do not start it without being asked
 again).** Sequence (see "Current phase" above for the full list and
 reasoning): Black & White is done, Sharpen is done, Noise Reduction is
-done, Definition (Clarity) is done, Levels + live histogram is done.
-**NEXT: WB neutral-gray eyedropper — item 6 of 9.** Not yet planned. This
-is the app's first point-and-click interaction (every prior control has
-been a slider or toggle) — will need a UI-architecture pass (how a
-click/tap on the displayed image maps back to a source-image pixel
-coordinate through `MetalImageView`'s aspect-fit transform, likely
-reusing/adapting `AspectFit`'s math) AND a small color-math piece (sample
-the clicked pixel, compute the white-balance temperature/tint that would
-neutralize it to gray, feed into the existing `whiteBalanceTemperature`/
-`whiteBalanceTint` fields — no new EditState fields needed, this is a
-UI-driven WAY to set the two fields that already exist, not a new
-adjustment). Likely needs empirical verification of the exact inverse-map
-math from `CITemperatureAndTint`'s neutral-point convention (already
-documented as having two independent, MEASURED sign inversions in
-`EditPipeline.applyWhiteBalance`'s doc comment) — reuse that precedent
-rather than re-deriving from scratch.
+done, Definition (Clarity) is done, Levels + live histogram is done, the
+WB neutral-gray eyedropper is done. **NEXT: Selective Color (HSL v2,
+per-band panel) — item 7 of 9, biggest scope of the remaining items.** Not
+yet planned. This is HSL v1 (global Hue + Saturation, already shipped)
+generalized to 8 color bands × 3 params (Hue/Saturation/Luminance) each,
+plus a Range parameter per CLAUDE.md's backlog description — a much larger
+UI surface (8 bands' worth of controls, likely a band-picker + per-band
+sliders rather than 24 simultaneous rows) than anything shipped so far.
+Will need a UI-architecture pass (how the band picker/selector works,
+whether bands are tabbed/segmented) AND real empirical Core Image
+investigation (Apple's `CISelectiveColor`-style approach vs. a wider global
+`CIHueSaturationValueGradient`/per-band hue-range mask approach — need to
+determine which filter(s) actually implement per-band selective adjustment
+in Core Image, since this app hasn't used any per-band/masked color
+filters yet; likely needs its own Plan-agent dispatch given the genuine
+novelty, similar to how Levels needed one for both its math and its UI).
 
-Remaining after WB eyedropper: Selective Color (HSL v2), Red-Eye removal,
-Cast (last, deliberately — see below).
+Remaining after Selective Color: Red-Eye removal, Cast (last,
+deliberately — see below).
 Lens distortion correction remains explicitly OUT of scope (wasn't in
 either screenshot, needs camera-profile data, a
 separate concern) unless the user asks for it specifically.

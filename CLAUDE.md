@@ -59,7 +59,13 @@ each gets its own Plan Mode session per the workflow rules below.
   (Photos' fuller B&W panel — v1 is on/off only).
 - **Red-Eye:** not built — likely needs a point-and-click UI, a different interaction
   model from every slider-based adjustment built so far.
-- **White Balance:** Temperature + Tint ✅. Not built: "pick a neutral gray" eyedropper.
+- **White Balance:** Temperature + Tint ✅. "Pick a neutral gray" eyedropper ✅
+  shipped — the app's first point-and-click interaction. `CITemperatureAndTint`
+  has no closed-form inverse, so `WhiteBalanceSolver` runs a live numerical
+  search (coarse grid + refine, ~52 filter evaluations, off the main thread)
+  at tap-time rather than a probe-baked constant; classifies results as fully
+  solved vs. best-achievable (some strong casts can't be fully neutralized
+  within the slider's own range).
 - **Curves:** ✅ v1 shipped as simplified parametric Shadows/Highlights sliders (2
   control points of a `CIToneCurve` spline — known limitation: clamps highlight
   headroom above linear 1.0 when active, see `EditPipeline.applyCurves`). v2 not built:

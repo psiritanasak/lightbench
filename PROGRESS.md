@@ -5,9 +5,9 @@ Phase 2 (Edit engine) — the original six roadmap items, five backlog
 tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
 Straighten, Vertical/Horizontal perspective correction, the full Apple
-Photos-style layout (dark theme + top tab bar), Black & White, Sharpen, and
-Noise Reduction are shipped, each reviewer-approved and manually verified
-live. The Apple
+Photos-style layout (dark theme + top tab bar), Black & White, Sharpen,
+Noise Reduction, and Definition (Clarity) are shipped, each reviewer-approved
+and manually verified live. The Apple
 Photos Crop-panel batch (6 features, see below) completed first; the user
 then asked to work through the REST of the Phase 2 backlog. The roadmap in
 CLAUDE.md was expanded three times at the user's request to spell out the
@@ -43,9 +43,9 @@ deliberately last since it needs a different content-aware architecture):**
 1. ✅ Black & White (monochrome mode) — done (see below).
 2. ✅ Sharpen (parametric) — done (see below).
 3. ✅ Noise Reduction (parametric) — done (see below).
-4. Definition/Clarity (local-contrast enhancement) — NEXT.
+4. ✅ Definition/Clarity (local-contrast enhancement) — done (see below).
 5. Levels (black/white-point/gamma sliders + a live histogram — a genuinely
-   new UI capability, not just more sliders).
+   new UI capability, not just more sliders) — NEXT.
 6. WB neutral-gray eyedropper (first point-and-click interaction in the app).
 7. Selective Color (HSL v2, per-band panel — 8 bands × 3 params, biggest
    scope of the remaining items).
@@ -600,10 +600,72 @@ restructure. 1 commit.
   couldn't measure it.
 - 143 tests total (8 new Noise Reduction tests). 1 commit.
 
+### Definition (Clarity) (complete, verified live) — backlog item 4 of 9
+- `Sources/EditEngine/EditState.swift` — `definition: Double = 0` (0...1,
+  one-directional), declared after `vignetteRadius`, before `noiseReduction`
+  (pipeline order). Local-contrast enhancement — boosts midtone/texture
+  contrast at a much wider spatial scale than Sharpen, without Contrast's
+  global flatness.
+- **The plan's original design intent was a BIPOLAR `-1...1` slider named
+  "Clarity"** (positive = punch, negative = soften, the Lightroom
+  convention), matching the already-shipped bipolar Contrast/Vignette
+  family. Per this project's measure-don't-assume discipline, before
+  implementing I ran a real compiled Swift probe (not the planning agent's
+  prediction — plan-mode agents can't execute code) against `CIUnsharpMask`
+  in this app's exact working space, and found Core Image silently clamps
+  NEGATIVE `intensity` to a no-op: at intensity -0.2 through -1.0 on a
+  step-edge test image, output was BIT-IDENTICAL to the unfiltered
+  baseline (contrast stayed exactly at the 0.3 input value, not even
+  subtly reduced). Not a subtle finding — half the intended slider range
+  would have done literally nothing. Pivoted the shipped feature to
+  one-directional `0...1`, renamed "Definition" to match Apple Photos'
+  convention and CLAUDE.md's own "Definition (Clarity)" backlog heading.
+  No softening/negative capability ships.
+- `Sources/EditEngine/EditPipeline.swift` — new `applyDefinition`, via
+  `CIUnsharpMask` — the SAME filter Sharpen uses (already measured
+  numerically identical to `CISharpenLuminance`), here at 16x Sharpen's
+  radius fraction (`0.04` vs `0.0025`, extent-scaled the same way). Runs
+  between Vignette and Noise Reduction. Rejected: `CIHighlightShadowAdjust`
+  (measured to be an asymmetric shadow/highlight tone-mapper, not a
+  symmetric local-contrast operator — it LIFTS the dark side of a test
+  edge). Domain: perceptual sandwich, matching Sharpen — though measured,
+  domain barely mattered here (~1% relative difference across tones,
+  unlike Sharpen's ~5% or Noise Reduction's ~2x). **Notable measured
+  finding**: unlike Sharpen (which commutes with Vignette within 0.00100),
+  Definition does NOT cleanly commute with Vignette — measured corner
+  differences up to 0.0188 between orderings — so running Definition AFTER
+  Vignette is a real, measured requirement, not an arbitrary choice.
+- v1 scope: single Amount slider only.
+- Reviewer APPROVE on first pass, independently re-verified all six review
+  checkpoints (range consistency end-to-end, radius scaling idiom match,
+  pipeline placement, the halo-width discriminator test's validity, field
+  declaration order, general style/force-unwrap/non-destructive checks).
+  One non-blocking gap noted: no dedicated test proves the claimed
+  Definition/Vignette non-commutativity the way `testSharpenCommutesWithVignette`
+  proves Sharpen's commutativity, or the way Straighten/Flip have explicit
+  ordering discriminators. Investigated adding one before committing:
+  a real discriminator would need to call `applyDefinition`/`applyVignette`
+  directly in both orders, but those are `private` (matching the file's
+  encapsulation), and — unlike Straighten/Flip's pure-geometry ordering
+  tests, which can be hand-derived analytically — there's no clean
+  closed-form way to predict two composed color filters' order-sensitivity
+  without actually running both orders. Chose not to weaken encapsulation
+  or ship a test that LOOKS rigorous but doesn't actually discriminate;
+  left as a tracked, explicitly non-blocking gap rather than faked
+  coverage. Revisit if this pattern (a new feature non-commuting with an
+  existing stage) recurs — may be worth adding package-internal (not
+  private) access to pipeline stages specifically to make ordering tests
+  possible, but that's a real API decision, not a one-line addition.
+- 151 tests total (8 new Definition tests). 1 commit.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Noise Reduction, second pass,
-after one FIX FIRST round on a test-rigor issue: the sharpness-pin
-regression guard originally couldn't fail even if the pin were removed).
+None — last reviewer verdict was APPROVE (Definition/Clarity, first pass,
+one non-blocking coverage gap noted above — no dedicated Vignette
+non-commutativity test, deliberately not force-added).
+
+Prior: Noise Reduction (second pass, after one FIX FIRST round on a
+test-rigor issue: the sharpness-pin regression guard originally couldn't
+fail even if the pin were removed).
 
 Prior: Sharpen (first pass, one minor non-blocking test-rigor nit only).
 Every shipped Phase 2 feature and backlog addition has a clean final
@@ -804,21 +866,22 @@ the REST of the Phase 2 backlog next (Undo/Revert stays queued/deferred,
 per the user's own instruction — do not start it without being asked
 again).** Sequence (see "Current phase" above for the full list and
 reasoning): Black & White is done, Sharpen is done, Noise Reduction is
-done. **NEXT: Definition/Clarity (local-contrast enhancement) — item 4 of
-9.** Not yet planned. Likely `CIHighlightShadowAdjust` or an unsharp-mask-
-at-a-larger-radius approach (local contrast is conventionally implemented
-as a wide-radius, low-amount unsharp mask, distinct from Sharpen's
-fine-detail radius) — will need real empirical Core Image investigation
-(exact filter/technique, parameter span, does it need Sharpen's kind of
-resolution-dependent radius scaling, domain, headroom/alpha, where it sits
-relative to the existing Light-group tone stages vs the new Noise
-Reduction/Sharpen detail pair) similar in kind to
-Vignette/Perspective/Sharpen/Noise Reduction's own Plan-agent dispatches —
-a genuine new filter/technique, not a reuse of already-proven mechanics.
+done, Definition (Clarity) is done. **NEXT: Levels (black/white-point/
+gamma sliders + a live histogram) — item 5 of 9.** Not yet planned. This
+is a genuinely new UI capability, not just more sliders — a live histogram
+needs a data pipeline from the rendered image back into SwiftUI (likely a
+downsampled luminance/RGB bucket count recomputed on each edit, off the
+main thread per CLAUDE.md's DB/thumbnail-style background-queue rule) —
+will need both a Core Image/math investigation (levels math itself is
+well-understood: black-point/white-point remap + gamma, similar in kind to
+the already-shipped Curves/Black Point) AND a UI-architecture investigation
+(how to compute and redraw a live histogram efficiently without janking
+the slider drag) — likely the first Phase 2 feature needing both an
+EditPipeline-side Plan-agent dispatch AND a separate UI-side design pass.
 
-Remaining after Definition/Clarity: Levels (+ live histogram), WB
-neutral-gray eyedropper (first point-and-click interaction), Selective
-Color (HSL v2), Red-Eye removal, Cast (last, deliberately — see below).
+Remaining after Levels: WB neutral-gray eyedropper (first point-and-click
+interaction), Selective Color (HSL v2), Red-Eye removal, Cast (last,
+deliberately — see below).
 Lens distortion correction remains explicitly OUT of scope (wasn't in
 either screenshot, needs camera-profile data, a
 separate concern) unless the user asks for it specifically.

@@ -66,7 +66,13 @@ each gets its own Plan Mode session per the workflow rules below.
   full interactive draggable RGB point-curve editor.
 - **Levels:** not built — black-point/white-point/gamma sliders with a live histogram;
   distinct tool from Curves despite overlapping purpose.
-- **Definition (Clarity):** not built — local-contrast enhancement.
+- **Definition (Clarity):** ✅ shipped — a single Amount slider via a large-radius
+  `CIUnsharpMask` (16x Sharpen's radius fraction), runs after Vignette (measured
+  non-commutative with it, unlike Sharpen) and before Noise Reduction/Sharpen.
+  One-directional 0...1, NOT bipolar: `CIUnsharpMask` was measured to silently
+  clamp negative intensity to a no-op, so the originally-planned bipolar
+  "Clarity" (positive=punch, negative=soften) was dropped for Apple Photos'
+  one-directional "Definition" convention. v1 scope: single Amount slider only.
 - **Selective Color:** this is HSL v2 — per-color-band Hue/Saturation/Luminance panel
   with a Range parameter (8 bands × 3 = 24 params), not yet built (v1 below is
   global-only).

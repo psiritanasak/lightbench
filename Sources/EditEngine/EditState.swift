@@ -256,6 +256,67 @@ struct EditState: Equatable, Codable {
     /// and not an identity violation.
     var vignetteRadius: Double = 0.5
 
+    // MARK: - Definition (Clarity)
+
+    /// Local-contrast enhancement, 0...1, default 0 (identity). One-directional
+    /// (0 = none, positive = more defined) — same 0...1 family as Vignette
+    /// Radius/Sharpen/Noise Reduction, NOT bipolar. A bipolar "Clarity" slider
+    /// (positive = punch, negative = soften, the Lightroom convention) was the
+    /// original design intent, but MEASURED (not assumed): `CIUnsharpMask`
+    /// silently clamps negative `intensity` to a no-op in this app's working
+    /// space (intensity -0.2 through -1.0 all produced output BIT-IDENTICAL to
+    /// the unfiltered baseline — not a subtle effect, a dead half of the
+    /// slider range). So this ships one-directional, named "Definition" to
+    /// match CLAUDE.md's own "Definition (Clarity)" backlog heading, matching
+    /// Apple Photos' one-directional convention rather than Lightroom's
+    /// bipolar one. Applied in the perceptual sRGB-gamma domain, AFTER
+    /// Vignette and BEFORE the Noise Reduction + Sharpen detail pair, via
+    /// Core Image's `CIUnsharpMask` at a LARGE radius — see `EditPipeline`.
+    ///
+    /// MEASURED findings (this app's extendedLinearSRGB/RGBAf working space,
+    /// not assumed):
+    /// - Filter: `CIUnsharpMask` — the SAME filter Sharpen uses (already
+    ///   measured numerically identical to `CISharpenLuminance` there), here
+    ///   at a much larger radius/lower intensity. Chosen for its explicit
+    ///   `radius` + `intensity` params, since Definition is defined by its
+    ///   wide radius. `intensity: 0` is an exact no-op (measured max diff
+    ///   0.0). Rejected: `CIHighlightShadowAdjust` — measured to be an
+    ///   ASYMMETRIC shadow/highlight tone-mapper (it LIFTS the dark side of a
+    ///   test edge from 0.2 to 0.303), not a symmetric local-contrast
+    ///   operator.
+    /// - Span: slider maps to `intensity = amount * 0.8`. At slider 1.0 a
+    ///   0.2/0.5 edge overshoots to 0.66061 / undershoots to 0.12525 —
+    ///   comparable PEAK punch to Sharpen's full strength, but spread far
+    ///   wider (still 0.50955 elevated at 60px from the edge, where Sharpen
+    ///   has already decayed back to baseline — this width is what makes it
+    ///   local CONTRAST, not fine sharpening).
+    /// - Resolution: like Sharpen (UNLIKE Noise Reduction), the filter's
+    ///   radius is in ABSOLUTE PIXELS (measured: a fixed radius gives
+    ///   byte-identical halos regardless of image size), so it MUST scale
+    ///   with image size; radius = 0.04 * min(width,height) — 16x Sharpen's
+    ///   own 0.0025 fraction, since local contrast needs a far wider reach
+    ///   than fine-detail sharpening.
+    /// - Domain: perceptual sandwich, matching Sharpen — though MEASURED,
+    ///   domain barely mattered here (~1% relative difference between
+    ///   perceptual and scene-linear lift across shadow/mid/highlight test
+    ///   edges, all ~77% of baseline in both domains), unlike Sharpen (~5%
+    ///   difference) or Noise Reduction (~2x difference). Perceptual chosen
+    ///   for consistency with Sharpen's established sandwich, not because it
+    ///   measurably wins here.
+    /// - Headroom/alpha: does NOT clamp above 1.0 (a 1.4 flat survives at
+    ///   1.40127) and preserves alpha exactly (measured).
+    /// - Vignette ordering: UNLIKE Sharpen (which commutes with Vignette
+    ///   within 0.00100), Definition does NOT cleanly commute with Vignette
+    ///   (measured corner differences up to 0.0188 between
+    ///   Definition-then-Vignette and Vignette-then-Definition) — its wide
+    ///   radius interacts with Vignette's spatially-varying darkening in a
+    ///   way Sharpen's tiny radius doesn't. This is why the pipeline order
+    ///   (Definition runs AFTER Vignette) is a real, measured requirement,
+    ///   not an arbitrary choice.
+    /// v1 scope: single Amount slider only — same scope-cut pattern as every
+    /// other v1 feature.
+    var definition: Double = 0
+
     // MARK: - Noise Reduction
 
     /// Luminance noise reduction amount, 0...1, default 0 (identity).

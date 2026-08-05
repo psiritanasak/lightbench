@@ -19,17 +19,21 @@ import CoreImage.CIFilterBuiltins
 /// with each other in general, so this order is a real, tested requirement).
 /// Vignette runs AFTER crop: it's a radial darkening tied to the final
 /// on-screen framing, so it must see the post-crop extent, not the
-/// fixed-order list's pre-crop stages. Noise Reduction and Sharpen are a
-/// "detail" pair at the pipeline's true end, after Vignette, in the
-/// standard denoise-then-sharpen order (measured: NR-first leaves less
-/// residual noise than the reverse) — both are extent-preserving so
-/// neither needs to run before crop, and running them last means they act
-/// on the actual final framed/stylized pixels, not content that gets
-/// discarded (crop) or resampled (geometric stages) afterward. Sharpen is
-/// the true FINAL stage: measured to commute with Vignette (order between
-/// those two specifically doesn't matter), but running dead last overall
-/// does, and it must come after Noise Reduction or it would re-amplify
-/// noise NR would otherwise have removed.
+/// fixed-order list's pre-crop stages. Definition (local-contrast/Clarity)
+/// runs AFTER Vignette: measured, it does NOT cleanly commute with
+/// Vignette (unlike Sharpen) — its wide radius interacts with Vignette's
+/// spatially-varying darkening, so this order is a real, measured
+/// requirement, not arbitrary. Noise Reduction and Sharpen are a "detail"
+/// pair at the pipeline's true end, after Definition, in the standard
+/// denoise-then-sharpen order (measured: NR-first leaves less residual
+/// noise than the reverse) — all three (Definition, NR, Sharpen) are
+/// extent-preserving so none need to run before crop, and running them
+/// last means they act on the actual final framed/stylized pixels, not
+/// content that gets discarded (crop) or resampled (geometric stages)
+/// afterward. Sharpen is the true FINAL stage: measured to commute with
+/// Vignette (order between those two specifically doesn't matter), but
+/// running dead last overall does, and it must come after Noise Reduction
+/// or it would re-amplify noise NR would otherwise have removed.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
@@ -41,6 +45,7 @@ enum EditPipeline {
         image = applyFlip(state, to: image)                   // geometric, before crop
         image = applyCrop(state, to: image)                   // geometric
         image = applyVignette(state, to: image)               // radial, scene-linear
+        image = applyDefinition(state, to: image)             // local contrast, perceptual, before detail pair
         image = applyNoiseReduction(state, to: image)         // detail, scene-linear, before sharpen
         image = applySharpen(state, to: image)                // detail, perceptual, truly last
         return image
@@ -641,6 +646,70 @@ enum EditPipeline {
         filter.intensity = Float(intensity)
         filter.falloff = Float(kVignetteFalloff)
         return filter.outputImage ?? image
+    }
+
+    // MARK: - Definition (Clarity)
+
+    /// Slider-to-`CIUnsharpMask.intensity` span, MEASURED to give comparable
+    /// PEAK punch to Sharpen's own full strength (0.66061 vs Sharpen's
+    /// 0.63963 on the same 0.2/0.5 edge) but spread over a far wider band —
+    /// still 0.50955 elevated 60px from the edge, where Sharpen has already
+    /// decayed to baseline. That width, not the peak, is what makes this
+    /// local CONTRAST rather than fine sharpening.
+    private static let kDefinitionAmountSpan: Double = 0.8
+
+    /// Radius as a fraction of the CURRENT extent's MIN dimension — MEASURED
+    /// necessity, same as Sharpen's `kSharpenRadiusFraction`: the filter's
+    /// radius is in absolute pixels (a fixed radius gives byte-identical
+    /// halos regardless of image size), so it must scale with resolution.
+    /// 16x Sharpen's own 0.0025 fraction — local contrast needs a far wider
+    /// reach than fine-detail sharpening; a smaller fraction reads as more
+    /// sharpening, a much larger one starts reading as a global contrast
+    /// boost rather than "local" (measured at a 0.02...0.08 sweep).
+    private static let kDefinitionRadiusFraction: Double = 0.04
+
+    private static func definitionActive(_ state: EditState) -> Bool {
+        state.definition != 0
+    }
+
+    /// Local-contrast ("Definition"/"Clarity") via a LARGE-radius, low-
+    /// amount `CIUnsharpMask` — the SAME filter Sharpen uses (already
+    /// measured numerically identical to `CISharpenLuminance` there), here
+    /// at a much larger radius. Runs AFTER Vignette, BEFORE the Noise
+    /// Reduction + Sharpen detail pair: post-crop/post-geometry so its
+    /// absolute-pixel radius tracks the final frame and nothing resamples
+    /// its work; leads the detail region as its coarsest member so Noise
+    /// Reduction then cleans up any noise it amplifies and Sharpen stays
+    /// truly last. MEASURED: does NOT cleanly commute with Vignette (unlike
+    /// Sharpen) — corner differences up to 0.0188 between orderings, so
+    /// running AFTER Vignette is a real requirement, not an arbitrary
+    /// choice. Applied in the PERCEPTUAL sRGB-gamma domain, in its own
+    /// encode/decode sandwich, matching Sharpen — though MEASURED, domain
+    /// barely mattered here (~1% relative difference between perceptual and
+    /// scene-linear lift across shadow/mid/highlight test edges), unlike
+    /// Sharpen (~5%) or Noise Reduction (~2x); perceptual is chosen for
+    /// consistency with the sandwich pattern, not because it measurably
+    /// wins here. Radius scales with `min(extent)` — see
+    /// `kDefinitionRadiusFraction`. Does NOT clamp highlight headroom (a 1.4
+    /// flat survives at 1.40127) and preserves alpha and extent exactly
+    /// (measured). Guarded off at amount 0 (exact no-op, measured max diff
+    /// 0.0). One-directional (0...1), NOT bipolar: `CIUnsharpMask` was
+    /// measured to silently clamp negative `intensity` to a no-op in this
+    /// working space (a dead half of a would-be bipolar slider range) — see
+    /// `EditState.definition`'s doc comment for the measurement.
+    private static func applyDefinition(_ state: EditState, to image: CIImage) -> CIImage {
+        guard definitionActive(state) else { return image }
+
+        let extent = image.extent
+        let radius = kDefinitionRadiusFraction * Double(min(extent.width, extent.height))
+
+        let encoded = encodeToPerceptual(image)
+        let filter = CIFilter.unsharpMask()
+        filter.inputImage = encoded
+        filter.radius = Float(radius)
+        filter.intensity = Float(state.definition * kDefinitionAmountSpan)
+        let adjusted = filter.outputImage ?? encoded
+        return decodeToLinear(adjusted)
     }
 
     // MARK: - Noise Reduction

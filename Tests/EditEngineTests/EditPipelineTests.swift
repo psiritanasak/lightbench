@@ -1541,6 +1541,115 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(state.hslSaturation, 0)
     }
 
+    // MARK: - Definition (Clarity) math
+    //
+    // Definition is CIUnsharpMask at a much larger radius than Sharpen, so
+    // — like Sharpen and Noise Reduction — these values are measured
+    // against the real filter, not derived. Uses `stepEdgeImage` and
+    // `edgePixel` (defined below, under Sharpen math) exactly like Sharpen's
+    // own tests, sampling several offsets from the edge to show the WIDE
+    // band that distinguishes local contrast from fine sharpening.
+
+    func testDefinitionZeroIsIdentity() {
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let output = EditPipeline.apply(EditState(definition: 0), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 0.5, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 398, size: 800).r, 0.2, accuracy: accuracy)
+    }
+
+    func testDefinitionBoostsLocalContrastOverBroadBand() {
+        // The signature test: Definition's overshoot stays elevated far from
+        // the edge (x=430, x=460 — 30px/60px away), where a fine sharpen has
+        // already decayed to baseline. That WIDTH, not the peak, is what
+        // makes this local contrast rather than fine detail sharpening.
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let output = EditPipeline.apply(EditState(definition: 1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 0.66061, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 415, size: 800).r, 0.60219, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 430, size: 800).r, 0.55443, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 460, size: 800).r, 0.50955, accuracy: accuracy)
+        XCTAssertGreaterThan(edgePixel(of: output, x: 460, size: 800).r, 0.505, "still measurably elevated 60px from the edge")
+
+        // Monotonic decay back toward baseline as we move further away.
+        XCTAssertEqual(edgePixel(of: output, x: 500, size: 800).r, 0.5, accuracy: accuracy)
+    }
+
+    func testDefinitionHaloIsWiderThanSharpen() {
+        // Discriminator vs the shipped Sharpen tool: at the same offset from
+        // the edge, Definition stays elevated while Sharpen (tiny radius)
+        // has already returned to baseline.
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let definitionOutput = EditPipeline.apply(EditState(definition: 1), to: input)
+        let sharpenOutput = EditPipeline.apply(EditState(sharpness: 1), to: input)
+
+        let definitionFar = edgePixel(of: definitionOutput, x: 430, size: 800).r
+        let sharpenFar = edgePixel(of: sharpenOutput, x: 430, size: 800).r
+        XCTAssertGreaterThan(definitionFar, sharpenFar)
+        XCTAssertEqual(sharpenFar, 0.5, accuracy: 0.005, "Sharpen's tiny radius should already be flat 30px from the edge")
+    }
+
+    func testDefinitionRadiusScalesWithResolution() {
+        // A FIXED pixel radius would give an IDENTICAL profile regardless of
+        // image size; measured values strictly increase with resolution at
+        // matching offsets, proving the radius scales with the image itself
+        // (mirrors testSharpenRadiusScalesWithResolution).
+        let sizes = [400, 800, 1600]
+        let expected: [Float] = [0.50955, 0.55443, 0.60285]
+
+        var values: [Float] = []
+        for size in sizes {
+            let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: size)
+            let output = EditPipeline.apply(EditState(definition: 1), to: input)
+            values.append(edgePixel(of: output, x: size / 2 + 30, size: size).r)
+        }
+
+        for (value, expectedValue) in zip(values, expected) {
+            XCTAssertEqual(value, expectedValue, accuracy: accuracy)
+        }
+        XCTAssertLessThan(values[0], values[1])
+        XCTAssertLessThan(values[1], values[2])
+    }
+
+    func testDefinitionPreservesHighlightHeadroom() {
+        let input = stepEdgeImage(lo: 0.8, hi: 1.4, size: 800)
+        let output = EditPipeline.apply(EditState(definition: 1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 1.68714, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 600, size: 800).r, 1.40127, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 398, size: 800).r, 0.62144, accuracy: accuracy)
+    }
+
+    func testDefinitionPreservesAlpha() {
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800, alpha: 0.5)
+        let output = EditPipeline.apply(EditState(definition: 1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 200, size: 800).a, 0.5, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).a, 0.5, accuracy: accuracy)
+    }
+
+    func testDefinitionPreservesExtent() {
+        let input = quadrantImage(width: 100, height: 100)
+        let withDefinition = EditPipeline.apply(
+            EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1, definition: 1),
+            to: input
+        )
+        let withoutDefinition = EditPipeline.apply(
+            EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1),
+            to: input
+        )
+
+        XCTAssertEqual(withDefinition.extent, withoutDefinition.extent, "definition must not change the extent crop already established")
+    }
+
+    func testDefinitionFlatImageUnaffected() {
+        let input = solidColorImage(0.35, size: 800)
+        let output = EditPipeline.apply(EditState(definition: 1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 400, size: 800).r, 0.35, accuracy: accuracy)
+    }
+
     // MARK: - Noise Reduction math
     //
     // Noise Reduction is a genuine new Core Image filter (CINoiseReduction),
@@ -1823,6 +1932,7 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().cropInsetRight, 0)
         XCTAssertEqual(EditState().vignetteStrength, 0)
         XCTAssertEqual(EditState().vignetteRadius, 0.5)
+        XCTAssertEqual(EditState().definition, 0)
         XCTAssertEqual(EditState().noiseReduction, 0)
         XCTAssertEqual(EditState().sharpness, 0)
 
@@ -1857,6 +1967,7 @@ final class EditPipelineTests: XCTestCase {
             cropInsetRight: 0.2,
             vignetteStrength: 0.7,
             vignetteRadius: 0.3,
+            definition: 0.55,
             noiseReduction: 0.45,
             sharpness: 0.6
         )

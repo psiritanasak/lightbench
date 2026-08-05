@@ -292,6 +292,10 @@ struct ContentView: View {
                 range: 0...1, identity: 0.5
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
+                label: "Definition", value: $document.editState.definition,
+                range: 0...1, identity: 0
+            ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
                 label: "Sharpen", value: $document.editState.sharpness,
                 range: 0...1, identity: 0
             ) { String(format: "%.0f%%", $0 * 100) }

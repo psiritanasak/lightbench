@@ -19,6 +19,11 @@ final class ImageDocumentModel: ObservableObject {
     /// actually reflects.
     @Published private(set) var histogramBins: [Float] = []
 
+    /// User-facing feedback for a WB eyedropper tap that couldn't fully do
+    /// its job (too dark to sample, or a cast too strong to fully correct)
+    /// — mirrors `loadErrorMessage`'s alert-binding pattern.
+    @Published var whiteBalanceSampleMessage: String?
+
     private var histogramWorkItem: DispatchWorkItem?
     /// Guards against an out-of-order background histogram result (an OLDER
     /// in-flight computation finishing after a NEWER one) overwriting fresher
@@ -107,6 +112,83 @@ final class ImageDocumentModel: ObservableObject {
             await MainActor.run {
                 guard let self, self.histogramGeneration == generation else { return }
                 self.histogramBins = bins
+            }
+        }
+    }
+
+    // MARK: - White Balance Eyedropper
+
+    /// Samples the point at normalized `(u, v)` (0...1, SwiftUI-local
+    /// space — the same convention `ContentView.currentFitRect` establishes)
+    /// and sets `editState`'s Temperature/Tint to neutralize it.
+    ///
+    /// Samples a GEOMETRY-ONLY render — an `EditState()` with every color/
+    /// tone field (including WB itself) left at identity, only straighten/
+    /// perspective/flip/crop copied from the real `editState` — rather than
+    /// "the displayed image with just WB reset." White balance is pipeline
+    /// stage 1, so what matters for neutralizing it is the RAW
+    /// front-of-pipeline chromaticity at that point, not what it looks like
+    /// after exposure/contrast/curves/etc have already reshaped it (those
+    /// stages don't commute with WB). Since color stages don't change
+    /// extent, this render still shares `currentFitRect`'s exact coordinate
+    /// space, so no geometric-transform inversion is needed to map a tap
+    /// back to a pixel.
+    func pickWhiteBalance(normalizedX u: Double, normalizedY v: Double) {
+        guard let currentImage else { return }
+
+        var samplingState = EditState()
+        samplingState.straightenAngle = editState.straightenAngle
+        samplingState.verticalPerspective = editState.verticalPerspective
+        samplingState.horizontalPerspective = editState.horizontalPerspective
+        samplingState.flipHorizontal = editState.flipHorizontal
+        samplingState.flipVertical = editState.flipVertical
+        samplingState.cropInsetTop = editState.cropInsetTop
+        samplingState.cropInsetBottom = editState.cropInsetBottom
+        samplingState.cropInsetLeft = editState.cropInsetLeft
+        samplingState.cropInsetRight = editState.cropInsetRight
+
+        let geometryOnly = EditPipeline.apply(samplingState, to: currentImage)
+        let extent = geometryOnly.extent
+        guard extent.width > 0, extent.height > 0 else { return }
+
+        // y-flip: SwiftUI-local space is top-left-origin/y-down; `CIImage`'s
+        // own space is bottom-left-origin/y-up — the same convention already
+        // established and tested elsewhere in this codebase (see
+        // `EditPipelineTests`'s `quadrantImage` doc comment on "high-y =
+        // visual top").
+        let point = CGPoint(
+            x: extent.minX + CGFloat(u) * extent.width,
+            y: extent.minY + CGFloat(1 - v) * extent.height
+        )
+
+        guard let sample = PixelSampler.averageColor(in: geometryOnly, at: point) else {
+            whiteBalanceSampleMessage = "Couldn't read a color sample at that point."
+            return
+        }
+
+        // MEASURED: the solver's search (~52 filter evaluations) takes
+        // ~13-30ms on real hardware — enough of a main-thread-hitch risk
+        // that, like the histogram, it runs off the main thread. Unlike the
+        // histogram (which recomputes on every edit and needs a generation
+        // counter to discard stale in-flight results), this is a discrete,
+        // one-shot tap that disarms eyedropper mode immediately afterward —
+        // the chance of two overlapping solves is low enough that a
+        // generation guard is deliberately skipped for v1 scope.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let outcome = WhiteBalanceSolver.solve(sampleLinearRGB: sample)
+            await MainActor.run {
+                guard let self else { return }
+                switch outcome {
+                case .solved(let temperature, let tint):
+                    self.editState.whiteBalanceTemperature = temperature
+                    self.editState.whiteBalanceTint = tint
+                case .solvedPartially(let temperature, let tint):
+                    self.editState.whiteBalanceTemperature = temperature
+                    self.editState.whiteBalanceTint = tint
+                    self.whiteBalanceSampleMessage = "Couldn't fully correct this area — it may have too strong a color cast, or not be truly neutral."
+                case .rejectedTooDark:
+                    self.whiteBalanceSampleMessage = "Pick a brighter neutral area — this spot is too dark to read a color cast."
+                }
             }
         }
     }

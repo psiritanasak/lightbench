@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -32,6 +33,12 @@ struct ContentView: View {
     /// named computed property, not inlined at each call site, since it
     /// reads more clearly at each of its several use sites below.
     private var isCroppingActive: Bool { selectedTab == .crop }
+
+    /// Whether a tap on the image should be captured as a WB eyedropper
+    /// sample. Its own overlay only exists while this is true AND cropping
+    /// is not active (see `body`), so the two point-interactions are
+    /// mutually exclusive by construction, not by a shared runtime check.
+    @State private var isPickingWhiteBalance = false
 
     /// The on-screen rect the image currently occupies, fit against the
     /// ACTUAL displayed extent (post-straighten/perspective, crop-zeroed) —
@@ -162,6 +169,30 @@ struct ContentView: View {
                                 aspectRatio: effectiveAspectRatio
                             )
                         }
+                        // WB eyedropper tap-capture. Gated on `!isCroppingActive`
+                        // (on top of `isPickingWhiteBalance` itself only ever
+                        // being armable from the Adjust tab — see the
+                        // `.onChange(of: selectedTab)` below) so this and
+                        // `CropOverlayView`'s own drag gestures above can never
+                        // both be live at once.
+                        if isPickingWhiteBalance, !isCroppingActive, let fitRect = currentFitRect {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .frame(width: fitRect.width, height: fitRect.height)
+                                .position(x: fitRect.midX, y: fitRect.midY)
+                                .onHover { inside in
+                                    if inside { NSCursor.crosshair.push() } else { NSCursor.pop() }
+                                }
+                                .gesture(
+                                    SpatialTapGesture(coordinateSpace: .local).onEnded { tap in
+                                        document.pickWhiteBalance(
+                                            normalizedX: tap.location.x / fitRect.width,
+                                            normalizedY: tap.location.y / fitRect.height
+                                        )
+                                        isPickingWhiteBalance = false
+                                    }
+                                )
+                        }
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .onAppear { containerSize = proxy.size }
@@ -184,6 +215,13 @@ struct ContentView: View {
             selectedTab = .adjust
             selectedAspect = .freeform
             customAspectRatio = nil
+            isPickingWhiteBalance = false
+        }
+        // Leaving the Adjust tab disarms eyedropper mode — it has no
+        // meaning while cropping (its overlay is gated on `!isCroppingActive`
+        // anyway) or in the other, not-yet-built tabs.
+        .onChange(of: selectedTab) { _, newTab in
+            if newTab != .adjust { isPickingWhiteBalance = false }
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
@@ -209,6 +247,20 @@ struct ContentView: View {
                 }
             ),
             presenting: document.loadErrorMessage
+        ) { _ in
+            Button("OK") {}
+        } message: { message in
+            Text(message)
+        }
+        .alert(
+            "White Balance",
+            isPresented: Binding(
+                get: { document.whiteBalanceSampleMessage != nil },
+                set: { isPresented in
+                    if !isPresented { document.whiteBalanceSampleMessage = nil }
+                }
+            ),
+            presenting: document.whiteBalanceSampleMessage
         ) { _ in
             Button("OK") {}
         } message: { message in
@@ -242,6 +294,14 @@ struct ContentView: View {
                 label: "Tint", value: $document.editState.whiteBalanceTint,
                 range: -100...100, identity: 0
             ) { String(format: "%+.0f", $0) }
+            Button {
+                isPickingWhiteBalance.toggle()
+            } label: {
+                Label("Pick White Balance", systemImage: "eyedropper")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(isPickingWhiteBalance ? .yellow : nil)
             EditSliderRow(
                 label: "Exposure", value: $document.editState.exposureEV,
                 range: -5...5, identity: 0

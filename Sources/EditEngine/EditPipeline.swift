@@ -91,13 +91,26 @@ enum EditPipeline {
     /// no perceptual-domain requirement the way contrast/curves/HSL do.
     private static func applyWhiteBalance(_ state: EditState, to image: CIImage) -> CIImage {
         guard state.whiteBalanceTemperature != kNeutralTemp || state.whiteBalanceTint != 0 else { return image }
+        return whiteBalanced(image, temperature: state.whiteBalanceTemperature, tint: state.whiteBalanceTint)
+    }
 
+    /// The exact filter construction `applyWhiteBalance` uses (including
+    /// both measured sign inversions above), factored out so `WhiteBalance
+    /// Solver` neutralizes against the SAME formula rather than a duplicated
+    /// one that could silently drift from it. Internal (not `private`) so
+    /// the solver, in this same module, can call it directly. Unlike
+    /// `applyWhiteBalance`, this has no identity guard — callers that only
+    /// care about the pipeline's real behavior should go through
+    /// `applyWhiteBalance`; the solver calls this directly since it always
+    /// wants the filter's actual output, including at values that happen to
+    /// equal the identity.
+    static func whiteBalanced(_ image: CIImage, temperature: Double, tint: Double) -> CIImage {
         let filter = CIFilter.temperatureAndTint()
         filter.inputImage = image
         filter.neutral = CIVector(x: kNeutralTemp, y: 0)
         filter.targetNeutral = CIVector(
-            x: 2 * kNeutralTemp - state.whiteBalanceTemperature,
-            y: -(state.whiteBalanceTint / 100) * kTintSpan
+            x: 2 * kNeutralTemp - temperature,
+            y: -(tint / 100) * kTintSpan
         )
         return filter.outputImage ?? image
     }

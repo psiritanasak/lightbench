@@ -84,9 +84,14 @@ each gets its own Plan Mode session per the workflow rules below.
   clamp negative intensity to a no-op, so the originally-planned bipolar
   "Clarity" (positive=punch, negative=soften) was dropped for Apple Photos'
   one-directional "Definition" convention. v1 scope: single Amount slider only.
-- **Selective Color:** this is HSL v2 — per-color-band Hue/Saturation/Luminance panel
-  with a Range parameter (8 bands × 3 = 24 params), not yet built (v1 below is
-  global-only).
+- **Selective Color:** ✅ shipped — this is HSL v2, 8 fixed hue bands
+  (Red/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta) × Hue/Saturation/Luminance
+  (24 params) + a shared Range falloff-width parameter. The first custom Core
+  Image kernel in this codebase (`Sources/Rendering/Shaders/SelectiveColor.cikernel`
+  — no built-in filter exposes per-pixel hue). Band weight is scaled by the
+  pixel's own saturation (achromatic pixels get zero weight in every band) and
+  the pixel's brightness is normalized before the HSL round-trip and restored
+  after, so a colored pixel's own headroom survives even inside an active band.
 - **HSL:** ✅ v1 shipped as global Hue + Saturation sliders (no Lightness — would
   duplicate Exposure/Curves). v2 = Selective Color above.
 - **Noise Reduction:** ✅ shipped — a single Amount slider via `CINoiseReduction`,

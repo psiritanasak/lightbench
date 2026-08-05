@@ -6,9 +6,9 @@ tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
 Straighten, Vertical/Horizontal perspective correction, the full Apple
 Photos-style layout (dark theme + top tab bar), Black & White, Sharpen,
-Noise Reduction, Definition (Clarity), Levels (with a live histogram), and
-the WB neutral-gray eyedropper are shipped, each reviewer-approved and
-manually verified live. The Apple
+Noise Reduction, Definition (Clarity), Levels (with a live histogram), the
+WB neutral-gray eyedropper, and Selective Color (HSL v2) are shipped, each
+reviewer-approved and manually verified live. The Apple
 Photos Crop-panel batch (6 features, see below) completed first; the user
 then asked to work through the REST of the Phase 2 backlog. The roadmap in
 CLAUDE.md was expanded three times at the user's request to spell out the
@@ -49,9 +49,9 @@ deliberately last since it needs a different content-aware architecture):**
    (see below).
 6. ✅ WB neutral-gray eyedropper (first point-and-click interaction in the
    app) — done (see below).
-7. Selective Color (HSL v2, per-band panel — 8 bands × 3 params, biggest
-   scope of the remaining items) — NEXT.
-8. Red-Eye removal (point-and-click + region-based correction).
+7. ✅ Selective Color (HSL v2, per-band panel — 8 bands × 3 params, biggest
+   scope of the remaining items) — done (see below).
+8. Red-Eye removal (point-and-click + region-based correction) — NEXT.
 9. Cast (color-cast neutralization — content-aware gray-world-style
    statistics, a different architecture from every other adjustment so
    far; deliberately last, as established when it was first deferred).
@@ -851,10 +851,104 @@ restructure. 1 commit.
   the second review pass rather than committed separately, since the first
   commit hadn't landed yet).
 
+### Selective Color (HSL v2, per-band panel) (complete, verified live) — backlog item 7 of 9
+- **The highest-risk feature shipped this session.** 8 fixed hue bands
+  (Red/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta) × Hue/Saturation/
+  Luminance (24 params) + a shared Range falloff-width parameter — this
+  app's own name for what CLAUDE.md's backlog calls "HSL v2." The FIRST
+  custom Core Image kernel in this codebase's history: no built-in filter
+  exposes per-pixel hue, and no composition of built-in filters can produce
+  a smooth 8-band mask without one. `CIColorCube` was investigated and
+  rejected (clamps highlight headroom unconditionally, RGB-space trilinear
+  interpolation mistracks hue near low-saturation nodes, needs CPU LUT
+  recomputation on every slider drag). New `Sources/Rendering/Shaders/`
+  directory — CLAUDE.md's Conventions section had already reserved this
+  path and named the exact use case ("custom kernels for curves, HSL, WB")
+  long before any kernel existed; this is the first time it was used.
+- **Kernel math** (`SelectiveColor.cikernel`): RGB↔HSL round-trip, a
+  raised-cosine falloff over the CIRCULAR hue distance from each band
+  center (handles 350°/10° wraparound correctly), band weight scaled by
+  the pixel's own saturation (an achromatic pixel has no real hue and must
+  not register as belonging to any band — MEASURED necessity, not a
+  nicety: without it, every gray pixel's undefined-hue fallback happened
+  to coincide with the Red band's center, silently giving every gray pixel
+  spurious full Red-band weight). Unnormalized weighted sum across bands
+  (not divided by total weight) — what makes all-24-params-zero an exact
+  identity and gives adjacent-band blending its natural additive feel.
+- **Empirical discipline taken further than any prior feature**: a real
+  compiled `CIColorKernel(source:)` was built and executed via a
+  standalone probe BEFORE any project file was written — not just
+  verifying parameters like every prior feature, but verifying the kernel
+  compiles and runs AT ALL, since kernel-language bugs are a risk category
+  nothing else in this codebase has faced. That first probe run caught a
+  real bug before it ever reached the codebase: an early design's
+  undefined-hue-defaults-to-red flaw (above), fixed by the saturation-
+  weighting before a single line of Swift was written.
+- **A second, more serious bug — caught by the reviewer, not the
+  pre-implementation probe.** The standard HSL saturation formula's
+  denominator (`1 - abs(2L-1)`) goes NEGATIVE once perceptual lightness
+  exceeds 1.0 — for any COLORED pixel with real headroom (e.g. a saturated
+  highlight after a modest positive Exposure), this made every band's
+  weight negative, which tripped the SAME "not in any band" passthrough
+  guard meant only for genuinely untouched pixels. Net effect: Selective
+  Color was a complete, silent no-op on any sufficiently bright colored
+  image region — skies, boosted highlights, anything with headroom on
+  saturated content — regardless of which slider was moved. The original
+  pre-implementation probe didn't catch this because its own headroom test
+  used an ACHROMATIC pixel (which sidesteps the bug via the `C==0` short
+  circuit) — a real reminder that a probe only proves what it actually
+  tests, not everything "similar." Fixed by normalizing the pixel's own
+  brightness (by its own max channel) before the HSL round-trip and
+  rescaling the result afterward — verified via a fresh standalone probe
+  before touching the kernel file, confirming both the fix (a colored
+  headroom pixel now IS correctly affected) and that literally every
+  previously-verified case at normal brightness stays byte-identical
+  (`scale` is an exact no-op multiply/divide whenever the pixel's max
+  channel is ≤1.0). A genuine improvement fell out of the fix too: a
+  colored pixel genuinely inside an active band now keeps its OWN
+  headroom while still being correctly color-processed, rather than being
+  destructively clamped to flat white the way the original (buggy) design
+  did — better than either the bug or the original band-aid.
+- `EditState.swift` — 24 flat named band fields + `selectiveColorRange`,
+  NOT an array/dictionary: a deliberate recommendation (not a default),
+  consistent with this codebase's established per-slider convention even
+  at this scale (crop's 4 insets are 4 separate named fields, not a
+  struct) — preserves the memberwise initializer, trivial `Codable`/
+  identity semantics, and per-slider key-path binding every other feature
+  already relies on.
+- `Sources/UI/SelectiveColorBand.swift` (new) + `ContentView.swift` — a
+  horizontal row of 8 tappable color swatches (not a new top-level
+  `EditorTab`, which is explicitly fixed to mirror Apple Photos' own tab
+  bar; Photos itself doesn't give this a separate top-level tab either),
+  one shared Range slider, then 3 sliders for whichever band is currently
+  selected — routed via a small per-band `Binding<Double>` dispatcher
+  function, not 24 simultaneous rows.
+- **Two reviewer passes** — the most thorough review this session, matching
+  the feature's stakes. First pass: FIX FIRST on the headroom-negative-
+  denominator bug above (a real, systematic functional gap, not a narrow
+  corner case) plus two minor nits (a stale test-name cross-reference in a
+  comment, PROGRESS.md not yet updated — expected at that stage). Fixed,
+  re-verified via a fresh probe, one test renamed with new (better) expected
+  values, one new regression-guard test added reproducing the reviewer's
+  own bug repro. Second pass: APPROVE, independently re-derived the fix's
+  correctness via a from-scratch reimplementation of the kernel math (not
+  just re-reading the diff), confirmed the regression test would genuinely
+  have failed against the old kernel, and caught one more residual doc-
+  comment nit (two other places still said "headroom-clamping," stale
+  after the fix changed that exact behavior) — fixed before commit.
+- 193 tests total (12 new Selective Color tests, including the one renamed
+  regression guard). 2 commits (the headroom-negative-denominator fix and
+  the residual doc-comment cleanup were both folded into the single
+  feature commit, since neither had landed separately before the second
+  review pass completed).
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (WB eyedropper, second pass, after
-one FIX FIRST round on force-unwraps in production code — resolved before
-commit, per workflow rules).
+None — last reviewer verdict was APPROVE (Selective Color, second pass,
+after one FIX FIRST round on a real functional bug — resolved and
+independently re-verified before commit, per workflow rules).
+
+Prior: WB eyedropper (second pass, after one FIX FIRST round on
+force-unwraps in production code — resolved before commit).
 
 Prior: Levels + live histogram (first pass, three non-blocking notes — one
 addressed by a same-commit-batch wording fix, two left as accepted,
@@ -1067,24 +1161,28 @@ per the user's own instruction — do not start it without being asked
 again).** Sequence (see "Current phase" above for the full list and
 reasoning): Black & White is done, Sharpen is done, Noise Reduction is
 done, Definition (Clarity) is done, Levels + live histogram is done, the
-WB neutral-gray eyedropper is done. **NEXT: Selective Color (HSL v2,
-per-band panel) — item 7 of 9, biggest scope of the remaining items.** Not
-yet planned. This is HSL v1 (global Hue + Saturation, already shipped)
-generalized to 8 color bands × 3 params (Hue/Saturation/Luminance) each,
-plus a Range parameter per CLAUDE.md's backlog description — a much larger
-UI surface (8 bands' worth of controls, likely a band-picker + per-band
-sliders rather than 24 simultaneous rows) than anything shipped so far.
-Will need a UI-architecture pass (how the band picker/selector works,
-whether bands are tabbed/segmented) AND real empirical Core Image
-investigation (Apple's `CISelectiveColor`-style approach vs. a wider global
-`CIHueSaturationValueGradient`/per-band hue-range mask approach — need to
-determine which filter(s) actually implement per-band selective adjustment
-in Core Image, since this app hasn't used any per-band/masked color
-filters yet; likely needs its own Plan-agent dispatch given the genuine
-novelty, similar to how Levels needed one for both its math and its UI).
+WB neutral-gray eyedropper is done, Selective Color (HSL v2) is done.
+**NEXT: Red-Eye removal — item 8 of 9.** Not yet planned. The app's SECOND
+point-and-click interaction (after the WB eyedropper) — likely reuses the
+same `currentFitRect`/tap-to-image-coordinate conversion established by
+`ContentView.pickWhiteBalance`/`PixelSampler`, but with a genuinely
+different back-end problem: rather than solving for two global slider
+values, this needs a localized, masked correction (detect/confirm a
+red-eye region around the tap point, desaturate red and darken luminance
+ONLY within that mask, likely via a soft-edged radial mask blended with
+the original — closer in spirit to Vignette's radial falloff than to
+Selective Color's hue-band falloff, but region-local rather than
+frame-wide, and needs new `EditState` surface to persist WHERE each
+correction is, not just slider values — this app has no precedent yet for
+storing a variable-length list of user-placed points/regions, unlike every
+other adjustment which is a fixed set of named fields). Will need its own
+Plan-agent dispatch — likely both a UI-interaction design (tap to place a
+correction point, maybe drag to size it, multiple corrections per photo)
+and Core Image investigation (radial mask construction, whether a custom
+kernel is warranted again or built-in filters + `CIRadialGradient`-style
+masking suffice this time, unlike Selective Color's genuine need for one).
 
-Remaining after Selective Color: Red-Eye removal, Cast (last,
-deliberately — see below).
+Remaining after Red-Eye removal: Cast (last, deliberately — see below).
 Lens distortion correction remains explicitly OUT of scope (wasn't in
 either screenshot, needs camera-profile data, a
 separate concern) unless the user asks for it specifically.

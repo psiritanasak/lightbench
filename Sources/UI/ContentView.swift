@@ -270,6 +270,20 @@ struct ContentView: View {
                 label: "Black Point", value: $document.editState.blackPoint,
                 range: -1...1, identity: 0
             ) { String(format: "%+.0f%%", $0 * 100) }
+            Text("Levels").font(.caption).foregroundStyle(.secondary)
+            HistogramView(bins: document.histogramBins)
+            EditSliderRow(
+                label: "Levels Black", value: $document.editState.levelsBlackPoint,
+                range: 0...1, identity: 0
+            ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Levels White", value: $document.editState.levelsWhitePoint,
+                range: 0...1, identity: 1
+            ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Levels Gamma", value: $document.editState.levelsGamma,
+                range: 0.3...3.0, identity: 1.0
+            ) { String(format: "%.2f", $0) }
             EditSliderRow(
                 label: "Hue", value: $document.editState.hslHue,
                 range: -180...180, identity: 0

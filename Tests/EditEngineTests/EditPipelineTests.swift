@@ -208,6 +208,133 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(pixel.r, 1.2, accuracy: accuracy)
     }
 
+    // MARK: - Levels math
+    //
+    // Levels (CIColorMatrix -> CIColorClamp -> CIGammaAdjust) is the first
+    // stage in the perceptual sandwich — genuine new filter math, so these
+    // values are measured against the real chain, not hand-derived. Inputs
+    // below are LINEAR solid colors; `levelsBlackPoint`/`levelsWhitePoint`/
+    // `levelsGamma` are PERCEPTUAL-domain thresholds (same convention as
+    // Black Point/Contrast/Brightness's own tests), so e.g. a linear 0.5
+    // input is already well above a perceptual white point of 0.7 once
+    // sRGB-encoded — not a bug, just the sRGB gamma curve.
+
+    func testLevelsIdentityIsNoOp() {
+        // Identity (0, 1, 1) must be an exact no-op, INCLUDING headroom —
+        // this specifically exercises the `levelsActive` guard: calling the
+        // raw filter chain unconditionally would clip 1.2/1.4 to 1.0 even
+        // at identity params (CIColorClamp always runs), so this also
+        // proves the guard is wired correctly, not just present.
+        for value in [0.05, 0.214, 0.5, 0.7, 1.0, 1.2, 1.4] {
+            let input = solidColorImage(value)
+            let output = EditPipeline.apply(EditState(), to: input)
+            XCTAssertEqual(linearPixel(of: output).r, Float(value), accuracy: accuracy, "value \(value)")
+        }
+    }
+
+    func testLevelsBlackPointCrushesShadows() {
+        let state = EditState(levelsBlackPoint: 0.3)
+        let expected: [Double: Float] = [
+            0.0: 0.0, 0.1: 0.00601, 0.2: 0.05650, 0.5: 0.34476, 0.8: 0.72215
+        ]
+        for (value, expectedOutput) in expected {
+            let output = EditPipeline.apply(state, to: solidColorImage(value))
+            XCTAssertEqual(linearPixel(of: output).r, expectedOutput, accuracy: accuracy, "value \(value)")
+        }
+    }
+
+    func testLevelsWhitePointClampsHighlights() {
+        let state = EditState(levelsWhitePoint: 0.7)
+        let expected: [Double: Float] = [0.0: 0.0, 0.2: 0.43694, 0.5: 1.0, 1.0: 1.0]
+        for (value, expectedOutput) in expected {
+            let output = EditPipeline.apply(state, to: solidColorImage(value))
+            XCTAssertEqual(linearPixel(of: output).r, expectedOutput, accuracy: accuracy, "value \(value)")
+        }
+    }
+
+    func testLevelsGammaBrightensMidtones() {
+        // The sign-convention test: this is what would catch an inverted
+        // `power = 1/gamma` (a mistake would darken where it should
+        // brighten and vice versa).
+        let input = solidColorImage(0.5)
+        let brighter = EditPipeline.apply(EditState(levelsGamma: 2.0), to: input)
+        let darker = EditPipeline.apply(EditState(levelsGamma: 0.5), to: input)
+
+        XCTAssertEqual(linearPixel(of: brighter).r, 0.70597, accuracy: accuracy)
+        XCTAssertEqual(linearPixel(of: darker).r, 0.25372, accuracy: accuracy)
+        XCTAssertGreaterThan(linearPixel(of: brighter).r, 0.5, "gamma > 1 should brighten")
+        XCTAssertLessThan(linearPixel(of: darker).r, 0.5, "gamma < 1 should darken")
+    }
+
+    func testLevelsClampsHighlightHeadroom() {
+        // UNLIKE most adjustments in this app, Levels intentionally clips
+        // highlight headroom once active — that's what a white point does.
+        let state = EditState(levelsWhitePoint: 0.9)
+        for value in [1.0, 1.2, 1.4] {
+            let output = EditPipeline.apply(state, to: solidColorImage(value))
+            XCTAssertEqual(linearPixel(of: output).r, 1.0, accuracy: accuracy, "value \(value)")
+        }
+    }
+
+    func testLevelsPreservesAlpha() {
+        let input = solidColorImage(r: 0.6, g: 0.6, b: 0.6, a: 0.5)
+        let output = EditPipeline.apply(
+            EditState(levelsBlackPoint: 0.2, levelsWhitePoint: 0.8, levelsGamma: 1.5),
+            to: input
+        )
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.a, 0.5, accuracy: accuracy)
+        XCTAssertEqual(pixel.r, 0.49714, accuracy: accuracy)
+        XCTAssertTrue(pixel.r.isFinite)
+    }
+
+    func testLevelsBlackWhiteDegenerateIsSafe() {
+        // Proves `kMinLevelsGap` prevents Inf/NaN: black == white, and a
+        // fully inverted black > white, both stay finite (if extreme).
+        let equal = EditPipeline.apply(EditState(levelsBlackPoint: 0.5, levelsWhitePoint: 0.5), to: solidColorImage(0.5))
+        XCTAssertTrue(linearPixel(of: equal).r.isFinite)
+
+        let inverted = EditState(levelsBlackPoint: 0.7, levelsWhitePoint: 0.3)
+        let expected: [Double: Float] = [0.0: 0.0, 0.2: 0.0, 0.5: 1.0, 0.8: 1.0, 1.0: 1.0]
+        for (value, expectedOutput) in expected {
+            let output = EditPipeline.apply(inverted, to: solidColorImage(value))
+            let pixel = linearPixel(of: output)
+            XCTAssertTrue(pixel.r.isFinite, "value \(value)")
+            XCTAssertEqual(pixel.r, expectedOutput, accuracy: accuracy, "value \(value)")
+        }
+    }
+
+    func testLevelsNegativeRemapNoNaN() {
+        // Core NaN-safety proof: an input well below the black point,
+        // combined with a fractional gamma power (gamma=3 -> power=1/3),
+        // would be `pow(negative, 1/3)` (NaN) if the clamp ran AFTER gamma
+        // instead of before. Measured: exact, finite 0.0.
+        let state = EditState(levelsBlackPoint: 0.5, levelsGamma: 3.0)
+        let output = EditPipeline.apply(state, to: solidColorImage(0.2))
+        let pixel = linearPixel(of: output)
+
+        XCTAssertTrue(pixel.r.isFinite)
+        XCTAssertFalse(pixel.r.isNaN)
+        XCTAssertEqual(pixel.r, 0.0, accuracy: accuracy)
+    }
+
+    func testLevelsRunsBeforeBrightness() {
+        // Proves pipeline ORDERING (Levels, then Brightness), not just each
+        // stage in isolation — MEASURED non-commuting (0.0119 gap between
+        // the two orders), the same real-requirement pattern as
+        // testBrightnessAppliedBeforeContrast/testWhiteBalanceAppliedBeforeContrast.
+        let input = solidColorImage(0.3)
+        let output = EditPipeline.apply(
+            EditState(levelsBlackPoint: 0.1, levelsWhitePoint: 0.9, levelsGamma: 1.5, brightness: 0.5),
+            to: input
+        )
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.67415, accuracy: accuracy)
+        XCTAssertNotEqual(pixel.r, 0.66228, accuracy: accuracy, "should not match the reversed (brightness-then-levels) order")
+    }
+
     // MARK: - Brightness math
     //
     // Brightness is a perceptual-domain additive offset (see EditPipeline's
@@ -1909,6 +2036,9 @@ final class EditPipelineTests: XCTestCase {
 
     func testEditStateDefaultIsIdentity() {
         XCTAssertEqual(EditState().exposureEV, 0)
+        XCTAssertEqual(EditState().levelsBlackPoint, 0)
+        XCTAssertEqual(EditState().levelsWhitePoint, 1)
+        XCTAssertEqual(EditState().levelsGamma, 1)
         XCTAssertEqual(EditState().brightness, 0)
         XCTAssertEqual(EditState().contrast, 0)
         XCTAssertEqual(EditState().whiteBalanceTemperature, 6500)
@@ -1946,6 +2076,9 @@ final class EditPipelineTests: XCTestCase {
             whiteBalanceTemperature: 5200,
             whiteBalanceTint: -10,
             exposureEV: 1.37,
+            levelsBlackPoint: 0.1,
+            levelsWhitePoint: 0.85,
+            levelsGamma: 1.3,
             brightness: 0.25,
             contrast: -0.4,
             curvesShadows: 0.6,

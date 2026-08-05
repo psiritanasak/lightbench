@@ -172,7 +172,8 @@ enum EditPipeline {
     /// Photos algorithm.
     private static func applyPerceptualAdjustments(_ state: EditState, to image: CIImage) -> CIImage {
         let effective = effectiveTone(state)
-        guard state.brightness != 0
+        guard levelsActive(state)
+            || state.brightness != 0
             || effective.contrast != 0
             || curvesActive(effective, state.blackPoint)
             || state.hslHue != 0
@@ -182,6 +183,16 @@ enum EditPipeline {
         else { return image }
 
         var img = encodeToPerceptual(image)
+        // Levels runs FIRST — MEASURED non-commuting with Brightness (a
+        // 0.0119 gap between levels-then-brightness and the reverse — real
+        // and well above this file's 0.002 test tolerance, though smaller
+        // than brightness/contrast's own 0.15 gap), so this order is a real
+        // requirement, not a style choice. Levels is a corrective base-tone
+        // remap (set the histogram's black/white/gamma reference points),
+        // conceptually prior to the "creative" brightness/contrast/curves
+        // adjustments that follow — the same rationale already used to
+        // justify Brightness itself running before Contrast.
+        if levelsActive(state) { img = applyLevels(state, to: img) }
         if state.brightness != 0 { img = applyBrightness(state.brightness, to: img) }
         if effective.contrast != 0 { img = applyContrast(effective.contrast, to: img) }
         if curvesActive(effective, state.blackPoint) { img = applyCurves(effective, state.blackPoint, to: img) }
@@ -211,6 +222,92 @@ enum EditPipeline {
             img = applySaturation(saturationOverride, to: img)
         }
         img = decodeToLinear(img)
+        return img
+    }
+
+    // MARK: - Levels
+
+    /// Minimum enforced separation between `levelsBlackPoint` and
+    /// `levelsWhitePoint`, so `scale = 1/(white-black)` can never divide by
+    /// zero. MEASURED necessity: without this, `black == white` produces
+    /// Inf, which the downstream clamp does not reliably neutralize. Same
+    /// defense-in-depth pattern as `kMaxCropInset`/`kMaxPerspectiveShift` —
+    /// `EditState` doesn't enforce `black < white` itself, this is where the
+    /// real guarantee lives. MEASURED safe even in the degenerate case: a
+    /// fully inverted `black > white` input (forced to the minimum gap by
+    /// this constant) still produces a finite, if extreme, result — no
+    /// NaN/Inf, just a very steep near-step response.
+    private static let kMinLevelsGap: Double = 0.001
+
+    private static func levelsActive(_ state: EditState) -> Bool {
+        state.levelsBlackPoint != 0 || state.levelsWhitePoint != 1 || state.levelsGamma != 1
+    }
+
+    /// The classic Photoshop/Lightroom Levels remap: `linear = clamp((input
+    /// - black) / (white - black), 0, 1)`, then `output = linear ^
+    /// (1/gamma)`. Implemented as `CIColorMatrix` (global scale+bias,
+    /// identical across R/G/B — a luminance-style remap, not per-channel
+    /// RGB levels; `aVector = (0,0,0,1)` passes alpha through untouched) →
+    /// `CIColorClamp` (0...1, BEFORE gamma) → `CIGammaAdjust`.
+    ///
+    /// MEASURED findings (this app's extendedLinearSRGB/RGBAf working
+    /// space, not assumed):
+    /// - Gamma sign: `CIGammaAdjust.power = 1/gamma` gives the classic
+    ///   convention where `gamma > 1` BRIGHTENS midtones and `gamma < 1`
+    ///   DARKENS them (verified at several inputs, monotonic both
+    ///   directions — e.g. perceptual 0.5 -> 0.70711 at gamma 2.0, -> 0.25
+    ///   at gamma 0.5). Getting this backwards would invert the slider.
+    /// - NaN safety: the clamp MUST run BEFORE gamma, not after. A pixel
+    ///   below the black point produces a NEGATIVE value from the
+    ///   `CIColorMatrix` step; raising a negative number to a fractional
+    ///   power (`gamma > 1` means `power < 1`) is undefined in IEEE float
+    ///   and measured to actually surface as NaN if attempted directly.
+    ///   Clamping to [0,1] first (this function's actual order) was
+    ///   measured to produce an exact, finite `0.0` in that same case, both
+    ///   before and after the surrounding encode/decode round-trip.
+    /// - Headroom: Levels INTENTIONALLY clips highlight headroom once
+    ///   active (measured: a 1.4 linear input with `levelsWhitePoint = 0.9`
+    ///   clips to 1.0) — a deliberate deviation from the headroom-preserving
+    ///   family (Brightness/HSL/Vibrance/Vignette/Sharpen/Definition/Noise
+    ///   Reduction), in the same accepted family as active Curves' own
+    ///   clamp-to-[0,1]. Alpha is preserved exactly regardless (measured on
+    ///   a semi-transparent pixel).
+    /// - The `levelsActive` guard above is NOT just a performance
+    ///   optimization here: MEASURED that calling this filter chain
+    ///   unconditionally — even at the identity parameters (0, 1, 1) —
+    ///   clips headroom anyway, because `CIColorClamp` runs regardless of
+    ///   whether black/white/gamma are at their identity values. The guard
+    ///   is what makes "identity" actually mean zero-effect, including
+    ///   headroom preservation.
+    private static func applyLevels(_ state: EditState, to image: CIImage) -> CIImage {
+        let black = min(max(state.levelsBlackPoint, 0), 1)
+        let white = max(min(max(state.levelsWhitePoint, 0), 1), black + kMinLevelsGap)
+        let gamma = max(state.levelsGamma, 0.01)
+
+        let scale = 1.0 / (white - black)
+        let bias = -black * scale
+
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = image
+        matrix.rVector = CIVector(x: scale, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: scale, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: scale, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        matrix.biasVector = CIVector(x: bias, y: bias, z: bias, w: 0)
+        var img = matrix.outputImage ?? image
+
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = img
+        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+        clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+        img = clamp.outputImage ?? img
+
+        if gamma != 1 {
+            let gammaFilter = CIFilter.gammaAdjust()
+            gammaFilter.inputImage = img
+            gammaFilter.power = Float(1.0 / gamma)
+            img = gammaFilter.outputImage ?? img
+        }
         return img
     }
 

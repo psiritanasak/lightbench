@@ -29,6 +29,35 @@ struct EditState: Equatable, Codable {
     /// pixel values — see `EditPipeline`.
     var exposureEV: Double = 0
 
+    // MARK: - Levels
+
+    /// Levels black input point, 0...1, default 0 (identity). Pixels at or
+    /// below this PERCEPTUAL-domain value crush to 0. DISTINCT from
+    /// `blackPoint` below (an unrelated, already-shipped Curves `point0`
+    /// control, -1...1) — this is the classic Photoshop/Lightroom Levels
+    /// black slider, a direct input-level threshold in histogram X units,
+    /// not a curve-point move. This struct does NOT itself enforce
+    /// `levelsBlackPoint < levelsWhitePoint` — same defense-in-depth
+    /// contract as `cropInsetTop`'s documented pattern: `EditPipeline`
+    /// guarantees a minimum separation on every use, so a future direct
+    /// consumer must not assume this is pre-validated.
+    var levelsBlackPoint: Double = 0
+
+    /// Levels white input point, 0...1, default 1 (identity — a non-zero
+    /// identity, same accepted pattern as `vignetteRadius`). Pixels at or
+    /// above this perceptual-domain value clip to 1.0 — Levels
+    /// INTENTIONALLY clips highlight headroom when active (that is what a
+    /// white point does; see `EditPipeline` for how this differs from every
+    /// other headroom-preserving adjustment in this app).
+    var levelsWhitePoint: Double = 1
+
+    /// Levels midtone gamma, default 1 (identity). MEASURED (not assumed):
+    /// values >1 brighten midtones, <1 darken them (verified against
+    /// `CIGammaAdjust` — see `EditPipeline`). This struct does not clamp
+    /// `levelsGamma` to a positive value; `EditPipeline` guards against a
+    /// non-positive gamma before computing its reciprocal power.
+    var levelsGamma: Double = 1
+
     // MARK: - Brightness
 
     /// Perceptual brightness offset, -1...1, 0 is identity. Unlike Exposure

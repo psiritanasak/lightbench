@@ -190,6 +190,7 @@ enum EditPipeline {
             || effective.contrast != 0
             || curvesActive(effective, state.blackPoint)
             || state.hslHue != 0
+            || selectiveColorActive(state)
             || state.vibrance != 0
             || effective.saturation != 0
             || state.blackAndWhite
@@ -210,6 +211,12 @@ enum EditPipeline {
         if effective.contrast != 0 { img = applyContrast(effective.contrast, to: img) }
         if curvesActive(effective, state.blackPoint) { img = applyCurves(effective, state.blackPoint, to: img) }
         if state.hslHue != 0 { img = applyHue(state.hslHue, to: img) }
+        // Selective Color runs right after global Hue (bands target hues as
+        // the user currently SEES them, post global rotation — the WYSIWYG
+        // choice) and before Vibrance/Saturation (those "final uniform
+        // scalers" then act on the per-band-adjusted result). MEASURED
+        // non-commuting with global Hue — see testSelectiveColorRunsAfterGlobalHue.
+        if selectiveColorActive(state) { img = applySelectiveColor(state, to: img) }
         if state.vibrance != 0 { img = applyVibrance(state.vibrance, to: img) }
         // `blackAndWhite` FORCES full desaturation (factor 0, i.e. the same
         // call `applySaturation` already makes at hslSaturation's own -1
@@ -471,6 +478,77 @@ enum EditPipeline {
         filter.inputImage = image
         filter.angle = Float(degrees * .pi / 180)
         return filter.outputImage ?? image
+    }
+
+    // MARK: - Selective Color (HSL v2, per-band)
+
+    /// The first custom Core Image kernel in this codebase (CLAUDE.md's
+    /// Stack section anticipated "custom kernels for curves, HSL, WB" —
+    /// this is that). Genuine per-hue-band selective adjustment has no
+    /// built-in Core Image primitive: nothing exposes per-pixel hue, and no
+    /// composition of built-in filters can produce a smooth 8-band mask
+    /// without one. `CIColorCube` was considered and rejected — it clamps
+    /// highlight headroom to [0,1] unconditionally (this app's HSL family
+    /// otherwise preserves it), RGB-space trilinear interpolation mistracks
+    /// hue near low-saturation cube nodes, and it would need CPU LUT
+    /// recomputation on every slider drag.
+    ///
+    /// Loaded once, lazily, from the bundled kernel source — see
+    /// `Sources/Rendering/Shaders/SelectiveColor.cikernel` for the exact
+    /// per-pixel math (RGB<->HSL conversion, circular hue-distance
+    /// falloff, why band weight is scaled by the pixel's own saturation,
+    /// and why brightness is normalized before the HSL round-trip and
+    /// restored after so a colored pixel's own headroom survives even once
+    /// it's genuinely inside an active band). `CIColorKernel(source:)` is
+    /// deprecated since macOS 10.14 but functional; a Metal `.ci.metal`
+    /// migration (non-deprecated,
+    /// needs new XcodeGen `-fcikernel`/`-cikernel` build rules this project
+    /// doesn't have yet) is an explicitly deferred v2.
+    private static let selectiveColorKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "SelectiveColor", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
+    private static func selectiveColorActive(_ state: EditState) -> Bool {
+        state.redHue != 0 || state.redSaturation != 0 || state.redLuminance != 0
+            || state.orangeHue != 0 || state.orangeSaturation != 0 || state.orangeLuminance != 0
+            || state.yellowHue != 0 || state.yellowSaturation != 0 || state.yellowLuminance != 0
+            || state.greenHue != 0 || state.greenSaturation != 0 || state.greenLuminance != 0
+            || state.aquaHue != 0 || state.aquaSaturation != 0 || state.aquaLuminance != 0
+            || state.blueHue != 0 || state.blueSaturation != 0 || state.blueLuminance != 0
+            || state.purpleHue != 0 || state.purpleSaturation != 0 || state.purpleLuminance != 0
+            || state.magentaHue != 0 || state.magentaSaturation != 0 || state.magentaLuminance != 0
+    }
+
+    /// Band argument layout matches the kernel exactly: hueA/satA/lumA =
+    /// (Red, Orange, Yellow, Green), hueB/satB/lumB = (Aqua, Blue, Purple,
+    /// Magenta) — MEASURED (real compiled kernel probe) against this exact
+    /// argument order before shipping, including that a pixel with only
+    /// `magentaHue` set (the 4th/`.w` component of `hueB`) is correctly,
+    /// and ONLY, affected when it's actually magenta-hued.
+    private static func applySelectiveColor(_ state: EditState, to image: CIImage) -> CIImage {
+        guard let kernel = selectiveColorKernel else { return image }
+
+        let hueA = CIVector(x: state.redHue, y: state.orangeHue, z: state.yellowHue, w: state.greenHue)
+        let hueB = CIVector(x: state.aquaHue, y: state.blueHue, z: state.purpleHue, w: state.magentaHue)
+        let satA = CIVector(
+            x: state.redSaturation, y: state.orangeSaturation, z: state.yellowSaturation, w: state.greenSaturation
+        )
+        let satB = CIVector(
+            x: state.aquaSaturation, y: state.blueSaturation, z: state.purpleSaturation, w: state.magentaSaturation
+        )
+        let lumA = CIVector(
+            x: state.redLuminance, y: state.orangeLuminance, z: state.yellowLuminance, w: state.greenLuminance
+        )
+        let lumB = CIVector(
+            x: state.aquaLuminance, y: state.blueLuminance, z: state.purpleLuminance, w: state.magentaLuminance
+        )
+        // NSNumber explicitly, not a raw Double — matches exactly what was
+        // verified against the real compiled kernel before shipping.
+        let arguments: [Any] = [image, hueA, hueB, satA, satB, lumA, lumB, NSNumber(value: state.selectiveColorRange)]
+        return kernel.apply(extent: image.extent, arguments: arguments) ?? image
     }
 
     // MARK: - Vibrance

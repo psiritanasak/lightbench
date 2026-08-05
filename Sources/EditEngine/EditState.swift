@@ -143,6 +143,62 @@ struct EditState: Equatable, Codable {
     /// (measured).
     var hslSaturation: Double = 0
 
+    // MARK: - Selective Color (HSL v2, per-band)
+
+    /// 8 fixed color bands (Red/Orange/Yellow/Green/Aqua/Blue/Purple/
+    /// Magenta) × Hue/Saturation/Luminance, each -1...1, 0 = identity — this
+    /// app's own name for what Lightroom calls the HSL panel (CLAUDE.md
+    /// calls it "Selective Color... HSL v2"). Flat named fields, NOT an
+    /// array/dictionary — matches this codebase's established per-slider
+    /// convention even at this scale (crop's 4 insets are 4 separate named
+    /// fields, not a struct), keeping the memberwise initializer, `Codable`/
+    /// `Equatable` identity, and per-slider key-path binding all trivial.
+    /// Declared here (between global `hslSaturation` and `vibrance`) to
+    /// match pipeline order: applied via a custom Core Image kernel — the
+    /// first one in this codebase — right after global Hue, before
+    /// Vibrance. See `EditPipeline.applySelectiveColor` and
+    /// `Sources/Rendering/Shaders/SelectiveColor.cikernel` for the exact,
+    /// MEASURED (real compiled kernel probe, not assumed) math: band
+    /// centers, circular hue-distance falloff shaped by
+    /// `selectiveColorRange`, why band weight is scaled by the pixel's own
+    /// saturation (an achromatic pixel has no real hue and must not
+    /// register as belonging to any band), and why the pixel's own
+    /// brightness is normalized before the HSL round-trip and restored
+    /// after — so a bright, colored pixel's own headroom survives even
+    /// once it's genuinely inside an active band (unlike Curves/Levels,
+    /// which do clamp).
+    var redHue: Double = 0
+    var redSaturation: Double = 0
+    var redLuminance: Double = 0
+    var orangeHue: Double = 0
+    var orangeSaturation: Double = 0
+    var orangeLuminance: Double = 0
+    var yellowHue: Double = 0
+    var yellowSaturation: Double = 0
+    var yellowLuminance: Double = 0
+    var greenHue: Double = 0
+    var greenSaturation: Double = 0
+    var greenLuminance: Double = 0
+    var aquaHue: Double = 0
+    var aquaSaturation: Double = 0
+    var aquaLuminance: Double = 0
+    var blueHue: Double = 0
+    var blueSaturation: Double = 0
+    var blueLuminance: Double = 0
+    var purpleHue: Double = 0
+    var purpleSaturation: Double = 0
+    var purpleLuminance: Double = 0
+    var magentaHue: Double = 0
+    var magentaSaturation: Double = 0
+    var magentaLuminance: Double = 0
+
+    /// Falloff width shared by all 8 bands, 0...1, default 0.5 (balanced —
+    /// a non-zero identity, same accepted pattern as `vignetteRadius`: the
+    /// stage is guarded off by the 24 band params above, not by this field
+    /// itself). Higher widens/softens every band's reach (more overlap
+    /// between neighbors); lower narrows it to a more surgical selection.
+    var selectiveColorRange: Double = 0.5
+
     // MARK: - Vibrance
 
     /// Global vibrance, -1...1, 0 is identity. A "smart" saturation that

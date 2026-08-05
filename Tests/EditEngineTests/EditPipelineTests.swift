@@ -864,6 +864,201 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(linearPixel(of: hueOutput).r, 1.2, accuracy: accuracy)
     }
 
+    // MARK: - Selective Color math (HSL v2, per-band)
+    //
+    // The first custom Core Image kernel in this codebase — genuinely new
+    // math with no closed-form transfer function, so every value below was
+    // measured against the real compiled kernel (both in isolation and
+    // wired into the full perceptual sandwich exactly as `EditPipeline`
+    // integrates it), not hand-derived. See `EditPipeline.applySelectiveColor`
+    // and `Sources/Rendering/Shaders/SelectiveColor.cikernel`.
+
+    func testSelectiveColorZeroIsExactNoOp() {
+        // Includes 1.2 to prove an inactive stage preserves headroom (no
+        // kernel invocation at all — the `selectiveColorActive` guard).
+        for value in [0.05, 0.214, 0.5, 0.7, 1.2] {
+            let input = solidColorImage(value)
+            let output = EditPipeline.apply(EditState(), to: input)
+            XCTAssertEqual(linearPixel(of: output).r, Float(value), accuracy: accuracy, "value \(value)")
+        }
+    }
+
+    func testSelectiveColorRedHueShiftsRedPixel() {
+        let input = solidColorImage(r: 0.6, g: 0.05, b: 0.05)
+        let output = EditPipeline.apply(EditState(redHue: 1), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.6, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.13728, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.05, accuracy: accuracy)
+    }
+
+    func testSelectiveColorBandIsolation() {
+        // A blue pixel is far outside the Red band's falloff window at the
+        // default Range — redHue active must leave it (essentially)
+        // untouched, proving the band selects by hue, not globally.
+        let input = solidColorImage(r: 0.05, g: 0.05, b: 0.6)
+        let output = EditPipeline.apply(EditState(redHue: 1), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.05, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.05, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.6, accuracy: accuracy)
+    }
+
+    func testSelectiveColorSaturationReducesBand() {
+        // Not asserted as exactly achromatic: this test color isn't
+        // precisely centered on the Orange band, so `orangeSaturation: -1`
+        // measurably REDUCES saturation rather than zeroing it exactly —
+        // the correct, expected behavior of a soft-falloff band, verified
+        // via `hsvSaturation` rather than an (incorrect) r≈g≈b assumption.
+        let input = solidColorImage(r: 0.6, g: 0.3, b: 0.05)
+        let output = EditPipeline.apply(EditState(orangeSaturation: -1), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.37509, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.26345, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.13244, accuracy: accuracy)
+        XCTAssertLessThan(hsvSaturation(pixel), hsvSaturation(linearPixel(of: input)))
+    }
+
+    func testSelectiveColorLuminanceShiftsBand() {
+        let input = solidColorImage(r: 0.6, g: 0.6, b: 0.05)
+
+        let bright = linearPixel(of: EditPipeline.apply(EditState(yellowLuminance: 1), to: input))
+        XCTAssertEqual(bright.r, 0.70831, accuracy: accuracy)
+        XCTAssertEqual(bright.g, 0.70831, accuracy: accuracy)
+        XCTAssertEqual(bright.b, 0.19149, accuracy: accuracy)
+
+        let dark = linearPixel(of: EditPipeline.apply(EditState(yellowLuminance: -1), to: input))
+        XCTAssertEqual(dark.r, 0.31498, accuracy: accuracy)
+        XCTAssertEqual(dark.g, 0.31498, accuracy: accuracy)
+        XCTAssertEqual(dark.b, 0.02211, accuracy: accuracy)
+    }
+
+    func testSelectiveColorRangeWidensEffect() {
+        // An in-between (roughly red-orange) pixel: a narrow Range barely
+        // reaches it, a wide Range affects it substantially — MEASURED
+        // strictly monotonic, proving Range controls falloff width, not
+        // just a cosmetic parameter.
+        let input = solidColorImage(r: 0.6, g: 0.15, b: 0.05)
+        let orig = linearPixel(of: input)
+
+        func deviation(range: Double) -> Float {
+            let output = EditPipeline.apply(EditState(redHue: 1, selectiveColorRange: range), to: input)
+            let pixel = linearPixel(of: output)
+            return max(abs(pixel.r - orig.r), max(abs(pixel.g - orig.g), abs(pixel.b - orig.b)))
+        }
+
+        let narrow = deviation(range: 0)
+        let mid = deviation(range: 0.5)
+        let wide = deviation(range: 1)
+
+        XCTAssertEqual(narrow, 0.0005, accuracy: 0.001)
+        XCTAssertEqual(mid, 0.09400, accuracy: accuracy)
+        XCTAssertEqual(wide, 0.12447, accuracy: accuracy)
+        XCTAssertLessThan(narrow, mid)
+        XCTAssertLessThan(mid, wide)
+    }
+
+    func testSelectiveColorWraparound() {
+        // A pixel near 350° and one near 10° are both close to the Red
+        // band's 0° center via CIRCULAR distance — both should be
+        // meaningfully affected, proving the falloff correctly wraps
+        // around rather than treating 350° as maximally far from 0°.
+        let near350 = solidColorImage(r: 0.55, g: 0.02, b: 0.09167)
+        let near10 = solidColorImage(r: 0.55, g: 0.09167, b: 0.02)
+
+        let out350 = linearPixel(of: EditPipeline.apply(EditState(redHue: 1), to: near350))
+        let out10 = linearPixel(of: EditPipeline.apply(EditState(redHue: 1), to: near10))
+
+        // The two test colors' "x" (partially-lit) channel differs by
+        // construction (near350's is b, near10's is g) — check each color's
+        // own moving channel.
+        XCTAssertEqual(out350.b, 0.02916, accuracy: accuracy)
+        XCTAssertEqual(out10.g, 0.19840, accuracy: accuracy)
+        XCTAssertNotEqual(out350.b, Float(0.09167), accuracy: 0.001, "H=350 should be measurably affected, not treated as far from the Red center")
+        XCTAssertNotEqual(out10.g, Float(0.09167), accuracy: 0.001, "H=10 should be measurably affected")
+    }
+
+    func testSelectiveColorPreservesAlpha() {
+        let input = solidColorImage(r: 0.6, g: 0.3, b: 0.05, a: 0.5)
+        let output = EditPipeline.apply(EditState(orangeHue: 1), to: input)
+
+        XCTAssertEqual(linearPixel(of: output).a, 0.5, accuracy: accuracy)
+    }
+
+    func testSelectiveColorPreservesHeadroomOutsideActiveBand() {
+        // A bright NEUTRAL pixel has no real hue (achromatic) and must not
+        // register as belonging to any band regardless of the kernel's
+        // arbitrary hue=0 fallback for undefined-hue pixels — MEASURED: a
+        // real bug caught by the pre-implementation probe (an earlier
+        // kernel draft silently clamped this to 1.0 before band weight was
+        // scaled by the pixel's own saturation; see the kernel's own doc
+        // comment on `bandWeights`/saturation-weighting for detail).
+        let input = solidColorImage(1.4)
+        let output = EditPipeline.apply(EditState(redHue: 1), to: input)
+
+        XCTAssertEqual(linearPixel(of: output).r, 1.4, accuracy: accuracy)
+    }
+
+    func testSelectiveColorPreservesHeadroomInsideActiveBand() {
+        // A colored pixel genuinely inside an active band's influence keeps
+        // its own headroom exactly (unlike an earlier design, caught on
+        // review: the standard HSL saturation formula's denominator goes
+        // negative once perceptual lightness exceeds 1.0, which silently
+        // made the kernel treat EVERY colored headroom pixel as "outside
+        // every band" — a real, systematic bug, not a narrow corner case;
+        // an ordinary bright saturated highlight was completely unaffected
+        // by any Selective Color slider). Fixed by normalizing by the
+        // pixel's own max channel before the HSL round-trip and rescaling
+        // after — the kernel's own doc comment has the full derivation.
+        // Still correctly color-processed: the luminance boost visibly
+        // lifts/desaturates the low channels, it just no longer destroys
+        // the pixel's own brightness to do it.
+        let input = solidColorImage(r: 1.4, g: 0.02, b: 0.02)
+        let output = EditPipeline.apply(EditState(redLuminance: 1), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 1.4, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.49355, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.49355, accuracy: accuracy)
+    }
+
+    func testSelectiveColorAffectsColoredHighlights() {
+        // Regression guard for the exact bug above, using the reviewer's
+        // own repro: a colored, moderately bright pixel (perceptual
+        // lightness > 1.0 after encoding) must still be affected by Hue/
+        // Saturation/Luminance sliders — before the fix, all three were
+        // silently complete no-ops on this input.
+        let input = solidColorImage(r: 1.6, g: 1.3, b: 1.3)
+        let orig = linearPixel(of: input)
+
+        let hueOut = linearPixel(of: EditPipeline.apply(EditState(redHue: 1), to: input))
+        let satOut = linearPixel(of: EditPipeline.apply(EditState(redSaturation: -1), to: input))
+        let lumOut = linearPixel(of: EditPipeline.apply(EditState(redLuminance: 1), to: input))
+
+        XCTAssertNotEqual(hueOut.g, orig.g, accuracy: 0.01, "redHue should visibly shift this colored highlight")
+        XCTAssertNotEqual(satOut.g, orig.g, accuracy: 0.01, "redSaturation should visibly desaturate this colored highlight")
+        XCTAssertNotEqual(lumOut.g, orig.g, accuracy: 0.01, "redLuminance should visibly affect this colored highlight")
+    }
+
+    func testSelectiveColorRunsAfterGlobalHue() {
+        // Proves pipeline ORDERING (global Hue, then Selective Color), not
+        // just each stage in isolation — MEASURED non-commuting: the
+        // reversed order (Selective Color, then global Hue) gives
+        // (0.32724, 0.17081, 0.72195) for the same inputs, a real,
+        // substantial gap (up to 0.122 on the b channel) well above this
+        // file's 0.002 tolerance.
+        let input = solidColorImage(r: 0.6, g: 0.2, b: 0.2)
+        let output = EditPipeline.apply(EditState(hslHue: -90, redSaturation: 1), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.33953, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.22242, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.6, accuracy: accuracy)
+    }
+
     // MARK: - Vibrance math
     //
     // Vibrance is a selective saturation (CIVibrance) that boosts muted
@@ -2049,6 +2244,31 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().brilliance, 0)
         XCTAssertEqual(EditState().hslHue, 0)
         XCTAssertEqual(EditState().hslSaturation, 0)
+        XCTAssertEqual(EditState().redHue, 0)
+        XCTAssertEqual(EditState().redSaturation, 0)
+        XCTAssertEqual(EditState().redLuminance, 0)
+        XCTAssertEqual(EditState().orangeHue, 0)
+        XCTAssertEqual(EditState().orangeSaturation, 0)
+        XCTAssertEqual(EditState().orangeLuminance, 0)
+        XCTAssertEqual(EditState().yellowHue, 0)
+        XCTAssertEqual(EditState().yellowSaturation, 0)
+        XCTAssertEqual(EditState().yellowLuminance, 0)
+        XCTAssertEqual(EditState().greenHue, 0)
+        XCTAssertEqual(EditState().greenSaturation, 0)
+        XCTAssertEqual(EditState().greenLuminance, 0)
+        XCTAssertEqual(EditState().aquaHue, 0)
+        XCTAssertEqual(EditState().aquaSaturation, 0)
+        XCTAssertEqual(EditState().aquaLuminance, 0)
+        XCTAssertEqual(EditState().blueHue, 0)
+        XCTAssertEqual(EditState().blueSaturation, 0)
+        XCTAssertEqual(EditState().blueLuminance, 0)
+        XCTAssertEqual(EditState().purpleHue, 0)
+        XCTAssertEqual(EditState().purpleSaturation, 0)
+        XCTAssertEqual(EditState().purpleLuminance, 0)
+        XCTAssertEqual(EditState().magentaHue, 0)
+        XCTAssertEqual(EditState().magentaSaturation, 0)
+        XCTAssertEqual(EditState().magentaLuminance, 0)
+        XCTAssertEqual(EditState().selectiveColorRange, 0.5)
         XCTAssertEqual(EditState().vibrance, 0)
         XCTAssertEqual(EditState().blackAndWhite, false)
         XCTAssertEqual(EditState().straightenAngle, 0)
@@ -2087,6 +2307,31 @@ final class EditPipelineTests: XCTestCase {
             brilliance: 0.5,
             hslHue: 45,
             hslSaturation: 0.3,
+            redHue: 0.1,
+            redSaturation: 0.2,
+            redLuminance: 0.3,
+            orangeHue: -0.1,
+            orangeSaturation: -0.2,
+            orangeLuminance: -0.3,
+            yellowHue: 0.15,
+            yellowSaturation: 0.25,
+            yellowLuminance: 0.35,
+            greenHue: -0.15,
+            greenSaturation: -0.25,
+            greenLuminance: -0.35,
+            aquaHue: 0.05,
+            aquaSaturation: 0.1,
+            aquaLuminance: 0.15,
+            blueHue: -0.05,
+            blueSaturation: -0.1,
+            blueLuminance: -0.15,
+            purpleHue: 0.4,
+            purpleSaturation: 0.45,
+            purpleLuminance: 0.5,
+            magentaHue: -0.4,
+            magentaSaturation: -0.45,
+            magentaLuminance: -0.5,
+            selectiveColorRange: 0.7,
             vibrance: 0.4,
             blackAndWhite: true,
             straightenAngle: 12.5,

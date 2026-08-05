@@ -1,0 +1,152 @@
+// Selective Color (HSL v2) — per-hue-band Hue/Saturation/Luminance.
+// The first custom Core Image kernel in this codebase (CLAUDE.md's Stack
+// section anticipated "custom kernels for curves, HSL, WB" — this is that).
+//
+// 8 fixed bands (Red/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta), each
+// with an independent Hue/Saturation/Luminance delta, selected by a smooth
+// raised-cosine falloff over the CIRCULAR distance from the pixel's own hue
+// to each band's center — not a hard cutoff, so adjacent bands blend
+// smoothly for in-between hues (e.g. a yellow-orange pixel). One shared
+// `range` parameter (0...1) widens or narrows every band's falloff window
+// at once. See EditPipeline.applySelectiveColor for the Swift-side
+// wrapper, EXACT measured behavior (a real compiled probe was run against
+// this kernel before it shipped — see PROGRESS.md), and pipeline placement.
+//
+// Band argument layout: hueA/satA/lumA = (Red, Orange, Yellow, Green),
+// hueB/satB/lumB = (Aqua, Blue, Purple, Magenta). Each component -1...1,
+// 0 = identity for that band/channel. `range` 0...1, identity-irrelevant
+// (has no effect unless some band param is non-zero).
+//
+// RGB<->HSL conversion is the standard double-hexcone formula (HSL, not
+// HSV/HSB — matches the panel's "Luminance" naming, distinct from a
+// Value/Brightness-based selection).
+
+vec3 rgb2hsl(vec3 c) {
+    float M = max(c.r, max(c.g, c.b));
+    float m = min(c.r, min(c.g, c.b));
+    float C = M - m;
+    float L = 0.5 * (M + m);
+    float S = (C == 0.0) ? 0.0 : C / (1.0 - abs(2.0*L - 1.0));
+    float H = 0.0;
+    if (C > 0.0) {
+        if (M == c.r)      H = mod((c.g - c.b)/C, 6.0);
+        else if (M == c.g) H = (c.b - c.r)/C + 2.0;
+        else               H = (c.r - c.g)/C + 4.0;
+        H *= 60.0;
+        if (H < 0.0) H += 360.0;
+    }
+    return vec3(H, S, L);
+}
+
+vec3 hsl2rgb(vec3 hslv) {
+    float H = hslv.x;
+    float S = hslv.y;
+    float L = hslv.z;
+    float C = (1.0 - abs(2.0*L - 1.0)) * S;
+    float Hp = H / 60.0;
+    float X = C * (1.0 - abs(mod(Hp, 2.0) - 1.0));
+    float mm = L - 0.5*C;
+    vec3 rgb;
+    if (Hp < 1.0)      rgb = vec3(C, X, 0.0);
+    else if (Hp < 2.0) rgb = vec3(X, C, 0.0);
+    else if (Hp < 3.0) rgb = vec3(0.0, C, X);
+    else if (Hp < 4.0) rgb = vec3(0.0, X, C);
+    else if (Hp < 5.0) rgb = vec3(X, 0.0, C);
+    else               rgb = vec3(C, 0.0, X);
+    return rgb + vec3(mm, mm, mm);
+}
+
+// Raised-cosine falloff over the circular hue distance from `H` to each of
+// `centers`' 4 band centers, window width `W` degrees. 1.0 at the exact
+// center, smoothly 0.0 at +/-W. MEASURED (real compiled probe): correctly
+// handles wraparound (a pixel at 350 degrees registers as close to a 0
+// degree Red center, not far, since dc is the MIN of the direct and
+// wrapped-around distance).
+vec4 bandWeights(float H, vec4 centers, float W) {
+    vec4 d = abs(vec4(H,H,H,H) - centers);
+    vec4 dc = min(d, vec4(360.0,360.0,360.0,360.0) - d);
+    vec4 within = step(dc, vec4(W,W,W,W));
+    vec4 raised = 0.5 * (vec4(1.0,1.0,1.0,1.0) + cos(3.14159265 * dc / W));
+    return within * raised;
+}
+
+kernel vec4 selectiveColor(__sample s, vec4 hueA, vec4 hueB, vec4 satA, vec4 satB, vec4 lumA, vec4 lumB, float range) {
+    vec4 centersA = vec4(0.0, 30.0, 60.0, 120.0);
+    vec4 centersB = vec4(180.0, 240.0, 280.0, 320.0);
+    float Wmin = 20.0;
+    float Wmax = 80.0;
+    float kHue = 30.0;
+    float kLum = 0.25;
+
+    float a = s.a;
+    vec3 rgb = (a > 0.0) ? s.rgb / a : s.rgb;
+
+    // Normalize by the pixel's own max channel (only when it exceeds 1.0)
+    // before HSL conversion, rescale the result back afterward. MEASURED,
+    // real bug this fixes: the standard HSL saturation formula (below,
+    // `1 - abs(2L-1)` in the denominator) assumes RGB in [0,1] — for a
+    // COLORED headroom pixel (M > 1.0, e.g. after a prior Exposure boost),
+    // L can exceed 1.0, driving that denominator NEGATIVE. That made every
+    // band's weight negative, which tripped the SAME "not in any band"
+    // early-return guard below meant only for genuinely untouched pixels —
+    // so Selective Color was silently a complete no-op on any sufficiently
+    // bright colored region (skies, boosted highlights, anything with a
+    // modest positive Exposure push on saturated content), regardless of
+    // which slider was moved. Achromatic pixels were never affected by this
+    // (their C==0 branch short-circuits before the division), which is why
+    // the original headroom-preservation test alone didn't catch it — a
+    // colored pixel was required, caught on review, not by the original
+    // pre-implementation probe. Normalizing guarantees `L` in the [0,1]
+    // domain the HSL formulas actually assume, so the math is always valid;
+    // multiplying the reconstructed color back by `scale` restores the
+    // original brightness exactly for untouched pixels, and gives a
+    // headroom-PRESERVING (not destructively clamped) result for pixels
+    // that are genuinely inside an active band too.
+    float M = max(rgb.r, max(rgb.g, rgb.b));
+    float scale = max(M, 1.0);
+    vec3 normalizedRGB = rgb / scale;
+
+    vec3 hslv = rgb2hsl(normalizedRGB);
+    float W = Wmin + range * (Wmax - Wmin);
+    // Weighted by the pixel's OWN saturation — MEASURED necessity: an
+    // achromatic/neutral pixel has no real hue (rgb2hsl's C==0 branch
+    // defaults H to 0), which would otherwise falsely register as maximal
+    // weight in the Red band specifically. Scaling by S makes a neutral
+    // pixel correctly get ZERO weight in every band regardless of that
+    // arbitrary fallback — measured to be the difference between a bright
+    // neutral pixel's headroom surviving exactly (1.4 stays 1.4) vs being
+    // silently clamped to 1.0 even though no band should have touched it.
+    vec4 wA = bandWeights(hslv.x, centersA, W) * hslv.y;
+    vec4 wB = bandWeights(hslv.x, centersB, W) * hslv.y;
+
+    float totalWeight = wA.x + wA.y + wA.z + wA.w + wB.x + wB.y + wB.z + wB.w;
+    if (totalWeight < 0.0001) {
+        // Untouched by every band: exact passthrough, including headroom
+        // above 1.0 and premultiplied alpha, unchanged.
+        return s;
+    }
+
+    // Unnormalized weighted sum (not divided by totalWeight): this is what
+    // makes all-24-params-zero collapse to an exact identity (every delta
+    // is 0 regardless of weight), and gives adjacent-band blending its
+    // natural additive feel — MEASURED smooth, monotonic transition across
+    // an in-between hue with two neighboring bands both active.
+    float hueDelta = (dot(wA, hueA) + dot(wB, hueB)) * kHue;
+    float lumDelta = (dot(wA, lumA) + dot(wB, lumB)) * kLum;
+    float satMul = 1.0 + dot(wA, satA) + dot(wB, satB);
+
+    float newH = mod(hslv.x + hueDelta, 360.0);
+    if (newH < 0.0) { newH = newH + 360.0; }
+    float newS = clamp(hslv.y * satMul, 0.0, 1.0);
+    // Clamped to the normalized [0,1] domain we're consistently working in
+    // here — NOT a headroom clamp on the pixel's real brightness, since the
+    // result is rescaled by `scale` below. A pixel genuinely inside an
+    // active band keeps its original headroom while still being correctly
+    // color-processed (e.g. a bright red pixel with Luminance pushed up
+    // gets brighter/more-white while KEEPING its >1.0 peak channel, rather
+    // than being destructively clamped to flat white).
+    float newL = clamp(hslv.z + lumDelta, 0.0, 1.0);
+
+    vec3 outRGB = hsl2rgb(vec3(newH, newS, newL)) * scale;
+    return vec4(outRGB * a, a);
+}

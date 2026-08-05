@@ -40,6 +40,13 @@ struct ContentView: View {
     /// mutually exclusive by construction, not by a shared runtime check.
     @State private var isPickingWhiteBalance = false
 
+    /// Which Selective Color band's Hue/Saturation/Luminance sliders are
+    /// currently shown. Presentation-only, same reasoning as `selectedTab`/
+    /// `selectedAspect` — `EditState` holds all 8 bands' values at once
+    /// (24 flat fields), this just tracks which band's trio the panel
+    /// displays right now.
+    @State private var selectedSelectiveColorBand: SelectiveColorBand = .red
+
     /// The on-screen rect the image currently occupies, fit against the
     /// ACTUAL displayed extent (post-straighten/perspective, crop-zeroed) —
     /// see the historical note on this distinction in the crop-overlay
@@ -284,6 +291,50 @@ struct ContentView: View {
         .background(Color(white: 0.11))
     }
 
+    /// Routes to the currently-selected Selective Color band's Hue field —
+    /// `EditState` has 24 flat named fields (no array/dictionary, matching
+    /// this codebase's established per-slider convention), so the panel
+    /// needs this small dispatch to show just one band's trio at a time
+    /// rather than 24 simultaneous rows.
+    private func selectiveColorHueBinding(for band: SelectiveColorBand) -> Binding<Double> {
+        switch band {
+        case .red: return $document.editState.redHue
+        case .orange: return $document.editState.orangeHue
+        case .yellow: return $document.editState.yellowHue
+        case .green: return $document.editState.greenHue
+        case .aqua: return $document.editState.aquaHue
+        case .blue: return $document.editState.blueHue
+        case .purple: return $document.editState.purpleHue
+        case .magenta: return $document.editState.magentaHue
+        }
+    }
+
+    private func selectiveColorSaturationBinding(for band: SelectiveColorBand) -> Binding<Double> {
+        switch band {
+        case .red: return $document.editState.redSaturation
+        case .orange: return $document.editState.orangeSaturation
+        case .yellow: return $document.editState.yellowSaturation
+        case .green: return $document.editState.greenSaturation
+        case .aqua: return $document.editState.aquaSaturation
+        case .blue: return $document.editState.blueSaturation
+        case .purple: return $document.editState.purpleSaturation
+        case .magenta: return $document.editState.magentaSaturation
+        }
+    }
+
+    private func selectiveColorLuminanceBinding(for band: SelectiveColorBand) -> Binding<Double> {
+        switch band {
+        case .red: return $document.editState.redLuminance
+        case .orange: return $document.editState.orangeLuminance
+        case .yellow: return $document.editState.yellowLuminance
+        case .green: return $document.editState.greenLuminance
+        case .aqua: return $document.editState.aquaLuminance
+        case .blue: return $document.editState.blueLuminance
+        case .purple: return $document.editState.purpleLuminance
+        case .magenta: return $document.editState.magentaLuminance
+        }
+    }
+
     private var adjustTabContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             EditSliderRow(
@@ -356,6 +407,7 @@ struct ContentView: View {
                 label: "Saturation", value: $document.editState.hslSaturation,
                 range: -1...1, identity: 0
             ) { String(format: "%+.0f%%", $0 * 100) }
+            selectiveColorSection
             EditToggleRow(label: "Black & White", value: $document.editState.blackAndWhite)
             EditSliderRow(
                 label: "Vignette", value: $document.editState.vignetteStrength,
@@ -420,6 +472,55 @@ struct ContentView: View {
 
             Button("Reset") { resetCropTab() }
                 .disabled(document.currentImage == nil)
+        }
+    }
+
+    /// Selective Color (HSL v2): a row of 8 tappable band swatches (the
+    /// selected one ringed), one shared Range slider, then the 3 sliders
+    /// for whichever band is currently selected — NOT a top-level
+    /// `EditorTab` (that's fixed to mirror Apple Photos' own tab bar, see
+    /// `EditorTab`'s doc comment; Photos itself doesn't give this a
+    /// separate top-level tab either), and NOT 24 simultaneous rows, which
+    /// wouldn't fit this panel's scale.
+    private var selectiveColorSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Selective Color")
+                .font(.headline)
+            HStack(spacing: 10) {
+                ForEach(SelectiveColorBand.allCases, id: \.self) { band in
+                    Button {
+                        selectedSelectiveColorBand = band
+                    } label: {
+                        Circle()
+                            .fill(band.swatchColor)
+                            .frame(width: 22, height: 22)
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.white, lineWidth: selectedSelectiveColorBand == band ? 2 : 0)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            EditSliderRow(
+                label: "Range", value: $document.editState.selectiveColorRange,
+                range: 0...1, identity: 0.5
+            ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "\(selectedSelectiveColorBand.label) Hue",
+                value: selectiveColorHueBinding(for: selectedSelectiveColorBand),
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "\(selectedSelectiveColorBand.label) Saturation",
+                value: selectiveColorSaturationBinding(for: selectedSelectiveColorBand),
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "\(selectedSelectiveColorBand.label) Luminance",
+                value: selectiveColorLuminanceBinding(for: selectedSelectiveColorBand),
+                range: -1...1, identity: 0
+            ) { String(format: "%+.0f%%", $0 * 100) }
         }
     }
 

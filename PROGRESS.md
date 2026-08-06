@@ -1187,20 +1187,45 @@ restructure. 1 commit.
   deferred** (Phase 4 catalog dependency) — this slice is in-memory only,
   consistent with the scope confirmed before starting.
 
+### Sidebar top-padding bug fix (complete, verified live) — found during Undo/Redo manual verification
+- User began the outstanding manual GUI verification (see below) and
+  reported (with a screenshot) that the sidebar's first slider row
+  ("Brilliance") sat flush against the window toolbar (Open/Undo/Redo
+  buttons), with no visual gap — unlike the image pane, which gets natural
+  clearance below the toolbar from its own `EditorTabBar` row.
+- `Sources/UI/ContentView.swift`'s `editControls` — the sidebar's `ScrollView`
+  content had a single `.padding()` (16pt all sides). Split into
+  `.padding(.horizontal)` + `.padding(.bottom)` (byte-for-byte unchanged from
+  before) plus a new, larger explicit `.padding(.top, 20)` for clearance.
+  Pure SwiftUI layout change, no `EditState`/`EditPipeline` touched.
+- User confirmed live in the running app that this fixes the crowding.
+  Reviewer APPROVE (quick pass, appropriate for a low-risk one-hunk padding
+  change — confirmed the horizontal/bottom split doesn't double or drop
+  spacing on any edge). 225 tests unchanged (no logic touched). 1 commit.
+- Also reported during this same round, NOT yet acted on: (1) the Levels
+  histogram shows luminance only, no per-channel RGB — confirmed not a bug,
+  a v1 scope decision; user picked this as the NEXT feature to plan
+  (see "Exact next step"); (2) request to reorganize the sidebar into
+  Apple-Photos-style labeled sections (Light/Color/B&W/etc, vs. today's flat
+  slider list) — confirmed not yet built, explicitly deferred (not picked
+  as next) pending the user asking again.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Undo/Redo, first pass). One
-non-blocking observation carried forward (not required to fix): the global
-⌘Z toolbar shortcut may intercept a focused text field's native undo;
-worth a manual check, not a correctness bug.
+None — last reviewer verdict was APPROVE (sidebar padding fix). One
+non-blocking observation carried forward from the Undo/Redo review (not
+required to fix): the global ⌘Z toolbar shortcut may intercept a focused
+text field's native undo; worth a manual check, not a correctness bug.
 
 **Outstanding manual verification** (could not be automated in this
-environment — no GUI automation tool for a native macOS app): confirm live
-that a continuous slider/crop drag coalesces into exactly ONE undo step (not
-many), that Undo/Redo buttons enable/disable correctly, that a red-eye tap /
-aspect-preset snap / per-slider Reset / WB eyedropper / Fix Color Cast each
-become one undoable step, that opening a new photo clears history, and that
-undo updates the live histogram. See "Exact next step" for the full manual
-checklist.
+environment — no GUI automation tool for a native macOS app): the toolbar-
+crowding visual issue found during this pass is now fixed and confirmed,
+but the UNDO/REDO FUNCTIONALITY ITSELF is still not yet manually confirmed.
+Still needed: confirm live that a continuous slider/crop drag coalesces into
+exactly ONE undo step (not many), that Undo/Redo buttons enable/disable
+correctly, that a red-eye tap / aspect-preset snap / per-slider Reset / WB
+eyedropper / Fix Color Cast each become one undoable step, that opening a
+new photo clears history, and that undo updates the live histogram. See
+"Exact next step" for the full manual checklist.
 
 Prior: Selective Color (second pass, after one FIX FIRST round on a real
 functional bug — resolved and independently re-verified before commit).
@@ -1418,14 +1443,28 @@ window-resize re-fit behavior, opened-file mtime check.
 ## Exact next step
 **Phase 2 is COMPLETE** (every backlog item ✅, see above). **Phase 3 has
 STARTED**: in-memory Undo/Redo (first slice) is done — see the "Undo/Redo"
-section above. 225 tests passing, last reviewer verdict APPROVE (Undo/Redo,
-first pass).
+section above. 225 tests passing, last reviewer verdict APPROVE (sidebar
+padding fix, found during this slice's own manual verification pass — see
+"Sidebar top-padding bug fix" above).
 
-**Immediate next step — outstanding manual verification, not yet done**
-(flagged in the Undo/Redo write-up above): this environment has no GUI
-automation tool for a native macOS app, so live interactive testing of the
-undo/redo feature could not be completed here. Before considering this
-slice fully done, confirm live:
+**NEXT PLANNED FEATURE — RGB histogram**: user was asked to choose between
+adding per-channel Red/Green/Blue histogram overlays to the existing
+Levels luminance histogram vs. reorganizing the sidebar into Apple-Photos-
+style labeled sections (Light/Color/B&W/etc); chose the RGB histogram.
+Needs its own Plan Mode session per CLAUDE.md's "new feature" rule before
+starting — not yet planned. The sidebar-regrouping idea is confirmed
+NOT built (today's sidebar is one flat slider list in pipeline order under
+a single "Adjust" tab; CLAUDE.md's backlog only used Apple Photos' panel as
+a completeness checklist, never as the actual UI layout) but was explicitly
+NOT picked this round — leave it deferred, don't start it without the user
+asking again.
+
+**Still outstanding — Undo/Redo functional manual verification, not yet
+done** (flagged when the slice shipped; only the toolbar-crowding VISUAL
+bug got checked/fixed so far during this pass, not the undo/redo mechanics
+themselves): this environment has no GUI automation tool for a native
+macOS app, so live interactive testing of the undo/redo feature could not
+be completed here. Confirm live:
 - A continuous slider or crop drag coalesces into exactly ONE undo step
   (not hundreds) — drag Exposure, pause, drag Contrast → ⌘Z should revert
   Contrast as one step, ⌘Z again should revert Exposure.

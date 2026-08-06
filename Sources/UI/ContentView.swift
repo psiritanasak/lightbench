@@ -1,99 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// Pins the enclosing `NSScrollView`'s content insets to zero and forces
-/// overlay-style scrollers. Root cause, found via live diagnostic
-/// measurement (a temporary `.onGeometryChange` probe, since removed) — not
-/// assumed: AppKit's `NSScrollView.automaticallyAdjustsContentInsets`
-/// (default `true`) and `scrollerStyle` get LAZILY RE-ASSERTED during an
-/// active scroll gesture, not just once at initial layout — confirmed by
-/// observing `scrollerStyle` momentarily revert to `.legacy` mid-scroll
-/// even after being explicitly set to `.overlay` at creation. A one-time
-/// override (tried first) doesn't survive that; this re-applies on every
-/// scroll (via the clip view's bounds-change notification) to counteract
-/// it continuously. SwiftUI's `ScrollView` doesn't expose the underlying
-/// `NSScrollView` directly, so this walks up to it via a zero-size probe
-/// view placed in the scroll content.
-///
-/// Deliberate trade-off: hardcodes `.overlay` rather than honoring
-/// `NSScroller.preferredScrollerStyle` (the system's real "Show scroll
-/// bars" setting) — a user with "Always" configured would otherwise hit
-/// the EXACT bug this fixes (legacy style reserving space is what causes
-/// the shift in the first place), so respecting their literal preference
-/// here would reintroduce it. This sidebar's scroller is always
-/// overlay-style regardless of that system setting; a user who relies on
-/// an always-visible scroller for accessibility loses that for this one
-/// view specifically.
-private struct StableScrollInsets: NSViewRepresentable {
-    final class Coordinator {
-        var observer: NSObjectProtocol?
-        var didRegister = false
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        let coordinator = context.coordinator
-        DispatchQueue.main.async {
-            Self.registerIfNeeded(view: view, coordinator: coordinator)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        Self.apply(to: nsView)
-        // `makeNSView` runs before the view is inserted into its eventual
-        // superview chain, so `enclosingScrollView` can still be nil on
-        // that first attempt — retry here, since `updateNSView` fires on
-        // every SwiftUI re-render, rather than leaving registration as a
-        // single best-effort attempt that could silently never activate.
-        Self.registerIfNeeded(view: nsView, coordinator: context.coordinator)
-    }
-
-    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-        if let observer = coordinator.observer {
-            NotificationCenter.default.removeObserver(observer)
-        }
-    }
-
-    /// Guarded by `didRegister` so this is a cheap no-op once already
-    /// registered — safe to call from `updateNSView`, which fires on every
-    /// `EditState` change (this app's hottest UI path, e.g. every
-    /// slider-drag tick).
-    private static func registerIfNeeded(view: NSView, coordinator: Coordinator) {
-        guard !coordinator.didRegister, let clipView = view.enclosingScrollView?.contentView else { return }
-        apply(to: view)
-        clipView.postsBoundsChangedNotifications = true
-        coordinator.observer = NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification, object: clipView, queue: .main
-        ) { [weak view] _ in
-            guard let view else { return }
-            apply(to: view)
-        }
-        coordinator.didRegister = true
-    }
-
-    /// Equality-guarded so repeated calls (`updateNSView` fires on every
-    /// `EditState` change) are cheap no-ops once the scroll view is already
-    /// correct, rather than unconditionally re-writing AppKit properties
-    /// that can trigger layout invalidation even when set to their current
-    /// value.
-    private static func apply(to view: NSView) {
-        guard let scrollView = view.enclosingScrollView else { return }
-        if scrollView.automaticallyAdjustsContentInsets {
-            scrollView.automaticallyAdjustsContentInsets = false
-        }
-        let insets = scrollView.contentInsets
-        if insets.top != 0 || insets.left != 0 || insets.bottom != 0 || insets.right != 0 {
-            scrollView.contentInsets = NSEdgeInsets()
-        }
-        if scrollView.scrollerStyle != .overlay {
-            scrollView.scrollerStyle = .overlay
-        }
-    }
-}
-
 struct ContentView: View {
     @StateObject private var document = ImageDocumentModel()
 
@@ -431,12 +338,6 @@ struct ContentView: View {
 
     private var editControls: some View {
         ScrollView {
-            // Zero-size AppKit probe — see `StableScrollInsets`'s own doc
-            // comment for why this is needed (fixes a live-observed bug:
-            // sidebar content shifts left by a few points the first time
-            // the user actually scrolls it).
-            StableScrollInsets()
-                .frame(width: 0, height: 0)
             Group {
                 switch selectedTab {
                 case .adjust: adjustTabContent
@@ -457,10 +358,7 @@ struct ContentView: View {
             // buffer.
             .padding(.top, tabBarHeight)
             // Belt-and-suspenders: guarantees this content block always
-            // fills the full width the ScrollView offers. Not itself the
-            // fix for the scroll-triggered shift bug (that's
-            // `StableScrollInsets`, above) — kept as a defensive guarantee
-            // against any other source of width ambiguity.
+            // fills the full width the ScrollView offers.
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         // The REAL bug (confirmed live, not guessed): this ScrollView was

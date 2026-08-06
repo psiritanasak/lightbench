@@ -1,7 +1,10 @@
 # Progress
 
 ## Current phase
-**Phase 2 (Edit engine) is COMPLETE.** The original six roadmap items, five
+**Phase 2 (Edit engine) is COMPLETE. Phase 3 (non-destructive pipeline) has
+STARTED — first slice (in-memory Undo/Redo) shipped, see below; disk
+persistence of edit state/history is still deferred.** The original six
+roadmap items, five
 backlog tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
 Straighten, Vertical/Horizontal perspective correction, the full Apple
@@ -1106,9 +1109,101 @@ restructure. 1 commit.
   explicitly deferred pending the user asking again, per their own earlier
   instruction).
 
+### Undo/Redo — in-memory edit history (complete, verified) — Phase 3, first slice
+- User was asked to choose between the small "Revert to Original" button and
+  full Phase 3 Undo/Redo once Phase 2 closed out; chose full Undo/Redo. Two
+  design questions confirmed up front: (1) granularity — time-coalesced
+  bursts (group rapid changes into one undo step, ~350ms pause starts a new
+  one) over one-step-per-intermediate-value (would make ⌘Z nudge a slider
+  back one hair per press — unusable); (2) scope — in-memory history now,
+  disk persistence deferred (targets the Phase 4 catalog DB, which doesn't
+  exist yet — `Sources/Catalog/` is still an empty `.gitkeep`).
+- `Sources/EditEngine/EditHistory.swift` (new) — a pure value struct:
+  `current: EditState` + `past`/`future: [EditState]` stacks, `limit`
+  (default 100, bounds memory — `redEyePoints` is the only unbounded
+  `EditState` field), `canUndo`/`canRedo`, `commit`/`undo`/`redo`. `commit`
+  no-ops if the new value equals `current` (via `EditState`'s existing
+  `Equatable` — prevents a burst that nets no real change, e.g. a slider
+  dragged back to its start, from creating a phantom step) and clears
+  `future` (standard undo-stack semantics — a new edit after an undo
+  abandons the redone-from branch). No timing, no UI, no Core Image —
+  matches this project's strong precedent of extracting real logic into a
+  pure, directly testable type (`CropAspectMath`, `RedEyeHitTest`).
+- `Sources/UI/ImageDocumentModel.swift` — the coalescing glue, hung entirely
+  off `editState`'s EXISTING `didSet` chokepoint, needing **zero changes to
+  the ~40 slider/toggle/overlay call sites** across `ContentView`/
+  `CropOverlayView`/`RedEyeOverlayView`. A new `recordEditChange()`
+  (re)schedules a debounced `finalizePendingCommit()` (0.35s, same
+  `DispatchWorkItem` idiom as the histogram's own 0.15s debounce, just a
+  different interval and purpose) unless a new `isApplyingHistoryChange`
+  guard flag is set — set only while `applyHistoryState(_:)` (the undo/
+  redo-driven write) is assigning `editState`, so undo/redo's own write
+  isn't re-recorded as a new burst. `undo()`/`redo()` each flush any
+  in-progress burst first (so ⌘Z mid-drag undoes the drag itself, not some
+  older step) before stepping `history`. `load(from:)` resets history via a
+  new `resetHistory()` right after resetting `editState` — history is
+  per-photo, can't undo across photos.
+- **Reviewer verified, not just trusted, the one genuinely order-sensitive
+  piece**: in `load(from:)`, `editState = EditState()` must run BEFORE
+  `resetHistory()`, not after — reviewer traced that the reversed order
+  would seed the fresh `EditHistory` with the PREVIOUS photo's values as
+  `current`, making the subsequent reset look like a real one-step edit and
+  committing a bogus "old-photo-values → identity" undo step into the new
+  photo's history. The shipped order avoids this; confirmed correct, not
+  assumed. Reviewer also traced (not assumed) that the existing async WB
+  eyedropper/Color Cast `MainActor.run` writes are automatically coalesced
+  by the same debounce path with no special-casing needed — both fields'
+  writes happen synchronously back-to-back before the 0.35s debounce can
+  fire, so they settle into one commit like a fast slider burst.
+- `Sources/UI/ContentView.swift` — two toolbar buttons (Undo/Redo,
+  `arrow.uturn.backward`/`arrow.uturn.forward`) next to "Open…",
+  `.keyboardShortcut("z", modifiers: .command)` / `[.command, .shift]`,
+  each `.disabled` when its `canUndo`/`canRedo` flag is false. Documented v1
+  scope choice: no Edit-menu `CommandGroup(replacing: .undoRedo)` (would need
+  lifting `@StateObject document` to `PhotoAppApp` — a real API change, not
+  needed for functional undo) — toolbar + shortcuts are sufficient for now.
+- Reviewer APPROVE on first pass — independently traced the `EditHistory`
+  push/pop/limit-eviction logic by hand (not just re-running tests),
+  confirmed the reentrancy guard is watertight (no code path re-enters
+  `editState`'s setter from inside its own `didSet`), and confirmed every
+  `history`-mutating call site correctly refreshes the published
+  `canUndo`/`canRedo` flags. One non-blocking observation, not required to
+  fix: the toolbar's global `⌘Z` shortcut may intercept text-field-native
+  undo (e.g. while typing in a crop-inset numeric field) rather than
+  deferring to the responder chain first — flagged for a manual check next
+  time there's GUI access, not a correctness issue for edit history itself.
+- 9 new `EditHistoryTests` (fresh-history flags, commit+undo, redo, no-op
+  commit of the current value, new-commit-after-undo clears redo, undo/redo
+  on empty stacks, a deep multi-step sequence, `limit` eviction). Debounce
+  timing and toolbar/shortcut wiring are UX "feel" concerns, not measurable
+  filter values, so they got manual verification instead of a probe: app
+  launched via `open` and confirmed to stay running with the new toolbar
+  items present (this environment has no GUI automation tool for a native
+  macOS app, so full interactive drag-coalescing verification — confirming
+  a real slider drag becomes exactly one undo step — is flagged as an
+  OUTSTANDING manual check for the user, not yet done).
+- 225 tests total (9 new `EditHistoryTests`). 1 commit.
+- **Disk/DB persistence of edit state or history remains explicitly
+  deferred** (Phase 4 catalog dependency) — this slice is in-memory only,
+  consistent with the scope confirmed before starting.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Cast, second pass after one
-FIX FIRST concurrency correction).
+None — last reviewer verdict was APPROVE (Undo/Redo, first pass). One
+non-blocking observation carried forward (not required to fix): the global
+⌘Z toolbar shortcut may intercept a focused text field's native undo;
+worth a manual check, not a correctness bug.
+
+**Outstanding manual verification** (could not be automated in this
+environment — no GUI automation tool for a native macOS app): confirm live
+that a continuous slider/crop drag coalesces into exactly ONE undo step (not
+many), that Undo/Redo buttons enable/disable correctly, that a red-eye tap /
+aspect-preset snap / per-slider Reset / WB eyedropper / Fix Color Cast each
+become one undoable step, that opening a new photo clears history, and that
+undo updates the live histogram. See "Exact next step" for the full manual
+checklist.
+
+Prior: Selective Color (second pass, after one FIX FIRST round on a real
+functional bug — resolved and independently re-verified before commit).
 
 Prior: Selective Color (second pass, after one FIX FIRST round on a real
 functional bug — resolved and independently re-verified before commit).
@@ -1321,28 +1416,47 @@ Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Phase 2 (the original six roadmap items plus the full expanded backlog —
-Apple Photos Crop-panel batch, then Black & White, Sharpen, Noise
-Reduction, Definition, Levels, WB eyedropper, Selective Color, Red-Eye
-removal, and finally Cast) is now COMPLETE.** Every backlog item in
-CLAUDE.md's "Phase 2 edit engine backlog" section is ✅. 216 tests passing,
-last reviewer verdict APPROVE (Cast, second pass).
+**Phase 2 is COMPLETE** (every backlog item ✅, see above). **Phase 3 has
+STARTED**: in-memory Undo/Redo (first slice) is done — see the "Undo/Redo"
+section above. 225 tests passing, last reviewer verdict APPROVE (Undo/Redo,
+first pass).
 
-**Nothing is currently planned or in progress.** The only known-remaining,
-explicitly-deferred item is Undo / "Revert to Original" (see below) — do
-NOT start it, or Phase 3, without the user asking again first; both need
-their own explicit go-ahead and Plan Mode session per CLAUDE.md's
-roadmap-order rule. Lens distortion correction also remains explicitly OUT
+**Immediate next step — outstanding manual verification, not yet done**
+(flagged in the Undo/Redo write-up above): this environment has no GUI
+automation tool for a native macOS app, so live interactive testing of the
+undo/redo feature could not be completed here. Before considering this
+slice fully done, confirm live:
+- A continuous slider or crop drag coalesces into exactly ONE undo step
+  (not hundreds) — drag Exposure, pause, drag Contrast → ⌘Z should revert
+  Contrast as one step, ⌘Z again should revert Exposure.
+- ⇧⌘Z redoes each step correctly; Undo/Redo toolbar buttons enable/disable
+  correctly as history changes.
+- A crop drag, a toggle (B&W), a red-eye tap, an aspect-preset snap, and a
+  per-slider "Reset" each become exactly one undoable step.
+- The WB eyedropper and "Fix Color Cast" results are each undoable as one
+  step.
+- Opening a NEW photo clears history (can't undo into the previous photo).
+- Undo/redo correctly updates the live histogram.
+- Check the reviewer's one non-blocking note: does the global ⌘Z shortcut
+  interfere with a focused crop-inset numeric text field's own native
+  undo? (Not expected to be an issue, but unverified.)
+
+**After that's confirmed, remaining options for what's next** (ask the user
+which, don't guess): (1) continue Phase 3 — a standalone "Revert to
+Original" button (trivial, `EditState()` reset already exists on load) was
+explicitly deferred as its own small item during this slice's scoping, or
+Edit-menu `CommandGroup(replacing: .undoRedo)` integration (would need
+lifting `@StateObject document` to `PhotoAppApp`) as a documented v1 gap
+from this slice; (2) disk persistence of edit state/history — explicitly
+deferred pending the Phase 4 catalog DB (`Sources/Catalog/` is still empty);
+(3) Phase 4+ (Library/import/catalog, Presets+export, RAW support, Polish)
+per CLAUDE.md's roadmap. Lens distortion correction remains explicitly OUT
 of scope (needs camera-profile data, a separate concern) unless the user
-asks for it specifically.
-
-When the user next asks to continue, the natural options are: (1) Undo/
-Revert-to-Original (scope split already recorded below — a trivial
-"Revert to Original" button vs full Phase 3 Undo/Redo), or (2) starting
-Phase 3 proper (non-destructive pipeline: param serialization, edit
-history, undo) if the user wants to skip straight past the simple revert
-button, or (3) Phase 4+ (Library/import/catalog, Presets+export, RAW
-support, Polish) per CLAUDE.md's roadmap — ask the user which, don't guess.
+asks for it specifically. Starting Phase 4 (a new phase) needs its own
+explicit go-ahead and Plan Mode session per CLAUDE.md's roadmap-order rule;
+continuing within Phase 3 (revert button, persistence, menu integration)
+is more of the same phase but each is still its own feature/session per the
+"one feature per session" rule.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

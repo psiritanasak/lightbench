@@ -192,4 +192,63 @@ final class ImageDocumentModel: ObservableObject {
             }
         }
     }
+
+    // MARK: - Color Cast
+
+    /// Analyzes the WHOLE image's gray-world average color and sets
+    /// `editState`'s Temperature/Tint to neutralize it — architecturally
+    /// different from `pickWhiteBalance` (whole-image statistics vs a
+    /// single tapped pixel) but reuses everything else about it almost
+    /// unchanged: the same geometry-only sampling render (WB is pipeline
+    /// stage 1, so the raw front-of-pipeline chromaticity is what needs to
+    /// average to neutral), the same `WhiteBalanceSolver`, the same
+    /// `Outcome` handling and `whiteBalanceSampleMessage` alert. No new
+    /// `EditState` fields — Cast, like the eyedropper, is a new UI-driven
+    /// WAY to set fields that already exist, not a new adjustment.
+    func fixColorCast() {
+        guard let currentImage else { return }
+
+        var samplingState = EditState()
+        samplingState.straightenAngle = editState.straightenAngle
+        samplingState.verticalPerspective = editState.verticalPerspective
+        samplingState.horizontalPerspective = editState.horizontalPerspective
+        samplingState.flipHorizontal = editState.flipHorizontal
+        samplingState.flipVertical = editState.flipVertical
+        samplingState.cropInsetTop = editState.cropInsetTop
+        samplingState.cropInsetBottom = editState.cropInsetBottom
+        samplingState.cropInsetLeft = editState.cropInsetLeft
+        samplingState.cropInsetRight = editState.cropInsetRight
+
+        // Unlike `pickWhiteBalance`'s trivial 5x5-pixel box sample, this is a
+        // full-image 256px render plus a whole-buffer CPU scan — the same
+        // cost profile `recomputeHistogram` already backgrounds for
+        // `HistogramComputer.histogram(of:)`, so the render itself (not just
+        // the solve) must happen inside the detached task, not on the main
+        // actor before it.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let geometryOnly = EditPipeline.apply(samplingState, to: currentImage)
+            guard let sample = ImageAverageColor.compute(of: geometryOnly) else {
+                await MainActor.run {
+                    self?.whiteBalanceSampleMessage = "Couldn't analyze this image's colors."
+                }
+                return
+            }
+
+            let outcome = WhiteBalanceSolver.solve(sampleLinearRGB: sample)
+            await MainActor.run {
+                guard let self else { return }
+                switch outcome {
+                case .solved(let temperature, let tint):
+                    self.editState.whiteBalanceTemperature = temperature
+                    self.editState.whiteBalanceTint = tint
+                case .solvedPartially(let temperature, let tint):
+                    self.editState.whiteBalanceTemperature = temperature
+                    self.editState.whiteBalanceTint = tint
+                    self.whiteBalanceSampleMessage = "Couldn't fully correct this image's color cast — it may be unusually strong."
+                case .rejectedTooDark:
+                    self.whiteBalanceSampleMessage = "This image is too dark overall to read a color cast."
+                }
+            }
+        }
+    }
 }

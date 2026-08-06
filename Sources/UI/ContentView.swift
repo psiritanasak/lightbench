@@ -377,6 +377,14 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .tint(isPickingWhiteBalance ? .yellow : nil)
+            Button {
+                document.fixColorCast()
+            } label: {
+                Label("Fix Color Cast", systemImage: "wand.and.rays")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(document.currentImage == nil)
             EditSliderRow(
                 label: "Exposure", value: $document.editState.exposureEV,
                 range: -5...5, identity: 0

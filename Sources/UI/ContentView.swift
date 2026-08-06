@@ -297,6 +297,14 @@ struct ContentView: View {
                 .keyboardShortcut("z", modifiers: [.command, .shift])
                 .disabled(!document.canRedo)
             }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    document.revertToOriginal()
+                } label: {
+                    Label("Revert to Original", systemImage: "arrow.counterclockwise")
+                }
+                .disabled(document.currentImage == nil || document.editState == .identity)
+            }
             if selectedTab == .crop {
                 ToolbarItem(placement: .automatic) {
                     Button("Done") { selectedTab = .adjust }

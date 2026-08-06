@@ -371,4 +371,22 @@ final class ImageDocumentModel: ObservableObject {
         history.redo()
         applyHistoryState(history.current)
     }
+
+    /// Resets the current photo's edits back to identity ("Revert to
+    /// Original") — the SAME value `load(from:)` already resets to when a
+    /// new photo opens. Flushes any in-progress burst FIRST (same reasoning
+    /// as `undo()`/`redo()`): a drag already in progress when Revert is
+    /// clicked becomes its own undo step, not silently discarded together
+    /// with the revert. Commits `history` DIRECTLY (like `undo()`/`redo()`
+    /// do, not via the debounced `editState` `didSet` path `recordEditChange`
+    /// normally uses) so the revert is always its own atomic, immediately-
+    /// committed step — going through the debounce instead would leave a
+    /// ~350ms window where a follow-up edit could merge into the same
+    /// commit as the revert, and where `canUndo`/`canRedo` would be stale
+    /// relative to what the toolbar buttons show.
+    func revertToOriginal() {
+        finalizePendingCommit()
+        history.commit(EditState())
+        applyHistoryState(history.current)
+    }
 }

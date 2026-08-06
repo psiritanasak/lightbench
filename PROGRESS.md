@@ -1639,12 +1639,11 @@ slider list) remains confirmed NOT built and explicitly deferred (was
 offered as an alternative to the RGB histogram, not picked) — don't start
 it without the user asking again.
 
-**Still outstanding — Undo/Redo functional manual verification, not yet
-done** (flagged when the slice shipped; only the toolbar-crowding VISUAL
-bug got checked/fixed so far during this pass, not the undo/redo mechanics
-themselves): this environment has no GUI automation tool for a native
-macOS app, so live interactive testing of the undo/redo feature could not
-be completed here. Confirm live:
+**Undo/Redo functional manual verification: DONE.** User confirmed live
+("Undo/Redo work fine") — a general confirmation, not a bullet-by-bullet
+walkthrough of every scenario below, but treated as sufficient closure per
+the user's own judgment. Original checklist (for reference, if a specific
+scenario ever needs re-checking):
 - A continuous slider or crop drag coalesces into exactly ONE undo step
   (not hundreds) — drag Exposure, pause, drag Contrast → ⌘Z should revert
   Contrast as one step, ⌘Z again should revert Exposure.
@@ -1656,12 +1655,11 @@ be completed here. Confirm live:
   step.
 - Opening a NEW photo clears history (can't undo into the previous photo).
 - Undo/redo correctly updates the live histogram.
-- Check the reviewer's one non-blocking note: does the global ⌘Z shortcut
+- The reviewer's one non-blocking note (does the global ⌘Z shortcut
   interfere with a focused crop-inset numeric text field's own native
-  undo? (Not expected to be an issue, but unverified.)
+  undo?) was not specifically called out as broken — treated as fine.
 
-**After that's confirmed, remaining options for what's next** (ask the user
-which, don't guess): (1) continue Phase 3 — a standalone "Revert to
+**Next: remaining options** (ask the user which, don't guess): (1) continue Phase 3 — a standalone "Revert to
 Original" button (trivial, `EditState()` reset already exists on load) was
 explicitly deferred as its own small item during this slice's scoping, or
 Edit-menu `CommandGroup(replacing: .undoRedo)` integration (would need

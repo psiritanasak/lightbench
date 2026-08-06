@@ -1423,9 +1423,65 @@ restructure. 1 commit.
   the FIX FIRST correction together, after user confirmed live both before
   and after the fix).
 
+### Edit-menu Undo/Redo integration (complete, verified live) — the FINAL small Phase 3 item
+- Last of the two small Phase 3 items deferred when Undo/Redo shipped (the
+  other, Revert to Original, done above). Adds a real macOS Edit menu
+  Undo/Redo pair via `.commands { CommandGroup(replacing: .undoRedo) }` —
+  the canonical, discoverable, keyboard-shortcut-owning home for these
+  actions on macOS, previously only available as toolbar buttons.
+- `Sources/App/PhotoAppApp.swift` — `ImageDocumentModel` ownership LIFTED
+  here from `ContentView` (was `@StateObject private var document` inside
+  `ContentView`; now `@StateObject private var document` in `PhotoAppApp`,
+  passed down as `ContentView(document: document)`), since `.commands` is a
+  `Scene`-level construct that needs direct access to the same document
+  instance the toolbar buttons already act on. New `CommandGroup(replacing:
+  .undoRedo)` with Undo/Redo `Button`s wired to the SAME `document.undo()`/
+  `.redo()` — zero duplicated logic, `canUndo`/`canRedo` being `@Published`
+  means the menu items reactively enable/disable in sync with the toolbar.
+- `Sources/UI/ContentView.swift` — `document` changed from a self-owned
+  `@StateObject` to an externally-supplied `@ObservedObject var document:
+  ImageDocumentModel` (now a required init parameter; `#Preview` updated to
+  `ContentView(document: ImageDocumentModel())`). The two existing toolbar
+  Undo/Redo buttons kept their click behavior/`.disabled` binding exactly
+  as-is but had their `.keyboardShortcut` modifiers REMOVED — the Edit menu
+  is now the sole canonical owner of ⌘Z/⇧⌘Z, so two separate views don't
+  both claim the same key combo. Reviewer confirmed this actually REMOVES a
+  pre-existing latent shortcut ambiguity (the toolbar's own shortcuts were
+  likely colliding with `WindowGroup`'s default inert Edit>Undo/Redo
+  shortcuts all along, before this diff added a real, intentional menu).
+- Reviewer APPROVE on first pass — confirmed `@ObservedObject`/`@StateObject`
+  ownership split is the correct SwiftUI pattern (no double-observation or
+  dangling-reference risk), `CommandGroup(replacing: .undoRedo)` usage is
+  standard/correct, and that macOS menu-bar key equivalents are dispatched
+  ahead of first-responder key-down handling — so ⌘Z/⇧⌘Z keep working
+  regardless of toolbar focus state. One non-blocking note worth tracking:
+  since `document` is now shared app-wide rather than per-`ContentView`,
+  IF a future "New Window" affordance is ever added (macOS's `WindowGroup`
+  supplies ⌘N by default; nothing in this app currently overrides or
+  exercises it), a second window would mirror and mutate the SAME edit
+  state/undo history live, not get an independent one — inert today (no
+  multi-window UI exists), but worth an explicit `CommandGroup(replacing:
+  .newItem) { }` suppression or a real per-window-document design if/when
+  multi-window or multi-document support (Phase 4 library) is considered.
+- No new tests — pure `Scene`/`Commands`/ownership wiring, no new logic,
+  consistent with this project's established gap for `ImageDocumentModel`/
+  `ContentView` UI glue (no unit test target exists for that layer).
+- 226 tests unchanged. 1 commit.
+- **This closes out Phase 3's initial slice entirely** — both small
+  deferred items (Revert to Original, Edit-menu integration) are now done,
+  alongside the core in-memory Undo/Redo feature itself. Disk persistence
+  of edit state/history remains the one still-deferred Phase 3 item,
+  blocked on the Phase 4 catalog DB.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Revert to Original, second pass
-after one FIX FIRST round on the atomic-commit correctness gap above).
+None — last reviewer verdict was APPROVE (Edit-menu Undo/Redo integration,
+first pass). Non-blocking note carried forward: consider suppressing or
+redesigning the default ⌘N "New Window" behavior before any multi-window
+UI is added, since `document` is now shared app-wide (see "Edit-menu
+Undo/Redo integration" above).
+
+Prior: Revert to Original (second pass, after one FIX FIRST round on the
+atomic-commit correctness gap).
 Separately, the sidebar layout investigation status stands as recorded
 above: the divider-drift bug IS fixed and shipped (`MetalImageView`'s
 `intrinsicContentSize`
@@ -1702,26 +1758,27 @@ scenario ever needs re-checking):
   interfere with a focused crop-inset numeric text field's own native
   undo?) was not specifically called out as broken — treated as fine.
 
-**Revert to Original button: DONE** — see its own section above. That was
-the last of the two small Phase 3 items deferred when Undo/Redo shipped.
+**Revert to Original button: DONE** — see its own section above.
+**Edit-menu Undo/Redo integration: DONE** — see its own section above.
+Both small Phase 3 items deferred when Undo/Redo shipped are now complete
+— **Phase 3's initial slice is fully closed out** except disk persistence.
 
-**Next: remaining options** (ask the user which, don't guess): (1) the
-OTHER small Phase 3 item — Edit-menu `CommandGroup(replacing: .undoRedo)`
-integration (would need lifting `@StateObject document` to `PhotoAppApp`),
-still a documented v1 gap, not yet built; (2) disk persistence of edit
-state/history — explicitly deferred pending the Phase 4 catalog DB
-(`Sources/Catalog/` is still empty); (3) Phase 4+ (Library/import/catalog,
-Presets+export, RAW support, Polish) per CLAUDE.md's roadmap; (4) the
-still-deferred sidebar-regrouping idea (Apple-Photos-style labeled
-sections); (5) revisit the re-deferred sidebar content-shift-on-scroll
-cosmetic bug (see its own section above, including the "Lesson recorded"
-note). Lens distortion correction remains explicitly OUT of scope (needs
-camera-profile data, a separate concern) unless the user asks for it
-specifically. Starting Phase 4 (a new phase) needs its own explicit
+**Next: remaining options** (ask the user which, don't guess): (1) disk
+persistence of edit state/history — explicitly deferred pending the
+Phase 4 catalog DB (`Sources/Catalog/` is still empty); (2) Phase 4+
+(Library/import/catalog, Presets+export, RAW support, Polish) per
+CLAUDE.md's roadmap; (3) the still-deferred sidebar-regrouping idea
+(Apple-Photos-style labeled sections); (4) revisit the re-deferred sidebar
+content-shift-on-scroll cosmetic bug (see its own section above, including
+the "Lesson recorded" note); (5) the reviewer's non-blocking note from the
+Edit-menu work — consider suppressing/redesigning the default ⌘N "New
+Window" behavior before any multi-window UI is added, since `document` is
+now shared app-wide. Lens distortion correction remains explicitly OUT of
+scope (needs camera-profile data, a separate concern) unless the user asks
+for it specifically. Starting Phase 4 (a new phase) needs its own explicit
 go-ahead and Plan Mode session per CLAUDE.md's roadmap-order rule;
-continuing within Phase 3 (menu integration, persistence) is more of the
-same phase but each is still its own feature/session per the "one feature
-per session" rule.
+continuing within Phase 3 (persistence) is more of the same phase but is
+still its own feature/session per the "one feature per session" rule.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

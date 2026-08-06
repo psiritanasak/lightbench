@@ -7,8 +7,8 @@ Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
 Straighten, Vertical/Horizontal perspective correction, the full Apple
 Photos-style layout (dark theme + top tab bar), Black & White, Sharpen,
 Noise Reduction, Definition (Clarity), Levels (with a live histogram), the
-WB neutral-gray eyedropper, and Selective Color (HSL v2) are shipped, each
-reviewer-approved and manually verified live. The Apple
+WB neutral-gray eyedropper, Selective Color (HSL v2), and Red-Eye removal
+are shipped, each reviewer-approved and manually verified live. The Apple
 Photos Crop-panel batch (6 features, see below) completed first; the user
 then asked to work through the REST of the Phase 2 backlog. The roadmap in
 CLAUDE.md was expanded three times at the user's request to spell out the
@@ -51,10 +51,12 @@ deliberately last since it needs a different content-aware architecture):**
    app) — done (see below).
 7. ✅ Selective Color (HSL v2, per-band panel — 8 bands × 3 params, biggest
    scope of the remaining items) — done (see below).
-8. Red-Eye removal (point-and-click + region-based correction) — NEXT.
+8. ✅ Red-Eye removal (point-and-click + region-based correction) — done
+   (see below).
 9. Cast (color-cast neutralization — content-aware gray-world-style
    statistics, a different architecture from every other adjustment so
-   far; deliberately last, as established when it was first deferred).
+   far; deliberately last, as established when it was first deferred) —
+   NEXT and FINAL item in the Phase 2 backlog.
 
 **User also asked about Undo / "Revert to Original" (2026-08-04) — held off
 for now, explicitly deferred, not started.** Clarified the scope split for
@@ -942,10 +944,93 @@ restructure. 1 commit.
   feature commit, since neither had landed separately before the second
   review pass completed).
 
+### Red-Eye removal (complete, verified live) — backlog item 8 of 9
+- The app's SECOND point-and-click interaction (after the WB eyedropper),
+  and the FIRST feature needing a variable-length, user-placed collection
+  in `EditState` — every prior adjustment, including Selective Color's 24
+  fixed-band fields, is a fixed set of named fields; red-eye spots are
+  inherently unbounded (0 to N per photo, wherever the user taps), so a new
+  `redEyePoints: [RedEyePoint]` array is a deliberate, justified departure
+  from the flat-field convention, not an inconsistency with it.
+- **Notably did NOT need a custom kernel**, unlike Selective Color — a
+  genuine, useful contrast the Plan agent investigated and confirmed:
+  "soft circular mask + suppress-red + darken" decomposes cleanly into
+  built-in filters (`CIRadialGradient` for an arbitrarily-centered soft
+  mask — `CIVignetteEffect` can't do this, it's pinned to the frame's own
+  center; `CIColorMatrix` for the red-suppress/darken transform in one
+  multiply; `CIBlendWithMask` to composite), because unlike Selective
+  Color this needs neither per-pixel hue detection nor a dynamic-length
+  kernel argument list.
+- **Multiple points — a real design decision, not an afterthought.**
+  Combined into ONE union mask via `CIMaximumCompositing` before the color
+  transform runs ONCE, rather than compositing N sequential single-point
+  corrections. MEASURED, a real and substantial difference: on two
+  overlapping correction circles, sequential double-application measurably
+  OVER-corrected the overlap region (red channel down to 0.061) versus the
+  union mask's single-pass result (0.191, close to a lone circle's own
+  reference value of 0.240) — the union approach is what makes an
+  overlapping-points correction apply exactly once, not twice. This is the
+  test (`testRedEyeOverlappingPointsCorrectOnce`) that actually proves the
+  design decision, not just documents it.
+- **Real empirical probe run before any code was written** (same
+  discipline as every prior feature): confirmed `CIRadialGradient`'s
+  falloff is smooth and monotonic (no ring/banding), `CIMaximumCompositing`
+  correctly unions two masks (not additive), the darken coefficient (0.4)
+  reads as a natural dark pupil rather than crushed black or still visibly
+  red, scene-linear domain gives a clean result (no crushing, matching
+  Vignette's own domain reasoning), and — genuinely useful, not just
+  confirmatory — that Red-Eye commutes EXACTLY with Vignette (measured at
+  both a frame-center and frame-corner correction point, diff ≈ 0), so
+  their relative pipeline order is a soft choice, while running before
+  Definition/Noise Reduction/Sharpen is the real requirement (those must
+  refine the corrected pupil, not an uncorrected red one).
+- `EditPipeline.swift` — new stage, FIRST among the post-crop stages
+  (`crop → applyRedEye → vignette → definition → noiseReduction → sharpen`):
+  needs the CURRENT (post-crop) extent to map stored normalized points
+  correctly, the same requirement Vignette already established. Preserves
+  headroom exactly on pixels OUTSIDE every point's mask (a 1.4 pixel far
+  from any point reads back 1.4) — pixels INSIDE an active mask are, by
+  design, reduced toward a dark corrected value, which IS the feature, not
+  a headroom bug the way an unrelated slider crushing a bright pixel would
+  be. Alpha and extent preserved exactly.
+- `Sources/UI/RedEyeOverlayView.swift` (new) — mirrors `CropOverlayView`'s
+  structure (an `fitRect`-sized/positioned container, children in its own
+  local coordinate space) more than the WB eyedropper's one-shot tap
+  capture, since this needs PERSISTENT markers for every placed point.
+  Reuses the exact same y-flip convention `ImageDocumentModel.
+  pickWhiteBalance` already established for point capture — the flip
+  happens exactly once, at the pipeline boundary, not duplicated in the UI
+  layer (traced by hand and independently confirmed by review). Tap adds a
+  point; tapping near an existing marker removes it instead — the hit-test
+  decision extracted into `Sources/UI/RedEyeHitTest.swift`, a pure,
+  directly testable function, matching the established `CropAspectMath`
+  precedent for UI-adjacent geometry math worth unit-testing despite
+  living in the UI layer. Shared Size/Strength sliders apply to every
+  placed point at once (no per-point sliders — v1 scope, matching this
+  app's established scope-cut pattern); Strength defaults to a non-zero
+  0.7 (not the usual 0-identity) so placing a point immediately produces a
+  visible correction without a required second slider step.
+- Mutual exclusivity: the three point-interaction modes (Crop, WB
+  eyedropper, Red-Eye placement) can only ever have one armed at a time —
+  each mode's button explicitly clears the other on arm (not just relying
+  on overlay-gating to hide an inactive one), so disarming one mode can
+  never silently resurrect another that was left armed in the background.
+- Reviewer APPROVE on first pass — independently re-verified the union-
+  mask implementation shape (not just trusting the doc comment), hand-
+  traced the full y-flip coordinate round-trip across all three touched
+  files, confirmed the mutual-exclusivity clearing happens on arm (not
+  disarm) so no stale-armed-state bug is possible, and re-derived the
+  `CIColorMatrix` arithmetic by hand to confirm the pinned test values are
+  real, not placeholders. No issues found, nothing to fix.
+- 210 tests total (11 new Red-Eye pipeline tests + 6 new
+  `RedEyeHitTestTests`). 1 commit.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Selective Color, second pass,
-after one FIX FIRST round on a real functional bug — resolved and
-independently re-verified before commit, per workflow rules).
+None — last reviewer verdict was APPROVE (Red-Eye removal, first pass, no
+issues found).
+
+Prior: Selective Color (second pass, after one FIX FIRST round on a real
+functional bug — resolved and independently re-verified before commit).
 
 Prior: WB eyedropper (second pass, after one FIX FIRST round on
 force-unwraps in production code — resolved before commit).
@@ -1161,28 +1246,28 @@ per the user's own instruction — do not start it without being asked
 again).** Sequence (see "Current phase" above for the full list and
 reasoning): Black & White is done, Sharpen is done, Noise Reduction is
 done, Definition (Clarity) is done, Levels + live histogram is done, the
-WB neutral-gray eyedropper is done, Selective Color (HSL v2) is done.
-**NEXT: Red-Eye removal — item 8 of 9.** Not yet planned. The app's SECOND
-point-and-click interaction (after the WB eyedropper) — likely reuses the
-same `currentFitRect`/tap-to-image-coordinate conversion established by
-`ContentView.pickWhiteBalance`/`PixelSampler`, but with a genuinely
-different back-end problem: rather than solving for two global slider
-values, this needs a localized, masked correction (detect/confirm a
-red-eye region around the tap point, desaturate red and darken luminance
-ONLY within that mask, likely via a soft-edged radial mask blended with
-the original — closer in spirit to Vignette's radial falloff than to
-Selective Color's hue-band falloff, but region-local rather than
-frame-wide, and needs new `EditState` surface to persist WHERE each
-correction is, not just slider values — this app has no precedent yet for
-storing a variable-length list of user-placed points/regions, unlike every
-other adjustment which is a fixed set of named fields). Will need its own
-Plan-agent dispatch — likely both a UI-interaction design (tap to place a
-correction point, maybe drag to size it, multiple corrections per photo)
-and Core Image investigation (radial mask construction, whether a custom
-kernel is warranted again or built-in filters + `CIRadialGradient`-style
-masking suffice this time, unlike Selective Color's genuine need for one).
-
-Remaining after Red-Eye removal: Cast (last, deliberately — see below).
+WB neutral-gray eyedropper is done, Selective Color (HSL v2) is done,
+Red-Eye removal is done. **NEXT AND FINAL: Cast (color-cast neutralization)
+— item 9 of 9.** Not yet planned. Deliberately last, as established when
+first deferred — needs a genuinely different, content-aware architecture
+from every other adjustment shipped so far: a gray-world-style statistical
+analysis of the WHOLE image (or a user-selected region) to estimate and
+neutralize an unwanted color cast, rather than a fixed per-pixel filter
+formula with user-set slider values. Will need its own Plan-agent
+dispatch — likely both a Core Image/algorithm investigation (how to
+compute a robust "average color" statistic efficiently — probably reusing
+`HistogramComputer`'s "independent CIContext, safe off the main thread"
+precedent for the analysis pass — and how to turn that into a
+neutralizing correction, likely reusing `WhiteBalanceSolver`'s numerical-
+search approach or `EditPipeline.whiteBalanced`'s existing chromatic-
+adaptation filter directly, since Cast neutralization and White Balance
+correction are mathematically closely related) and a UI design (does Cast
+need its own point-and-click "sample here" interaction like the WB
+eyedropper, or is it a single "Auto" button that analyzes the whole frame
+with no user interaction at all — a genuinely different interaction model
+from every other feature shipped this session). This is the last item in
+the Phase 2 backlog — completing it closes out Phase 2 entirely (modulo
+Undo/Revert, still explicitly deferred pending the user asking again).
 Lens distortion correction remains explicitly OUT of scope (wasn't in
 either screenshot, needs camera-profile data, a
 separate concern) unless the user asks for it specifically.

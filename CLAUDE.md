@@ -57,8 +57,14 @@ each gets its own Plan Mode session per the workflow rules below.
   (reuses the same `CIColorControls` saturation-zero mechanism `hslSaturation`'s
   own -1 extreme uses). Not built: Intensity/Neutrals/Tone/Grain sliders
   (Photos' fuller B&W panel — v1 is on/off only).
-- **Red-Eye:** not built — likely needs a point-and-click UI, a different interaction
-  model from every slider-based adjustment built so far.
+- **Red-Eye:** ✅ shipped — tap to place correction points (tap an existing
+  marker to remove it), shared Size/Strength sliders apply to every point at
+  once. `EditState.redEyePoints` is the app's first variable-length/user-
+  placed collection field (every other adjustment is a fixed set of named
+  fields). Localized soft-masked "suppress red + darken" via
+  `CIRadialGradient`/`CIColorMatrix`/`CIBlendWithMask` — no custom kernel
+  needed. Multiple points combine into one union mask (`CIMaximumCompositing`)
+  before the color transform runs once, avoiding double-correcting overlaps.
 - **White Balance:** Temperature + Tint ✅. "Pick a neutral gray" eyedropper ✅
   shipped — the app's first point-and-click interaction. `CITemperatureAndTint`
   has no closed-form inverse, so `WhiteBalanceSolver` runs a live numerical

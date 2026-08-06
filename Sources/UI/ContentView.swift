@@ -2,7 +2,11 @@ import AppKit
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var document = ImageDocumentModel()
+    /// Owned by `PhotoAppApp`, not this view — lifted there so the Edit
+    /// menu's `.commands { CommandGroup(replacing: .undoRedo) }` (a
+    /// Scene-level construct) can act on the SAME document instance the
+    /// toolbar's Undo/Redo buttons already do.
+    @ObservedObject var document: ImageDocumentModel
 
     /// Which top-level editing tool is active — Apple Photos-style tab bar.
     /// Selecting `.crop` IS entering crop-editing mode (see `isCroppingActive`
@@ -285,7 +289,10 @@ struct ContentView: View {
                 } label: {
                     Label("Undo", systemImage: "arrow.uturn.backward")
                 }
-                .keyboardShortcut("z", modifiers: .command)
+                // No .keyboardShortcut here — the Edit menu
+                // (`PhotoAppApp`'s `.commands { CommandGroup(replacing:
+                // .undoRedo) }`) is the canonical ⌘Z/⇧⌘Z owner now, so two
+                // separate views don't both claim the same key combo.
                 .disabled(!document.canUndo)
             }
             ToolbarItem(placement: .automatic) {
@@ -294,7 +301,6 @@ struct ContentView: View {
                 } label: {
                     Label("Redo", systemImage: "arrow.uturn.forward")
                 }
-                .keyboardShortcut("z", modifiers: [.command, .shift])
                 .disabled(!document.canRedo)
             }
             ToolbarItem(placement: .automatic) {
@@ -742,5 +748,5 @@ private struct EditToggleRow: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(document: ImageDocumentModel())
 }

@@ -91,8 +91,12 @@ each gets its own Plan Mode session per the workflow rules below.
   purpose) via `CIColorMatrix` → `CIColorClamp` → `CIGammaAdjust` (clamp
   deliberately before gamma to avoid NaN below the black point), running
   first in the perceptual sandwich (measured non-commuting with Brightness).
-  Live histogram (`HistogramComputer`, 256-bin luminance, independent
-  `CIContext`) computed off the main thread, debounced ~150ms.
+  Live histogram (`HistogramComputer`, 256-bin luminance + independently-
+  normalized per-channel R/G/B, one shared downsample/render pass,
+  independent `CIContext`) computed off the main thread, debounced ~150ms.
+  A Luminance/RGB toggle (`HistogramDisplayMode`) switches `HistogramView`
+  between the plain luminance bars and an additive-blended (`.plusLighter`)
+  overlay of all four series.
 - **Definition (Clarity):** ✅ shipped — a single Amount slider via a large-radius
   `CIUnsharpMask` (16x Sharpen's radius fraction), runs after Vignette (measured
   non-commutative with it, unlike Sharpen) and before Noise Reduction/Sharpen.

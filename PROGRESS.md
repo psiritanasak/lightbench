@@ -1210,11 +1210,106 @@ restructure. 1 commit.
   slider list) — confirmed not yet built, explicitly deferred (not picked
   as next) pending the user asking again.
 
+### RGB channel histograms (complete, verified live) + two more sidebar bug fixes
+- Planned feature: user picked adding per-channel Red/Green/Blue histogram
+  overlays to the existing Levels luminance histogram (over the deferred
+  sidebar-regrouping alternative). Two design choices confirmed with the
+  user before planning: (1) overlaid additive-color blending (Photos/
+  Lightroom-style — overlapping channels visually mix, e.g. red+green reads
+  yellow) over four separate small strips; (2) each channel normalized
+  independently to its own peak (tallest bin = 1.0) over one shared global
+  scale.
+- `Sources/Rendering/Histogram.swift` — `HistogramComputer.histogram(of:)`
+  changed from returning `[Float]` (luminance only) to a new `HistogramData`
+  struct (`luminance`/`red`/`green`/`blue`, plus `.empty`). Reuses the EXACT
+  same downsample+render pass (256px target, display-sRGB, `.RGBA8`) — no
+  new render pass needed, since the R/G/B bytes were already being read to
+  derive luminance and were simply discarded before. Each channel's raw
+  8-bit byte value IS its own bin index directly (no weighting math needed,
+  unlike luminance's Rec.709-weighted sum, which is unchanged). Each of the
+  four arrays normalized independently via a new shared `normalized()` helper.
+- `Sources/UI/HistogramView.swift` — takes `data: HistogramData` +
+  `showChannels: Bool`. Luminance drawn first as the unchanged gray base
+  layer (normal compositing); if `showChannels`, `context.blendMode =
+  .plusLighter` is set before drawing translucent Red/Green/Blue bar areas
+  on top — real additive color mixing via the Canvas compositor itself, not
+  a manually computed blend.
+- `Sources/UI/HistogramDisplayMode.swift` (new) — small presentation-only
+  enum (Luminance/RGB), mirrors the existing `SelectiveColorBand` transient-
+  `@State` pattern; not stored in `EditState`. New segmented `Picker` above
+  the histogram in `ContentView.swift`; defaults to Luminance (matches the
+  histogram's original look).
+- `Sources/UI/ImageDocumentModel.swift` — `histogramBins: [Float]` renamed
+  to `histogramData: HistogramData`; the debounced/generation-guarded
+  background-render flow in `recomputeHistogram()` is otherwise unchanged.
+- New `testChannelsTrackTheirOwnColorIndependently` test — a solid image
+  with distinctly different r/g/b values (0.9/0.5/0.1), asserting the three
+  channels' peak bins are ordered `red > green > blue`. Reviewer walked
+  through several plausible bugs this would need to catch (all-three-
+  collapsed-to-luminance, channel-index swaps, byte-offset errors) and
+  confirmed each would fail this assertion — a genuine discriminator, not
+  just plumbing coverage. Existing `HistogramComputerTests` extended to
+  check all four arrays instead of one.
+- **Two more sidebar layout bugs found and fixed live during this same
+  verification round** (both from the SAME user-facing symptom — "the
+  sidebar's top row crowds the toolbar" — that turned out to have TWO
+  independent causes, found and fixed one at a time via direct live
+  testing, not guessed):
+  - **Bug A (top clearance)**: the earlier round's guessed `.padding(.top,
+    20)` (see previous section) undershot once tested against a real photo
+    with the fuller Adjust-tab content — a whole row ("Temperature") was
+    still hidden under the toolbar. Root cause: both `HSplitView` panes
+    start at the SAME native y-offset below the window's toolbar chrome
+    (that chrome is outside the SwiftUI view hierarchy, applied uniformly
+    across the whole window) — the image pane's content only sits lower
+    because `EditorTabBar` is prepended above it. Fixed by MEASURING
+    `EditorTabBar`'s real rendered height live via `.onGeometryChange`
+    (into a new `tabBarHeight` state) instead of guessing a constant, and
+    using that measured value as the sidebar's top padding.
+  - **Bug B (scroll position) — a completely different bug that LOOKED
+    like the same symptom**: even after Bug A's fix, "Temperature" was
+    still not visible on open. Diagnosed via a direct, targeted live test
+    (asked the user to scroll the sidebar up and check whether a hidden row
+    appeared above the visible top one) — confirmed: the `ScrollView` was
+    starting scrolled one row past the top on appear; "Temperature" was
+    correctly laid out with correct padding, just not visible until
+    scrolled up manually. Not a padding/spacing problem at all. Fixed with
+    `.defaultScrollAnchor(.top)`, pinning the initial scroll position
+    explicitly (macOS 14+ API, matches this project's deployment target).
+  - **A third, separate cosmetic issue was found and NOT fixed, logged as
+    known/deferred**: the `HSplitView` divider between the image pane and
+    sidebar shifts by a small amount specifically when a photo is opened
+    (confirmed via direct testing to be the DIVIDER moving, not the whole
+    window). User confirmed the shift is minor/low-priority and explicitly
+    asked to defer rather than risk a bigger structural change (replacing
+    the native resizable `HSplitView` divider with a custom state-controlled
+    one) for a few-pixel cosmetic drift. Revisit only if the user asks again
+    or it turns out to be more disruptive than initially assessed.
+- Reviewer APPROVE on first pass for the whole bundled diff (histogram
+  feature + both fixed sidebar bugs, reviewed together since they came from
+  the same live-verification session) — independently confirmed the binning
+  math (raw 8-bit byte as direct bin index for R/G/B vs. luminance's
+  weighted-sum-then-clamp, unchanged), the `.empty` contract holds through
+  the zero-extent guard, the new channel-independence test genuinely
+  discriminates, and `.onGeometryChange`/`.defaultScrollAnchor` are used
+  safely (no layout feedback loop, correct API for the deployment target).
+  One non-blocking observation: `tabBarHeight`'s initial fallback default
+  (44) could cause a one-frame padding pop before the real measurement
+  lands — cosmetic only.
+- 226 tests total (1 new `HistogramComputerTests` test; the rest updated in
+  place for the new return type, not net-new). 1 commit (feature + both
+  bug fixes together, matching this session's established pattern of
+  bundling same-session fixes into one reviewed diff).
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (sidebar padding fix). One
-non-blocking observation carried forward from the Undo/Redo review (not
-required to fix): the global ⌘Z toolbar shortcut may intercept a focused
-text field's native undo; worth a manual check, not a correctness bug.
+None — last reviewer verdict was APPROVE (RGB histogram + sidebar
+top-clearance/scroll-anchor fixes, first pass). Known, explicitly deferred
+(not a reviewer issue, a user-deprioritized cosmetic item): the `HSplitView`
+divider shifts slightly when a photo opens — see "RGB channel histograms"
+section above. One non-blocking observation carried forward from the
+Undo/Redo review (still not required to fix): the global ⌘Z toolbar
+shortcut may intercept a focused text field's native undo; worth a manual
+check, not a correctness bug.
 
 **Outstanding manual verification** (could not be automated in this
 environment — no GUI automation tool for a native macOS app): the toolbar-
@@ -1443,21 +1538,18 @@ window-resize re-fit behavior, opened-file mtime check.
 ## Exact next step
 **Phase 2 is COMPLETE** (every backlog item ✅, see above). **Phase 3 has
 STARTED**: in-memory Undo/Redo (first slice) is done — see the "Undo/Redo"
-section above. 225 tests passing, last reviewer verdict APPROVE (sidebar
-padding fix, found during this slice's own manual verification pass — see
-"Sidebar top-padding bug fix" above).
+section above. **RGB channel histograms are also done** — see "RGB channel
+histograms" above, including two sidebar layout bugs found and fixed live
+(top-clearance padding, scroll-anchor) and one found-but-deferred cosmetic
+issue (HSplitView divider shift on photo open — user confirmed low
+priority, do not fix without being asked again). 226 tests passing, last
+reviewer verdict APPROVE (RGB histogram + both sidebar fixes, first pass).
 
-**NEXT PLANNED FEATURE — RGB histogram**: user was asked to choose between
-adding per-channel Red/Green/Blue histogram overlays to the existing
-Levels luminance histogram vs. reorganizing the sidebar into Apple-Photos-
-style labeled sections (Light/Color/B&W/etc); chose the RGB histogram.
-Needs its own Plan Mode session per CLAUDE.md's "new feature" rule before
-starting — not yet planned. The sidebar-regrouping idea is confirmed
-NOT built (today's sidebar is one flat slider list in pipeline order under
-a single "Adjust" tab; CLAUDE.md's backlog only used Apple Photos' panel as
-a completeness checklist, never as the actual UI layout) but was explicitly
-NOT picked this round — leave it deferred, don't start it without the user
-asking again.
+**Nothing is currently planned.** The sidebar-regrouping idea (Apple-
+Photos-style labeled sections — Light/Color/B&W/etc — vs. today's flat
+slider list) remains confirmed NOT built and explicitly deferred (was
+offered as an alternative to the RGB histogram, not picked) — don't start
+it without the user asking again.
 
 **Still outstanding — Undo/Redo functional manual verification, not yet
 done** (flagged when the slice shipped; only the toolbar-crowding VISUAL

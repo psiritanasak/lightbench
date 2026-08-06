@@ -40,6 +40,13 @@ struct ContentView: View {
     /// mutually exclusive by construction, not by a shared runtime check.
     @State private var isPickingWhiteBalance = false
 
+    /// Whether taps on the image should place/remove Red-Eye correction
+    /// points. UNLIKE `isPickingWhiteBalance`, placing a point does NOT
+    /// auto-disarm this mode — the user will often place several
+    /// corrections (both eyes) in one sitting, so it stays armed until
+    /// toggled off or the user leaves the Adjust tab.
+    @State private var isPlacingRedEyeCorrections = false
+
     /// Which Selective Color band's Hue/Saturation/Luminance sliders are
     /// currently shown. Presentation-only, same reasoning as `selectedTab`/
     /// `selectedAspect` — `EditState` holds all 8 bands' values at once
@@ -200,6 +207,18 @@ struct ContentView: View {
                                     }
                                 )
                         }
+                        // Red-Eye correction markers/tap-capture. Gated on
+                        // `!isCroppingActive` and `!isPickingWhiteBalance`
+                        // (on top of `isPlacingRedEyeCorrections` itself only
+                        // ever being armable from the Adjust tab) so only
+                        // one of the three point-interaction modes can ever
+                        // be live at once. UNLIKE the WB eyedropper, a tap
+                        // does NOT disarm this mode — see
+                        // `isPlacingRedEyeCorrections`'s own doc comment.
+                        if isPlacingRedEyeCorrections, !isCroppingActive, !isPickingWhiteBalance,
+                           let fitRect = currentFitRect {
+                            RedEyeOverlayView(fitRect: fitRect, points: $document.editState.redEyePoints)
+                        }
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .onAppear { containerSize = proxy.size }
@@ -223,12 +242,16 @@ struct ContentView: View {
             selectedAspect = .freeform
             customAspectRatio = nil
             isPickingWhiteBalance = false
+            isPlacingRedEyeCorrections = false
         }
-        // Leaving the Adjust tab disarms eyedropper mode — it has no
-        // meaning while cropping (its overlay is gated on `!isCroppingActive`
-        // anyway) or in the other, not-yet-built tabs.
+        // Leaving the Adjust tab disarms both point-interaction modes —
+        // neither has meaning while cropping (their overlays are gated on
+        // `!isCroppingActive` anyway) or in the other, not-yet-built tabs.
         .onChange(of: selectedTab) { _, newTab in
-            if newTab != .adjust { isPickingWhiteBalance = false }
+            if newTab != .adjust {
+                isPickingWhiteBalance = false
+                isPlacingRedEyeCorrections = false
+            }
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
@@ -347,6 +370,7 @@ struct ContentView: View {
             ) { String(format: "%+.0f", $0) }
             Button {
                 isPickingWhiteBalance.toggle()
+                if isPickingWhiteBalance { isPlacingRedEyeCorrections = false }
             } label: {
                 Label("Pick White Balance", systemImage: "eyedropper")
                     .frame(maxWidth: .infinity)
@@ -429,6 +453,37 @@ struct ContentView: View {
                 label: "Noise Reduction", value: $document.editState.noiseReduction,
                 range: 0...1, identity: 0
             ) { String(format: "%.0f%%", $0 * 100) }
+            redEyeSection
+        }
+    }
+
+    /// Red-Eye: a "Fix Red-Eye" toggle button (arms the tap-to-place/tap-
+    /// to-remove overlay), shared Size/Strength sliders (apply to every
+    /// placed point at once — this app has no per-point sliders, matching
+    /// its established scope-cut pattern), and a "Clear All" button.
+    private var redEyeSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button {
+                isPlacingRedEyeCorrections.toggle()
+                if isPlacingRedEyeCorrections { isPickingWhiteBalance = false }
+            } label: {
+                Label("Fix Red-Eye", systemImage: "eye.trianglebadge.exclamationmark")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(isPlacingRedEyeCorrections ? .yellow : nil)
+            EditSliderRow(
+                label: "Red-Eye Size", value: $document.editState.redEyeSize,
+                range: 0...1, identity: 0.5
+            ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Red-Eye Strength", value: $document.editState.redEyeStrength,
+                range: 0...1, identity: 0.7
+            ) { String(format: "%.0f%%", $0 * 100) }
+            Button("Clear All Red-Eye Corrections") {
+                document.editState.redEyePoints.removeAll()
+            }
+            .disabled(document.editState.redEyePoints.isEmpty)
         }
     }
 

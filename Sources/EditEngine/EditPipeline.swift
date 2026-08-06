@@ -17,9 +17,17 @@ import CoreImage.CIFilterBuiltins
 /// matching the fixed order — Straighten runs first, then Perspective, then
 /// Flip (matching the Photos reference panel order; none of these commute
 /// with each other in general, so this order is a real, tested requirement).
-/// Vignette runs AFTER crop: it's a radial darkening tied to the final
-/// on-screen framing, so it must see the post-crop extent, not the
-/// fixed-order list's pre-crop stages. Definition (local-contrast/Clarity)
+/// Red-Eye removal runs AFTER crop, BEFORE Vignette: like Vignette, its
+/// stored normalized correction points must map against the CURRENT
+/// (post-crop) extent, not the original frame. MEASURED to commute with
+/// Vignette exactly (order between those two doesn't matter — confirmed at
+/// both a frame-center and a frame-corner correction point, diff ≈ 0), but
+/// it must run before Definition/Noise Reduction/Sharpen: those "detail"
+/// stages should refine the ALREADY-corrected pupil, not reshape a red one
+/// that then gets corrected differently. Vignette runs AFTER crop: it's a
+/// radial darkening tied to the final on-screen framing, so it must see
+/// the post-crop extent, not the fixed-order list's pre-crop stages.
+/// Definition (local-contrast/Clarity)
 /// runs AFTER Vignette: measured, it does NOT cleanly commute with
 /// Vignette (unlike Sharpen) — its wide radius interacts with Vignette's
 /// spatially-varying darkening, so this order is a real, measured
@@ -44,6 +52,7 @@ enum EditPipeline {
         image = applyPerspective(state, to: image)            // geometric, before flip
         image = applyFlip(state, to: image)                   // geometric, before crop
         image = applyCrop(state, to: image)                   // geometric
+        image = applyRedEye(state, to: image)                 // localized, scene-linear
         image = applyVignette(state, to: image)               // radial, scene-linear
         image = applyDefinition(state, to: image)             // local contrast, perceptual, before detail pair
         image = applyNoiseReduction(state, to: image)         // detail, scene-linear, before sharpen
@@ -769,6 +778,116 @@ enum EditPipeline {
             height: extent.height * (1 - top - bottom)
         )
         return image.cropped(to: cropRect)
+    }
+
+    // MARK: - Red-Eye Removal
+
+    /// Size slider → pupil radius as a fraction of the CURRENT extent's MIN
+    /// dimension — same resolution-independence rationale as Sharpen/
+    /// Definition (a fixed pixel radius would cover a wildly different
+    /// real-world area on a 400px vs 4000px export). MEASURED plausible
+    /// span for a pupil-scale correction: 1.5% (tight, ~15px on a 1000px
+    /// min-dimension) to 8% (wide, ~80px).
+    private static let kRedEyeRadiusMin: Double = 0.015
+    private static let kRedEyeRadiusMax: Double = 0.08
+
+    /// Fraction of the radius that stays FULLY corrected before the soft
+    /// falloff begins — MEASURED (via `CIRadialGradient`'s own real
+    /// interpolation, not assumed linear): the falloff is smooth and
+    /// monotonic from `coreFraction * radius` (full correction) to
+    /// `radius` (zero effect), with no visible ring/banding.
+    private static let kRedEyeCoreFraction: Double = 0.5
+
+    /// Darken factor for a fully-corrected (strength=1) pupil, in
+    /// SCENE-LINEAR light. MEASURED against a synthetic red-pupil test
+    /// color (0.7, 0.1, 0.1): 0.4 reads as a natural dark pupil (result
+    /// ~0.04 on all channels — dark, not a crushed pure-black hole);
+    /// smaller values (0.2) read closer to true black, larger (0.5)
+    /// noticeably lighter — 0.4 is the measured middle ground.
+    private static let kRedEyeDarken: Double = 0.4
+
+    private static func redEyeActive(_ state: EditState) -> Bool {
+        !state.redEyePoints.isEmpty && state.redEyeStrength != 0
+    }
+
+    /// Localized "suppress red + darken" correction inside a soft circle
+    /// around each user-placed point. Built-ins only — no custom kernel
+    /// needed here (unlike Selective Color): `CIRadialGradient` builds an
+    /// arbitrarily-centered soft mask (`CIVignetteEffect` can't — it's
+    /// pinned to the frame's own center), `CIColorMatrix` does the
+    /// de-red/darken transform in one multiply, `CIBlendWithMask`
+    /// composites. Applied in SCENE-LINEAR light (no perceptual sandwich —
+    /// measured clean, no crushing artifacts, unlike a domain choice that
+    /// would need one).
+    ///
+    /// Multiple points are combined via `CIMaximumCompositing` into ONE
+    /// union mask, THEN the color matrix is applied ONCE — not by
+    /// compositing N sequential single-point corrections. MEASURED, a real,
+    /// substantial difference: on two overlapping correction circles,
+    /// sequential double-application measurably OVER-corrects the overlap
+    /// (0.061 red-channel result) versus the union mask's single-pass
+    /// result (0.191, close to a lone circle's own 0.240) — the union
+    /// approach is what makes an overlapping-points correction apply
+    /// exactly once, not twice.
+    ///
+    /// MEASURED to commute exactly with Vignette (see this file's header
+    /// doc comment) — placement relative to Vignette is a soft choice;
+    /// placement BEFORE Definition/Noise Reduction/Sharpen is a real
+    /// requirement (those must refine the corrected pixels, not un-corrected
+    /// ones). Preserves alpha and extent exactly (measured). Preserves
+    /// headroom on pixels OUTSIDE every point's mask exactly (a 1.4 pixel
+    /// far from any point reads back 1.4) — pixels INSIDE an active mask
+    /// are, by design, reduced toward a dark, corrected value (that
+    /// reduction IS the feature, not a headroom bug the way an unrelated
+    /// slider crushing a bright pixel would be).
+    private static func applyRedEye(_ state: EditState, to image: CIImage) -> CIImage {
+        guard redEyeActive(state) else { return image }
+
+        let extent = image.extent
+        let strength = min(max(state.redEyeStrength, 0), 1)
+        let radius = (kRedEyeRadiusMin + state.redEyeSize * (kRedEyeRadiusMax - kRedEyeRadiusMin))
+            * Double(min(extent.width, extent.height))
+
+        var mask = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: extent)
+        for point in state.redEyePoints {
+            // y-flip: SwiftUI-local space is top-left-origin/y-down; the
+            // stored point matches that convention (same as the WB
+            // eyedropper's own capture) — flip into CIImage's bottom-left/
+            // y-up space and map onto the CURRENT post-crop extent.
+            let center = CGPoint(
+                x: extent.minX + CGFloat(point.x) * extent.width,
+                y: extent.minY + CGFloat(1 - point.y) * extent.height
+            )
+            let gradient = CIFilter.radialGradient()
+            gradient.center = center
+            gradient.radius0 = Float(radius * kRedEyeCoreFraction)
+            gradient.radius1 = Float(radius)
+            gradient.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 1)
+            gradient.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
+            guard let circle = gradient.outputImage?.cropped(to: extent) else { continue }
+
+            let union = CIFilter.maximumCompositing()
+            union.inputImage = circle
+            union.backgroundImage = mask
+            mask = union.outputImage ?? mask
+        }
+
+        let darken = kRedEyeDarken
+        let keepGreenBlue = 1 - strength * (1 - darken)
+        let mixRed = 0.5 * strength * darken
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = image
+        matrix.rVector = CIVector(x: 1 - strength, y: mixRed, z: mixRed, w: 0)
+        matrix.gVector = CIVector(x: 0, y: keepGreenBlue, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: keepGreenBlue, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        let corrected = matrix.outputImage ?? image
+
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = corrected
+        blend.backgroundImage = image
+        blend.maskImage = mask
+        return (blend.outputImage ?? image).cropped(to: extent)
     }
 
     // MARK: - Vignette

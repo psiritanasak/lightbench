@@ -1,5 +1,15 @@
 import Foundation
 
+/// A single user-placed Red-Eye correction point, normalized 0...1 in
+/// SwiftUI-local (top-left-origin, y-DOWN) fractions of the displayed
+/// image — the SAME convention `ImageDocumentModel.pickWhiteBalance`
+/// already established for point capture, so `EditPipeline.applyRedEye`
+/// reuses that exact y-flip mapping rather than inventing a new one.
+struct RedEyePoint: Equatable, Codable {
+    var x: Double
+    var y: Double
+}
+
 /// The full set of non-destructive edit adjustments applied to a photo.
 ///
 /// This is pure data — no image or rendering logic lives here. It is
@@ -314,6 +324,30 @@ struct EditState: Equatable, Codable {
     var cropInsetBottom: Double = 0
     var cropInsetLeft: Double = 0
     var cropInsetRight: Double = 0
+
+    // MARK: - Red-Eye Removal
+
+    /// User-placed correction points. UNLIKE every other adjustment in this
+    /// app (including Selective Color's 24 fixed-band fields), this is
+    /// VARIABLE-LENGTH — red-eye spots are inherently unbounded (0 to N per
+    /// photo, wherever the user taps), so a flat-named-field convention
+    /// doesn't fit; an array is the deliberate, justified departure here,
+    /// not an inconsistency with the rest of this struct.
+    var redEyePoints: [RedEyePoint] = []
+
+    /// Correction radius, 0...1, default 0.5 — shared by every placed point
+    /// (not per-point), same non-zero-identity pattern as `vignetteRadius`:
+    /// guarded off by `redEyePoints`/`redEyeStrength`, not by this field.
+    var redEyeSize: Double = 0.5
+
+    /// Correction strength, 0...1, default 0.7 — deliberately NOT 0, unlike
+    /// most sliders: tapping to place a point should immediately produce a
+    /// visible correction without also requiring the user to raise a
+    /// second slider first; Size/Strength are for fine-tuning afterward,
+    /// not a required second step. `EditPipeline`'s guard still makes the
+    /// whole stage an exact no-op whenever `redEyePoints` is empty, so this
+    /// non-zero default has no effect until at least one point exists.
+    var redEyeStrength: Double = 0.7
 
     // MARK: - Vignette
 

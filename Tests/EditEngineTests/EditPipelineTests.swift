@@ -1664,6 +1664,189 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(buffer[0], 0.4, accuracy: accuracy)
     }
 
+    // MARK: - Red-Eye Removal math
+    //
+    // Localized "suppress red + darken" correction (CIRadialGradient mask +
+    // CIColorMatrix + CIBlendWithMask) — built-ins only, no custom kernel
+    // needed (unlike Selective Color). Expected values are measured against
+    // the real filter chain (a real compiled probe was run before this
+    // shipped, matching every other feature's discipline), not hand-derived.
+
+    func testRedEyeNoPointsIsExactNoOp() {
+        // Guarded off entirely when no points are placed — exact no-op
+        // including headroom, the same load-bearing guard pattern every
+        // other stage in this file relies on.
+        for value in [0.05, 0.214, 0.5, 0.7, 1.2, 1.4] {
+            let input = solidColorImage(value)
+            let output = EditPipeline.apply(EditState(), to: input)
+            XCTAssertEqual(linearPixel(of: output).r, Float(value), accuracy: accuracy, "value \(value)")
+        }
+    }
+
+    func testRedEyeStrengthZeroIsNoOp() {
+        // A point IS placed, but strength=0 — still an exact no-op,
+        // including headroom, proving the guard checks strength too, not
+        // just point count.
+        let input = solidColorImage(r: 1.4, g: 1.4, b: 1.4, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(redEyePoints: [RedEyePoint(x: 0.5, y: 0.5)], redEyeStrength: 0),
+            to: input
+        )
+        let pixel = pixel(of: output, at: 200, 200)
+
+        XCTAssertEqual(pixel.r, 1.4, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 1.4, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 1.4, accuracy: accuracy)
+    }
+
+    func testRedEyeDesaturatesAndDarkensAtTap() {
+        let input = solidColorImage(r: 0.7, g: 0.1, b: 0.1, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(redEyePoints: [RedEyePoint(x: 0.5, y: 0.5)], redEyeSize: 1, redEyeStrength: 1),
+            to: input
+        )
+        let pixel = pixel(of: output, at: 200, 200)
+
+        XCTAssertEqual(pixel.r, 0.04, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.04, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.04, accuracy: accuracy)
+    }
+
+    func testRedEyeLeavesFarPixelUnchanged() {
+        // Spatial isolation: a tightly-sized correction leaves a far pixel
+        // completely untouched, mirroring how Vignette's own corners stay
+        // pristine at its own center.
+        let input = solidColorImage(r: 0.7, g: 0.1, b: 0.1, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(redEyePoints: [RedEyePoint(x: 0.5, y: 0.5)], redEyeSize: 0.3, redEyeStrength: 1),
+            to: input
+        )
+        let pixel = pixel(of: output, at: 10, 10)
+
+        XCTAssertEqual(pixel.r, 0.7, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.1, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.1, accuracy: accuracy)
+    }
+
+    func testRedEyeSoftEdgeFalloff() {
+        // MEASURED monotonic, smooth transition from full correction (core)
+        // to zero effect (past the radius) — not a hard-edged circle.
+        let input = solidColorImage(r: 0.7, g: 0.1, b: 0.1, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(redEyePoints: [RedEyePoint(x: 0.5, y: 0.5)], redEyeSize: 0.5, redEyeStrength: 1),
+            to: input
+        )
+
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, 0.04, accuracy: accuracy, "center")
+        XCTAssertEqual(pixel(of: output, at: 209, 200).r, 0.04091, accuracy: accuracy, "still within the core")
+        XCTAssertEqual(pixel(of: output, at: 215, 200).r, 0.45740, accuracy: accuracy, "mid-falloff")
+        XCTAssertEqual(pixel(of: output, at: 219, 200).r, 0.7, accuracy: accuracy, "at the radius boundary")
+        XCTAssertEqual(pixel(of: output, at: 230, 200).r, 0.7, accuracy: accuracy, "beyond the radius")
+    }
+
+    func testRedEyeSizeControlsReach() {
+        let input = solidColorImage(r: 0.7, g: 0.1, b: 0.1, a: 1, size: 400)
+        let small = EditPipeline.apply(
+            EditState(redEyePoints: [RedEyePoint(x: 0.5, y: 0.5)], redEyeSize: 0.1, redEyeStrength: 1),
+            to: input
+        )
+        let large = EditPipeline.apply(
+            EditState(redEyePoints: [RedEyePoint(x: 0.5, y: 0.5)], redEyeSize: 1, redEyeStrength: 1),
+            to: input
+        )
+
+        XCTAssertEqual(pixel(of: small, at: 215, 200).r, 0.7, accuracy: accuracy, "small size shouldn't reach 15px away")
+        XCTAssertEqual(pixel(of: large, at: 215, 200).r, 0.04, accuracy: accuracy, "large size fully reaches 15px away")
+    }
+
+    func testRedEyeStrengthScalesCorrection() {
+        let input = solidColorImage(r: 0.7, g: 0.1, b: 0.1, a: 1, size: 400)
+        let half = EditPipeline.apply(
+            EditState(redEyePoints: [RedEyePoint(x: 0.5, y: 0.5)], redEyeSize: 1, redEyeStrength: 0.5),
+            to: input
+        )
+        let full = EditPipeline.apply(
+            EditState(redEyePoints: [RedEyePoint(x: 0.5, y: 0.5)], redEyeSize: 1, redEyeStrength: 1),
+            to: input
+        )
+        let halfPixel = pixel(of: half, at: 200, 200)
+        let fullPixel = pixel(of: full, at: 200, 200)
+
+        XCTAssertEqual(halfPixel.r, 0.37, accuracy: accuracy)
+        XCTAssertEqual(halfPixel.g, 0.07, accuracy: accuracy)
+        XCTAssertEqual(fullPixel.r, 0.04, accuracy: accuracy)
+        // Monotonic: half-strength sits strictly between no correction and full.
+        XCTAssertLessThan(fullPixel.r, halfPixel.r)
+        XCTAssertLessThan(halfPixel.r, 0.7)
+    }
+
+    func testRedEyeOverlappingPointsCorrectOnce() {
+        // The test that actually proves the union-mask design decision:
+        // two overlapping points' shared region is corrected exactly ONCE
+        // (close to a single point's own effect there), NOT twice —
+        // MEASURED: sequential double-application at this same setup gives
+        // a much darker, over-corrected 0.061 instead.
+        let input = solidColorImage(r: 0.7, g: 0.1, b: 0.1, a: 1, size: 400)
+        let overlapping = EditPipeline.apply(
+            EditState(
+                redEyePoints: [RedEyePoint(x: 0.45, y: 0.5), RedEyePoint(x: 0.55, y: 0.5)],
+                redEyeSize: 1, redEyeStrength: 1
+            ),
+            to: input
+        )
+        let pixel = pixel(of: overlapping, at: 200, 200)
+
+        XCTAssertEqual(pixel.r, 0.18464, accuracy: accuracy)
+        XCTAssertGreaterThan(pixel.r, 0.1, "should NOT be over-corrected toward the sequential-compositing 0.061 result")
+    }
+
+    func testRedEyePreservesAlpha() {
+        let input = solidColorImage(r: 0.7, g: 0.1, b: 0.1, a: 0.5, size: 400)
+        let output = EditPipeline.apply(
+            EditState(redEyePoints: [RedEyePoint(x: 0.5, y: 0.5)], redEyeSize: 1, redEyeStrength: 1),
+            to: input
+        )
+
+        XCTAssertEqual(pixel(of: output, at: 200, 200).a, 0.5, accuracy: accuracy, "corrected pixel")
+        XCTAssertEqual(pixel(of: output, at: 10, 10).a, 0.5, accuracy: accuracy, "untouched pixel")
+    }
+
+    func testRedEyePreservesHeadroomOutsideMask() {
+        // A bright pixel far from every point survives exactly — the SAME
+        // headroom-preservation family as Vignette/Sharpen for untouched
+        // content. (A bright pixel INSIDE an active mask is, by design,
+        // reduced toward a dark corrected value — see
+        // testRedEyeDesaturatesAndDarkensAtTap — that reduction IS the
+        // feature, not a headroom bug.)
+        let input = solidColorImage(r: 1.4, g: 1.4, b: 1.4, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(redEyePoints: [RedEyePoint(x: 0.1, y: 0.1)], redEyeSize: 0.1, redEyeStrength: 1),
+            to: input
+        )
+        let pixel = pixel(of: output, at: 200, 200)
+
+        XCTAssertEqual(pixel.r, 1.4, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 1.4, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 1.4, accuracy: accuracy)
+    }
+
+    func testRedEyeCentersOnCroppedExtent() {
+        // MEASURED: like Vignette, a stored normalized point maps against
+        // the CURRENT (post-crop) extent, not the original frame — and the
+        // stage preserves the crop's own extent exactly.
+        let input = quadrantImage(width: 100, height: 100)
+        let cropOnly = EditPipeline.apply(EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1), to: input)
+        let withRedEye = EditPipeline.apply(
+            EditState(
+                cropInsetTop: 0.25, cropInsetLeft: 0.1,
+                redEyePoints: [RedEyePoint(x: 0.5, y: 0.5)], redEyeSize: 0.1, redEyeStrength: 1
+            ),
+            to: input
+        )
+
+        XCTAssertEqual(withRedEye.extent, cropOnly.extent)
+    }
+
     // MARK: - Vignette math
     //
     // Vignette (CIVignetteEffect) is a radial darkening/brightening tied to
@@ -2280,6 +2463,9 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().cropInsetBottom, 0)
         XCTAssertEqual(EditState().cropInsetLeft, 0)
         XCTAssertEqual(EditState().cropInsetRight, 0)
+        XCTAssertEqual(EditState().redEyePoints, [])
+        XCTAssertEqual(EditState().redEyeSize, 0.5)
+        XCTAssertEqual(EditState().redEyeStrength, 0.7)
         XCTAssertEqual(EditState().vignetteStrength, 0)
         XCTAssertEqual(EditState().vignetteRadius, 0.5)
         XCTAssertEqual(EditState().definition, 0)
@@ -2343,6 +2529,9 @@ final class EditPipelineTests: XCTestCase {
             cropInsetBottom: 0.05,
             cropInsetLeft: 0.15,
             cropInsetRight: 0.2,
+            redEyePoints: [RedEyePoint(x: 0.3, y: 0.4), RedEyePoint(x: 0.6, y: 0.65)],
+            redEyeSize: 0.4,
+            redEyeStrength: 0.9,
             vignetteStrength: 0.7,
             vignetteRadius: 0.3,
             definition: 0.55,

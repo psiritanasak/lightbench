@@ -49,4 +49,20 @@ private final class ResizingMTKView: MTKView {
         super.setFrameSize(newSize)
         setNeedsDisplay(bounds)
     }
+
+    /// Explicitly opt OUT of intrinsic sizing — this view should always be
+    /// sized purely by whatever frame its SwiftUI parent (`GeometryReader`
+    /// inside the HSplitView pane) gives it, never by its own content.
+    /// Candidate fix for a live-observed bug: opening the FIRST photo after
+    /// launch (and only the first — later photos don't repeat it) narrows
+    /// the sidebar/widens the image pane by a small amount, suggesting
+    /// `HSplitView`'s one-time initial divide computation picks up SOME
+    /// content-dependent sizing signal from this view once it first has a
+    /// real drawable/texture, differing from its signal while empty.
+    /// `MTKView`'s own default `intrinsicContentSize` behavior isn't
+    /// documented as content-independent, so this removes the ambiguity
+    /// outright rather than guessing at a magic frame size to compensate.
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
 }

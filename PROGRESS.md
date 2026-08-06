@@ -1301,94 +1301,99 @@ restructure. 1 commit.
   bug fixes together, matching this session's established pattern of
   bundling same-session fixes into one reviewed diff).
 
-### Sidebar content-shift-on-scroll bug + HSplitView divider drift (complete, verified live) — the deferred cosmetic item revisited
+### Sidebar content-shift-on-scroll bug + HSplitView divider drift — divider drift FIXED, content-shift attempted then REVERTED (critical regression)
 - User asked to revisit the `HSplitView` divider drift previously logged as
   low-priority/deferred. Live investigation (many rounds of build → relaunch
   → user tests → report back, the established pattern for UI bugs this
   session) revealed it was actually TWO separate, unrelated bugs conflated
   under one symptom description:
-  1. **Divider drift on first photo load** — the ACTUAL divider position
-     issue originally deferred. Root cause: `MetalImageView`'s underlying
-     `MTKView` wasn't opting out of intrinsic content sizing, so `HSplitView`
-     could pick up a content-dependent sizing signal from it the FIRST time
-     it had a real drawable/texture, differing from its signal while empty —
-     a one-time settling event (never recurs after the first photo). Fixed
-     by overriding `intrinsicContentSize` on `ResizingMTKView` to always
-     report `NSView.noIntrinsicMetric` on both axes — the view's layout is
-     now governed purely by its SwiftUI-provided frame, never by content.
-  2. **A completely different bug, initially mistaken for the same thing**:
-     sidebar CONTENT (not the divider) shifting left by a few points,
-     specifically the first time the user actually SCROLLS the sidebar
-     (not on photo-open at all — that red herring cost several rounds
-     before the user pinned down the real trigger via direct testing).
-- **This second bug is a genuinely hard-won diagnosis** — five different
-  plausible-sounding fixes were tried and FAILED before the real cause was
-  found: matching padding to measured tab-bar height (already shipped for a
-  different bug, didn't touch this one), forcing `.frame(maxWidth: .infinity)`
-  on the content, hiding scroll indicators (`.scrollIndicators(.hidden)`,
-  later removed again — never the actual fix), and a first attempt at
-  forcing `scrollerStyle = .overlay` ONCE at view creation (insufficient,
-  see below). Standard SwiftUI-level tools were exhausted without success.
-- **Root cause only found by dropping to REAL measurement** — a temporary
-  `.onGeometryChange`-based diagnostic (logging to a file, since sandboxed
-  apps can't write outside their container: `NSTemporaryDirectory()`
-  resolves to a writable path inside the sandbox that's still readable from
-  outside it) proved the sidebar's own frame WIDTH never actually changed;
-  a follow-up `CGRect`-based probe caught the content's X-ORIGIN shifting by
-  exactly 8pt, and — critically — a probe logging `NSScrollView.scrollerStyle`
-  directly caught it MOMENTARILY REVERTING to `.legacy` (raw value 0)
-  DURING an active scroll gesture, even after being explicitly set to
-  `.overlay` at view creation. AppKit's `NSScrollView.automaticallyAdjustsContentInsets`
-  (default `true`) and `scrollerStyle` get lazily RE-ASSERTED mid-scroll,
-  not just once at initial layout — a one-time override doesn't survive that.
-- `Sources/UI/ContentView.swift` — new `StableScrollInsets: NSViewRepresentable`,
-  a zero-size AppKit probe placed in the sidebar's `ScrollView` content that
-  walks up to the enclosing `NSScrollView` (SwiftUI's `ScrollView` doesn't
-  expose it directly) and CONTINUOUSLY re-applies zero content insets +
-  `.overlay` scroller style on every scroll event (via the clip view's
-  `boundsDidChangeNotification`), not just once — that continuous
-  reapplication, not the setting itself, is what actually fixes it.
-- **First reviewer pass was FIX FIRST — four real AppKit-interop hygiene
-  gaps**, all fixed: (1) the notification observer was never torn down —
-  added a `Coordinator` + `dismantleNSView`; (2) the one-shot registration
-  attempt could silently never activate if `enclosingScrollView` was still
-  nil on the first tick — now retried from `updateNSView` (fires on every
-  `EditState` change) guarded by a `didRegister` flag; (3) `updateNSView`
-  unconditionally rewrote three AppKit properties on every call, including
-  during rapid slider-drag re-renders (this app's hottest UI path) — added
-  equality guards (manual field-by-field comparison for `NSEdgeInsets`,
-  which isn't `Equatable`) so it's a cheap no-op once already correct;
-  (4) hardcoding `.overlay` silently overrides a user's system "Always show
-  scroll bars" preference for this one view — now explicitly documented as
-  a deliberate trade-off (reviewer agreed: honoring that preference here
-  would literally reintroduce the bug for exactly the affected users, since
-  legacy style reserving space IS the mechanism causing the shift). Second
-  pass independently verified all four fixes (including confirming
-  `NSEdgeInsets()` actually compiles to a zero-valued struct rather than
-  assuming it) and APPROVEd.
-- All temporary diagnostic instrumentation (the file-logging helper, the
-  `.onGeometryChange` probes, verbose per-call diagnostic logging inside the
-  scroll-view fix itself) was removed before commit — only the clean,
-  minimal, hardened fix shipped.
-- 226 tests unchanged (pure AppKit-interop/layout code, no `EditState`/
-  `EditPipeline`/color-math touched). 1 commit (both fixes + the FIX FIRST
-  hardening together, after user confirmed each fix live across several
-  separate rebuild-and-relaunch rounds).
+  1. **Divider drift on first photo load — FIXED, shipped, still in place.**
+     The ACTUAL divider position issue originally deferred. Root cause:
+     `MetalImageView`'s underlying `MTKView` wasn't opting out of intrinsic
+     content sizing, so `HSplitView` could pick up a content-dependent
+     sizing signal from it the FIRST time it had a real drawable/texture,
+     differing from its signal while empty — a one-time settling event
+     (never recurs after the first photo). Fixed by overriding
+     `intrinsicContentSize` on `ResizingMTKView` to always report
+     `NSView.noIntrinsicMetric` on both axes — the view's layout is now
+     governed purely by its SwiftUI-provided frame, never by content. This
+     part of the fix is SOUND and remains shipped.
+  2. **A completely different bug, initially mistaken for the same thing —
+     attempted, then REVERTED after a critical regression.** Sidebar
+     CONTENT (not the divider) shifting left by a few points, specifically
+     the first time the user actually SCROLLS the sidebar (not on
+     photo-open at all — that red herring cost several rounds before the
+     user pinned down the real trigger via direct testing).
+- **The content-shift bug's diagnosis was genuinely hard-won** — five
+  different plausible-sounding fixes were tried and FAILED before finding
+  the apparent root cause: matching padding to measured tab-bar height,
+  forcing `.frame(maxWidth: .infinity)`, hiding scroll indicators, and a
+  first one-time `scrollerStyle = .overlay` attempt. A temporary
+  `.onGeometryChange`/file-logging diagnostic (writing into the sandboxed
+  app's own container via `NSTemporaryDirectory()`, since a path outside it
+  silently fails) eventually caught `NSScrollView.scrollerStyle`
+  MOMENTARILY REVERTING to `.legacy` DURING an active scroll gesture, even
+  after being explicitly set to `.overlay` at view creation — AppKit's
+  `automaticallyAdjustsContentInsets`/`scrollerStyle` get lazily
+  RE-ASSERTED mid-scroll, not just once at initial layout.
+- **The fix based on that diagnosis (`StableScrollInsets`, an
+  `NSViewRepresentable` continuously re-applying zero content insets +
+  `.overlay` scroller style on every scroll event) passed TWO full reviewer
+  passes** (first FIX FIRST on four real AppKit-interop hygiene gaps —
+  missing observer teardown, registration retry, equality guards to stay
+  cheap on the slider-drag hot path, and documenting the accessibility
+  trade-off of hardcoding `.overlay` — then APPROVE on the second pass) and
+  226 tests still passed throughout, since none of this is unit-testable
+  UI-interaction behavior.
+- **Despite two clean reviewer passes and passing tests, live testing
+  caught a CRITICAL regression the reviewer and test suite both missed
+  entirely: it broke ALL slider click/drag interaction in the sidebar** —
+  the app became unusable for its core editing purpose. Reproduced
+  on a fresh launch (ruling out session-state corruption) and in BOTH a
+  sibling-element placement AND a `.background()` placement (a safer
+  standard NSViewRepresentable idiom, tried as a fix attempt) — neither
+  avoided the regression. **REVERTED** — the entire `StableScrollInsets`
+  type and its call site were removed. The cosmetic content-shift-on-scroll
+  bug is BACK (re-deferred), but the app is fully usable again. A working
+  app matters more than a few-pixel cosmetic polish item.
+- **Lesson recorded for future attempts at this specific bug**: reaching
+  into `NSScrollView.contentInsets`/`automaticallyAdjustsContentInsets`/
+  `scrollerStyle` via an `NSViewRepresentable` probe — even implemented
+  "correctly" per AppKit-interop hygiene standards and reviewer-approved —
+  can silently break SwiftUI's own gesture recognition for sibling controls
+  in ways NEITHER code review NOR the unit test suite catches; only live,
+  hands-on interaction testing surfaced it. If this cosmetic bug is
+  revisited again, budget for thorough live interaction testing (not just
+  "does the shift stop") as part of verifying ANY fix touching
+  `NSScrollView` internals, and consider that the "design improvement"
+  the reviewer suggested during the second pass (a stable, never-toggling
+  reserved inset from the start, rather than reactively correcting AppKit's
+  own lazy reassertion) might avoid this class of side effect — untried.
+- 226 tests unchanged throughout (both the fix attempt and the revert are
+  pure AppKit-interop/layout code, no `EditState`/`EditPipeline`/color-math
+  touched — consistent with why neither the fix's regression nor its
+  revert needed new test coverage, and also why tests alone couldn't have
+  caught this class of bug). 3 commits total for this whole investigation:
+  the divider-drift + first content-shift fix attempt (reviewed, FIX
+  FIRST'd, re-reviewed, APPROVEd), a follow-up PROGRESS.md update (now
+  itself partially superseded by this correction), and this revert commit
+  (lightly re-reviewed given it's a well-evidenced, purely subtractive,
+  user-confirmed-live change).
 
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (sidebar content-shift-on-scroll +
-HSplitView divider drift fixes, second pass after one FIX FIRST round of
-AppKit-interop hygiene fixes — see "Sidebar content-shift-on-scroll bug +
-HSplitView divider drift" above). The previously-deferred divider-drift
-item is now fixed, not deferred. One non-blocking observation carried
-forward from the Undo/Redo review (still not required to fix): the global
-⌘Z toolbar shortcut may intercept a focused text field's native undo;
-worth a manual check, not a correctness bug. Also non-blocking, noted by
-the reviewer during the scroll-fix pass: for users with "Always show
-scroll bars" configured system-wide, a MORE robust future fix might give
-the sidebar a stable, never-toggling reserved inset from the start
-(avoiding both the shift bug AND the accessibility trade-off of forcing
-overlay style) — a design improvement, not required now.
+None — last reviewer verdict was APPROVE (the `StableScrollInsets` revert,
+lightly re-reviewed given it's a well-evidenced, purely subtractive,
+user-confirmed-live change — see "Sidebar content-shift-on-scroll bug +
+HSplitView divider drift" above for the full story). Status: the divider-
+drift bug IS fixed and shipped (`MetalImageView`'s `intrinsicContentSize`
+override); the sidebar content-shift-on-scroll bug is BACK/re-deferred
+after its fix caused a critical regression (broke all slider interaction)
+that passed two reviewer passes and the full test suite before live
+testing caught it — see that section's "Lesson recorded" note before
+attempting this again. One non-blocking observation carried forward from
+the Undo/Redo review (still not required to fix): the global ⌘Z toolbar
+shortcut may intercept a focused text field's native undo; worth a manual
+check, not a correctness bug.
 
 **Outstanding manual verification** (could not be automated in this
 environment — no GUI automation tool for a native macOS app): the toolbar-
@@ -1618,13 +1623,15 @@ window-resize re-fit behavior, opened-file mtime check.
 **Phase 2 is COMPLETE** (every backlog item ✅, see above). **Phase 3 has
 STARTED**: in-memory Undo/Redo (first slice) is done — see the "Undo/Redo"
 section above. **RGB channel histograms are also done** — see "RGB channel
-histograms" above. **All known sidebar layout bugs are now fixed** —
-top-clearance padding, scroll-anchor, the sidebar content-shift-on-scroll
-bug, AND the previously-deferred HSplitView divider drift (revisited and
-fixed, not deferred anymore — see "Sidebar content-shift-on-scroll bug +
-HSplitView divider drift" above). 226 tests passing, last reviewer verdict
-APPROVE (second pass, after one FIX FIRST round of AppKit-interop hygiene
-fixes on the scroll-insets fix).
+histograms" above. **Sidebar layout bugs — MOSTLY fixed, one re-deferred
+after a critical regression**: top-clearance padding, scroll-anchor, and
+the HSplitView divider drift are all fixed and shipped. The sidebar
+content-shift-on-scroll bug's fix (`StableScrollInsets`) broke ALL slider
+interaction and was REVERTED — that cosmetic bug is back, re-deferred
+(see "Sidebar content-shift-on-scroll bug + HSplitView divider drift"
+above, including a "Lesson recorded" note for whoever attempts this next).
+226 tests passing, app fully functional, last reviewer verdict APPROVE
+(the revert).
 
 **Nothing is currently planned.** The sidebar-regrouping idea (Apple-
 Photos-style labeled sections — Light/Color/B&W/etc — vs. today's flat

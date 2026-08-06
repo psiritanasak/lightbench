@@ -6,34 +6,63 @@ final class HistogramComputerTests: XCTestCase {
     private let linearSpace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
 
     private func solidColorImage(_ value: Double, size: Int = 64) -> CIImage {
-        let color = CIColor(red: value, green: value, blue: value, alpha: 1, colorSpace: linearSpace)!
+        solidColorImage(r: value, g: value, b: value, size: size)
+    }
+
+    private func solidColorImage(r: Double, g: Double, b: Double, size: Int = 64) -> CIImage {
+        let color = CIColor(red: r, green: g, blue: b, alpha: 1, colorSpace: linearSpace)!
         return CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: size, height: size))
     }
 
     func testEmptyExtentReturnsEmptyHistogram() {
-        let bins = HistogramComputer.histogram(of: CIImage.empty())
-        XCTAssertTrue(bins.isEmpty)
+        let data = HistogramComputer.histogram(of: CIImage.empty())
+        XCTAssertTrue(data.luminance.isEmpty)
+        XCTAssertTrue(data.red.isEmpty)
+        XCTAssertTrue(data.green.isEmpty)
+        XCTAssertTrue(data.blue.isEmpty)
     }
 
     func testSolidImageProducesASingleTallBin() {
-        // A perfectly flat image should concentrate almost every sample
-        // into one bin (small AA/downsample edge effects aside).
-        let bins = HistogramComputer.histogram(of: solidColorImage(0.5))
+        // A neutral GRAY input (r == g == b) — a good sanity check that
+        // channel binning doesn't silently diverge on a neutral color: all
+        // four histograms should collapse the same way.
+        let data = HistogramComputer.histogram(of: solidColorImage(0.5))
 
-        XCTAssertEqual(bins.count, HistogramComputer.binCount)
-        let tallBins = bins.filter { $0 > 0 }
-        XCTAssertLessThanOrEqual(tallBins.count, 3, "a flat image should collapse into a small handful of adjacent bins")
-        XCTAssertEqual(bins.max(), 1.0, "the tallest bin is always normalized to 1.0")
+        for bins in [data.luminance, data.red, data.green, data.blue] {
+            XCTAssertEqual(bins.count, HistogramComputer.binCount)
+            let tallBins = bins.filter { $0 > 0 }
+            XCTAssertLessThanOrEqual(tallBins.count, 3, "a flat image should collapse into a small handful of adjacent bins")
+            XCTAssertEqual(bins.max(), 1.0, "the tallest bin is always normalized to 1.0")
+        }
+    }
+
+    func testChannelsTrackTheirOwnColorIndependently() {
+        // A solid color with a distinctly different value per channel — if
+        // the red/green/blue histograms were accidentally computed from
+        // luminance (or from each other) instead of their OWN channel byte,
+        // their peak bins would collapse together instead of tracking
+        // r > g > b (the same monotonic sRGB encode is applied identically
+        // to every channel, so ordering survives the linear->display
+        // conversion).
+        let data = HistogramComputer.histogram(of: solidColorImage(r: 0.9, g: 0.5, b: 0.1))
+
+        let redPeak = data.red.firstIndex(of: 1.0) ?? -1
+        let greenPeak = data.green.firstIndex(of: 1.0) ?? -1
+        let bluePeak = data.blue.firstIndex(of: 1.0) ?? -1
+
+        XCTAssertGreaterThanOrEqual(redPeak, 0)
+        XCTAssertGreaterThanOrEqual(greenPeak, 0)
+        XCTAssertGreaterThanOrEqual(bluePeak, 0)
+        XCTAssertGreaterThan(redPeak, greenPeak, "red's own peak should track its own (higher) channel value, not collapse toward green")
+        XCTAssertGreaterThan(greenPeak, bluePeak, "green's own peak should track its own channel value, distinct from blue")
     }
 
     func testDarkerInputProducesALowerBin() {
-        // Bucket index should track perceived brightness: a near-black
-        // image's peak bin should sit well below a near-white image's.
-        let darkBins = HistogramComputer.histogram(of: solidColorImage(0.02))
-        let brightBins = HistogramComputer.histogram(of: solidColorImage(0.9))
+        let darkData = HistogramComputer.histogram(of: solidColorImage(0.02))
+        let brightData = HistogramComputer.histogram(of: solidColorImage(0.9))
 
-        let darkPeak = darkBins.firstIndex(of: 1.0) ?? -1
-        let brightPeak = brightBins.firstIndex(of: 1.0) ?? -1
+        let darkPeak = darkData.luminance.firstIndex(of: 1.0) ?? -1
+        let brightPeak = brightData.luminance.firstIndex(of: 1.0) ?? -1
 
         XCTAssertGreaterThanOrEqual(darkPeak, 0)
         XCTAssertGreaterThanOrEqual(brightPeak, 0)
@@ -41,11 +70,13 @@ final class HistogramComputerTests: XCTestCase {
     }
 
     func testAllValuesAreFiniteAndNormalized() {
-        let bins = HistogramComputer.histogram(of: solidColorImage(0.7))
-        for value in bins {
-            XCTAssertTrue(value.isFinite)
-            XCTAssertGreaterThanOrEqual(value, 0)
-            XCTAssertLessThanOrEqual(value, 1)
+        let data = HistogramComputer.histogram(of: solidColorImage(0.7))
+        for bins in [data.luminance, data.red, data.green, data.blue] {
+            for value in bins {
+                XCTAssertTrue(value.isFinite)
+                XCTAssertGreaterThanOrEqual(value, 0)
+                XCTAssertLessThanOrEqual(value, 1)
+            }
         }
     }
 
@@ -54,9 +85,11 @@ final class HistogramComputerTests: XCTestCase {
         // the histogram must handle an image whose extent doesn't start at
         // the origin (e.g. after a crop), not just the (0,0)-origin case.
         let cropped = solidColorImage(0.4, size: 100).cropped(to: CGRect(x: 10, y: 5, width: 40, height: 30))
-        let bins = HistogramComputer.histogram(of: cropped)
+        let data = HistogramComputer.histogram(of: cropped)
 
-        XCTAssertEqual(bins.count, HistogramComputer.binCount)
-        XCTAssertEqual(bins.max(), 1.0)
+        for bins in [data.luminance, data.red, data.green, data.blue] {
+            XCTAssertEqual(bins.count, HistogramComputer.binCount)
+            XCTAssertEqual(bins.max(), 1.0)
+        }
     }
 }

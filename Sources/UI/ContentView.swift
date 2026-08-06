@@ -54,6 +54,23 @@ struct ContentView: View {
     /// displays right now.
     @State private var selectedSelectiveColorBand: SelectiveColorBand = .red
 
+    /// Whether the Levels histogram shows luminance only or luminance +
+    /// per-channel RGB overlays. Presentation-only — `HistogramData` always
+    /// carries all four; this just controls what `HistogramView` draws.
+    /// Defaults to `.luminance` to match this histogram's original look.
+    @State private var histogramDisplayMode: HistogramDisplayMode = .luminance
+
+    /// The image pane's `EditorTabBar` row's actual rendered height,
+    /// measured live (not guessed) — see `editControls`'s top padding,
+    /// which uses this to match the sidebar's top clearance to it exactly.
+    /// Both `HSplitView` panes start at the SAME native y-offset below the
+    /// window's toolbar chrome (that chrome is outside the SwiftUI view
+    /// hierarchy entirely, applied uniformly to the whole window); the
+    /// image pane's real content only LOOKS lower because `EditorTabBar` is
+    /// prepended above it. A fixed guessed padding constant (tried twice)
+    /// undershot both times; measuring the real value is the actual fix.
+    @State private var tabBarHeight: CGFloat = 44
+
     /// The on-screen rect the image currently occupies, fit against the
     /// ACTUAL displayed extent (post-straighten/perspective, crop-zeroed) —
     /// see the historical note on this distinction in the crop-overlay
@@ -152,6 +169,9 @@ struct ContentView: View {
         HSplitView {
             VStack(spacing: 0) {
                 EditorTabBar(selectedTab: $selectedTab)
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { newHeight in
+                        tabBarHeight = newHeight
+                    }
                 GeometryReader { proxy in
                     ZStack {
                         MetalImageView(image: document.currentImage, editState: displayEditState)
@@ -328,14 +348,26 @@ struct ContentView: View {
             }
             .padding(.horizontal)
             .padding(.bottom)
-            // The image pane's left column starts with `EditorTabBar`, which
-            // gives it natural clearance below the window's unified toolbar.
-            // This column has no equivalent header, so its content needs
-            // EXTRA top padding (beyond the horizontal/bottom padding above)
-            // to keep the first slider row from crowding the toolbar's
-            // Open/Undo/Redo buttons directly above it.
-            .padding(.top, 20)
+            // Both `HSplitView` panes start at the SAME native y-offset
+            // below the window's toolbar chrome — the image pane's content
+            // only sits lower because `EditorTabBar` is prepended above it.
+            // Match that exactly via the MEASURED `tabBarHeight` (see its
+            // own doc comment) rather than a guessed constant — a guessed
+            // constant (20) undershot in practice, since what's actually
+            // needed is the tab bar's own real height, not an arbitrary
+            // buffer.
+            .padding(.top, tabBarHeight)
         }
+        // The REAL bug (confirmed live, not guessed): this ScrollView was
+        // starting scrolled a row past the top on appear — "Temperature"
+        // existed and was correctly laid out, just not visible until
+        // scrolled up manually. Not a padding/spacing problem at all (the
+        // `tabBarHeight`-matched top padding above is a real, separate,
+        // correct visual-alignment choice, but it wasn't THIS bug's fix).
+        // `.defaultScrollAnchor(.top)` pins the initial/default scroll
+        // position to the top explicitly, overriding whatever implicit
+        // macOS focus-driven auto-scroll was otherwise moving it.
+        .defaultScrollAnchor(.top)
         .disabled(document.currentImage == nil)
         .background(Color(white: 0.11))
     }
@@ -440,7 +472,14 @@ struct ContentView: View {
                 range: -1...1, identity: 0
             ) { String(format: "%+.0f%%", $0 * 100) }
             Text("Levels").font(.caption).foregroundStyle(.secondary)
-            HistogramView(bins: document.histogramBins)
+            Picker("", selection: $histogramDisplayMode) {
+                ForEach(HistogramDisplayMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            HistogramView(data: document.histogramData, showChannels: histogramDisplayMode == .rgb)
             EditSliderRow(
                 label: "Levels Black", value: $document.editState.levelsBlackPoint,
                 range: 0...1, identity: 0

@@ -27,11 +27,12 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
 
-    /// Live Levels histogram, `HistogramComputer.binCount` values normalized
-    /// 0...1. Empty until the first debounced recompute finishes (or if no
-    /// image is loaded). See `recomputeHistogram()` for what state it
-    /// actually reflects.
-    @Published private(set) var histogramBins: [Float] = []
+    /// Live Levels histogram — luminance plus per-channel R/G/B, each
+    /// `HistogramComputer.binCount` values normalized 0...1. Empty (`.empty`)
+    /// until the first debounced recompute finishes (or if no image is
+    /// loaded). See `recomputeHistogram()` for what state it actually
+    /// reflects.
+    @Published private(set) var histogramData = HistogramData.empty
 
     /// User-facing feedback for a WB eyedropper tap that couldn't fully do
     /// its job (too dark to sample, or a cast too strong to fully correct)
@@ -138,7 +139,7 @@ final class ImageDocumentModel: ObservableObject {
     /// for without new pipeline surface.
     private func recomputeHistogram() {
         guard let currentImage else {
-            histogramBins = []
+            histogramData = .empty
             return
         }
         var referenceState = editState
@@ -151,10 +152,10 @@ final class ImageDocumentModel: ObservableObject {
 
         Task.detached(priority: .userInitiated) { [weak self] in
             let edited = EditPipeline.apply(referenceState, to: currentImage)
-            let bins = HistogramComputer.histogram(of: edited)
+            let data = HistogramComputer.histogram(of: edited)
             await MainActor.run {
                 guard let self, self.histogramGeneration == generation else { return }
-                self.histogramBins = bins
+                self.histogramData = data
             }
         }
     }

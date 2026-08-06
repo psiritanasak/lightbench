@@ -51,8 +51,14 @@ each gets its own Plan Mode session per the workflow rules below.
   Light-group sliders — revisit whether to split them out once Levels/Curves v2 lands.
 - **Color:** Saturation ✅ (global, under HSL v1 below), Vibrance ✅ (saturation
   that protects already-saturated tones and skin tones — a genuinely different
-  algorithm from plain saturation, via Core Image's `CIVibrance`). Not built:
-  Cast (color-cast neutralization, distinct from White Balance's temperature/tint).
+  algorithm from plain saturation, via Core Image's `CIVibrance`). Cast ✅
+  shipped — whole-image gray-world statistical analysis (downsampled,
+  luma-outlier-clipped mean in scene-linear light via
+  `Sources/Rendering/ImageAverageColor.swift`) feeding the existing
+  `WhiteBalanceSolver`/`whiteBalanceTemperature`/`whiteBalanceTint` fields —
+  no new `EditState` fields or pipeline stage, a new UI-driven way (a single
+  "Fix Color Cast" button, `ImageDocumentModel.fixColorCast()`) to set
+  fields that already exist, exactly like the WB eyedropper.
 - **Black & White:** ✅ shipped — a single toggle forcing full desaturation
   (reuses the same `CIColorControls` saturation-zero mechanism `hslSaturation`'s
   own -1 extreme uses). Not built: Intensity/Neutrals/Tone/Grain sliders

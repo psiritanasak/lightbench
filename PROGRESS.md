@@ -1,16 +1,20 @@
 # Progress
 
 ## Current phase
-Phase 2 (Edit engine) — the original six roadmap items, five backlog
-tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
+**Phase 2 (Edit engine) is COMPLETE.** The original six roadmap items, five
+backlog tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
 Straighten, Vertical/Horizontal perspective correction, the full Apple
 Photos-style layout (dark theme + top tab bar), Black & White, Sharpen,
 Noise Reduction, Definition (Clarity), Levels (with a live histogram), the
-WB neutral-gray eyedropper, Selective Color (HSL v2), and Red-Eye removal
-are shipped, each reviewer-approved and manually verified live. The Apple
-Photos Crop-panel batch (6 features, see below) completed first; the user
-then asked to work through the REST of the Phase 2 backlog. The roadmap in
+WB neutral-gray eyedropper, Selective Color (HSL v2), Red-Eye removal, and
+finally Cast (color-cast neutralization) are all shipped, each
+reviewer-approved and manually verified live — every item in CLAUDE.md's
+"Phase 2 edit engine backlog" is now ✅. Only Undo/Revert-to-Original
+remains explicitly deferred (see "Exact next step" below); nothing else is
+outstanding in Phase 2. The Apple Photos Crop-panel batch (6 features, see
+below) completed first; the user then asked to work through the REST of
+the Phase 2 backlog, ending with Cast. The roadmap in
 CLAUDE.md was expanded three times at the user's request to spell out the
 fuller scope: first adding Transform/Distort and v2 notes for
 curves/HSL/crop, then using Apple Photos' adjustment panel (screenshots the
@@ -53,10 +57,12 @@ deliberately last since it needs a different content-aware architecture):**
    scope of the remaining items) — done (see below).
 8. ✅ Red-Eye removal (point-and-click + region-based correction) — done
    (see below).
-9. Cast (color-cast neutralization — content-aware gray-world-style
+9. ✅ Cast (color-cast neutralization — content-aware gray-world-style
    statistics, a different architecture from every other adjustment so
    far; deliberately last, as established when it was first deferred) —
-   NEXT and FINAL item in the Phase 2 backlog.
+   done (see below). **This was the FINAL item in the Phase 2 backlog —
+   Phase 2 is now complete** (modulo Undo/Revert, still explicitly
+   deferred pending the user asking again).
 
 **User also asked about Undo / "Revert to Original" (2026-08-04) — held off
 for now, explicitly deferred, not started.** Clarified the scope split for
@@ -1025,9 +1031,84 @@ restructure. 1 commit.
 - 210 tests total (11 new Red-Eye pipeline tests + 6 new
   `RedEyeHitTestTests`). 1 commit.
 
+### Cast — color-cast neutralization (complete, verified live) — backlog item 9 of 9, FINAL Phase 2 item
+- Turned out LOWER risk than several preceding features despite CLAUDE.md
+  describing it as needing "a different architecture from every other
+  adjustment": it reuses `WhiteBalanceSolver.solve(sampleLinearRGB:)` (the
+  WB eyedropper's already-tested numerical search) and
+  `ImageDocumentModel.pickWhiteBalance`'s own structural template almost
+  unchanged — the only genuinely new piece is HOW to compute a robust
+  whole-image "gray world" average color to feed the solver. **No new
+  `EditState` fields and no new `EditPipeline` stage** — Cast, like the WB
+  eyedropper, is a new UI-driven way to set the SAME
+  `whiteBalanceTemperature`/`whiteBalanceTint` fields, not a new adjustment.
+- `Sources/Rendering/ImageAverageColor.swift` (new) — mirrors
+  `HistogramComputer`'s structure (own independent, non-Metal `CIContext`,
+  downsample to 256px before analyzing — reused, not re-derived) but
+  computes a MEAN in SCENE-LINEAR light (`extendedLinearSRGB`/`RGBAf`,
+  matching `WhiteBalanceSolver`/`PixelSampler`'s domain), not a histogram in
+  display space — a deliberate domain divergence from the file it's
+  structurally modeled on. Excludes `alpha < 0.5` pixels (same reasoning
+  `PixelSampler` already established for a sample region overlapping a
+  transparent margin).
+- **Real compiled probe run before any project file was written** (same
+  discipline as every prior feature): built a synthetic 4-quadrant
+  multi-color scene (not flat — genuinely exercises whole-image averaging),
+  confirmed the gray-world approach actually recovers an injected synthetic
+  cast end-to-end (solved correction reapplied to the cast scene tightened
+  its color spread to 0.0275, even tighter than the original uncast scene's
+  own 0.0375); confirmed 256px downsampling is EXACTLY lossless for this
+  statistic (diff = 0.0 vs full-resolution on the test scene, not just
+  "close enough"); and — the plan's own explicitly open question — measured
+  that LUMA-OUTLIER CLIPPING matters: a scene with a blown-out quadrant
+  skewed a plain mean measurably away from the true base tone
+  ((0.625,0.610,0.587) vs correct (0.5,0.48,0.45)) and solved a meaningfully
+  different (250K off) correction, while excluding near-black/near-white
+  pixels (linear luma outside 0.05...0.95) recovered the true base tone
+  almost exactly. Shipped WITH outlier clipping as a result.
+- `Sources/UI/ImageDocumentModel.swift` — new `fixColorCast()`, structurally
+  mirroring `pickWhiteBalance` (same geometry-only sampling render — WB is
+  pipeline stage 1, so the raw front-of-pipeline chromaticity is what needs
+  to average to neutral; same `WhiteBalanceSolver.solve` → three-way
+  `Outcome` switch, reusing the existing `whiteBalanceSampleMessage` alert)
+  but whole-image rather than point-tap driven — no coordinate/tap needed.
+- `Sources/UI/ContentView.swift` — a single "Fix Color Cast" button
+  (`wand.and.rays`, disabled with no image loaded) next to the existing
+  "Pick White Balance" button — the simplest UI addition in the whole
+  backlog: no armed mode, no overlay, no gesture, no mutual-exclusivity
+  wiring needed (unlike the WB eyedropper/Red-Eye/Crop point-interaction
+  trio).
+- **First reviewer pass was FIX FIRST — one real concurrency bug**:
+  `fixColorCast()` initially called `EditPipeline.apply(...)` and
+  `ImageAverageColor.compute(of:)` synchronously on the main actor before
+  entering `Task.detached` — copied `pickWhiteBalance`'s shape without
+  noticing this analysis is a full 256px render + 65k-pixel CPU scan (the
+  same cost profile `recomputeHistogram` already backgrounds for
+  `HistogramComputer`), not `pickWhiteBalance`'s trivial 5×5-pixel sample.
+  Fixed by moving both calls inside the detached task, with the `nil`-sample
+  early-return hopping back to `MainActor.run` rather than returning
+  synchronously on the main actor. Second pass independently verified the
+  capture semantics (value-type `EditState`/`CIImage`, non-`MainActor`
+  `EditPipeline`/`ImageAverageColor`) are sound, re-ran build (Swift 6
+  strict concurrency, no Sendable diagnostics) and the full test suite, and
+  APPROVEd.
+- `Tests/RenderingTests/ImageAverageColorTests.swift` (new, 6 tests) —
+  mirrors `HistogramComputerTests`/`PixelSamplerTests` style: solid image
+  averages to itself, two-region image averages to the weighted mean,
+  alpha-excluded pixels don't dilute, a blown-out outlier region doesn't
+  skew the average (the luma-clipping behavior specifically), zero-extent
+  returns `nil`, offset extent doesn't crash. No new `WhiteBalanceSolver`
+  tests needed — untouched, already covered.
+- 216 tests total (6 new `ImageAverageColorTests`). 1 commit (feature +
+  the FIX FIRST concurrency correction, both folded into the single
+  reviewed/approved diff before commit).
+- **This closes out Phase 2 entirely** (modulo Undo/Revert, which stays
+  explicitly deferred pending the user asking again, per their own earlier
+  instruction).
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Red-Eye removal, first pass, no
-issues found).
+None — last reviewer verdict was APPROVE (Cast, second pass after one
+FIX FIRST concurrency correction).
 
 Prior: Selective Color (second pass, after one FIX FIRST round on a real
 functional bug — resolved and independently re-verified before commit).
@@ -1240,54 +1321,28 @@ Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**The Apple Photos Crop-panel batch is complete; user asked to work through
-the REST of the Phase 2 backlog next (Undo/Revert stays queued/deferred,
-per the user's own instruction — do not start it without being asked
-again).** Sequence (see "Current phase" above for the full list and
-reasoning): Black & White is done, Sharpen is done, Noise Reduction is
-done, Definition (Clarity) is done, Levels + live histogram is done, the
-WB neutral-gray eyedropper is done, Selective Color (HSL v2) is done,
-Red-Eye removal is done. **NEXT AND FINAL: Cast (color-cast neutralization)
-— item 9 of 9.** Not yet planned. Deliberately last, as established when
-first deferred — needs a genuinely different, content-aware architecture
-from every other adjustment shipped so far: a gray-world-style statistical
-analysis of the WHOLE image (or a user-selected region) to estimate and
-neutralize an unwanted color cast, rather than a fixed per-pixel filter
-formula with user-set slider values. Will need its own Plan-agent
-dispatch — likely both a Core Image/algorithm investigation (how to
-compute a robust "average color" statistic efficiently — probably reusing
-`HistogramComputer`'s "independent CIContext, safe off the main thread"
-precedent for the analysis pass — and how to turn that into a
-neutralizing correction, likely reusing `WhiteBalanceSolver`'s numerical-
-search approach or `EditPipeline.whiteBalanced`'s existing chromatic-
-adaptation filter directly, since Cast neutralization and White Balance
-correction are mathematically closely related) and a UI design (does Cast
-need its own point-and-click "sample here" interaction like the WB
-eyedropper, or is it a single "Auto" button that analyzes the whole frame
-with no user interaction at all — a genuinely different interaction model
-from every other feature shipped this session). This is the last item in
-the Phase 2 backlog — completing it closes out Phase 2 entirely (modulo
-Undo/Revert, still explicitly deferred pending the user asking again).
-Lens distortion correction remains explicitly OUT of scope (wasn't in
-either screenshot, needs camera-profile data, a
-separate concern) unless the user asks for it specifically.
+**Phase 2 (the original six roadmap items plus the full expanded backlog —
+Apple Photos Crop-panel batch, then Black & White, Sharpen, Noise
+Reduction, Definition, Levels, WB eyedropper, Selective Color, Red-Eye
+removal, and finally Cast) is now COMPLETE.** Every backlog item in
+CLAUDE.md's "Phase 2 edit engine backlog" section is ✅. 216 tests passing,
+last reviewer verdict APPROVE (Cast, second pass).
 
-Do not start Phase 3 (non-destructive pipeline: param serialization, edit
-history, undo) without the user's explicit go-ahead — starting a new phase
-always needs its own Plan Mode session per CLAUDE.md's roadmap-order rule.
+**Nothing is currently planned or in progress.** The only known-remaining,
+explicitly-deferred item is Undo / "Revert to Original" (see below) — do
+NOT start it, or Phase 3, without the user asking again first; both need
+their own explicit go-ahead and Plan Mode session per CLAUDE.md's
+roadmap-order rule. Lens distortion correction also remains explicitly OUT
+of scope (needs camera-profile data, a separate concern) unless the user
+asks for it specifically.
 
-Cast was deliberately passed over (not forgotten) when picking a feature
-after Vibrance: it's the one remaining backlog item that breaks the
-established pure-per-pixel-filter architecture — its distinction from White
-Balance is *content-awareness* (neutralizing a DETECTED cast, needing
-per-image statistics like a gray-world average, not just a stateless
-per-pixel transform), which deserves its own deliberate design pass rather
-than reusing the existing pattern. Still not built; pick it up when ready to
-design that content-aware machinery properly.
-
-Do not start Phase 3 (non-destructive pipeline: param serialization, edit
-history, undo) without the user's explicit go-ahead — starting a new phase
-always needs its own Plan Mode session per CLAUDE.md's roadmap-order rule.
+When the user next asks to continue, the natural options are: (1) Undo/
+Revert-to-Original (scope split already recorded below — a trivial
+"Revert to Original" button vs full Phase 3 Undo/Redo), or (2) starting
+Phase 3 proper (non-destructive pipeline: param serialization, edit
+history, undo) if the user wants to skip straight past the simple revert
+button, or (3) Phase 4+ (Library/import/catalog, Presets+export, RAW
+support, Polish) per CLAUDE.md's roadmap — ask the user which, don't guess.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

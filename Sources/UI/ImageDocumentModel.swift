@@ -10,8 +10,22 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var currentFileName: String?
     @Published var loadErrorMessage: String?
     @Published var editState = EditState() {
-        didSet { scheduleHistogramUpdate() }
+        didSet {
+            scheduleHistogramUpdate()
+            // Skip re-recording a write WE made while applying an undo/redo
+            // (`applyHistoryState`) — otherwise undoing would immediately
+            // re-commit the very state it just restored.
+            if !isApplyingHistoryChange { recordEditChange() }
+        }
     }
+
+    /// Whether an undo/redo step is available — mirrors `EditHistory`'s own
+    /// `canUndo`/`canRedo` as `@Published` properties, since SwiftUI can't
+    /// observe mutation of a plain (non-`ObservableObject`) struct property;
+    /// refreshed after every history operation. Drives the toolbar buttons'
+    /// enabled state.
+    @Published private(set) var canUndo = false
+    @Published private(set) var canRedo = false
 
     /// Live Levels histogram, `HistogramComputer.binCount` values normalized
     /// 0...1. Empty until the first debounced recompute finishes (or if no
@@ -34,6 +48,34 @@ final class ImageDocumentModel: ObservableObject {
     /// "only the latest result wins" mechanism here, not task cancellation.
     private var histogramGeneration = 0
 
+    // MARK: - Undo/Redo state
+
+    private var history = EditHistory()
+
+    /// Set while `applyHistoryState` is assigning `editState` as the result
+    /// of an undo/redo — makes the resulting `didSet` skip re-recording
+    /// (which would otherwise immediately re-commit the state undo/redo just
+    /// restored), while still letting `scheduleHistogramUpdate()` run
+    /// unconditionally (the histogram must update on undo/redo too).
+    private var isApplyingHistoryChange = false
+
+    /// How long a pause in `editState` changes must last before the
+    /// in-progress burst is considered "settled" and committed as one undo
+    /// step. A slider or crop drag fires many writes per second; without
+    /// this, every intermediate value would become its own undo step. A UX
+    /// "feel" constant, not a measured filter value — tuned by feel, not a
+    /// probe.
+    private static let historyCoalesceInterval: TimeInterval = 0.35
+
+    private var historyCommitWorkItem: DispatchWorkItem?
+    /// Whether a burst of `editState` changes is currently in progress
+    /// (waiting out the coalesce interval before committing). The actual
+    /// "before" value doesn't need to be captured separately — `history`'s
+    /// own `current` already IS the last settled/committed value, so
+    /// `finalizePendingCommit` just commits the current `editState` on top
+    /// of it once the burst settles.
+    private var isBurstPending = false
+
     func openImage() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.jpeg, .png, .tiff, .heic]
@@ -52,6 +94,7 @@ final class ImageDocumentModel: ObservableObject {
         currentImage = raw.oriented(Self.exifOrientation(of: url))
         currentFileName = url.lastPathComponent
         editState = EditState() // edits are per-photo; don't carry over to the next one opened
+        resetHistory() // undo history is per-photo too — can't undo into the previous photo
     }
 
     private static func exifOrientation(of url: URL) -> CGImagePropertyOrientation {
@@ -250,5 +293,81 @@ final class ImageDocumentModel: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Undo/Redo
+
+    /// Called from `editState`'s `didSet` for every write that ISN'T an
+    /// undo/redo replay. A slider/crop drag fires many writes per second, so
+    /// this doesn't commit immediately — it just marks a burst as in
+    /// progress (if one isn't already) and (re)schedules a debounced
+    /// `finalizePendingCommit()` after `historyCoalesceInterval` of
+    /// inactivity, coalescing the whole burst into one undo step.
+    private func recordEditChange() {
+        isBurstPending = true
+
+        historyCommitWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in self?.finalizePendingCommit() }
+        historyCommitWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.historyCoalesceInterval, execute: workItem)
+    }
+
+    /// Settles the in-progress burst (if any) into one `EditHistory` commit.
+    /// `EditHistory.commit`'s own `== current` guard drops a burst that
+    /// netted no actual change (e.g. a slider dragged back to its start).
+    private func finalizePendingCommit() {
+        guard isBurstPending else { return }
+        isBurstPending = false
+        history.commit(editState)
+        refreshUndoRedoFlags()
+    }
+
+    /// Applies `state` as the result of an undo/redo step. Guarded by
+    /// `isApplyingHistoryChange` so the resulting `editState` `didSet`
+    /// doesn't re-record this as a new burst (which would immediately
+    /// re-commit the very state just restored) — `scheduleHistogramUpdate()`
+    /// still runs unconditionally, so the live histogram updates correctly.
+    private func applyHistoryState(_ state: EditState) {
+        isApplyingHistoryChange = true
+        editState = state
+        isApplyingHistoryChange = false
+        refreshUndoRedoFlags()
+    }
+
+    private func refreshUndoRedoFlags() {
+        canUndo = history.canUndo
+        canRedo = history.canRedo
+    }
+
+    /// Resets undo/redo history to empty — called on `load(from:)` since
+    /// edits (and their history) are per-photo; also cancels/discards any
+    /// burst that was mid-flight for the PREVIOUS photo so it can't leak a
+    /// stray commit into the new photo's fresh history.
+    private func resetHistory() {
+        historyCommitWorkItem?.cancel()
+        historyCommitWorkItem = nil
+        isBurstPending = false
+        history = EditHistory(editState)
+        refreshUndoRedoFlags()
+    }
+
+    /// Undoes the most recent undo step. First flushes any in-progress burst
+    /// (so ⌘Z during an active drag undoes the drag-in-progress edit, not
+    /// some older already-committed one), then steps `history` back and
+    /// applies the result.
+    func undo() {
+        finalizePendingCommit()
+        history.undo()
+        applyHistoryState(history.current)
+    }
+
+    /// Redoes the most recently undone step. Same finalize-first reasoning
+    /// as `undo()` — though in practice a redo is only available when no
+    /// burst is pending (any new edit clears the redo stack), flushing first
+    /// keeps the two methods symmetric and safe regardless.
+    func redo() {
+        finalizePendingCommit()
+        history.redo()
+        applyHistoryState(history.current)
     }
 }

@@ -259,6 +259,24 @@ struct ContentView: View {
                     document.openImage()
                 }
             }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    document.undo()
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!document.canUndo)
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    document.redo()
+                } label: {
+                    Label("Redo", systemImage: "arrow.uturn.forward")
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!document.canRedo)
+            }
             if selectedTab == .crop {
                 ToolbarItem(placement: .automatic) {
                     Button("Done") { selectedTab = .adjust }

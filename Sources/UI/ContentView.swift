@@ -326,7 +326,15 @@ struct ContentView: View {
                 case .cleanUp: placeholderTab("Clean Up isn't available yet.")
                 }
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.bottom)
+            // The image pane's left column starts with `EditorTabBar`, which
+            // gives it natural clearance below the window's unified toolbar.
+            // This column has no equivalent header, so its content needs
+            // EXTRA top padding (beyond the horizontal/bottom padding above)
+            // to keep the first slider row from crowding the toolbar's
+            // Open/Undo/Redo buttons directly above it.
+            .padding(.top, 20)
         }
         .disabled(document.currentImage == nil)
         .background(Color(white: 0.11))

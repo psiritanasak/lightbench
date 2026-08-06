@@ -1380,12 +1380,55 @@ restructure. 1 commit.
   (lightly re-reviewed given it's a well-evidenced, purely subtractive,
   user-confirmed-live change).
 
+### Revert to Original button (complete, verified live) — last remaining small Phase 3 item
+- User picked this over Edit-menu `CommandGroup` integration (the other
+  small Phase 3 item deferred when Undo/Redo shipped) and over moving to
+  Phase 4. Genuinely small — reused `EditState()` (the same identity value
+  `load(from:)` already resets to on new-photo load), `EditHistory`'s
+  existing `finalizePendingCommit()` flush-first pattern (already used by
+  `undo()`/`redo()`), and each `EditSliderRow`'s own `.disabled(value ==
+  identity)` convention applied at the whole-`EditState` level. No new
+  `EditState` fields, no new `EditPipeline` stage, no confirmation dialog
+  (matches existing app conventions — trivially undoable via ⌘Z anyway).
+- `Sources/UI/ImageDocumentModel.swift` — new `revertToOriginal()`.
+  **First reviewer pass was FIX FIRST — one real correctness gap**: the
+  initial implementation set `editState = EditState()` directly, routing
+  through the normal DEBOUNCED `didSet` → `recordEditChange()` path (same
+  as an ordinary slider drag) instead of committing immediately like
+  `undo()`/`redo()` do. Reviewer traced two real consequences: (1) a
+  follow-up edit made within the ~350ms debounce window could silently
+  merge into the SAME undo step as the revert, contradicting the method's
+  own doc comment claiming atomicity; (2) `canUndo`/`canRedo` could go
+  stale relative to what the toolbar buttons showed during that window
+  (e.g. clicking Redo right after Revert could silently no-op, since
+  `redo()`'s own `finalizePendingCommit()` would commit the pending revert
+  and clear the redo stack as a side effect before `history.redo()` ran).
+  Fixed by mirroring `undo()`/`redo()`'s exact pattern: `finalizePendingCommit()`
+  → `history.commit(EditState())` (direct, synchronous) → `applyHistoryState(
+  history.current)` — the revert is now always its own atomic,
+  immediately-committed step, `canUndo`/`canRedo` accurate the instant the
+  button is clicked. Second pass independently traced through the
+  guard/flag interactions (`isApplyingHistoryChange`, `refreshUndoRedoFlags`)
+  and confirmed both consequences are closed, with no divergence from
+  `undo()`/`redo()`'s own established shape. APPROVEd.
+- `Sources/UI/ContentView.swift` — one toolbar button after Redo,
+  `arrow.counterclockwise` icon (distinct from Undo's `arrow.uturn.backward`,
+  matches Apple Photos' own convention), disabled when no photo is loaded
+  or nothing to revert.
+- No new tests — matches this project's own established gap: `ImageDocumentModel`
+  (unlike `EditEngine`/`Rendering`) has no unit test target at all (depends
+  on `NSOpenPanel`/file I/O), and `undo()`/`redo()` are likewise untested;
+  this diff is consistent with that existing gap, not a new one.
+- 226 tests unchanged (no test-relevant code touched). 1 commit (feature +
+  the FIX FIRST correction together, after user confirmed live both before
+  and after the fix).
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (the `StableScrollInsets` revert,
-lightly re-reviewed given it's a well-evidenced, purely subtractive,
-user-confirmed-live change — see "Sidebar content-shift-on-scroll bug +
-HSplitView divider drift" above for the full story). Status: the divider-
-drift bug IS fixed and shipped (`MetalImageView`'s `intrinsicContentSize`
+None — last reviewer verdict was APPROVE (Revert to Original, second pass
+after one FIX FIRST round on the atomic-commit correctness gap above).
+Separately, the sidebar layout investigation status stands as recorded
+above: the divider-drift bug IS fixed and shipped (`MetalImageView`'s
+`intrinsicContentSize`
 override); the sidebar content-shift-on-scroll bug is BACK/re-deferred
 after its fix caused a critical regression (broke all slider interaction)
 that passed two reviewer passes and the full test suite before live
@@ -1659,21 +1702,26 @@ scenario ever needs re-checking):
   interfere with a focused crop-inset numeric text field's own native
   undo?) was not specifically called out as broken — treated as fine.
 
-**Next: remaining options** (ask the user which, don't guess): (1) continue Phase 3 — a standalone "Revert to
-Original" button (trivial, `EditState()` reset already exists on load) was
-explicitly deferred as its own small item during this slice's scoping, or
-Edit-menu `CommandGroup(replacing: .undoRedo)` integration (would need
-lifting `@StateObject document` to `PhotoAppApp`) as a documented v1 gap
-from this slice; (2) disk persistence of edit state/history — explicitly
-deferred pending the Phase 4 catalog DB (`Sources/Catalog/` is still empty);
-(3) Phase 4+ (Library/import/catalog, Presets+export, RAW support, Polish)
-per CLAUDE.md's roadmap. Lens distortion correction remains explicitly OUT
-of scope (needs camera-profile data, a separate concern) unless the user
-asks for it specifically. Starting Phase 4 (a new phase) needs its own
-explicit go-ahead and Plan Mode session per CLAUDE.md's roadmap-order rule;
-continuing within Phase 3 (revert button, persistence, menu integration)
-is more of the same phase but each is still its own feature/session per the
-"one feature per session" rule.
+**Revert to Original button: DONE** — see its own section above. That was
+the last of the two small Phase 3 items deferred when Undo/Redo shipped.
+
+**Next: remaining options** (ask the user which, don't guess): (1) the
+OTHER small Phase 3 item — Edit-menu `CommandGroup(replacing: .undoRedo)`
+integration (would need lifting `@StateObject document` to `PhotoAppApp`),
+still a documented v1 gap, not yet built; (2) disk persistence of edit
+state/history — explicitly deferred pending the Phase 4 catalog DB
+(`Sources/Catalog/` is still empty); (3) Phase 4+ (Library/import/catalog,
+Presets+export, RAW support, Polish) per CLAUDE.md's roadmap; (4) the
+still-deferred sidebar-regrouping idea (Apple-Photos-style labeled
+sections); (5) revisit the re-deferred sidebar content-shift-on-scroll
+cosmetic bug (see its own section above, including the "Lesson recorded"
+note). Lens distortion correction remains explicitly OUT of scope (needs
+camera-profile data, a separate concern) unless the user asks for it
+specifically. Starting Phase 4 (a new phase) needs its own explicit
+go-ahead and Plan Mode session per CLAUDE.md's roadmap-order rule;
+continuing within Phase 3 (menu integration, persistence) is more of the
+same phase but each is still its own feature/session per the "one feature
+per session" rule.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

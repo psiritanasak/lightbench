@@ -448,32 +448,27 @@ struct ContentView: View {
     }
 
     private var adjustTabContent: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            lightSection
+            Divider()
+            colorSection
+            Divider()
+            selectiveColorSection
+            Divider()
+            blackAndWhiteSection
+            Divider()
+            effectsSection
+            Divider()
+            redEyeSection
+        }
+    }
+
+    /// Tone/exposure-family controls, matching Apple Photos' own "Light"
+    /// group — everything here operates on brightness/contrast/tonal
+    /// range, not color.
+    private var lightSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            EditSliderRow(
-                label: "Temperature", value: $document.editState.whiteBalanceTemperature,
-                range: 3500...9500, identity: 6500
-            ) { String(format: "%.0fK", $0) }
-            EditSliderRow(
-                label: "Tint", value: $document.editState.whiteBalanceTint,
-                range: -100...100, identity: 0
-            ) { String(format: "%+.0f", $0) }
-            Button {
-                isPickingWhiteBalance.toggle()
-                if isPickingWhiteBalance { isPlacingRedEyeCorrections = false }
-            } label: {
-                Label("Pick White Balance", systemImage: "eyedropper")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .tint(isPickingWhiteBalance ? .yellow : nil)
-            Button {
-                document.fixColorCast()
-            } label: {
-                Label("Fix Color Cast", systemImage: "wand.and.rays")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled(document.currentImage == nil)
+            Text("Light").font(.headline)
             EditSliderRow(
                 label: "Exposure", value: $document.editState.exposureEV,
                 range: -5...5, identity: 0
@@ -523,6 +518,39 @@ struct ContentView: View {
                 label: "Levels Gamma", value: $document.editState.levelsGamma,
                 range: 0.3...3.0, identity: 1.0
             ) { String(format: "%.2f", $0) }
+        }
+    }
+
+    /// Color/white-balance-family controls, matching Apple Photos' own
+    /// "Color" group.
+    private var colorSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Color").font(.headline)
+            EditSliderRow(
+                label: "Temperature", value: $document.editState.whiteBalanceTemperature,
+                range: 3500...9500, identity: 6500
+            ) { String(format: "%.0fK", $0) }
+            EditSliderRow(
+                label: "Tint", value: $document.editState.whiteBalanceTint,
+                range: -100...100, identity: 0
+            ) { String(format: "%+.0f", $0) }
+            Button {
+                isPickingWhiteBalance.toggle()
+                if isPickingWhiteBalance { isPlacingRedEyeCorrections = false }
+            } label: {
+                Label("Pick White Balance", systemImage: "eyedropper")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(isPickingWhiteBalance ? .yellow : nil)
+            Button {
+                document.fixColorCast()
+            } label: {
+                Label("Fix Color Cast", systemImage: "wand.and.rays")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(document.currentImage == nil)
             EditSliderRow(
                 label: "Hue", value: $document.editState.hslHue,
                 range: -180...180, identity: 0
@@ -535,8 +563,24 @@ struct ContentView: View {
                 label: "Saturation", value: $document.editState.hslSaturation,
                 range: -1...1, identity: 0
             ) { String(format: "%+.0f%%", $0 * 100) }
-            selectiveColorSection
+        }
+    }
+
+    /// Just the monochrome-mode toggle, given its own small section —
+    /// matches Apple Photos giving Black & White its own distinct panel
+    /// entry rather than lumping a mode toggle in with continuous sliders.
+    private var blackAndWhiteSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Black & White").font(.headline)
             EditToggleRow(label: "Black & White", value: $document.editState.blackAndWhite)
+        }
+    }
+
+    /// Vignette/Definition/Sharpen/Noise Reduction — the "finishing"
+    /// controls, matching Apple Photos' own Effects/Detail grouping.
+    private var effectsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Effects").font(.headline)
             EditSliderRow(
                 label: "Vignette", value: $document.editState.vignetteStrength,
                 range: -1...1, identity: 0
@@ -557,7 +601,6 @@ struct ContentView: View {
                 label: "Noise Reduction", value: $document.editState.noiseReduction,
                 range: 0...1, identity: 0
             ) { String(format: "%.0f%%", $0 * 100) }
-            redEyeSection
         }
     }
 
@@ -567,6 +610,7 @@ struct ContentView: View {
     /// its established scope-cut pattern), and a "Clear All" button.
     private var redEyeSection: some View {
         VStack(alignment: .leading, spacing: 14) {
+            Text("Red-Eye").font(.headline)
             Button {
                 isPlacingRedEyeCorrections.toggle()
                 if isPlacingRedEyeCorrections { isPickingWhiteBalance = false }

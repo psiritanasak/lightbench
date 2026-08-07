@@ -1597,14 +1597,55 @@ restructure. 1 commit.
   Original, Edit-menu integration, and sidecar-file persistence are all
   shipped and reviewer-approved. Nothing remains deferred in Phase 3.
 
+### Adjust tab regrouping into labeled sections (complete, verified live)
+- User picked this as a lighter follow-up after Phase 3 closed out, over
+  suppressing the default ⌘N "New Window" behavior or revisiting the
+  re-deferred sidebar scroll-shift bug. Deferred earlier in favor of the
+  RGB histogram feature; confirmed scope via a preview shown at that time
+  (LIGHT/COLOR/EFFECTS groupings), extended here to cover every existing
+  control.
+- `Sources/UI/ContentView.swift` — `adjustTabContent`'s single flat
+  ~20-row `VStack` split into six labeled, `Divider()`-separated
+  sub-sections matching Apple Photos' own adjustment-panel groupings:
+  `lightSection` (Exposure, Brightness, Brilliance, Contrast, Highlights,
+  Shadows, Black Point, Levels), `colorSection` (Temperature, Tint, Pick
+  White Balance, Fix Color Cast, Hue, Vibrance, Saturation), the
+  pre-existing `selectiveColorSection` (kept as its own top-level section
+  rather than folded into Color — big enough, and already visually
+  distinct, to deserve staying separate, matching how Apple Photos' own
+  panel treats it), a new `blackAndWhiteSection` (just the toggle, its own
+  small section — B&W is a mode switch, not a continuous slider, matching
+  Apple Photos giving it a distinct panel entry), `effectsSection`
+  (Vignette, Vignette Radius, Definition, Sharpen, Noise Reduction), and
+  the pre-existing `redEyeSection` (untouched internals, gained one new
+  `Text("Red-Eye").font(.headline)` label for consistency with the other
+  sections' header style).
+- Purely presentation-only — zero `EditState`/`EditPipeline` changes,
+  every binding/range/identity/format closure claimed to be copied
+  byte-for-byte into its new location, just regrouped and reordered.
+- Reviewer APPROVE on first pass — given the real, checkable risk in a
+  large manual transcription (20 rows moved, a silent copy-paste swap
+  between two similar-looking rows being the realistic failure mode),
+  explicitly cross-checked every row's `range`/`identity`/format string
+  against `EditState.swift`'s own documented defaults (not just confirmed
+  the code compiles), confirmed every field binding points at the correct
+  property, confirmed no row was dropped or duplicated (each
+  `$document.editState.<field>` binding appears exactly once), and
+  confirmed `selectiveColorSection`/`redEyeSection`'s bodies are untouched
+  except the one intentional header addition. No issues found.
+- 235 tests unchanged (pure UI reorganization, no test-relevant code
+  touched) — matches this project's own precedent (the earlier dark-
+  theme+tab-bar layout redesign also shipped with zero new tests). 1
+  commit.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (sidecar-file persistence,
-second pass after one FIX FIRST round on two real bugs — see "Sidecar-
-file persistence of edit state" above). One documented, unexplained
-live flake carried forward for awareness (not blocking, not reproduced a
-second time): a transient "you don't have permission" sidecar-save
-failure that self-resolved without a code change — see that section's
-own write-up. Non-blocking note carried forward from the Edit-menu
+None — last reviewer verdict was APPROVE (Adjust tab regrouping, first
+pass). One documented, unexplained live flake carried forward for
+awareness (not blocking, not reproduced a second time, from the sidecar-
+persistence work): a transient "you don't have permission" sidecar-save
+failure that self-resolved without a code change — see "Sidecar-file
+persistence of edit state" above for its own write-up. Non-blocking note
+carried forward from the Edit-menu
 integration: consider suppressing or redesigning the default ⌘N "New
 Window" behavior before any multi-window UI is added, since `document`
 is shared app-wide.
@@ -1862,30 +1903,31 @@ interaction and was REVERTED — that cosmetic bug is back, re-deferred
 (see "Sidebar content-shift-on-scroll bug + HSplitView divider drift"
 above, including a "Lesson recorded" note for whoever attempts this next).
 235 tests passing, app fully functional, last reviewer verdict APPROVE
-(sidecar-file persistence, second pass).
+(Adjust tab regrouping, first pass).
 
-**Nothing is currently planned.** Two items remain explicitly deferred,
-neither picked yet:
-- The sidebar-regrouping idea (Apple-Photos-style labeled sections —
-  Light/Color/B&W/etc — vs. today's flat slider list) — offered as an
-  alternative to the RGB histogram, not picked.
-- The sidebar content-shift-on-scroll cosmetic bug (see its own section
-  above, including the "Lesson recorded" note for whoever attempts it).
+**Adjust tab regrouping into labeled sections: DONE** — see its own
+section above. Picked as a lighter follow-up after Phase 3 closed out,
+over suppressing ⌘N or revisiting the scroll-shift bug.
+
+**Nothing is currently planned.** One item remains explicitly deferred,
+not picked yet: the sidebar content-shift-on-scroll cosmetic bug (see its
+own section above, including the "Lesson recorded" note for whoever
+attempts it).
 
 **Next: remaining options** (ask the user which, don't guess): (1) Phase
 4 (Library: import, catalog DB, thumbnail grid, ratings/flags,
 collections) per CLAUDE.md's roadmap — needs its own explicit go-ahead
-and Plan Mode session, since it's a new phase; (2) the still-deferred
-sidebar-regrouping idea; (3) revisit the re-deferred sidebar content-
-shift-on-scroll cosmetic bug; (4) the reviewer's non-blocking note from
-the Edit-menu work — consider suppressing/redesigning the default ⌘N
-"New Window" behavior before any multi-window UI is added, since
-`document` is now shared app-wide; (5) the reviewer's non-blocking note
-from the sidecar-persistence work — investigate the one unexplained
-"you don't have permission" flake further if it recurs (Console.app
-sandbox-denial logs would help pin it down next time). Lens distortion
-correction remains explicitly OUT of scope (needs camera-profile data, a
-separate concern) unless the user asks for it specifically.
+and Plan Mode session, since it's a new phase; (2) revisit the re-deferred
+sidebar content-shift-on-scroll cosmetic bug; (3) the reviewer's non-
+blocking note from the Edit-menu work — consider suppressing/redesigning
+the default ⌘N "New Window" behavior before any multi-window UI is
+added, since `document` is now shared app-wide; (4) the reviewer's non-
+blocking note from the sidecar-persistence work — investigate the one
+unexplained "you don't have permission" flake further if it recurs
+(Console.app sandbox-denial logs would help pin it down next time). Lens
+distortion correction remains explicitly OUT of scope (needs camera-
+profile data, a separate concern) unless the user asks for it
+specifically.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

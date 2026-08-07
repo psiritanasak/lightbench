@@ -8,7 +8,18 @@ import UniformTypeIdentifiers
 final class ImageDocumentModel: ObservableObject {
     @Published private(set) var currentImage: CIImage?
     @Published private(set) var currentFileName: String?
+    /// The full URL of the currently-open photo — NOT `@Published` (no UI
+    /// reads it directly), kept purely so a sidecar path can be derived
+    /// from it. Before sidecar persistence, `load(from:)` never retained
+    /// anything beyond the bare filename string.
+    private var currentURL: URL?
     @Published var loadErrorMessage: String?
+    /// User-facing feedback when saving a sidecar fails (folder-bookmark
+    /// resolution or the write itself) — mirrors `whiteBalanceSampleMessage`'s
+    /// alert-binding pattern. NOT set when the user simply declines a
+    /// folder-access prompt — that's an ordinary, silent choice, not an
+    /// error condition.
+    @Published var sidecarSaveErrorMessage: String?
     @Published var editState = EditState() {
         didSet {
             scheduleHistogramUpdate()
@@ -16,6 +27,14 @@ final class ImageDocumentModel: ObservableObject {
             // (`applyHistoryState`) — otherwise undoing would immediately
             // re-commit the very state it just restored.
             if !isApplyingHistoryChange { recordEditChange() }
+            // Skip scheduling a save for the write `load(from:)` itself
+            // makes to apply a restored (or identity) state — auto-save
+            // must stay LAZY: opening/viewing a photo should never trigger
+            // a folder-access prompt on its own, only a REAL subsequent
+            // edit should. Undo/redo/revert writes are NOT guarded here —
+            // those represent real, intentional state changes and should
+            // still get saved.
+            if !isLoadingPhoto { scheduleSidecarSave() }
         }
     }
 
@@ -92,9 +111,18 @@ final class ImageDocumentModel: ObservableObject {
             loadErrorMessage = "Couldn't open \"\(url.lastPathComponent)\". The file may be missing, unreadable, or not a supported image format."
             return
         }
+        flushPendingSidecarSave() // save the OUTGOING photo's edits before switching away from it
         currentImage = raw.oriented(Self.exifOrientation(of: url))
         currentFileName = url.lastPathComponent
-        editState = EditState() // edits are per-photo; don't carry over to the next one opened
+        currentURL = url
+        // Restore saved edits if we can currently reach this photo's
+        // sidecar (needs a resolvable folder bookmark, same as saving —
+        // see `// MARK: - Sidecar Persistence`). No bookmark yet, or no
+        // sidecar at that path, both fall back to identity exactly like
+        // before this feature existed — neither is an error.
+        isLoadingPhoto = true
+        editState = loadSidecarIfReachable(for: url) ?? EditState()
+        isLoadingPhoto = false
         resetHistory() // undo history is per-photo too — can't undo into the previous photo
     }
 
@@ -388,5 +416,167 @@ final class ImageDocumentModel: ObservableObject {
         finalizePendingCommit()
         history.commit(EditState())
         applyHistoryState(history.current)
+    }
+
+    // MARK: - Sidecar Persistence
+
+    /// Whether the current `editState` assignment is `load(from:)` applying
+    /// a restored (or identity) state, not a real user edit — set/cleared
+    /// around that one assignment. Keeps auto-save LAZY: opening a photo
+    /// must never trigger a folder-access prompt on its own.
+    private var isLoadingPhoto = false
+
+    /// How long a pause in `editState` changes must last before the
+    /// sidecar actually gets (re)written. Longer than `historyCoalesceInterval`
+    /// (0.35s) — disk I/O doesn't need the same sub-second responsiveness
+    /// undo-step boundaries or the live histogram redraw do. A UX "feel"
+    /// constant, not a measured value.
+    private static let sidecarSaveCoalesceInterval: TimeInterval = 1.0
+
+    private var sidecarSaveWorkItem: DispatchWorkItem?
+
+    /// One resolvable, persisted security-scoped bookmark per folder the
+    /// user has granted sidecar access to — keyed by the folder's own path.
+    /// Backed by `UserDefaults` (small, simple; `Data` is a valid property-
+    /// list type, no new storage format needed for this). Not `@Published`
+    /// — purely internal bookkeeping, no UI reads it.
+    private var folderBookmarks: [String: Data] {
+        get { UserDefaults.standard.dictionary(forKey: Self.folderBookmarksDefaultsKey) as? [String: Data] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: Self.folderBookmarksDefaultsKey) }
+    }
+    private static let folderBookmarksDefaultsKey = "PhotoApp.sidecarFolderBookmarks"
+
+    /// Folders (by path) where the user CANCELLED a folder-access prompt
+    /// this session — in-memory only, deliberately NOT persisted. Without
+    /// this, every subsequent edit in a declined folder would re-prompt
+    /// (a live-tested, genuinely bad UX: five slider drags means five
+    /// dialogs) since a decline leaves no bookmark to short-circuit on.
+    /// Suppresses re-prompting for the REST OF THIS SESSION only — a fresh
+    /// launch asks again, giving the user another chance rather than
+    /// permanently blocking a folder from one accidental cancel.
+    private var declinedFolders: Set<String> = []
+
+    /// The sidecar path for a given photo URL — same directory, original
+    /// filename with `.photoapp.json` appended (e.g. `MyPhoto.jpg` →
+    /// `MyPhoto.jpg.photoapp.json`). Pure and directly unit-testable;
+    /// `nonisolated` since it touches no actor-isolated state, so tests
+    /// don't need `@MainActor` context to call it.
+    nonisolated static func sidecarURL(for url: URL) -> URL {
+        url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".photoapp.json")
+    }
+
+    /// Resolves an EXISTING bookmark for `folder`, if one is stored and
+    /// still valid. Drops (and returns `nil` for) a stale or unresolvable
+    /// entry rather than surfacing an error — the next save attempt will
+    /// simply re-prompt, self-healing rather than getting stuck. Never
+    /// prompts — that's `requestFolderAccess`'s job.
+    private func resolvedBookmarkURL(for folder: URL) -> URL? {
+        guard let data = folderBookmarks[folder.path] else { return nil }
+        var isStale = false
+        guard let resolved = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale),
+              !isStale
+        else {
+            folderBookmarks.removeValue(forKey: folder.path)
+            return nil
+        }
+        return resolved
+    }
+
+    /// Shows a directory-mode `NSOpenPanel` asking the user to grant access
+    /// to `folder` (pre-navigated there for convenience), and persists a
+    /// security-scoped bookmark for it on success. Returns `nil` if the
+    /// user cancels/declines — a normal, silent outcome, not an error —
+    /// and records the decline in `declinedFolders` so `saveSidecarNow`
+    /// doesn't re-show this same prompt on the next edit. If the user
+    /// GRANTS access but `bookmarkData(options:)` itself then fails (a
+    /// genuine, unexpected error, not a decline), that's surfaced via
+    /// `sidecarSaveErrorMessage` — silently returning `nil` here would
+    /// otherwise let an edit fail to save with zero feedback despite the
+    /// user having just said yes.
+    private func requestFolderAccess(for folder: URL) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = folder
+        panel.message = "PhotoApp would like to save your edits for photos in this folder. Choose the folder to grant access."
+        panel.prompt = "Grant Access"
+        guard panel.runModal() == .OK, let grantedURL = panel.url else {
+            declinedFolders.insert(folder.path)
+            return nil
+        }
+        do {
+            let bookmarkData = try grantedURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            folderBookmarks[folder.path] = bookmarkData
+            return grantedURL
+        } catch {
+            sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Loads a photo's sidecar, if one exists AND we can currently reach
+    /// it. Deliberately does NOT prompt for folder access — load must stay
+    /// silent; only a real save attempt (via `saveSidecarNow`) may prompt.
+    /// A missing bookmark, missing sidecar, or undecodable sidecar are all
+    /// treated identically: no saved edits to restore, not an error.
+    private func loadSidecarIfReachable(for url: URL) -> EditState? {
+        guard let folderURL = resolvedBookmarkURL(for: url.deletingLastPathComponent()) else { return nil }
+        guard folderURL.startAccessingSecurityScopedResource() else { return nil }
+        defer { folderURL.stopAccessingSecurityScopedResource() }
+        guard let data = try? Data(contentsOf: Self.sidecarURL(for: url)) else { return nil }
+        return try? JSONDecoder().decode(EditState.self, from: data)
+    }
+
+    private func scheduleSidecarSave() {
+        sidecarSaveWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            // Clear FIRST — without this, `flushPendingSidecarSave()`'s
+            // `sidecarSaveWorkItem != nil` guard stays true forever after
+            // the very first edit of the session (this work item firing on
+            // its own never resets it), making every later `load(from:)`
+            // redundantly re-invoke `saveSidecarNow()` even for an
+            // untouched photo — silently breaking the "auto-save only
+            // happens after a real edit" contract.
+            self?.sidecarSaveWorkItem = nil
+            self?.saveSidecarNow()
+        }
+        sidecarSaveWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidecarSaveCoalesceInterval, execute: workItem)
+    }
+
+    /// Called from `load(from:)` before switching to a new photo, so the
+    /// OUTGOING photo's last ~1s of unsaved edits aren't dropped.
+    private func flushPendingSidecarSave() {
+        guard sidecarSaveWorkItem != nil else { return }
+        sidecarSaveWorkItem?.cancel()
+        sidecarSaveWorkItem = nil
+        saveSidecarNow()
+    }
+
+    /// Resolves (or lazily requests) folder access, then encodes and writes
+    /// the current `editState` to its sidecar. Declining a folder-access
+    /// prompt is silent (not an error); a resolution or write FAILURE after
+    /// access was actually granted surfaces via `sidecarSaveErrorMessage`.
+    /// Skips re-prompting entirely for a folder already declined this
+    /// session (see `declinedFolders`).
+    private func saveSidecarNow() {
+        guard let currentURL else { return }
+        let folder = currentURL.deletingLastPathComponent()
+        guard !declinedFolders.contains(folder.path) else { return }
+        guard let folderURL = resolvedBookmarkURL(for: folder) ?? requestFolderAccess(for: folder) else {
+            return
+        }
+        guard folderURL.startAccessingSecurityScopedResource() else {
+            sidecarSaveErrorMessage = "Couldn't save edits: access to the containing folder is no longer available."
+            return
+        }
+        defer { folderURL.stopAccessingSecurityScopedResource() }
+        do {
+            let data = try JSONEncoder().encode(editState)
+            try data.write(to: Self.sidecarURL(for: currentURL), options: .atomic)
+        } catch {
+            sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"
+        }
     }
 }

@@ -348,6 +348,20 @@ struct ContentView: View {
         } message: { message in
             Text(message)
         }
+        .alert(
+            "Couldn't Save Edits",
+            isPresented: Binding(
+                get: { document.sidecarSaveErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented { document.sidecarSaveErrorMessage = nil }
+                }
+            ),
+            presenting: document.sidecarSaveErrorMessage
+        ) { _ in
+            Button("OK") {}
+        } message: { message in
+            Text(message)
+        }
     }
 
     private var editControls: some View {

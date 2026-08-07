@@ -518,3 +518,118 @@ struct EditState: Equatable, Codable {
     /// The no-op edit state: every adjustment at its default (identity) value.
     static let identity = EditState()
 }
+
+// MARK: - Custom decoding (schema-tolerant)
+
+extension EditState {
+    /// Swift's SYNTHESIZED `Decodable` (the default, used everywhere else in
+    /// this codebase) throws `keyNotFound` the moment a single key is
+    /// missing — it does NOT fall back to a property's declared default.
+    /// This project adds new `EditState` fields almost every session; any
+    /// sidecar file written today would fail to decode ENTIRELY (not just
+    /// partially) the moment a future session adds one more field, unless
+    /// decoding is tolerant of that from the start. This custom `init(from:)`
+    /// uses `decodeIfPresent(...) ?? <declared default>` for every field, so
+    /// an older/smaller sidecar decodes successfully with any missing field
+    /// silently at its current default, and a newer/larger sidecar (read by
+    /// older logic, hypothetically) decodes fine too since unknown keys are
+    /// already harmlessly ignored by standard keyed decoding.
+    ///
+    /// Deliberately NOT pairing this with a custom `encode(to:)` — encoding
+    /// a fully-in-memory `EditState` is never ambiguous, so Swift still
+    /// synthesizes `Encodable` on its own (each `Codable` requirement is
+    /// synthesized independently; providing `init(from:)` by hand doesn't
+    /// prevent `encode(to:)` from still being auto-generated).
+    private enum CodingKeys: String, CodingKey {
+        case whiteBalanceTemperature, whiteBalanceTint
+        case exposureEV
+        case levelsBlackPoint, levelsWhitePoint, levelsGamma
+        case brightness
+        case contrast
+        case curvesShadows, curvesHighlights, blackPoint
+        case brilliance
+        case hslHue, hslSaturation
+        case redHue, redSaturation, redLuminance
+        case orangeHue, orangeSaturation, orangeLuminance
+        case yellowHue, yellowSaturation, yellowLuminance
+        case greenHue, greenSaturation, greenLuminance
+        case aquaHue, aquaSaturation, aquaLuminance
+        case blueHue, blueSaturation, blueLuminance
+        case purpleHue, purpleSaturation, purpleLuminance
+        case magentaHue, magentaSaturation, magentaLuminance
+        case selectiveColorRange
+        case vibrance
+        case blackAndWhite
+        case straightenAngle
+        case verticalPerspective, horizontalPerspective
+        case flipHorizontal, flipVertical
+        case cropInsetTop, cropInsetBottom, cropInsetLeft, cropInsetRight
+        case redEyePoints, redEyeSize, redEyeStrength
+        case vignetteStrength, vignetteRadius
+        case definition
+        case noiseReduction
+        case sharpness
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        whiteBalanceTemperature = try container.decodeIfPresent(Double.self, forKey: .whiteBalanceTemperature) ?? 6500
+        whiteBalanceTint = try container.decodeIfPresent(Double.self, forKey: .whiteBalanceTint) ?? 0
+        exposureEV = try container.decodeIfPresent(Double.self, forKey: .exposureEV) ?? 0
+        levelsBlackPoint = try container.decodeIfPresent(Double.self, forKey: .levelsBlackPoint) ?? 0
+        levelsWhitePoint = try container.decodeIfPresent(Double.self, forKey: .levelsWhitePoint) ?? 1
+        levelsGamma = try container.decodeIfPresent(Double.self, forKey: .levelsGamma) ?? 1
+        brightness = try container.decodeIfPresent(Double.self, forKey: .brightness) ?? 0
+        contrast = try container.decodeIfPresent(Double.self, forKey: .contrast) ?? 0
+        curvesShadows = try container.decodeIfPresent(Double.self, forKey: .curvesShadows) ?? 0
+        curvesHighlights = try container.decodeIfPresent(Double.self, forKey: .curvesHighlights) ?? 0
+        blackPoint = try container.decodeIfPresent(Double.self, forKey: .blackPoint) ?? 0
+        brilliance = try container.decodeIfPresent(Double.self, forKey: .brilliance) ?? 0
+        hslHue = try container.decodeIfPresent(Double.self, forKey: .hslHue) ?? 0
+        hslSaturation = try container.decodeIfPresent(Double.self, forKey: .hslSaturation) ?? 0
+        redHue = try container.decodeIfPresent(Double.self, forKey: .redHue) ?? 0
+        redSaturation = try container.decodeIfPresent(Double.self, forKey: .redSaturation) ?? 0
+        redLuminance = try container.decodeIfPresent(Double.self, forKey: .redLuminance) ?? 0
+        orangeHue = try container.decodeIfPresent(Double.self, forKey: .orangeHue) ?? 0
+        orangeSaturation = try container.decodeIfPresent(Double.self, forKey: .orangeSaturation) ?? 0
+        orangeLuminance = try container.decodeIfPresent(Double.self, forKey: .orangeLuminance) ?? 0
+        yellowHue = try container.decodeIfPresent(Double.self, forKey: .yellowHue) ?? 0
+        yellowSaturation = try container.decodeIfPresent(Double.self, forKey: .yellowSaturation) ?? 0
+        yellowLuminance = try container.decodeIfPresent(Double.self, forKey: .yellowLuminance) ?? 0
+        greenHue = try container.decodeIfPresent(Double.self, forKey: .greenHue) ?? 0
+        greenSaturation = try container.decodeIfPresent(Double.self, forKey: .greenSaturation) ?? 0
+        greenLuminance = try container.decodeIfPresent(Double.self, forKey: .greenLuminance) ?? 0
+        aquaHue = try container.decodeIfPresent(Double.self, forKey: .aquaHue) ?? 0
+        aquaSaturation = try container.decodeIfPresent(Double.self, forKey: .aquaSaturation) ?? 0
+        aquaLuminance = try container.decodeIfPresent(Double.self, forKey: .aquaLuminance) ?? 0
+        blueHue = try container.decodeIfPresent(Double.self, forKey: .blueHue) ?? 0
+        blueSaturation = try container.decodeIfPresent(Double.self, forKey: .blueSaturation) ?? 0
+        blueLuminance = try container.decodeIfPresent(Double.self, forKey: .blueLuminance) ?? 0
+        purpleHue = try container.decodeIfPresent(Double.self, forKey: .purpleHue) ?? 0
+        purpleSaturation = try container.decodeIfPresent(Double.self, forKey: .purpleSaturation) ?? 0
+        purpleLuminance = try container.decodeIfPresent(Double.self, forKey: .purpleLuminance) ?? 0
+        magentaHue = try container.decodeIfPresent(Double.self, forKey: .magentaHue) ?? 0
+        magentaSaturation = try container.decodeIfPresent(Double.self, forKey: .magentaSaturation) ?? 0
+        magentaLuminance = try container.decodeIfPresent(Double.self, forKey: .magentaLuminance) ?? 0
+        selectiveColorRange = try container.decodeIfPresent(Double.self, forKey: .selectiveColorRange) ?? 0.5
+        vibrance = try container.decodeIfPresent(Double.self, forKey: .vibrance) ?? 0
+        blackAndWhite = try container.decodeIfPresent(Bool.self, forKey: .blackAndWhite) ?? false
+        straightenAngle = try container.decodeIfPresent(Double.self, forKey: .straightenAngle) ?? 0
+        verticalPerspective = try container.decodeIfPresent(Double.self, forKey: .verticalPerspective) ?? 0
+        horizontalPerspective = try container.decodeIfPresent(Double.self, forKey: .horizontalPerspective) ?? 0
+        flipHorizontal = try container.decodeIfPresent(Bool.self, forKey: .flipHorizontal) ?? false
+        flipVertical = try container.decodeIfPresent(Bool.self, forKey: .flipVertical) ?? false
+        cropInsetTop = try container.decodeIfPresent(Double.self, forKey: .cropInsetTop) ?? 0
+        cropInsetBottom = try container.decodeIfPresent(Double.self, forKey: .cropInsetBottom) ?? 0
+        cropInsetLeft = try container.decodeIfPresent(Double.self, forKey: .cropInsetLeft) ?? 0
+        cropInsetRight = try container.decodeIfPresent(Double.self, forKey: .cropInsetRight) ?? 0
+        redEyePoints = try container.decodeIfPresent([RedEyePoint].self, forKey: .redEyePoints) ?? []
+        redEyeSize = try container.decodeIfPresent(Double.self, forKey: .redEyeSize) ?? 0.5
+        redEyeStrength = try container.decodeIfPresent(Double.self, forKey: .redEyeStrength) ?? 0.7
+        vignetteStrength = try container.decodeIfPresent(Double.self, forKey: .vignetteStrength) ?? 0
+        vignetteRadius = try container.decodeIfPresent(Double.self, forKey: .vignetteRadius) ?? 0.5
+        definition = try container.decodeIfPresent(Double.self, forKey: .definition) ?? 0
+        noiseReduction = try container.decodeIfPresent(Double.self, forKey: .noiseReduction) ?? 0
+        sharpness = try container.decodeIfPresent(Double.self, forKey: .sharpness) ?? 0
+    }
+}

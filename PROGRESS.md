@@ -1473,12 +1473,141 @@ restructure. 1 commit.
   of edit state/history remains the one still-deferred Phase 3 item,
   blocked on the Phase 4 catalog DB.
 
+### Sidecar-file persistence of edit state (complete, verified live) — the LAST Phase 3 item — PHASE 3 NOW FULLY COMPLETE
+- The final item in Phase 3 ("non-destructive pipeline: param
+  serialization, edit history, undo"). User confirmed scope: a lightweight
+  JSON sidecar per photo (`MyPhoto.jpg.photoapp.json`, same directory) —
+  CLAUDE.md's own architecture principle explicitly sanctions this
+  ("serialized to the DB **and optionally XMP-style sidecars**"), so this
+  stayed inside Phase 3 without pulling in Phase 4's much larger
+  library/catalog scope. Auto-save (no Save button), reusing the same
+  settle/debounce feel already established for undo history.
+- **Fixed a landmine flagged months earlier in this project's own
+  history**: `EditState`'s `Codable` was fully synthesized, so a missing
+  JSON key would throw `keyNotFound` rather than falling back to that
+  field's default — meaning any sidecar written today would fail to
+  decode ENTIRELY the moment a future session added one more `EditState`
+  field (this project adds fields almost every session). Fixed with a
+  custom, schema-tolerant `init(from decoder:)` covering all 58 stored
+  fields via `decodeIfPresent(...) ?? <declared default>`. **A real,
+  live-caught gotcha**: putting this custom init directly in the struct's
+  own body silently SUPPRESSED Swift's synthesized memberwise
+  initializer, breaking every bare `EditState()` call site across the
+  whole codebase (a build failure, caught immediately). Fixed by moving
+  the custom `init(from:)` + its `CodingKeys` into a separate
+  `extension EditState { ... }` — extensions don't suppress synthesis,
+  only the primary struct body does. New `Tests/EditEngineTests/
+  EditStateCodableTests.swift` (9 tests) directly exercises the fix:
+  missing-field-defaults, empty-object-decodes-to-identity, unknown-key-
+  ignored, the one array field (`redEyePoints`) absent vs. present, plus
+  `ImageDocumentModel.sidecarURL(for:)` (marked `nonisolated` so tests
+  don't need `@MainActor` context — it touches no actor state).
+- **A real platform constraint found via live testing, not assumed**:
+  the plan's original design (write a sidecar file as a sibling of the
+  user-selected photo, upgrading `com.apple.security.files.user-selected
+  .read-only` to `.read-write`) turned out to be blocked by App Sandbox
+  outright — confirmed live via a temporary probe write, which failed
+  with "You don't have permission to save the file... in the folder
+  'Downloads'." App Sandbox's access grant for a user-SELECTED file does
+  NOT extend to writing new sibling files in the same directory. **User
+  was asked directly and chose the security-scoped-bookmark approach**
+  (over the simpler alternative — storing edit data invisibly inside the
+  app's own container, keyed by path) to preserve the visible, portable,
+  Lightroom-style "sidecar sits next to the photo" model.
+- **A SECOND real platform gotcha, also only found live**: upgrading to
+  `.read-write` (which seemed necessary at first) turned out to BREAK the
+  basic "Open…" photo picker outright — files became unclickable, only
+  Cancel worked, reproduced on a fresh launch. Root cause not fully
+  pinned down (suspected: an ad-hoc "Sign to Run Locally" signing
+  identity, with no real Team ID/provisioning profile, interacting badly
+  with this specific entitlement under `ENABLE_HARDENED_RUNTIME: true`).
+  Resolved by reverting to `.read-only` and confirming LIVE that the
+  security-scoped folder bookmark (obtained via its own, separate,
+  user-consented directory-mode `NSOpenPanel` + `bookmarkData(options:
+  .withSecurityScope)`) works completely independently of the
+  `user-selected` entitlement family — it's an orthogonal sandbox grant.
+  Net result: `project.yml`/`PhotoApp.entitlements` show NO diff versus
+  the pre-feature state (ended up back at the original `.read-only`).
+  **Also discovered along the way (unrelated to this feature, but
+  load-bearing for future entitlement work)**: `project.yml`'s own
+  `entitlements.properties` block, not the `.entitlements` XML file
+  directly, is the actual source of truth — `xcodegen generate`
+  regenerates the XML from it every run, silently overwriting any direct
+  edit to the XML file alone. Cost a full confused round before being
+  traced.
+- `Sources/UI/ImageDocumentModel.swift` — the bulk of the new code:
+  `currentURL` (previously never retained after `load(from:)` — only the
+  bare filename string survived); `folderBookmarks: [String: Data]`
+  (UserDefaults-backed, keyed by folder path); `resolvedBookmarkURL`/
+  `requestFolderAccess`/`declinedFolders`/`isLoadingPhoto`/
+  `scheduleSidecarSave`/`flushPendingSidecarSave`/`saveSidecarNow`/
+  `loadSidecarIfReachable`. Auto-save reuses the EXACT debounce/coalesce
+  `DispatchWorkItem` idiom already established for undo history (a
+  longer ~1.0s interval, since disk I/O doesn't need undo-step
+  sub-second responsiveness). The `isLoadingPhoto` guard (set only around
+  `load(from:)`'s own restore-or-identity assignment) keeps auto-save
+  LAZY — merely opening/viewing a photo must never trigger a folder-
+  access prompt, only a REAL subsequent edit should; this was designed
+  in from the start, not a live-caught bug.
+- **A real UX gap WAS caught live and fixed before shipping**: declining
+  a folder-access prompt once caused EVERY subsequent edit to re-prompt
+  again (nothing remembered the decline) — five slider drags would have
+  meant five dialogs. Fixed with an in-memory-only (deliberately NOT
+  persisted) `declinedFolders: Set<String>`, checked before prompting —
+  suppresses re-prompting for the rest of THIS session only; a fresh
+  launch asks again, so one accidental cancel doesn't permanently block
+  a folder.
+- **First reviewer pass was FIX FIRST — two real bugs**: (1)
+  `sidecarSaveWorkItem` was never cleared once its debounced closure
+  actually FIRED (only replaced on a NEW edit) — meaning
+  `flushPendingSidecarSave()`'s guard stayed permanently "true" after
+  the first-ever edit of a session, silently making every later
+  `load(from:)` (i.e. every photo switch, even to an untouched photo)
+  redundantly re-invoke `saveSidecarNow()`, which could pop an unwanted
+  permission prompt on a mere switch if a bookmark had gone stale — fixed
+  by clearing the flag as the FIRST statement inside the work item's own
+  closure; (2) `requestFolderAccess`'s `try? bookmarkData(...)` silently
+  swallowed a genuine creation failure even after the user explicitly
+  GRANTED access, with zero feedback — fixed with a proper `do/catch`
+  surfacing via the new `sidecarSaveErrorMessage` alert, while keeping
+  the separate "user declined the panel" path correctly silent. Second
+  pass independently traced `saveSidecarNow()`'s full call graph to
+  confirm no re-entrancy hazard from clearing-before-calling, confirmed
+  the decline-vs-failure paths are now cleanly separated, and APPROVEd.
+- **A live, unexplained flake, documented rather than hidden**: during
+  testing, a save attempt for a second photo in an ALREADY-bookmark-
+  granted folder failed once with "you don't have permission" (reaching
+  the actual write step, not a resolution failure), then succeeded on a
+  later attempt with no code change in between. Not reproduced a second
+  time; not root-caused with certainty (Console.app sandbox-denial logs
+  were not captured). Reviewer confirmed the resolve→start→defer-stop
+  security-scoped-resource lifecycle is Apple's own documented correct
+  pattern and found no logic bug that would explain it — currently
+  believed to be a transient macOS sandbox/extension-registration timing
+  quirk, possibly made rarer by the `sidecarSaveWorkItem` fix above
+  (which was also generating spurious extra save attempts). Flagged here
+  for anyone debugging a similar report later, not treated as blocking.
+- 235 tests total (9 new `EditStateCodableTests`). 1 commit (feature +
+  both FIX FIRST corrections together, after extensive live verification
+  across many rebuild-and-relaunch rounds — this was, by a wide margin,
+  the most live-testing-intensive feature this entire session, given it
+  was the first disk-write code and first security-scoped-bookmark code
+  in the whole project).
+- **PHASE 3 IS NOW FULLY COMPLETE** — in-memory Undo/Redo, Revert to
+  Original, Edit-menu integration, and sidecar-file persistence are all
+  shipped and reviewer-approved. Nothing remains deferred in Phase 3.
+
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Edit-menu Undo/Redo integration,
-first pass). Non-blocking note carried forward: consider suppressing or
-redesigning the default ⌘N "New Window" behavior before any multi-window
-UI is added, since `document` is now shared app-wide (see "Edit-menu
-Undo/Redo integration" above).
+None — last reviewer verdict was APPROVE (sidecar-file persistence,
+second pass after one FIX FIRST round on two real bugs — see "Sidecar-
+file persistence of edit state" above). One documented, unexplained
+live flake carried forward for awareness (not blocking, not reproduced a
+second time): a transient "you don't have permission" sidecar-save
+failure that self-resolved without a code change — see that section's
+own write-up. Non-blocking note carried forward from the Edit-menu
+integration: consider suppressing or redesigning the default ⌘N "New
+Window" behavior before any multi-window UI is added, since `document`
+is shared app-wide.
 
 Prior: Revert to Original (second pass, after one FIX FIRST round on the
 atomic-commit correctness gap).
@@ -1719,9 +1848,12 @@ Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Phase 2 is COMPLETE** (every backlog item ✅, see above). **Phase 3 has
-STARTED**: in-memory Undo/Redo (first slice) is done — see the "Undo/Redo"
-section above. **RGB channel histograms are also done** — see "RGB channel
+**Phase 2 is COMPLETE** (every backlog item ✅, see above). **Phase 3 is
+NOW FULLY COMPLETE**: in-memory Undo/Redo, Revert to Original, Edit-menu
+integration, and sidecar-file persistence of edit state are all shipped
+and reviewer-approved — see "Undo/Redo", "Revert to Original button",
+"Edit-menu Undo/Redo integration", and "Sidecar-file persistence of edit
+state" above. **RGB channel histograms are also done** — see "RGB channel
 histograms" above. **Sidebar layout bugs — MOSTLY fixed, one re-deferred
 after a critical regression**: top-clearance padding, scroll-anchor, and
 the HSplitView divider drift are all fixed and shipped. The sidebar
@@ -1729,56 +1861,31 @@ content-shift-on-scroll bug's fix (`StableScrollInsets`) broke ALL slider
 interaction and was REVERTED — that cosmetic bug is back, re-deferred
 (see "Sidebar content-shift-on-scroll bug + HSplitView divider drift"
 above, including a "Lesson recorded" note for whoever attempts this next).
-226 tests passing, app fully functional, last reviewer verdict APPROVE
-(the revert).
+235 tests passing, app fully functional, last reviewer verdict APPROVE
+(sidecar-file persistence, second pass).
 
-**Nothing is currently planned.** The sidebar-regrouping idea (Apple-
-Photos-style labeled sections — Light/Color/B&W/etc — vs. today's flat
-slider list) remains confirmed NOT built and explicitly deferred (was
-offered as an alternative to the RGB histogram, not picked) — don't start
-it without the user asking again.
+**Nothing is currently planned.** Two items remain explicitly deferred,
+neither picked yet:
+- The sidebar-regrouping idea (Apple-Photos-style labeled sections —
+  Light/Color/B&W/etc — vs. today's flat slider list) — offered as an
+  alternative to the RGB histogram, not picked.
+- The sidebar content-shift-on-scroll cosmetic bug (see its own section
+  above, including the "Lesson recorded" note for whoever attempts it).
 
-**Undo/Redo functional manual verification: DONE.** User confirmed live
-("Undo/Redo work fine") — a general confirmation, not a bullet-by-bullet
-walkthrough of every scenario below, but treated as sufficient closure per
-the user's own judgment. Original checklist (for reference, if a specific
-scenario ever needs re-checking):
-- A continuous slider or crop drag coalesces into exactly ONE undo step
-  (not hundreds) — drag Exposure, pause, drag Contrast → ⌘Z should revert
-  Contrast as one step, ⌘Z again should revert Exposure.
-- ⇧⌘Z redoes each step correctly; Undo/Redo toolbar buttons enable/disable
-  correctly as history changes.
-- A crop drag, a toggle (B&W), a red-eye tap, an aspect-preset snap, and a
-  per-slider "Reset" each become exactly one undoable step.
-- The WB eyedropper and "Fix Color Cast" results are each undoable as one
-  step.
-- Opening a NEW photo clears history (can't undo into the previous photo).
-- Undo/redo correctly updates the live histogram.
-- The reviewer's one non-blocking note (does the global ⌘Z shortcut
-  interfere with a focused crop-inset numeric text field's own native
-  undo?) was not specifically called out as broken — treated as fine.
-
-**Revert to Original button: DONE** — see its own section above.
-**Edit-menu Undo/Redo integration: DONE** — see its own section above.
-Both small Phase 3 items deferred when Undo/Redo shipped are now complete
-— **Phase 3's initial slice is fully closed out** except disk persistence.
-
-**Next: remaining options** (ask the user which, don't guess): (1) disk
-persistence of edit state/history — explicitly deferred pending the
-Phase 4 catalog DB (`Sources/Catalog/` is still empty); (2) Phase 4+
-(Library/import/catalog, Presets+export, RAW support, Polish) per
-CLAUDE.md's roadmap; (3) the still-deferred sidebar-regrouping idea
-(Apple-Photos-style labeled sections); (4) revisit the re-deferred sidebar
-content-shift-on-scroll cosmetic bug (see its own section above, including
-the "Lesson recorded" note); (5) the reviewer's non-blocking note from the
-Edit-menu work — consider suppressing/redesigning the default ⌘N "New
-Window" behavior before any multi-window UI is added, since `document` is
-now shared app-wide. Lens distortion correction remains explicitly OUT of
-scope (needs camera-profile data, a separate concern) unless the user asks
-for it specifically. Starting Phase 4 (a new phase) needs its own explicit
-go-ahead and Plan Mode session per CLAUDE.md's roadmap-order rule;
-continuing within Phase 3 (persistence) is more of the same phase but is
-still its own feature/session per the "one feature per session" rule.
+**Next: remaining options** (ask the user which, don't guess): (1) Phase
+4 (Library: import, catalog DB, thumbnail grid, ratings/flags,
+collections) per CLAUDE.md's roadmap — needs its own explicit go-ahead
+and Plan Mode session, since it's a new phase; (2) the still-deferred
+sidebar-regrouping idea; (3) revisit the re-deferred sidebar content-
+shift-on-scroll cosmetic bug; (4) the reviewer's non-blocking note from
+the Edit-menu work — consider suppressing/redesigning the default ⌘N
+"New Window" behavior before any multi-window UI is added, since
+`document` is now shared app-wide; (5) the reviewer's non-blocking note
+from the sidecar-persistence work — investigate the one unexplained
+"you don't have permission" flake further if it recurs (Console.app
+sandbox-denial logs would help pin it down next time). Lens distortion
+correction remains explicitly OUT of scope (needs camera-profile data, a
+separate concern) unless the user asks for it specifically.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

@@ -27,11 +27,22 @@ Edits are stored as parameter sets and rendered live on the GPU.
 1. Foundation: Xcode project, open + display an image in a Metal-backed view
 2. Edit engine: exposure, contrast, white balance, curves, HSL, crop, transform/distort
    — see detailed backlog below (grown from the original 6 items after review)
-3. Non-destructive pipeline: param serialization, edit history, undo — IN
-   PROGRESS: in-memory Undo/Redo ✅ shipped (`Sources/EditEngine/EditHistory.swift`,
-   time-coalesced ~350ms bursts, toolbar buttons + ⌘Z/⇧⌘Z). Not built yet:
-   disk persistence of edit state/history (waits on Phase 4's catalog DB),
-   a standalone "Revert to Original" button, Edit-menu `CommandGroup` integration.
+3. Non-destructive pipeline: param serialization, edit history, undo — ✅
+   COMPLETE. In-memory Undo/Redo (`Sources/EditEngine/EditHistory.swift`,
+   time-coalesced ~350ms bursts, toolbar buttons + ⌘Z/⇧⌘Z); Revert to
+   Original (toolbar button, atomic commit, always resets to true identity
+   regardless of any loaded sidecar); Edit-menu `CommandGroup(replacing:
+   .undoRedo)` integration (`document` ownership lives in `PhotoAppApp`,
+   passed down to `ContentView`); sidecar-file persistence (each photo's
+   edits auto-save to `MyPhoto.jpg.photoapp.json` next to it via a lazy,
+   per-folder security-scoped bookmark — the FIRST real edit in an
+   unapproved folder prompts once via a directory-mode `NSOpenPanel`,
+   reused silently afterward; declining is honored for the rest of the
+   session, not persisted). `EditState`'s `Codable` is schema-tolerant
+   (falls back to each field's own default on a missing key, in a
+   separate `extension EditState` so the synthesized memberwise init
+   isn't suppressed) — safe for this project's habit of adding new
+   `EditState` fields almost every session.
 4. Library: import, catalog DB, thumbnail grid, ratings/flags, collections
 5. Presets + export: save/apply presets, batch export (resize, quality, format)
 6. RAW support: LibRaw bridge, demosaic, camera profiles

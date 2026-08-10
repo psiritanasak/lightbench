@@ -44,7 +44,7 @@ Edits are stored as parameter sets and rendered live on the GPU.
    isn't suppressed) — safe for this project's habit of adding new
    `EditState` fields almost every session.
 4. Library: import, catalog DB, thumbnail grid, ratings/flags, collections
-   — STARTED. Catalog DB foundation + basic folder import ✅ COMPLETE:
+   — ✅ COMPLETE (all four slices shipped). Catalog DB foundation + basic folder import ✅ COMPLETE:
    GRDB (first external dependency) added via `project.yml`'s `packages:`;
    `Sources/Catalog/` now holds `Photo` (a metadata/path-only record —
    `path` is `UNIQUE`, making re-import idempotent), the first
@@ -90,10 +90,37 @@ Edits are stored as parameter sets and rendered live on the GPU.
    the query runs. Reviewer APPROVED on the first pass; one non-blocking
    note carried forward in `PROGRESS.md` (rapid repeated taps can
    transiently show a stale rating in the grid — self-heals, not a
-   persisted-data bug). Collections is NOT started; also not started:
-   sort/filter/search (including by rating/flag), removing photos from
-   the catalog, detecting files deleted on disk since import, a
-   three-state pick/reject model, keyboard shortcuts for rating/flagging.
+   persisted-data bug). Collections ✅ COMPLETE: photos can belong to any
+   number of user-created albums, browsed via a left sidebar next to the
+   grid (`Sources/UI/CollectionSidebarView.swift` — the app's first
+   `List`) plus a per-cell `Menu` to toggle membership.
+   `Migrations/003_collections.swift` is the first migration to create two
+   tables with a foreign key (`onDelete: .cascade` on both sides) and a
+   composite primary key — reviewer independently confirmed against the
+   vendored GRDB source that `PRAGMA foreign_keys` is on by default and
+   never overridden, so cascade delete genuinely takes effect. The new
+   record type is named `PhotoCollection`, not `Collection` — this project
+   is a single Swift module, so a bare `Collection` would shadow
+   `Swift.Collection` project-wide. `CatalogDatabase` gained
+   `allCollections`/`createCollection`/`photos(inCollection:)`/
+   `allMemberships`/`setMembership` (this project's first `IN`-clause
+   filter and first `onConflict: .ignore` insert). **A real bug caught by
+   live testing** (not the reviewer): binding `selectedCollectionID: Int64?`
+   (`nil` = "All Photos") directly to SwiftUI's `List(selection:)` made
+   the `nil`-tagged "All Photos" row silently stop being selectable once a
+   real collection had been chosen — a known category of quirk with
+   `Optional`-typed List selection bindings. Fixed with `LibraryFilter`, a
+   non-optional enum (`.allPhotos` / `.collection(Int64)`), so every row's
+   tag is a concrete value; the sidebar exposes a computed
+   `Binding<LibraryFilter?>` (still required by `List`'s own API) that
+   coerces the framework's "nothing selected" `nil` back to `.allPhotos`.
+   Reviewer confirmed this is the sound, standard fix. Sort/filter/search,
+   removing photos from the catalog, detecting files deleted on disk
+   since import, a three-state pick/reject model, keyboard shortcuts for
+   rating/flagging, renaming/deleting collections, and folder-mirrored/
+   nested collections (a user-suggested follow-up, matching how they
+   organize photos on disk) are all NOT started — candidates for a future
+   session, not part of Phase 4's scope.
 5. Presets + export: save/apply presets, batch export (resize, quality, format)
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases

@@ -1,11 +1,11 @@
 # Progress
 
 ## Current phase
-**Phase 2 (Edit engine) and Phase 3 (non-destructive pipeline) are both
-COMPLETE. Phase 4 (Library) has STARTED — slices 1 (catalog DB foundation
-+ basic folder import), 2 (thumbnail grid browsing view), and 3
-(ratings and flags) shipped, see below; collections is still not
-started.** The original six
+**Phase 2 (Edit engine), Phase 3 (non-destructive pipeline), and Phase 4
+(Library) are ALL COMPLETE.** Phase 4's four slices — catalog DB
+foundation + basic folder import, thumbnail grid browsing view, ratings
+and flags, and collections — all shipped, reviewer-approved, and
+manually verified live; see below. The original six
 roadmap items, five
 backlog tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
@@ -1641,18 +1641,27 @@ restructure. 1 commit.
   commit.
 
 ## Open reviewer issues
-One non-blocking note carried forward (last reviewer verdict was APPROVE,
-first pass, for Ratings and flags): rapid repeated taps on the same
-photo's rating/flag spawn independent `Task.detached` calls in
-`CatalogModel.setRating`/`setFlagged`, each paired with its own
-`refresh()` — since the write and its refresh aren't atomic together, two
-fast taps can interleave such that the DISPLAYED `photos` array
-transiently shows the pre-second-tap value (self-heals on the next
-refresh-triggering action). NOT a persisted-data bug — confirmed via two
-full quit/relaunch cycles that ratings/flags always land correctly in the
-database. Left as-is per this project's convention of only fixing FIX
-FIRST items; worth hardening (optimistic local mutation of `photos`, or
-serializing per-photo updates) before the feature sees heavier use.
+Two non-blocking notes carried forward (last reviewer verdict was
+APPROVE, first pass, for Collections): (1) the SAME "overlapping
+`refresh()` calls can complete out of order" class of issue already
+recorded below for ratings/flags now generalizes to EVERY mutation
+(`createCollection`, `toggleMembership`, imports, ratings, flags) — each
+independently kicks off its own `Task.detached` + `refresh()` with no
+cancellation/sequencing, so a fast second action can have its slower
+first `refresh()` clobber `photos` with stale data; still just a
+transient, self-correcting display glitch, not data corruption (worth a
+generation-counter or `Task` cancellation guard if it ever becomes
+user-visible); (2) `collection.name` has no `UNIQUE` constraint, so
+rapid double-submits of "New Collection…" could create duplicate-named
+collections — consistent with rename/delete management being explicitly
+out of this slice's scope, not a data-integrity bug.
+
+Also carried forward: rapid repeated taps on the same photo's
+rating/flag can similarly show a transiently-stale value in the grid
+(same underlying cause as (1) above, first observed in Ratings and
+flags) — NOT a persisted-data bug, confirmed via multiple full
+quit/relaunch cycles across both that slice and Collections that writes
+always land correctly in the database.
 
 Before that: last reviewer verdict was APPROVE (Library thumbnail grid, second
 pass, after one FIX FIRST round with 4 issues, all in `CatalogModel.swift`:
@@ -2088,59 +2097,128 @@ commit, per workflow rules).
 - 3 commits (migration + Photo fields + DB methods + their tests;
   CatalogModel methods; grid UI).
 
+### Phase 4, Slice 4 — Collections (complete, verified live) — Phase 4 now COMPLETE
+- Confirmed with the user up front: a left sidebar list of collections
+  (the app's first `List`-based navigation) plus an "All Photos" row;
+  assigning a photo via a per-cell menu button listing every collection
+  with a membership checkmark; creating collections via a "New
+  Collection…" row prompting for a name through a simple `.alert` +
+  `TextField`. Explicitly OUT of scope: renaming/deleting collections,
+  reordering, drag-and-drop, bulk operations, smart/dynamic collections,
+  nested collections, folder→collection auto-mapping (the user separately
+  asked about auto-collections mirroring their on-disk Year/Trip/Day
+  folder structure — noted as a good idea for a FUTURE session, not this
+  one, see "Exact next step" below).
+- `Sources/Catalog/Migrations/003_collections.swift` (new): the most
+  novel GRDB surface yet — creates TWO tables in one migration
+  (`collection`, `collection_photo`) with a foreign-key relationship
+  (`onDelete: .cascade` on both sides) and a composite primary key
+  (`collectionId`, `photoId`) on the join table. Reviewer independently
+  verified against the vendored GRDB source that `PRAGMA foreign_keys` is
+  on by default and never overridden in `CatalogDatabase`, so cascade
+  delete genuinely takes effect; also verified the empty-array edge case
+  in the `IN`-clause query (`[].contains(...)` compiles to literal
+  `false`, never "matches everything").
+- `Sources/Catalog/PhotoCollection.swift` (new): named `PhotoCollection`,
+  not `Collection` — this is a single Swift module (no per-directory
+  targets), so a bare `struct Collection` would have shadowed
+  `Swift.Collection` project-wide. `Sources/Catalog/CollectionPhoto.swift`
+  (new): the join record, `PersistableRecord` not `MutablePersistableRecord`
+  (no autoincrement column — the composite key is its whole identity).
+- `Sources/Catalog/CatalogDatabase.swift`: `allCollections`,
+  `createCollection`, `photos(inCollection:)` (a two-query join, both
+  queries inside one `dbQueue.read` so they observe a consistent
+  snapshot), `allMemberships`, `setMembership` (`insert(onConflict:
+  .ignore)` makes re-adding an existing membership a no-op instead of a
+  primary-key-violation error — the first use of GRDB's `onConflict` in
+  this project).
+- **A real bug caught by LIVE testing, not the reviewer**: the first
+  `CatalogModel` implementation bound `selectedCollectionID: Int64?`
+  (`nil` = "All Photos") directly to `List(selection:)`. The user found
+  that after selecting a real collection, tapping back on the
+  `nil`-tagged "All Photos" row silently failed to register — a known
+  category of SwiftUI/AppKit `List(selection:)` quirk with
+  `Optional`-typed selection bindings. Fixed by introducing
+  `LibraryFilter` (a non-optional enum: `.allPhotos` /
+  `.collection(Int64)`) so every sidebar row is tagged with a concrete,
+  non-optional value; `CollectionSidebarView` exposes a computed
+  `Binding<LibraryFilter?>` (List's API still requires an
+  Optional-wrapped binding) that coerces the framework's "nothing
+  selected" `nil` back to `.allPhotos` in its setter, without ever
+  letting a real row be tagged `nil`. Re-verified live after the fix —
+  selecting a collection, returning to All Photos, and re-selecting all
+  now work correctly. Reviewer independently confirmed this is the sound,
+  standard fix for this exact quirk category.
+- `Sources/UI/CollectionSidebarView.swift` (new), `Sources/UI/LibraryGridView.swift`
+  extended (a folder-badge `Menu` per cell), `Sources/UI/ContentView.swift`
+  extended (`libraryContent`, a new `HSplitView` of sidebar + grid,
+  mirroring `editorContent`'s own split shape).
+- 6 new tests in `Tests/CatalogTests/CatalogDatabaseTests.swift`:
+  create-assigns-id, order-by-name, add-to-collection (+ confirms
+  `allPhotos()` stays unaffected), idempotent-add (exercises
+  `onConflict: .ignore`), remove-from-collection, `allMemberships()`
+  round-trip. All 260 tests pass (254 prior + 6 new).
+- Reviewer verdict: APPROVE on the first pass. Two non-blocking notes
+  carried forward — see "Open reviewer issues" above.
+- Manually verified live end-to-end, including the List-selection bug
+  fix, and a full quit/relaunch cycle confirming the collection and its
+  membership persisted against the real, already-populated on-disk
+  catalog (exercising migration `003`).
+- 3 commits (migration + models + DB methods + their tests; CatalogModel
+  state/methods + the `LibraryFilter` fix; sidebar view + per-cell menu +
+  `ContentView` wiring).
+
+**Phase 4 (Library) is now fully COMPLETE** — every item in CLAUDE.md's
+roadmap line 4 shipped: import, catalog DB, thumbnail grid, ratings/
+flags, collections.
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Phase 2 and Phase 3 are COMPLETE** (see above). **Phase 4 has STARTED**:
-slices 1 ("Catalog DB foundation + basic folder import"), 2 ("Library
-thumbnail grid"), and 3 ("Ratings and flags") are all DONE — GRDB
-dependency, `Sources/Catalog/` module (now on migration `002`), `CatalogModel`
-(import, `photos`, thumbnail cache, persisted folder access,
-`setRating`/`setFlagged`), `LibraryGridView` (grid + star rating row +
-flag toggle per cell), a "Library"/"Editor" toolbar toggle. All three
-slices reviewer-approved (slice 1: one FIX FIRST round, a main-thread-
-blocking DB-open bug; slice 2: one FIX FIRST round, 4 issues in the
-folder-access/thumbnail-cache logic; slice 3: APPROVE on the first pass)
-and manually verified live, including multiple full quit+relaunch cycles
-confirming persisted access AND persisted ratings/flags both actually
-work against the real on-disk catalog — see "Phase 4, Slice 1/2/3" above.
-254 tests passing, app fully functional.
+**Phase 2, Phase 3, AND Phase 4 are ALL COMPLETE.** Phase 4's four slices
+(catalog DB + import, thumbnail grid, ratings/flags, collections) are all
+shipped, reviewer-approved, and manually verified live — see "Phase 4,
+Slice 1/2/3/4" above. 260 tests passing, app fully functional. Next up
+per `CLAUDE.md`'s roadmap: **Phase 5 (Presets + export)**.
 
-**Nothing is currently planned.** Remaining Phase 4 sub-features, per
-CLAUDE.md's roadmap item 4, still NOT started: collections. Also NOT
-started, deliberately deferred within earlier slices' own scope:
-sort/filter/search in the Library grid (including by rating/flag now that
-they exist), removing photos from the catalog, detecting files deleted on
-disk since import, a three-state pick/reject flag model, keyboard
-shortcuts for rating/flagging, surfacing rating/flag in the single-photo
-Editor. Each is its own session per the project's "one feature per
-session" rule — ask the user which, don't guess.
+**Nothing is currently planned.** The user asked, while verifying
+Collections, whether importing could auto-create a collection per
+on-disk folder (they organize photos as Year → Trip → Day) with a
+mirrored tree in the sidebar — explicitly NOT built this session (told
+them it's a distinct feature deserving its own planning session, not a
+fold-in). Worth surfacing as an option next time Library work resumes.
 
-**Next: remaining options** (ask the user which, don't guess): (1) Phase
-4 slice 4 — collections (the last unstarted item in CLAUDE.md's Phase 4
-roadmap line); (2) Library grid polish — sort/filter/search (by rating/
-flag or otherwise), removing photos, detecting missing files; (3)
-hardening the reviewer's non-blocking note from Ratings and flags —
-rapid repeated rating/flag taps can transiently show a stale value in the
-grid (self-heals, not a persisted-data bug) — via optimistic local
-mutation or serialized per-photo updates; (4) revisit the still-deferred
-sidebar content-shift-on-scroll cosmetic bug (see its own section above,
-including the "Lesson recorded" note for whoever attempts it); (5) the
-reviewer's non-blocking note from the Edit-menu work — consider
-suppressing/redesigning the default ⌘N "New Window" behavior before any
-multi-window UI is added, since `document` is now shared app-wide; (6)
-the reviewer's non-blocking note from the sidecar-persistence work —
-investigate the one unexplained "you don't have permission" flake
-further if it recurs (Console.app sandbox-denial logs would help pin it
-down next time); (7) the reviewer's non-blocking note from Library slice
-2 — `activateKnownFolders` keys `activeFolders` by the bookmark's
-original path, so a folder renamed/moved between sessions could get its
-scope started twice on re-import (a corner case, not a regression). Lens
-distortion correction remains explicitly OUT of scope (needs
-camera-profile data, a separate concern) unless the user asks for it
-specifically.
+**Next: options** (ask the user which, don't guess): (1) Phase 5
+(Presets + export: save/apply presets, batch export) per CLAUDE.md's
+roadmap — the natural next phase; (2) folder-mirrored/nested collections
+(the user's own follow-up idea above) or other Library polish — sort/
+filter/search (by rating/flag/collection), removing photos, detecting
+missing files, renaming/deleting collections; (3) hardening the
+reviewer's non-blocking note, now generalized across ALL of `CatalogModel`'s
+mutations (ratings/flags AND collections) — overlapping `Task.detached`
++ `refresh()` calls with no cancellation/sequencing can transiently show
+stale data in the grid (self-heals, not a persisted-data bug) — via a
+generation-counter or `Task` cancellation guard; (4) `collection.name`
+having no `UNIQUE` constraint, so rapid double-submits of "New
+Collection…" could create duplicate-named collections (consistent with
+rename/delete being out of scope, not urgent); (5) revisit the
+still-deferred sidebar content-shift-on-scroll cosmetic bug (see its own
+section above, including the "Lesson recorded" note for whoever attempts
+it); (6) the reviewer's non-blocking note from the Edit-menu work —
+consider suppressing/redesigning the default ⌘N "New Window" behavior
+before any multi-window UI is added, since `document` is now shared
+app-wide; (7) the reviewer's non-blocking note from the sidecar-
+persistence work — investigate the one unexplained "you don't have
+permission" flake further if it recurs (Console.app sandbox-denial logs
+would help pin it down next time); (8) the reviewer's non-blocking note
+from Library slice 2 — `activateKnownFolders` keys `activeFolders` by
+the bookmark's original path, so a folder renamed/moved between sessions
+could get its scope started twice on re-import (a corner case, not a
+regression). Lens distortion correction remains explicitly OUT of scope
+(needs camera-profile data, a separate concern) unless the user asks for
+it specifically.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

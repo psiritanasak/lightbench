@@ -52,6 +52,7 @@ final class CatalogDatabase: Sendable {
         var migrator = DatabaseMigrator()
         Migration001Initial.register(in: &migrator)
         Migration002RatingsAndFlags.register(in: &migrator)
+        Migration003Collections.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 
@@ -118,6 +119,66 @@ final class CatalogDatabase: Sendable {
         try await dbQueue.write { db in
             try Photo.filter(Photo.Columns.id == photoID)
                 .updateAll(db, Photo.Columns.isFlagged.set(to: isFlagged))
+        }
+    }
+
+    // MARK: - Collections (Phase 4 slice 4)
+
+    /// Ordered by `name`, not `createdAt` (unlike `allPhotos()`) — a
+    /// sidebar list is more scannable alphabetically as it grows.
+    func allCollections() async throws -> [PhotoCollection] {
+        try await dbQueue.read { db in
+            try PhotoCollection.order(PhotoCollection.Columns.name).fetchAll(db)
+        }
+    }
+
+    func createCollection(name: String) async throws -> PhotoCollection {
+        try await dbQueue.write { db in
+            var collection = PhotoCollection(id: nil, name: name, createdAt: Date())
+            try collection.insert(db)
+            return collection
+        }
+    }
+
+    /// Every photo in `collectionID`, via its `collection_photo` join
+    /// rows. Does not affect `allPhotos()` — collection membership is a
+    /// separate relation, not a filter on the base library.
+    func photos(inCollection collectionID: Int64) async throws -> [Photo] {
+        try await dbQueue.read { db in
+            let photoIDs = try CollectionPhoto
+                .filter(CollectionPhoto.Columns.collectionId == collectionID)
+                .fetchAll(db)
+                .map(\.photoId)
+            return try Photo
+                .filter(photoIDs.contains(Photo.Columns.id))
+                .order(Photo.Columns.importedAt, Photo.Columns.id)
+                .fetchAll(db)
+        }
+    }
+
+    /// Every membership row in the catalog — `CatalogModel` uses this to
+    /// build a photoID→collectionIDs map for cheap, synchronous per-cell
+    /// checkmark lookups rather than a query per grid cell.
+    func allMemberships() async throws -> [CollectionPhoto] {
+        try await dbQueue.read { db in try CollectionPhoto.fetchAll(db) }
+    }
+
+    /// Adds or removes `photoID` from `collectionID`. `onConflict: .ignore`
+    /// on the add path makes toggling on an already-member photo a no-op
+    /// rather than a primary-key-violation error — the composite primary
+    /// key (`collectionId`, `photoId`) is what makes this collapse
+    /// correctly instead of inserting a duplicate.
+    func setMembership(photoID: Int64, collectionID: Int64, isMember: Bool) async throws {
+        try await dbQueue.write { db in
+            if isMember {
+                try CollectionPhoto(collectionId: collectionID, photoId: photoID)
+                    .insert(db, onConflict: .ignore)
+            } else {
+                try CollectionPhoto
+                    .filter(CollectionPhoto.Columns.collectionId == collectionID)
+                    .filter(CollectionPhoto.Columns.photoId == photoID)
+                    .deleteAll(db)
+            }
         }
     }
 }

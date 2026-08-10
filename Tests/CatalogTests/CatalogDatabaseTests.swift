@@ -141,4 +141,90 @@ final class CatalogDatabaseTests: XCTestCase {
         let unflaggedPhoto = try XCTUnwrap(unflaggedPhotos.first)
         XCTAssertFalse(unflaggedPhoto.isFlagged)
     }
+
+    // MARK: - Collections (Phase 4 slice 4)
+
+    func testCreateCollectionAssignsAnID() async throws {
+        let db = try makeDatabase()
+
+        let collection = try await db.createCollection(name: "Trip")
+
+        XCTAssertNotNil(collection.id)
+        XCTAssertEqual(collection.name, "Trip")
+    }
+
+    func testAllCollectionsOrdersByName() async throws {
+        let db = try makeDatabase()
+        _ = try await db.createCollection(name: "Zebra")
+        _ = try await db.createCollection(name: "Apple")
+
+        let collections = try await db.allCollections()
+
+        XCTAssertEqual(collections.map(\.name), ["Apple", "Zebra"])
+    }
+
+    func testSetMembershipAddsPhotoToCollection() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [
+            URL(fileURLWithPath: "/tmp/a.jpg"),
+            URL(fileURLWithPath: "/tmp/b.jpg")
+        ])
+        let photos = try await db.allPhotos()
+        let targetID = try XCTUnwrap(photos.first(where: { $0.filename == "a.jpg" })?.id)
+        let collection = try await db.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+
+        try await db.setMembership(photoID: targetID, collectionID: collectionID, isMember: true)
+
+        let inCollection = try await db.photos(inCollection: collectionID)
+        XCTAssertEqual(inCollection.map(\.filename), ["a.jpg"])
+
+        // Collections don't affect the base library.
+        let all = try await db.allPhotos()
+        XCTAssertEqual(all.count, 2)
+    }
+
+    func testSetMembershipIsIdempotent() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+        let photos = try await db.allPhotos()
+        let photoID = try XCTUnwrap(photos.first?.id)
+        let collection = try await db.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+
+        try await db.setMembership(photoID: photoID, collectionID: collectionID, isMember: true)
+        try await db.setMembership(photoID: photoID, collectionID: collectionID, isMember: true)
+
+        let inCollection = try await db.photos(inCollection: collectionID)
+        XCTAssertEqual(inCollection.count, 1, "adding the same membership twice must not duplicate the row")
+    }
+
+    func testSetMembershipRemovesPhotoFromCollection() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+        let photos = try await db.allPhotos()
+        let photoID = try XCTUnwrap(photos.first?.id)
+        let collection = try await db.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+
+        try await db.setMembership(photoID: photoID, collectionID: collectionID, isMember: true)
+        try await db.setMembership(photoID: photoID, collectionID: collectionID, isMember: false)
+
+        let inCollection = try await db.photos(inCollection: collectionID)
+        XCTAssertTrue(inCollection.isEmpty)
+    }
+
+    func testAllMembershipsReflectsCurrentState() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+        let photos = try await db.allPhotos()
+        let photoID = try XCTUnwrap(photos.first?.id)
+        let collection = try await db.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+
+        try await db.setMembership(photoID: photoID, collectionID: collectionID, isMember: true)
+
+        let memberships = try await db.allMemberships()
+        XCTAssertEqual(memberships, [CollectionPhoto(collectionId: collectionID, photoId: photoID)])
+    }
 }

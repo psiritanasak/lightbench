@@ -14,6 +14,12 @@ struct ContentView: View {
     /// also observe.
     @ObservedObject var catalog: CatalogModel
 
+    /// Phase 4 slice 2: toggles the main window between the single-photo
+    /// Editor (the existing `HSplitView`, unchanged) and the Library
+    /// thumbnail grid. Presentation-only — switching back to the Editor
+    /// leaves whatever photo was already loaded exactly as it was.
+    @State private var showLibrary = false
+
     /// Which top-level editing tool is active — Apple Photos-style tab bar.
     /// Selecting `.crop` IS entering crop-editing mode (see `isCroppingActive`
     /// below); there's no separate in-sidebar toggle anymore.
@@ -243,6 +249,97 @@ struct ContentView: View {
     }
 
     private var mainContent: some View {
+        Group {
+            if showLibrary {
+                LibraryGridView(catalog: catalog) { photo in
+                    document.load(from: URL(fileURLWithPath: photo.path))
+                    showLibrary = false
+                }
+            } else {
+                editorContent
+            }
+        }
+        .preferredColorScheme(.dark)
+        // Opening a new photo resets `editState` (including crop) to
+        // identity; return to the Adjust tab too so the crop overlay
+        // doesn't linger showing a stale (now-meaningless) full-frame rect
+        // over the new photo, and reset the aspect lock (a fresh photo has
+        // no meaningful "current" ratio to keep enforcing).
+        .onChange(of: document.currentFileName) { _, _ in
+            selectedTab = .adjust
+            selectedAspect = .freeform
+            customAspectRatio = nil
+            isPickingWhiteBalance = false
+            isPlacingRedEyeCorrections = false
+        }
+        // Leaving the Adjust tab disarms both point-interaction modes —
+        // neither has meaning while cropping (their overlays are gated on
+        // `!isCroppingActive` anyway) or in the other, not-yet-built tabs.
+        .onChange(of: selectedTab) { _, newTab in
+            if newTab != .adjust {
+                isPickingWhiteBalance = false
+                isPlacingRedEyeCorrections = false
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button(showLibrary ? "Editor" : "Library") {
+                    showLibrary.toggle()
+                }
+            }
+            ToolbarItem(placement: .automatic) {
+                Button("Open…") {
+                    document.openImage()
+                }
+            }
+            ToolbarItem(placement: .automatic) {
+                Button("Import Folder…") {
+                    catalog.importFolder()
+                }
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    document.undo()
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                }
+                // No .keyboardShortcut here — the Edit menu
+                // (`PhotoAppApp`'s `.commands { CommandGroup(replacing:
+                // .undoRedo) }`) is the canonical ⌘Z/⇧⌘Z owner now, so two
+                // separate views don't both claim the same key combo.
+                .disabled(!document.canUndo)
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    document.redo()
+                } label: {
+                    Label("Redo", systemImage: "arrow.uturn.forward")
+                }
+                .disabled(!document.canRedo)
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    document.revertToOriginal()
+                } label: {
+                    Label("Revert to Original", systemImage: "arrow.counterclockwise")
+                }
+                .disabled(document.currentImage == nil || document.editState == .identity)
+            }
+            if selectedTab == .crop {
+                ToolbarItem(placement: .automatic) {
+                    Button("Done") { selectedTab = .adjust }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.yellow)
+                }
+            }
+        }
+        .navigationTitle(showLibrary ? "Library" : (document.currentFileName ?? "PhotoApp"))
+    }
+
+    /// The single-photo editor — unchanged from before the Library grid
+    /// was added, just extracted out of `mainContent` so `mainContent` can
+    /// switch between this and `LibraryGridView`.
+    private var editorContent: some View {
         HSplitView {
             VStack(spacing: 0) {
                 EditorTabBar(selectedTab: $selectedTab)
@@ -328,76 +425,6 @@ struct ContentView: View {
             editControls
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
         }
-        .preferredColorScheme(.dark)
-        // Opening a new photo resets `editState` (including crop) to
-        // identity; return to the Adjust tab too so the crop overlay
-        // doesn't linger showing a stale (now-meaningless) full-frame rect
-        // over the new photo, and reset the aspect lock (a fresh photo has
-        // no meaningful "current" ratio to keep enforcing).
-        .onChange(of: document.currentFileName) { _, _ in
-            selectedTab = .adjust
-            selectedAspect = .freeform
-            customAspectRatio = nil
-            isPickingWhiteBalance = false
-            isPlacingRedEyeCorrections = false
-        }
-        // Leaving the Adjust tab disarms both point-interaction modes —
-        // neither has meaning while cropping (their overlays are gated on
-        // `!isCroppingActive` anyway) or in the other, not-yet-built tabs.
-        .onChange(of: selectedTab) { _, newTab in
-            if newTab != .adjust {
-                isPickingWhiteBalance = false
-                isPlacingRedEyeCorrections = false
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button("Open…") {
-                    document.openImage()
-                }
-            }
-            ToolbarItem(placement: .automatic) {
-                Button("Import Folder…") {
-                    catalog.importFolder()
-                }
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    document.undo()
-                } label: {
-                    Label("Undo", systemImage: "arrow.uturn.backward")
-                }
-                // No .keyboardShortcut here — the Edit menu
-                // (`PhotoAppApp`'s `.commands { CommandGroup(replacing:
-                // .undoRedo) }`) is the canonical ⌘Z/⇧⌘Z owner now, so two
-                // separate views don't both claim the same key combo.
-                .disabled(!document.canUndo)
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    document.redo()
-                } label: {
-                    Label("Redo", systemImage: "arrow.uturn.forward")
-                }
-                .disabled(!document.canRedo)
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    document.revertToOriginal()
-                } label: {
-                    Label("Revert to Original", systemImage: "arrow.counterclockwise")
-                }
-                .disabled(document.currentImage == nil || document.editState == .identity)
-            }
-            if selectedTab == .crop {
-                ToolbarItem(placement: .automatic) {
-                    Button("Done") { selectedTab = .adjust }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.yellow)
-                }
-            }
-        }
-        .navigationTitle(document.currentFileName ?? "PhotoApp")
     }
 
     private var editControls: some View {

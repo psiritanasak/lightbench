@@ -91,6 +91,28 @@ private struct LibraryThumbnailCell: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(photo.isFlagged ? .yellow : .secondary)
+
+                Menu {
+                    ForEach(catalog.collections) { collection in
+                        Button {
+                            catalog.toggleMembership(of: photo, in: collection)
+                        } label: {
+                            let isMember = catalog.membershipsByPhotoID[photo.id ?? -1, default: []]
+                                .contains(collection.id ?? -1)
+                            HStack {
+                                Text(collection.name)
+                                Spacer()
+                                if isMember {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "folder.badge.plus")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             }
         }
         .contentShape(Rectangle())

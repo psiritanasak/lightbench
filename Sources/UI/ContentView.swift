@@ -251,10 +251,7 @@ struct ContentView: View {
     private var mainContent: some View {
         Group {
             if showLibrary {
-                LibraryGridView(catalog: catalog) { photo in
-                    document.load(from: URL(fileURLWithPath: photo.path))
-                    showLibrary = false
-                }
+                libraryContent
             } else {
                 editorContent
             }
@@ -334,6 +331,21 @@ struct ContentView: View {
             }
         }
         .navigationTitle(showLibrary ? "Library" : (document.currentFileName ?? "PhotoApp"))
+    }
+
+    /// The Library, in an `HSplitView` alongside `editorContent` (Phase 4
+    /// slice 4) — a collections sidebar on the left, the thumbnail grid
+    /// on the right. Selecting a thumbnail loads it into the editor and
+    /// switches back out of Library mode.
+    private var libraryContent: some View {
+        HSplitView {
+            CollectionSidebarView(catalog: catalog)
+                .frame(minWidth: 160, idealWidth: 200, maxWidth: 260)
+            LibraryGridView(catalog: catalog) { photo in
+                document.load(from: URL(fileURLWithPath: photo.path))
+                showLibrary = false
+            }
+        }
     }
 
     /// The single-photo editor — unchanged from before the Library grid

@@ -1,6 +1,19 @@
 import AppKit
 import Foundation
 
+/// Which photos the Library grid shows. A non-optional enum rather than
+/// `Int64?` (`nil` = All Photos) — SwiftUI's `List(selection:)` on macOS
+/// was measured LIVE to be unreliable when a row is tagged with the `nil`
+/// case of an `Optional` selection binding: after selecting a real
+/// collection, tapping back to the `nil`-tagged "All Photos" row silently
+/// failed to register. A plain, always-non-nil enum sidesteps that
+/// specific selection-binding quirk entirely (every row's tag is a
+/// concrete, non-optional value).
+enum LibraryFilter: Hashable, Sendable {
+    case allPhotos
+    case collection(Int64)
+}
+
 /// The UI-facing wrapper around `CatalogDatabase` — deliberately kept in
 /// `Sources/UI`, not `Sources/Catalog`, so the Catalog module itself stays
 /// free of SwiftUI/AppKit (`CLAUDE.md`: "Keep modules separated... No UI
@@ -15,6 +28,21 @@ final class CatalogModel: ObservableObject {
     @Published private(set) var photoCount: Int = 0
     @Published var importStatusMessage: String?
     @Published private(set) var photos: [Photo] = []
+    @Published private(set) var collections: [PhotoCollection] = []
+    /// Which photos `photos` reflects. Setting this re-filters `photos` —
+    /// see `didSet` below and `refresh()`.
+    @Published var selectedFilter: LibraryFilter = .allPhotos {
+        didSet {
+            guard oldValue != selectedFilter else { return }
+            Task { await refresh() }
+        }
+    }
+    /// photoID → the set of collectionIDs it belongs to, rebuilt from
+    /// `allMemberships()` on every `refresh()`. Keeping this as one
+    /// client-side map (rather than a query per grid cell) is what makes
+    /// each cell's collection-membership checkmarks a synchronous
+    /// dictionary lookup.
+    @Published private(set) var membershipsByPhotoID: [Int64: Set<Int64>] = [:]
 
     /// `nil` until the background open+migrate in `init()` completes (or
     /// forever, if it failed — see `initError`). `CatalogDatabase()`
@@ -118,18 +146,30 @@ final class CatalogModel: ObservableObject {
         }
     }
 
-    /// Re-reads `photoCount`/`photos` from the catalog. Safe to call
-    /// repeatedly (e.g. after every import) — `CatalogDatabase`'s own
-    /// methods are `async` and do their real work via GRDB's queue, not on
-    /// this (`@MainActor`) call site, so this doesn't block the UI despite
+    /// Re-reads `photoCount`/`photos`/`collections`/`membershipsByPhotoID`
+    /// from the catalog. Safe to call repeatedly (e.g. after every import
+    /// or rating/flag/membership change) — `CatalogDatabase`'s own methods
+    /// are `async` and do their real work via GRDB's queue, not on this
+    /// (`@MainActor`) call site, so this doesn't block the UI despite
     /// being an ordinary method here rather than wrapped in its own
-    /// `Task.detached`. A failed read leaves the previous, still-valid
-    /// `photos`/`photoCount` in place rather than clearing them.
+    /// `Task.detached`. `photos` respects `selectedFilter` — `.allPhotos`
+    /// (`allPhotos()`), or just one collection's members
+    /// (`photos(inCollection:)`). A failed read leaves the previous,
+    /// still-valid state in place rather than clearing it.
     func refresh() async {
         guard let database else { return }
         do {
             photoCount = try await database.photoCount()
-            photos = try await database.allPhotos()
+            collections = try await database.allCollections()
+            let memberships = try await database.allMemberships()
+            membershipsByPhotoID = Dictionary(grouping: memberships, by: \.photoId)
+                .mapValues { Set($0.map(\.collectionId)) }
+            switch selectedFilter {
+            case .allPhotos:
+                photos = try await database.allPhotos()
+            case .collection(let collectionID):
+                photos = try await database.photos(inCollection: collectionID)
+            }
         } catch {
             // Best-effort — a transient read failure shouldn't blank out
             // an otherwise-valid, already-displayed library.
@@ -166,6 +206,33 @@ final class CatalogModel: ObservableObject {
         guard let database, let id = photo.id else { return }
         Task.detached { [weak self] in
             try? await database.setFlagged(isFlagged, for: id)
+            await self?.refresh()
+        }
+    }
+
+    // MARK: - Collections (Phase 4 slice 4)
+
+    /// Creates a new collection. An empty (or whitespace-only) name is
+    /// rejected before ever reaching the database — mirroring how other
+    /// write paths in this class validate up front.
+    func createCollection(name: String) {
+        guard let database else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task.detached { [weak self] in
+            _ = try? await database.createCollection(name: trimmed)
+            await self?.refresh()
+        }
+    }
+
+    /// Toggles `photo`'s membership in `collection` — same
+    /// `Task.detached` + `refresh()` shape and swallowed-failure
+    /// reasoning as `setRating`/`setFlagged`.
+    func toggleMembership(of photo: Photo, in collection: PhotoCollection) {
+        guard let database, let photoID = photo.id, let collectionID = collection.id else { return }
+        let isMember = membershipsByPhotoID[photoID, default: []].contains(collectionID)
+        Task.detached { [weak self] in
+            try? await database.setMembership(photoID: photoID, collectionID: collectionID, isMember: !isMember)
             await self?.refresh()
         }
     }

@@ -2,9 +2,9 @@
 
 ## Current phase
 **Phase 2 (Edit engine) and Phase 3 (non-destructive pipeline) are both
-COMPLETE. Phase 4 (Library) has STARTED — first slice (catalog DB
-foundation + basic folder import) shipped, see below; thumbnail grid,
-ratings/flags, and collections are still not started.** The original six
+COMPLETE. Phase 4 (Library) has STARTED — slices 1 (catalog DB foundation
++ basic folder import) and 2 (thumbnail grid browsing view) shipped, see
+below; ratings/flags and collections are still not started.** The original six
 roadmap items, five
 backlog tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
@@ -1640,21 +1640,30 @@ restructure. 1 commit.
   commit.
 
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Catalog DB foundation + basic
-folder import, second pass, after one FIX FIRST round: `CatalogModel.init()`
-was opening/migrating the SQLite database synchronously on `@MainActor` at
-app launch, violating CLAUDE.md's "DB access never blocks the main thread"
-— fixed by moving the open into a `Task.detached`, re-reviewed, APPROVED).
-Three non-blocking notes from that same review, deliberately left as-is
-(matching this project's convention of only fixing FIX FIRST items, not
-every stylistic note): (1) the `#Preview` in `ContentView.swift` still
-constructs a real `CatalogModel()`, side-effecting the on-disk catalog on
-every canvas-preview render — harmless, low priority; (2) `photoCount` is
-seeded from the DB shortly after launch, not instantly, so any future UI
-binding to it before the background open completes would briefly show 0 —
-fine today since nothing reads it yet; (3) no security-scoped bookmark is
-persisted for imported folders — deferred on purpose, only needed once a
-later slice actually re-opens catalogued files for browsing.
+None — last reviewer verdict was APPROVE (Library thumbnail grid, second
+pass, after one FIX FIRST round with 4 issues, all in `CatalogModel.swift`:
+(1) `activateFolderAccess` returned early on a bookmark-creation failure
+BEFORE ever calling `startAccessingSecurityScopedResource()`, silently
+killing access for the current session too, not just future relaunches;
+(2) the `Bool` return of `startAccessingSecurityScopedResource()` was
+discarded everywhere, treating a failed grant as success; (3) the new
+thumbnail cache was an unbounded `[String: CGImage]` — every photo ever
+scrolled into view stayed decoded in memory forever; (4) re-importing the
+same folder twice in one session called `startAccessingSecurityScopedResource()`
+again with no matching stop. All four fixed — access-capture and
+scope-activation are now independent steps (a bookmark failure no longer
+blocks the `start` call), failures surface as a warning folded into the
+import summary, the cache is now an `NSCache` capped at 64MB, and an
+`activeFolders` set prevents starting the same folder's scope twice —
+re-reviewed, APPROVED. One non-blocking note carried forward for a future
+session: `activateKnownFolders` keys `activeFolders` by the bookmark's
+original path, so a folder renamed/moved between sessions could get its
+scope started twice on re-import — a corner case, not a regression.
+
+One non-blocking note carried forward from Catalog DB foundation (slice 1)
+review, still accurate: the `#Preview` in `ContentView.swift` constructs a
+real `CatalogModel()`, side-effecting the on-disk catalog on every
+canvas-preview render — harmless, low priority.
 
 Before that: last reviewer verdict was APPROVE (Adjust tab regrouping, first
 pass). One documented, unexplained live flake carried forward for
@@ -1955,41 +1964,112 @@ commit, per workflow rules).
 - 4 commits (GRDB dependency; the Catalog module; UI wiring + the
   body/mainContent split; tests).
 
+### Phase 4, Slice 2 — Library thumbnail grid (browsing view) (complete, verified live)
+- `Sources/Rendering/ThumbnailGenerator.swift` (new): a pure, stateless
+  ImageIO-based decoder — `CGImageSourceCreateThumbnailAtIndex` with
+  `kCGImageSourceCreateThumbnailWithTransform` (applies EXIF orientation
+  for free, unlike `ImageDocumentModel.load`'s own manual
+  `exifOrientation(of:)` step) and a `maxPixelSize` cap. Never
+  materializes the full-resolution image.
+- `Sources/UI/CatalogModel.swift` extended: `@Published photos: [Photo]` +
+  `refresh()` (re-reads `photoCount`/`photos`, called after init's
+  background DB-open and after every successful import); `thumbnail(for:)`
+  backed by a `private actor ThumbnailCache` with in-flight de-duplication
+  (two concurrent requests for the same path await the same decode) and,
+  after the reviewer's fix, an `NSCache` (not a plain dictionary) capped
+  at 64MB so a large, growing library's thumbnails don't stay resident
+  forever.
+- **Persisted, read-only folder access across relaunches** — the key new
+  piece of sandbox handling this slice needed: `ImageDocumentModel.load(from:)`'s
+  `CIImage(contentsOf:)` decode is LAZY (the file is actually read at
+  render time, possibly repeatedly), so scoping security access only
+  around the `load()` call isn't enough — the scope must outlive it. Design:
+  capture a `.withSecurityScope` read-only bookmark for each imported
+  folder (own `UserDefaults` store, separate key from
+  `ImageDocumentModel`'s existing sidecar-save bookmarks — deliberately
+  not shared, so this newer/less-tested path can't affect the working
+  one), and hold `startAccessingSecurityScopedResource()` open for the
+  process's entire lifetime (no matching `stop` — intentional, the OS
+  reclaims on quit). Every known folder is re-activated once at launch
+  (`activateKnownFolders()`), so thumbnails and "open" both keep working
+  after quit/relaunch — manually verified live, including a full quit +
+  relaunch cycle.
+- **A real reviewer-caught bug batch, all in this bookmark/scope logic**
+  (first pass FIX FIRST, 4 issues — see "Open reviewer issues" above for
+  the full list): a bookmark-creation failure was short-circuiting past
+  the `start` call entirely (killing CURRENT-session access, not just a
+  future relaunch's); `startAccessingSecurityScopedResource()`'s `Bool`
+  result was discarded everywhere, hiding a failed grant; the thumbnail
+  cache was unbounded; re-importing the same folder twice stacked
+  unmatched `start` calls. All four fixed (independent bookmark/start
+  steps with a surfaced warning folded into the import summary, an
+  `activeFolders` guard set, `NSCache`), re-reviewed, APPROVED.
+- `Sources/UI/LibraryGridView.swift` (new): a `LazyVGrid` over
+  `catalog.photos` with an empty-state prompt, each cell fetching its own
+  thumbnail via `.task(id: photo.path)`.
+- `Sources/UI/ContentView.swift`: a "Library"/"Editor" toolbar toggle;
+  `mainContent` now branches between `LibraryGridView` and the existing
+  editor (mechanically renamed to `editorContent`, confirmed
+  behavior-preserving by the reviewer — same modifier chain relocated
+  onto the new outer `Group`, nothing dropped or duplicated). Selecting a
+  thumbnail calls `document.load(from:)` and switches back to the editor.
+- `Tests/RenderingTests/ThumbnailGeneratorTests.swift` (new, 4 tests):
+  size-cap enforcement, no-upscale-beyond-source, missing file, non-image
+  file — writes a real PNG to a temp file first. All 249 tests pass (245
+  prior + 4 new). `CatalogModel`'s bookmark/actor-cache code itself is
+  left untested, matching this project's established UI-glue convention
+  (no `UITests`, bookmarks can't be exercised headlessly).
+- Manually verified live end-to-end, including the specific behavior most
+  likely to silently regress: thumbnails render, clicking one opens it
+  into a fully-editable state, toggling Library/Editor works, AND — after
+  fully quitting and relaunching the app — thumbnails still render and a
+  photo still opens (the actual payoff of the persisted-bookmark design).
+- 3 commits (ThumbnailGenerator + tests; CatalogModel extensions; grid +
+  ContentView wiring).
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
 **Phase 2 and Phase 3 are COMPLETE** (see above). **Phase 4 has STARTED**:
-slice 1, "Catalog DB foundation + basic folder import," is DONE — GRDB
-dependency, `Sources/Catalog/` module (`Photo`, migration, `CatalogDatabase`,
-`PhotoImporter`), `CatalogModel` + an "Import Folder…" toolbar button, all
-reviewer-approved (one FIX FIRST round on a main-thread-blocking DB-open
-bug, fixed, re-reviewed, APPROVE) and manually verified live — see "Phase
-4, Slice 1" above. 245 tests passing, app fully functional.
+slice 1 ("Catalog DB foundation + basic folder import") AND slice 2
+("Library thumbnail grid") are both DONE — GRDB dependency,
+`Sources/Catalog/` module, `CatalogModel` (import, `photos`, thumbnail
+cache, persisted folder access), `LibraryGridView`, a "Library"/"Editor"
+toolbar toggle. Both slices reviewer-approved after one FIX FIRST round
+each (slice 1: a main-thread-blocking DB-open bug; slice 2: 4 issues in
+the folder-access/thumbnail-cache logic) and manually verified live,
+including a full quit+relaunch cycle confirming persisted access actually
+works — see "Phase 4, Slice 1" and "Phase 4, Slice 2" above. 249 tests
+passing, app fully functional.
 
 **Nothing is currently planned.** Remaining Phase 4 sub-features, per
-CLAUDE.md's roadmap item 4 ("Library: import, catalog DB, thumbnail grid,
-ratings/flags, collections"), still NOT started: thumbnail grid/browsing
-UI (the natural next slice — would consume `CatalogDatabase.allPhotos()`,
-which already exists but is currently unused by any UI), ratings/flags,
-collections. Each is its own session per the project's "one feature per
-session" rule — ask the user which, don't guess.
+CLAUDE.md's roadmap item 4, still NOT started: ratings/flags, collections.
+Also NOT started, deliberately deferred within slice 2's own scope:
+sort/filter/search in the Library grid, removing photos from the catalog,
+detecting files deleted on disk since import. Each is its own session per
+the project's "one feature per session" rule — ask the user which, don't
+guess.
 
 **Next: remaining options** (ask the user which, don't guess): (1) Phase
-4 slice 2 — thumbnail grid/browsing UI (natural next step, builds directly
-on this slice's `CatalogDatabase`); (2) Phase 4 slice 3/4 — ratings/flags
-or collections; (3) revisit the still-deferred sidebar content-shift-on-
-scroll cosmetic bug (see its own section above, including the "Lesson
-recorded" note for whoever attempts it); (4) the reviewer's non-blocking
-note from the Edit-menu work — consider suppressing/redesigning the
-default ⌘N "New Window" behavior before any multi-window UI is added,
-since `document` is now shared app-wide; (5) the reviewer's non-blocking
-note from the sidecar-persistence work — investigate the one unexplained
-"you don't have permission" flake further if it recurs (Console.app
-sandbox-denial logs would help pin it down next time). Lens distortion
-correction remains explicitly OUT of scope (needs camera-profile data, a
-separate concern) unless the user asks for it specifically.
+4 slice 3/4 — ratings/flags or collections (natural next Library
+features); (2) Library grid polish — sort/filter/search, removing
+photos, detecting missing files; (3) revisit the still-deferred sidebar
+content-shift-on-scroll cosmetic bug (see its own section above, including
+the "Lesson recorded" note for whoever attempts it); (4) the reviewer's
+non-blocking note from the Edit-menu work — consider suppressing/
+redesigning the default ⌘N "New Window" behavior before any multi-window
+UI is added, since `document` is now shared app-wide; (5) the reviewer's
+non-blocking note from the sidecar-persistence work — investigate the one
+unexplained "you don't have permission" flake further if it recurs
+(Console.app sandbox-denial logs would help pin it down next time); (6)
+the reviewer's non-blocking note from Library slice 2 — `activateKnownFolders`
+keys `activeFolders` by the bookmark's original path, so a folder
+renamed/moved between sessions could get its scope started twice on
+re-import (a corner case, not a regression). Lens distortion correction
+remains explicitly OUT of scope (needs camera-profile data, a separate
+concern) unless the user asks for it specifically.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

@@ -56,8 +56,28 @@ Edits are stored as parameter sets and rendered live on the GPU.
    of `Sources/Catalog` to keep that module UI-free) opens the database
    via a `Task.detached` inside `init()`, never synchronously on
    `@MainActor` — a real bug the reviewer caught in the first draft.
-   Basic "Import Folder…" toolbar button only; thumbnail grid, ratings/
-   flags, and collections are NOT started.
+   Basic "Import Folder…" toolbar button only. Library thumbnail grid
+   ✅ COMPLETE: `Sources/Rendering/ThumbnailGenerator.swift` (pure ImageIO
+   decode, `CGImageSourceCreateThumbnailAtIndex`, EXIF orientation via
+   `kCGImageSourceCreateThumbnailWithTransform`); `CatalogModel` gained
+   `@Published photos`/`refresh()`, an actor-isolated `NSCache`-backed
+   thumbnail cache (bounded, in-flight-deduplicated), and — the key
+   sandbox piece — a read-only security-scoped bookmark PER IMPORTED
+   FOLDER, held open (`startAccessingSecurityScopedResource()`, never
+   `stop`ped) for the app's whole process lifetime and re-activated for
+   every known folder at launch, because `ImageDocumentModel.load(from:)`'s
+   `CIImage(contentsOf:)` decode is lazy (reads happen at render time,
+   possibly repeatedly) so scoping access only around `load()` isn't
+   enough; `Sources/UI/LibraryGridView.swift` is a `LazyVGrid` toggled via
+   a new toolbar button, swapping `ContentView`'s `mainContent` between it
+   and the existing single-photo editor (renamed `editorContent`).
+   Reviewer's first pass caught 4 real bugs, all in the folder-access/
+   thumbnail-cache logic (a bookmark failure silently skipping the
+   `start` call too; a discarded `Bool` success/failure result; an
+   unbounded cache; unmatched repeated `start` calls on re-import) —
+   all fixed, re-reviewed, APPROVED. Ratings/flags and collections are
+   NOT started; also not started: sort/filter/search, removing photos
+   from the catalog, detecting files deleted on disk since import.
 5. Presets + export: save/apply presets, batch export (resize, quality, format)
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases

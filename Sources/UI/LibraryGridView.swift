@@ -78,11 +78,50 @@ private struct LibraryThumbnailCell: View {
                 .font(.caption)
                 .lineLimit(1)
                 .truncationMode(.middle)
+
+            HStack(spacing: 6) {
+                StarRatingRow(rating: photo.rating) { newRating in
+                    catalog.setRating(newRating, for: photo)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    catalog.setFlagged(!photo.isFlagged, for: photo)
+                } label: {
+                    Image(systemName: photo.isFlagged ? "flag.fill" : "flag")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(photo.isFlagged ? .yellow : .secondary)
+            }
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .task(id: photo.path) {
             image = await catalog.thumbnail(for: photo)
+        }
+    }
+}
+
+/// A row of 5 tappable stars, matching this app's existing "row of small
+/// tappable icons" style (the aspect-ratio preset list and Selective
+/// Color band swatches in `ContentView.swift`). Tapping the star that's
+/// already the current rating clears it to 0 — the standard Lightroom/
+/// Photos toggle-off convenience.
+private struct StarRatingRow: View {
+    let rating: Int
+    let onSet: (Int) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(1...5, id: \.self) { star in
+                Button {
+                    onSet(star == rating ? 0 : star)
+                } label: {
+                    Image(systemName: star <= rating ? "star.fill" : "star")
+                        .font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(star <= rating ? .yellow : .secondary)
+            }
         }
     }
 }

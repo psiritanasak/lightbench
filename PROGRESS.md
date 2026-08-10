@@ -3,8 +3,9 @@
 ## Current phase
 **Phase 2 (Edit engine) and Phase 3 (non-destructive pipeline) are both
 COMPLETE. Phase 4 (Library) has STARTED — slices 1 (catalog DB foundation
-+ basic folder import) and 2 (thumbnail grid browsing view) shipped, see
-below; ratings/flags and collections are still not started.** The original six
++ basic folder import), 2 (thumbnail grid browsing view), and 3
+(ratings and flags) shipped, see below; collections is still not
+started.** The original six
 roadmap items, five
 backlog tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
@@ -1640,7 +1641,20 @@ restructure. 1 commit.
   commit.
 
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Library thumbnail grid, second
+One non-blocking note carried forward (last reviewer verdict was APPROVE,
+first pass, for Ratings and flags): rapid repeated taps on the same
+photo's rating/flag spawn independent `Task.detached` calls in
+`CatalogModel.setRating`/`setFlagged`, each paired with its own
+`refresh()` — since the write and its refresh aren't atomic together, two
+fast taps can interleave such that the DISPLAYED `photos` array
+transiently shows the pre-second-tap value (self-heals on the next
+refresh-triggering action). NOT a persisted-data bug — confirmed via two
+full quit/relaunch cycles that ratings/flags always land correctly in the
+database. Left as-is per this project's convention of only fixing FIX
+FIRST items; worth hardening (optimistic local mutation of `photos`, or
+serializing per-photo updates) before the feature sees heavier use.
+
+Before that: last reviewer verdict was APPROVE (Library thumbnail grid, second
 pass, after one FIX FIRST round with 4 issues, all in `CatalogModel.swift`:
 (1) `activateFolderAccess` returned early on a bookmark-creation failure
 BEFORE ever calling `startAccessingSecurityScopedResource()`, silently
@@ -2027,49 +2041,106 @@ commit, per workflow rules).
 - 3 commits (ThumbnailGenerator + tests; CatalogModel extensions; grid +
   ContentView wiring).
 
+### Phase 4, Slice 3 — Ratings and flags (complete, verified live)
+- Confirmed with the user up front: a classic 0–5 star rating, a single
+  boolean flag ("Pick"), both always visible below the filename in every
+  grid cell (not hover-only) — Library-grid-only for now, not surfaced in
+  the single-photo Editor.
+- `Sources/Catalog/Migrations/002_ratings_and_flags.swift` (new): the
+  project's first migration since `001_initial` and its first
+  `ALTER TABLE` — adds `rating INTEGER NOT NULL DEFAULT 0` and
+  `isFlagged BOOLEAN NOT NULL DEFAULT 0` via GRDB's `table.add(column:)`.
+  Reviewer independently confirmed (against the vendored GRDB source) this
+  is exactly the constant-default form SQLite requires for adding a
+  `NOT NULL` column to an ALREADY-POPULATED table — real risk here, since
+  slices 1/2 shipped without this column and this machine's on-disk
+  `catalog.sqlite` already had rows. `001_initial.swift` itself has zero
+  diff — append-only convention held.
+  Manually verified against that exact real, pre-populated database (not
+  just a fresh test DB): two full quit/relaunch cycles, ratings/flags
+  persisted correctly both times.
+- `Sources/Catalog/Photo.swift`: `rating`/`isFlagged` fields added with
+  Swift-side defaults matching the migration's, so `CatalogDatabase.importPhotos`'s
+  existing `Photo(...)` construction kept compiling unchanged.
+- `Sources/Catalog/CatalogDatabase.swift`: `setRating`/`setFlagged` — the
+  project's first `UPDATE` queries (every prior write was `importPhotos`'s
+  `INSERT`). Rating clamped to 0...5 in Swift before the query runs, not
+  relying on any DB-side constraint.
+- `Sources/UI/CatalogModel.swift`: `setRating(_:for:)`/`setFlagged(_:for:)`,
+  mirroring `importFolder()`'s `Task.detached` + `refresh()` shape;
+  failures swallowed via `try?` rather than surfaced as an alert (a rating
+  tap is frequent/low-stakes — a proportionate, documented choice).
+- `Sources/UI/LibraryGridView.swift`: a new `StarRatingRow` (5 tappable
+  stars; tapping the current rating clears it to 0) and a flag `Button`,
+  both below the filename — matching the app's existing "row of small
+  tappable icons" style (aspect-preset list, Selective Color swatches).
+  Confirmed live that clicking a star/flag does NOT also open the photo
+  (standard SwiftUI `Button`-inside-`.onTapGesture` precedence, reviewer
+  independently confirmed the reasoning, not just the live result).
+- 5 new tests in `Tests/CatalogTests/CatalogDatabaseTests.swift`: default
+  unrated/unflagged on import, rating round-trip, clamp-above-5,
+  clamp-below-0, flag toggle both directions. All 254 tests pass (249
+  prior + 5 new).
+- Reviewer verdict: APPROVE on the first pass — see "Open reviewer
+  issues" above for the one non-blocking note carried forward
+  (display-ordering race on rapid repeated taps, not a persisted-data
+  bug).
+- 3 commits (migration + Photo fields + DB methods + their tests;
+  CatalogModel methods; grid UI).
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
 **Phase 2 and Phase 3 are COMPLETE** (see above). **Phase 4 has STARTED**:
-slice 1 ("Catalog DB foundation + basic folder import") AND slice 2
-("Library thumbnail grid") are both DONE — GRDB dependency,
-`Sources/Catalog/` module, `CatalogModel` (import, `photos`, thumbnail
-cache, persisted folder access), `LibraryGridView`, a "Library"/"Editor"
-toolbar toggle. Both slices reviewer-approved after one FIX FIRST round
-each (slice 1: a main-thread-blocking DB-open bug; slice 2: 4 issues in
-the folder-access/thumbnail-cache logic) and manually verified live,
-including a full quit+relaunch cycle confirming persisted access actually
-works — see "Phase 4, Slice 1" and "Phase 4, Slice 2" above. 249 tests
-passing, app fully functional.
+slices 1 ("Catalog DB foundation + basic folder import"), 2 ("Library
+thumbnail grid"), and 3 ("Ratings and flags") are all DONE — GRDB
+dependency, `Sources/Catalog/` module (now on migration `002`), `CatalogModel`
+(import, `photos`, thumbnail cache, persisted folder access,
+`setRating`/`setFlagged`), `LibraryGridView` (grid + star rating row +
+flag toggle per cell), a "Library"/"Editor" toolbar toggle. All three
+slices reviewer-approved (slice 1: one FIX FIRST round, a main-thread-
+blocking DB-open bug; slice 2: one FIX FIRST round, 4 issues in the
+folder-access/thumbnail-cache logic; slice 3: APPROVE on the first pass)
+and manually verified live, including multiple full quit+relaunch cycles
+confirming persisted access AND persisted ratings/flags both actually
+work against the real on-disk catalog — see "Phase 4, Slice 1/2/3" above.
+254 tests passing, app fully functional.
 
 **Nothing is currently planned.** Remaining Phase 4 sub-features, per
-CLAUDE.md's roadmap item 4, still NOT started: ratings/flags, collections.
-Also NOT started, deliberately deferred within slice 2's own scope:
-sort/filter/search in the Library grid, removing photos from the catalog,
-detecting files deleted on disk since import. Each is its own session per
-the project's "one feature per session" rule — ask the user which, don't
-guess.
+CLAUDE.md's roadmap item 4, still NOT started: collections. Also NOT
+started, deliberately deferred within earlier slices' own scope:
+sort/filter/search in the Library grid (including by rating/flag now that
+they exist), removing photos from the catalog, detecting files deleted on
+disk since import, a three-state pick/reject flag model, keyboard
+shortcuts for rating/flagging, surfacing rating/flag in the single-photo
+Editor. Each is its own session per the project's "one feature per
+session" rule — ask the user which, don't guess.
 
 **Next: remaining options** (ask the user which, don't guess): (1) Phase
-4 slice 3/4 — ratings/flags or collections (natural next Library
-features); (2) Library grid polish — sort/filter/search, removing
-photos, detecting missing files; (3) revisit the still-deferred sidebar
-content-shift-on-scroll cosmetic bug (see its own section above, including
-the "Lesson recorded" note for whoever attempts it); (4) the reviewer's
-non-blocking note from the Edit-menu work — consider suppressing/
-redesigning the default ⌘N "New Window" behavior before any multi-window
-UI is added, since `document` is now shared app-wide; (5) the reviewer's
-non-blocking note from the sidecar-persistence work — investigate the one
-unexplained "you don't have permission" flake further if it recurs
-(Console.app sandbox-denial logs would help pin it down next time); (6)
-the reviewer's non-blocking note from Library slice 2 — `activateKnownFolders`
-keys `activeFolders` by the bookmark's original path, so a folder
-renamed/moved between sessions could get its scope started twice on
-re-import (a corner case, not a regression). Lens distortion correction
-remains explicitly OUT of scope (needs camera-profile data, a separate
-concern) unless the user asks for it specifically.
+4 slice 4 — collections (the last unstarted item in CLAUDE.md's Phase 4
+roadmap line); (2) Library grid polish — sort/filter/search (by rating/
+flag or otherwise), removing photos, detecting missing files; (3)
+hardening the reviewer's non-blocking note from Ratings and flags —
+rapid repeated rating/flag taps can transiently show a stale value in the
+grid (self-heals, not a persisted-data bug) — via optimistic local
+mutation or serialized per-photo updates; (4) revisit the still-deferred
+sidebar content-shift-on-scroll cosmetic bug (see its own section above,
+including the "Lesson recorded" note for whoever attempts it); (5) the
+reviewer's non-blocking note from the Edit-menu work — consider
+suppressing/redesigning the default ⌘N "New Window" behavior before any
+multi-window UI is added, since `document` is now shared app-wide; (6)
+the reviewer's non-blocking note from the sidecar-persistence work —
+investigate the one unexplained "you don't have permission" flake
+further if it recurs (Console.app sandbox-denial logs would help pin it
+down next time); (7) the reviewer's non-blocking note from Library slice
+2 — `activateKnownFolders` keys `activeFolders` by the bookmark's
+original path, so a folder renamed/moved between sessions could get its
+scope started twice on re-import (a corner case, not a regression). Lens
+distortion correction remains explicitly OUT of scope (needs
+camera-profile data, a separate concern) unless the user asks for it
+specifically.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

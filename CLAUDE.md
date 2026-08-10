@@ -75,9 +75,25 @@ Edits are stored as parameter sets and rendered live on the GPU.
    thumbnail-cache logic (a bookmark failure silently skipping the
    `start` call too; a discarded `Bool` success/failure result; an
    unbounded cache; unmatched repeated `start` calls on re-import) —
-   all fixed, re-reviewed, APPROVED. Ratings/flags and collections are
-   NOT started; also not started: sort/filter/search, removing photos
-   from the catalog, detecting files deleted on disk since import.
+   all fixed, re-reviewed, APPROVED. Ratings and flags ✅ COMPLETE: a
+   0–5 star rating and a boolean flag, settable via a `StarRatingRow` +
+   flag `Button` always visible below the filename in every
+   `LibraryGridView` cell (Library-grid-only, not in the Editor).
+   `Migrations/002_ratings_and_flags.swift` is the first migration since
+   `001_initial` and the first `ALTER TABLE` — adds `NOT NULL ... DEFAULT`
+   columns, the specific form SQLite requires for altering an
+   already-populated table (verified against the real, pre-populated
+   on-disk `catalog.sqlite` from slices 1/2 via two live quit/relaunch
+   cycles, not just a fresh test DB). `CatalogDatabase.setRating`/
+   `setFlagged` are the first `UPDATE` queries (every prior write was
+   `importPhotos`'s `INSERT`); rating is clamped to 0...5 in Swift before
+   the query runs. Reviewer APPROVED on the first pass; one non-blocking
+   note carried forward in `PROGRESS.md` (rapid repeated taps can
+   transiently show a stale rating in the grid — self-heals, not a
+   persisted-data bug). Collections is NOT started; also not started:
+   sort/filter/search (including by rating/flag), removing photos from
+   the catalog, detecting files deleted on disk since import, a
+   three-state pick/reject model, keyboard shortcuts for rating/flagging.
 5. Presets + export: save/apply presets, batch export (resize, quality, format)
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases

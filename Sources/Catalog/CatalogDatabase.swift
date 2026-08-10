@@ -51,6 +51,7 @@ final class CatalogDatabase: Sendable {
     private static func migrate(_ dbQueue: DatabaseQueue) throws {
         var migrator = DatabaseMigrator()
         Migration001Initial.register(in: &migrator)
+        Migration002RatingsAndFlags.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 
@@ -96,6 +97,27 @@ final class CatalogDatabase: Sendable {
             // `importedAt` alone (SQLite makes no ordering guarantee among
             // equal keys).
             try Photo.order(Photo.Columns.importedAt, Photo.Columns.id).fetchAll(db)
+        }
+    }
+
+    /// Sets `photoID`'s star rating, clamped to 0...5 — the project's
+    /// first `UPDATE` (every prior write was an `INSERT`, in
+    /// `importPhotos` above). Clamping happens here, not in `Photo`
+    /// itself, matching this project's `EditState` precedent of not
+    /// self-enforcing ranges in the model.
+    func setRating(_ rating: Int, for photoID: Int64) async throws {
+        let clamped = min(max(rating, 0), 5)
+        try await dbQueue.write { db in
+            try Photo.filter(Photo.Columns.id == photoID)
+                .updateAll(db, Photo.Columns.rating.set(to: clamped))
+        }
+    }
+
+    /// Sets `photoID`'s flagged state.
+    func setFlagged(_ isFlagged: Bool, for photoID: Int64) async throws {
+        try await dbQueue.write { db in
+            try Photo.filter(Photo.Columns.id == photoID)
+                .updateAll(db, Photo.Columns.isFlagged.set(to: isFlagged))
         }
     }
 }

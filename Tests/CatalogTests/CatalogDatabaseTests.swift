@@ -72,4 +72,73 @@ final class CatalogDatabaseTests: XCTestCase {
 
         XCTAssertEqual(photos.map(\.filename), ["first.jpg", "second.jpg"])
     }
+
+    // MARK: - Ratings and flags (Phase 4 slice 3)
+
+    func testNewlyImportedPhotoDefaultsToUnratedAndUnflagged() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+
+        let photos = try await db.allPhotos()
+        let photo = try XCTUnwrap(photos.first)
+
+        XCTAssertEqual(photo.rating, 0)
+        XCTAssertFalse(photo.isFlagged)
+    }
+
+    func testSetRatingUpdatesTheStoredValue() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+        let importedPhotos = try await db.allPhotos()
+        let id = try XCTUnwrap(importedPhotos.first?.id)
+
+        try await db.setRating(3, for: id)
+
+        let photos = try await db.allPhotos()
+        let photo = try XCTUnwrap(photos.first)
+        XCTAssertEqual(photo.rating, 3)
+    }
+
+    func testSetRatingClampsAboveFive() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+        let importedPhotos = try await db.allPhotos()
+        let id = try XCTUnwrap(importedPhotos.first?.id)
+
+        try await db.setRating(99, for: id)
+
+        let photos = try await db.allPhotos()
+        let photo = try XCTUnwrap(photos.first)
+        XCTAssertEqual(photo.rating, 5)
+    }
+
+    func testSetRatingClampsBelowZero() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+        let importedPhotos = try await db.allPhotos()
+        let id = try XCTUnwrap(importedPhotos.first?.id)
+
+        try await db.setRating(-1, for: id)
+
+        let photos = try await db.allPhotos()
+        let photo = try XCTUnwrap(photos.first)
+        XCTAssertEqual(photo.rating, 0)
+    }
+
+    func testSetFlaggedTogglesTheStoredValue() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+        let importedPhotos = try await db.allPhotos()
+        let id = try XCTUnwrap(importedPhotos.first?.id)
+
+        try await db.setFlagged(true, for: id)
+        let flaggedPhotos = try await db.allPhotos()
+        let flaggedPhoto = try XCTUnwrap(flaggedPhotos.first)
+        XCTAssertTrue(flaggedPhoto.isFlagged)
+
+        try await db.setFlagged(false, for: id)
+        let unflaggedPhotos = try await db.allPhotos()
+        let unflaggedPhoto = try XCTUnwrap(unflaggedPhotos.first)
+        XCTAssertFalse(unflaggedPhoto.isFlagged)
+    }
 }

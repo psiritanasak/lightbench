@@ -1,9 +1,10 @@
 # Progress
 
 ## Current phase
-**Phase 2 (Edit engine) is COMPLETE. Phase 3 (non-destructive pipeline) has
-STARTED — first slice (in-memory Undo/Redo) shipped, see below; disk
-persistence of edit state/history is still deferred.** The original six
+**Phase 2 (Edit engine) and Phase 3 (non-destructive pipeline) are both
+COMPLETE. Phase 4 (Library) has STARTED — first slice (catalog DB
+foundation + basic folder import) shipped, see below; thumbnail grid,
+ratings/flags, and collections are still not started.** The original six
 roadmap items, five
 backlog tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
@@ -1639,7 +1640,23 @@ restructure. 1 commit.
   commit.
 
 ## Open reviewer issues
-None — last reviewer verdict was APPROVE (Adjust tab regrouping, first
+None — last reviewer verdict was APPROVE (Catalog DB foundation + basic
+folder import, second pass, after one FIX FIRST round: `CatalogModel.init()`
+was opening/migrating the SQLite database synchronously on `@MainActor` at
+app launch, violating CLAUDE.md's "DB access never blocks the main thread"
+— fixed by moving the open into a `Task.detached`, re-reviewed, APPROVED).
+Three non-blocking notes from that same review, deliberately left as-is
+(matching this project's convention of only fixing FIX FIRST items, not
+every stylistic note): (1) the `#Preview` in `ContentView.swift` still
+constructs a real `CatalogModel()`, side-effecting the on-disk catalog on
+every canvas-preview render — harmless, low priority; (2) `photoCount` is
+seeded from the DB shortly after launch, not instantly, so any future UI
+binding to it before the background open completes would briefly show 0 —
+fine today since nothing reads it yet; (3) no security-scoped bookmark is
+persisted for imported folders — deferred on purpose, only needed once a
+later slice actually re-opens catalogued files for browsing.
+
+Before that: last reviewer verdict was APPROVE (Adjust tab regrouping, first
 pass). One documented, unexplained live flake carried forward for
 awareness (not blocking, not reproduced a second time, from the sidecar-
 persistence work): a transient "you don't have permission" sidecar-save
@@ -1884,50 +1901,95 @@ commit, per workflow rules).
   color/geometry math, the rendering fix as its own commit, then UI).
 - 24 commits total on `master`.
 
+### Phase 4, Slice 1 — Catalog DB foundation + basic folder import (complete, verified live)
+- The project's FIRST external dependency ever: GRDB 7.x, added via
+  `project.yml`'s new `packages:`/`dependencies: [- package: GRDB]` keys
+  (XcodeGen syntax, confirmed via a live `xcodebuild -resolvePackageDependencies`
+  — resolved to 7.11.1). `xcodegen generate` only writes the package
+  reference; the actual fetch happens at build time and needs network then.
+- `Sources/Catalog/` (previously empty) now holds: `Photo.swift` (a
+  metadata/path-only GRDB record — `path` is `UNIQUE`, which is what makes
+  re-importing the same folder idempotent), `Migrations/001_initial.swift`
+  (the first append-only migration, per CLAUDE.md convention), and
+  `CatalogDatabase.swift` (an `async`, off-main-thread wrapper around a
+  GRDB `DatabaseQueue`, opened at `Application Support/PhotoApp/catalog.sqlite`
+  — inside the app's own sandbox container, so no security-scoped bookmark
+  is needed for the DB itself, and no user photo file is ever touched).
+  `PhotoImporter.swift` is a separate, pure/stateless folder-scan helper
+  (no DB, no UI) so it's trivially unit-testable.
+- `Sources/UI/CatalogModel.swift` (new) is the UI-facing wrapper — kept out
+  of `Sources/Catalog` to keep that module SwiftUI/AppKit-free, matching
+  CLAUDE.md's "No UI imports in EditEngine" principle extended to Catalog.
+  Shows a directory-mode `NSOpenPanel`, then imports via `Task.detached`.
+- **A real bug caught by the reviewer's first pass**: `CatalogModel.init()`
+  originally opened `CatalogDatabase()` (real blocking I/O — directory
+  creation, SQLite open, migration) synchronously on `@MainActor` at app
+  launch, contradicting CLAUDE.md's own "DB access never blocks the main
+  thread" principle. Fixed by making `init()` cheap/synchronous (just
+  launches a `Task.detached`) and hopping back to `@MainActor` only to
+  publish the opened `database`/`initError`/seeded `photoCount`. Second
+  reviewer pass confirmed the fix is genuinely off-main and race-free
+  (`database`/`initError` are only ever read/written from `@MainActor`,
+  so serialized) — APPROVE.
+- A separate, unrelated build failure surfaced along the way: adding a 5th
+  `.alert` to `ContentView`'s already-large `body` made Swift's type
+  checker fail ("unable to type-check this expression in reasonable
+  time"). Fixed by splitting `body` into `mainContent` (the existing view
+  tree, unchanged) + `body` (`mainContent` followed by the alert chain) —
+  confirmed behavior-preserving by the reviewer (same modifiers, same
+  conditions, nothing dropped or duplicated).
+- `Tests/CatalogTests/` (new): `CatalogDatabaseTests` (in-memory GRDB
+  queue — insert, idempotent re-import, fetch round-trip, ordering) and
+  `PhotoImporterTests` (real temp directory — case-insensitive extension
+  filtering, excludes this app's own `.photoapp.json` sidecars). All 245
+  tests pass (235 prior + 10 new).
+- Manually verified live (after killing a STALE already-running instance
+  from days earlier that `open` was silently refocusing instead of
+  launching the fresh build — worth remembering for next time): "Import
+  Folder…" toolbar button imports and reports a count; re-importing the
+  same folder reports 0 new (idempotent); existing Open/edit flow
+  unaffected; re-verified again after the async-init fix.
+- Explicitly OUT of scope for this slice (by the user's own chosen scope):
+  thumbnail grid/browsing UI, ratings/flags, collections, persisting a
+  bookmark for re-reading catalogued files later.
+- 4 commits (GRDB dependency; the Catalog module; UI wiring + the
+  body/mainContent split; tests).
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Phase 2 is COMPLETE** (every backlog item ✅, see above). **Phase 3 is
-NOW FULLY COMPLETE**: in-memory Undo/Redo, Revert to Original, Edit-menu
-integration, and sidecar-file persistence of edit state are all shipped
-and reviewer-approved — see "Undo/Redo", "Revert to Original button",
-"Edit-menu Undo/Redo integration", and "Sidecar-file persistence of edit
-state" above. **RGB channel histograms are also done** — see "RGB channel
-histograms" above. **Sidebar layout bugs — MOSTLY fixed, one re-deferred
-after a critical regression**: top-clearance padding, scroll-anchor, and
-the HSplitView divider drift are all fixed and shipped. The sidebar
-content-shift-on-scroll bug's fix (`StableScrollInsets`) broke ALL slider
-interaction and was REVERTED — that cosmetic bug is back, re-deferred
-(see "Sidebar content-shift-on-scroll bug + HSplitView divider drift"
-above, including a "Lesson recorded" note for whoever attempts this next).
-235 tests passing, app fully functional, last reviewer verdict APPROVE
-(Adjust tab regrouping, first pass).
+**Phase 2 and Phase 3 are COMPLETE** (see above). **Phase 4 has STARTED**:
+slice 1, "Catalog DB foundation + basic folder import," is DONE — GRDB
+dependency, `Sources/Catalog/` module (`Photo`, migration, `CatalogDatabase`,
+`PhotoImporter`), `CatalogModel` + an "Import Folder…" toolbar button, all
+reviewer-approved (one FIX FIRST round on a main-thread-blocking DB-open
+bug, fixed, re-reviewed, APPROVE) and manually verified live — see "Phase
+4, Slice 1" above. 245 tests passing, app fully functional.
 
-**Adjust tab regrouping into labeled sections: DONE** — see its own
-section above. Picked as a lighter follow-up after Phase 3 closed out,
-over suppressing ⌘N or revisiting the scroll-shift bug.
-
-**Nothing is currently planned.** One item remains explicitly deferred,
-not picked yet: the sidebar content-shift-on-scroll cosmetic bug (see its
-own section above, including the "Lesson recorded" note for whoever
-attempts it).
+**Nothing is currently planned.** Remaining Phase 4 sub-features, per
+CLAUDE.md's roadmap item 4 ("Library: import, catalog DB, thumbnail grid,
+ratings/flags, collections"), still NOT started: thumbnail grid/browsing
+UI (the natural next slice — would consume `CatalogDatabase.allPhotos()`,
+which already exists but is currently unused by any UI), ratings/flags,
+collections. Each is its own session per the project's "one feature per
+session" rule — ask the user which, don't guess.
 
 **Next: remaining options** (ask the user which, don't guess): (1) Phase
-4 (Library: import, catalog DB, thumbnail grid, ratings/flags,
-collections) per CLAUDE.md's roadmap — needs its own explicit go-ahead
-and Plan Mode session, since it's a new phase; (2) revisit the re-deferred
-sidebar content-shift-on-scroll cosmetic bug; (3) the reviewer's non-
-blocking note from the Edit-menu work — consider suppressing/redesigning
-the default ⌘N "New Window" behavior before any multi-window UI is
-added, since `document` is now shared app-wide; (4) the reviewer's non-
-blocking note from the sidecar-persistence work — investigate the one
-unexplained "you don't have permission" flake further if it recurs
-(Console.app sandbox-denial logs would help pin it down next time). Lens
-distortion correction remains explicitly OUT of scope (needs camera-
-profile data, a separate concern) unless the user asks for it
-specifically.
+4 slice 2 — thumbnail grid/browsing UI (natural next step, builds directly
+on this slice's `CatalogDatabase`); (2) Phase 4 slice 3/4 — ratings/flags
+or collections; (3) revisit the still-deferred sidebar content-shift-on-
+scroll cosmetic bug (see its own section above, including the "Lesson
+recorded" note for whoever attempts it); (4) the reviewer's non-blocking
+note from the Edit-menu work — consider suppressing/redesigning the
+default ⌘N "New Window" behavior before any multi-window UI is added,
+since `document` is now shared app-wide; (5) the reviewer's non-blocking
+note from the sidecar-persistence work — investigate the one unexplained
+"you don't have permission" flake further if it recurs (Console.app
+sandbox-denial logs would help pin it down next time). Lens distortion
+correction remains explicitly OUT of scope (needs camera-profile data, a
+separate concern) unless the user asks for it specifically.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

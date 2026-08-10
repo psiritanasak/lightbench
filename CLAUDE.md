@@ -44,6 +44,20 @@ Edits are stored as parameter sets and rendered live on the GPU.
    isn't suppressed) — safe for this project's habit of adding new
    `EditState` fields almost every session.
 4. Library: import, catalog DB, thumbnail grid, ratings/flags, collections
+   — STARTED. Catalog DB foundation + basic folder import ✅ COMPLETE:
+   GRDB (first external dependency) added via `project.yml`'s `packages:`;
+   `Sources/Catalog/` now holds `Photo` (a metadata/path-only record —
+   `path` is `UNIQUE`, making re-import idempotent), the first
+   append-only migration (`Migrations/001_initial.swift`), and
+   `CatalogDatabase` (async, off-main-thread GRDB `DatabaseQueue` wrapper
+   at `Application Support/PhotoApp/catalog.sqlite` — inside the sandbox
+   container, so no bookmark is needed for the DB itself); `PhotoImporter`
+   is a pure folder-scan helper. `Sources/UI/CatalogModel.swift` (kept out
+   of `Sources/Catalog` to keep that module UI-free) opens the database
+   via a `Task.detached` inside `init()`, never synchronously on
+   `@MainActor` — a real bug the reviewer caught in the first draft.
+   Basic "Import Folder…" toolbar button only; thumbnail grid, ratings/
+   flags, and collections are NOT started.
 5. Presets + export: save/apply presets, batch export (resize, quality, format)
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases

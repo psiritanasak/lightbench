@@ -8,6 +8,12 @@ struct ContentView: View {
     /// toolbar's Undo/Redo buttons already do.
     @ObservedObject var document: ImageDocumentModel
 
+    /// Phase 4 slice 1: catalog DB + basic folder import. Owned by
+    /// `PhotoAppApp` for the same reason `document` is — a single shared
+    /// instance, ready for later Phase 4 slices (thumbnail grid, etc.) to
+    /// also observe.
+    @ObservedObject var catalog: CatalogModel
+
     /// Which top-level editing tool is active — Apple Photos-style tab bar.
     /// Selecting `.crop` IS entering crop-editing mode (see `isCroppingActive`
     /// below); there's no separate in-sidebar toggle anymore.
@@ -170,6 +176,73 @@ struct ContentView: View {
     }
 
     var body: some View {
+        // Split out of `body` (into `mainContent` below) so the type
+        // checker only has to solve the alert chain against ONE already-
+        // opaque `some View` type, not the whole `HSplitView` tree AND
+        // every alert simultaneously — adding the `importStatusMessage`
+        // alert pushed the previously-single expression past what the
+        // compiler could type-check in reasonable time (measured: this
+        // split is what fixed it).
+        mainContent
+            .alert(
+                "Couldn't Open Image",
+                isPresented: Binding(
+                    get: { document.loadErrorMessage != nil },
+                    set: { isPresented in
+                        if !isPresented { document.loadErrorMessage = nil }
+                    }
+                ),
+                presenting: document.loadErrorMessage
+            ) { _ in
+                Button("OK") {}
+            } message: { message in
+                Text(message)
+            }
+            .alert(
+                "White Balance",
+                isPresented: Binding(
+                    get: { document.whiteBalanceSampleMessage != nil },
+                    set: { isPresented in
+                        if !isPresented { document.whiteBalanceSampleMessage = nil }
+                    }
+                ),
+                presenting: document.whiteBalanceSampleMessage
+            ) { _ in
+                Button("OK") {}
+            } message: { message in
+                Text(message)
+            }
+            .alert(
+                "Couldn't Save Edits",
+                isPresented: Binding(
+                    get: { document.sidecarSaveErrorMessage != nil },
+                    set: { isPresented in
+                        if !isPresented { document.sidecarSaveErrorMessage = nil }
+                    }
+                ),
+                presenting: document.sidecarSaveErrorMessage
+            ) { _ in
+                Button("OK") {}
+            } message: { message in
+                Text(message)
+            }
+            .alert(
+                "Import Folder",
+                isPresented: Binding(
+                    get: { catalog.importStatusMessage != nil },
+                    set: { isPresented in
+                        if !isPresented { catalog.importStatusMessage = nil }
+                    }
+                ),
+                presenting: catalog.importStatusMessage
+            ) { _ in
+                Button("OK") {}
+            } message: { message in
+                Text(message)
+            }
+    }
+
+    private var mainContent: some View {
         HSplitView {
             VStack(spacing: 0) {
                 EditorTabBar(selectedTab: $selectedTab)
@@ -284,6 +357,11 @@ struct ContentView: View {
                 }
             }
             ToolbarItem(placement: .automatic) {
+                Button("Import Folder…") {
+                    catalog.importFolder()
+                }
+            }
+            ToolbarItem(placement: .automatic) {
                 Button {
                     document.undo()
                 } label: {
@@ -320,48 +398,6 @@ struct ContentView: View {
             }
         }
         .navigationTitle(document.currentFileName ?? "PhotoApp")
-        .alert(
-            "Couldn't Open Image",
-            isPresented: Binding(
-                get: { document.loadErrorMessage != nil },
-                set: { isPresented in
-                    if !isPresented { document.loadErrorMessage = nil }
-                }
-            ),
-            presenting: document.loadErrorMessage
-        ) { _ in
-            Button("OK") {}
-        } message: { message in
-            Text(message)
-        }
-        .alert(
-            "White Balance",
-            isPresented: Binding(
-                get: { document.whiteBalanceSampleMessage != nil },
-                set: { isPresented in
-                    if !isPresented { document.whiteBalanceSampleMessage = nil }
-                }
-            ),
-            presenting: document.whiteBalanceSampleMessage
-        ) { _ in
-            Button("OK") {}
-        } message: { message in
-            Text(message)
-        }
-        .alert(
-            "Couldn't Save Edits",
-            isPresented: Binding(
-                get: { document.sidecarSaveErrorMessage != nil },
-                set: { isPresented in
-                    if !isPresented { document.sidecarSaveErrorMessage = nil }
-                }
-            ),
-            presenting: document.sidecarSaveErrorMessage
-        ) { _ in
-            Button("OK") {}
-        } message: { message in
-            Text(message)
-        }
     }
 
     private var editControls: some View {
@@ -806,5 +842,5 @@ private struct EditToggleRow: View {
 }
 
 #Preview {
-    ContentView(document: ImageDocumentModel())
+    ContentView(document: ImageDocumentModel(), catalog: CatalogModel())
 }

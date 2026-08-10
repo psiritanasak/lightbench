@@ -8,9 +8,14 @@ struct PhotoAppApp: App {
     /// document instance.
     @StateObject private var document = ImageDocumentModel()
 
+    /// Phase 4 slice 1's catalog DB + basic folder import. Owned here,
+    /// same reasoning as `document` — a single shared instance for
+    /// `ContentView` (and, later, any browsing UI) to observe.
+    @StateObject private var catalog = CatalogModel()
+
     var body: some Scene {
         WindowGroup {
-            ContentView(document: document)
+            ContentView(document: document, catalog: catalog)
         }
         .commands {
             // Replaces macOS's default (inert) Edit > Undo/Redo items —

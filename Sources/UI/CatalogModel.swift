@@ -145,6 +145,31 @@ final class CatalogModel: ObservableObject {
         await thumbnailCache.thumbnail(for: photo.path)
     }
 
+    // MARK: - Ratings and flags (Phase 4 slice 3)
+
+    /// Sets `photo`'s star rating (clamped to 0...5 by `CatalogDatabase`)
+    /// and refreshes `photos` so every grid cell bound to it picks up the
+    /// new value. A failed write is swallowed (`try?`) rather than
+    /// surfaced via `importStatusMessage` — a rating tap is a frequent,
+    /// low-stakes action; the grid simply not updating is a proportionate,
+    /// self-evident failure mode, not worth an alert.
+    func setRating(_ rating: Int, for photo: Photo) {
+        guard let database, let id = photo.id else { return }
+        Task.detached { [weak self] in
+            try? await database.setRating(rating, for: id)
+            await self?.refresh()
+        }
+    }
+
+    /// Sets `photo`'s flagged state — same shape/reasoning as `setRating`.
+    func setFlagged(_ isFlagged: Bool, for photo: Photo) {
+        guard let database, let id = photo.id else { return }
+        Task.detached { [weak self] in
+            try? await database.setFlagged(isFlagged, for: id)
+            await self?.refresh()
+        }
+    }
+
     // MARK: - Folder access (read-only, persisted across relaunches)
 
     /// Captures a security-scoped bookmark for `folder` and activates it

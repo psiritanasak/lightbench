@@ -145,7 +145,37 @@ Edits are stored as parameter sets and rendered live on the GPU.
    index on `folderPath`, no symlink-loop guard in the recursive scan, a
    mismatched `parentID` on re-import from a different root is silently
    ignored rather than reparenting).
-5. Presets + export: save/apply presets, batch export (resize, quality, format)
+5. Presets + export: save/apply presets, batch export (resize, quality,
+   format) — STARTED. Batch export ✅ COMPLETE: exports the Library's
+   currently-filtered set (`catalog.photos` — all photos, or one
+   Collection/Folder's members, whatever the sidebar selection is; no
+   new multi-select UI in this slice) as JPEG/PNG/TIFF with quality/
+   resize options and a live progress HUD. `Sources/Rendering/PhotoExporter.swift`
+   renders via decode → EXIF-orient → `EditPipeline.apply` → optional
+   resize → `CIContext.write*Representation` — deliberately never
+   touches `ImageRenderer`/manual `MTLTexture` rendering (that type's
+   own doc comment flags its "no y-flip" behavior as verified only for
+   the live `MTKView` drawable and warns export must independently
+   re-verify orientation for an offscreen destination, not assume it);
+   visually confirmed live, not just assumed safe from avoiding that
+   landmine. Required extensive live debugging to get sandboxed writes
+   working, root-caused to `project.yml`'s `user-selected.read-only`
+   sandbox entitlement — a hard cap that made every write fail
+   regardless of thread/API/folder — fixed by switching to
+   `user-selected.read-write` (this exact change broke the "Open…"
+   picker once before, in Phase 3; re-verified live this time that it
+   doesn't regress). Reviewer's first pass caught 2 real bugs (no
+   re-entrancy guard around a destination-filename race; no validation
+   against a non-positive resize value, silently corrupting output) —
+   both fixed, re-reviewed, APPROVED. Presets (save/apply named
+   edit-state presets) and checkbox multi-select for export (the user's
+   own immediate follow-up ask) are NOT started. Two unrelated real
+   issues surfaced live during this slice's verification, explicitly
+   deferred to their own future sessions: Library thumbnails don't
+   reflect edits (`ThumbnailGenerator` bypasses `EditPipeline` entirely
+   — a Phase 4 gap), and the Editor's on-screen rendering looks
+   brighter/less saturated than Preview.app (a color-management question
+   in `ImageRenderer`, not export).
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases
 

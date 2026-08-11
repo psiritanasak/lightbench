@@ -7,7 +7,13 @@ foundation + basic folder import, thumbnail grid browsing view, ratings
 and flags, and collections — all shipped, reviewer-approved, and
 manually verified live; see below. A user-requested follow-up feature,
 folder-mirrored nested collections (outside Phase 4's original scope),
-has ALSO shipped since — see its own section below. The original six
+has ALSO shipped since — see its own section below. **Phase 5 (Presets +
+export) has STARTED** — slice 1, batch export, shipped; see its own
+section below. Two real, NOT-yet-fixed issues were found live while
+verifying that slice, both explicitly deferred to their own future
+sessions (see "Exact next step"): Library thumbnails don't reflect
+edits, and the Editor's on-screen color/brightness looks different from
+Preview.app. The original six
 roadmap items, five
 backlog tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
@@ -1643,8 +1649,19 @@ restructure. 1 commit.
   commit.
 
 ## Open reviewer issues
-Three non-blocking notes carried forward (last reviewer verdict was
-APPROVE, first pass, for Folder-mirrored nested collections): (1)
+One non-blocking note carried forward (last reviewer verdict was
+APPROVE, second pass, for Batch export — after one FIX FIRST round, see
+"Phase 5, Slice 1" below): `ExportOptionsView`'s own "Export" button
+isn't gated on `exportModel.isExporting` and doesn't disable itself
+after being tapped once — a very rapid double-click on it, before the
+sheet's `dismiss()` completes, could in theory queue two
+`DispatchQueue.main.async { onExport() }` calls that both see
+`isExporting == false`. Low-probability edge case, orthogonal to the
+toolbar-button re-entrancy guard that WAS required and fixed; worth a
+follow-up `.disabled(...)` there sometime, not urgent.
+
+Before that: three non-blocking notes carried forward (reviewer verdict
+was APPROVE, first pass, for Folder-mirrored nested collections): (1)
 `collection.folderPath` has no index at all (not even a plain non-unique
 one — SQLite's restriction is specifically on `UNIQUE`/`PRIMARY KEY` via
 `ALTER TABLE ADD COLUMN`, a separate `CREATE INDEX` isn't restricted), so
@@ -2259,60 +2276,179 @@ flags, collections.
   tests; `CatalogModel.importFolderTree()`; sidebar tree UI + toolbar
   button).
 
+### Phase 5, Slice 1 — Batch export (complete, verified live) — Phase 5 STARTED
+- Confirmed with the user up front: no new multi-select UI — exports the
+  Library's currently-filtered set (`catalog.photos`, already exactly
+  "all photos" or one Collection/Folder's members depending on the
+  sidebar selection), with format (JPEG/PNG/TIFF)/quality/resize options
+  and a live progress HUD. RAW support (Phase 6) was separately declined
+  for this session — `CLAUDE.md` gates it "do not start early"; user
+  chose Phase 5 first as planned.
+- `Sources/Rendering/PhotoExporter.swift` (new): decode → EXIF-orient
+  (`ImageDocumentModel.exifOrientation(of:)`, widened from `private` to
+  `nonisolated static` for this reuse, mirroring `sidecarURL(for:)`'s
+  existing treatment) → `EditPipeline.apply` → optional resize (never
+  upscales, treats a non-positive max-long-edge as a no-op) → write.
+  Deliberately never touches `ImageRenderer`/manual `MTLTexture`
+  rendering — that type's own doc comment flags its "no y-flip" behavior
+  as verified ONLY for the live `MTKView` drawable and explicitly warns
+  Phase 5 export must independently re-verify, not assume, for an
+  offscreen destination. `PhotoExporter` sidesteps that whole path via
+  `CIContext.write*Representation` directly on the edited `CIImage` —
+  visually confirmed live (correct orientation, edited look present),
+  not just assumed safe because it avoids the landmine.
+- 13 tests (`Tests/RenderingTests/PhotoExporterTests.swift`): resize,
+  collision-suffix naming, sidecar `EditState` loading, end-to-end export
+  for all three formats.
+- **Extensive live debugging was required to get sandboxed writes
+  working** — automated tests never exercised the real sandbox path
+  (they write to the test bundle's own writable temp directory). In
+  order: (1) a SwiftUI `.sheet`-dismiss vs. immediately-opening
+  `NSOpenPanel` race made the destination picker appear but not respond
+  to clicks — fixed by deferring the panel via `DispatchQueue.main.async`
+  after `dismiss()`; (2) moved `startAccessingSecurityScopedResource()`
+  onto the same execution context as the actual writes (a `Task.detached`,
+  not `@MainActor`); (3) replaced `CIContext` writing directly to the
+  security-scoped destination with writing to an app-writable temp file
+  first, then `Data.write` into the real destination (matching
+  `ImageDocumentModel.saveSidecarNow`'s own working write mechanism);
+  (4) switched to a Metal-backed `CIContext` (built once) after a plain
+  one reliably failed on real, full-size photos with an internal Core
+  Image error despite passing fine against small synthetic test images;
+  (5) round-tripped the destination through an actual security-scoped
+  bookmark (`bookmarkData` → `URL(resolvingBookmarkData:...)`) rather
+  than using the raw panel URL, mirroring
+  `ImageDocumentModel.requestFolderAccess`'s pattern.
+- **The actual root cause, found last**: `project.yml`'s sandbox
+  entitlement was `com.apple.security.files.user-selected.read-only` —
+  a hard sandbox-profile cap that made EVERY write fail with
+  `NSCocoaErrorDomain Code=513` / `NSPOSIXErrorDomain "Operation not
+  permitted"`, regardless of thread, write API, or destination folder
+  (confirmed by testing multiple different folders, including ones
+  outside the specially-TCC-protected Desktop/Documents/Downloads).
+  Fixed by switching to `user-selected.read-write`. **This exact change
+  was tried once before** (Phase 3, sidecar-persistence work) and broke
+  the "Open…" picker's clickability at the time, never fully root-caused
+  — reverted then. This time, the user explicitly re-tested "Open…"
+  FIRST, before re-testing export, and confirmed no regression. Items
+  (2)/(3)/(5) above were all added WHILE the entitlement bug was still
+  present and only confirmed working together with the entitlement fix
+  — their individual necessity now that the real cause is fixed was
+  deliberately NOT re-isolated (reviewer explicitly agreed this is
+  reasonable to ship as a "proven-together" combination, not a blocking
+  concern), and the code comments say so plainly for future maintainers.
+- **A real bug caught by the reviewer's first pass, fixed**: no
+  re-entrancy guard on `ExportModel.runExport` — a second concurrent
+  export could race the first on `uniqueDestinationURL`'s check-then-write,
+  potentially silently overwriting a file mid-batch. Fixed with a
+  `guard !isExporting` plus UI-level `.disabled(...)` on the toolbar
+  button. **A second real bug, also fixed**: `resized(_:option:)` had no
+  validation against a non-positive resize value — `0` produced a
+  zero-extent image, a negative value silently mirrored the output at
+  the wrong size, neither case threw. Fixed with a `maxLongEdge > 0`
+  guard plus a UI-level clamp, both covered by new tests. Re-reviewed,
+  APPROVED (one further non-blocking note, see "Open reviewer issues"
+  above).
+- Live verified end-to-end, extensively: options sheet + destination
+  picker work; exported files show the EDITED look, not the original;
+  orientation correct; re-exporting into the same folder produces
+  `(2)`-suffixed files, never overwrites; PNG/TIFF both work; resize
+  actually shrinks output dimensions; a Collection/Folder-filtered export
+  limits correctly; the progress HUD displays/updates live during a real
+  batch; macOS's own Downloads-folder TCC consent prompt (separate from
+  the app's own sandbox entitlement) is normal, expected behavior, not a
+  bug.
+- 3 commits (entitlement fix + `exifOrientation` visibility; the
+  `PhotoExporter` engine + tests; `ExportModel`/`ExportOptionsView`/
+  `ContentView` wiring).
+- **Two issues surfaced live during this verification that are
+  EXPLICITLY NOT part of this slice, not fixed, and need their own
+  future sessions**: (1) Library thumbnails don't reflect edits —
+  `ThumbnailGenerator` reads straight from the source file via ImageIO,
+  entirely bypassing `EditPipeline`/the sidecar; a real, by-design gap
+  from Phase 4 slice 2, never wired up. (2) The Editor's on-screen
+  rendering looks brighter/less vivid ("more faded") than the same photo
+  in Preview.app — a color-management question in the core pipeline
+  (`ImageRenderer`'s handling of the source image's own embedded color
+  profile going into the linear working space), not export-specific.
+  This is a real correctness concern that deserves its own careful,
+  empirical investigation (matching how every other color-math question
+  in this project has been handled), not a guess-fix.
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Phase 2, Phase 3, AND Phase 4 are ALL COMPLETE.** Phase 4's four slices
-(catalog DB + import, thumbnail grid, ratings/flags, collections) are all
-shipped — see "Phase 4, Slice 1/2/3/4" above. **Folder-mirrored nested
-collections** (a user-requested follow-up, outside Phase 4's original
-scope) has ALSO shipped since — "Import Folder Tree…" recursively imports
-a folder, mirroring its subfolder structure as a nested collection tree
-in a new sidebar "Folders" section — see its own section above. Both
-reviewer-approved (Collections: APPROVE first pass; folder-mirrored:
-APPROVE first pass, verified against the actual vendored GRDB source for
-its novel ALTER-TABLE self-referencing FK) and manually verified live,
-including full quit/relaunch cycles. 269 tests passing, app fully
-functional. Next up per `CLAUDE.md`'s roadmap: **Phase 5 (Presets +
-export)**.
+**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus a user-requested
+follow-up (folder-mirrored nested collections) — see their own sections
+above. **Phase 5 (Presets + export) has STARTED**: slice 1, batch export,
+is DONE — see "Phase 5, Slice 1" above for the full write-up, including
+the extensive live-debugging saga (culminating in a sandbox entitlement
+fix, `user-selected.read-only` → `read-write`, re-verified not to
+regress the "Open…" picker this time) and the two real bugs the reviewer
+caught and had fixed (re-entrancy guard; non-positive resize-value
+validation). Reviewer APPROVED (second pass). 284 tests passing, app
+fully functional.
 
-**Nothing is currently planned.**
+**Immediately requested, NOT yet started**: the user asked for the
+ability to hand-pick individual photos to export (checkbox-style
+multi-select in the Library grid), rather than only exporting via the
+sidebar's Collection/Folder filter. This was explicitly scoped OUT of
+slice 1 (confirmed with the user at the time) and is the natural next
+Phase 5 sub-feature — needs its own Plan Mode session (new selection
+state on `CatalogModel`/`LibraryGridView`, a checkbox overlay per cell,
+an "Export Selected…" action, and deciding how selection coexists with
+the existing single-tap-to-open gesture).
 
-**Next: options** (ask the user which, don't guess): (1) Phase 5
-(Presets + export: save/apply presets, batch export) per CLAUDE.md's
-roadmap — the natural next phase; (2) Library polish — sort/filter/search
-(by rating/flag/collection/folder), removing photos, detecting missing
-files, renaming/deleting collections; (3) hardening the reviewer's
+**Two real, unfixed issues surfaced live while verifying batch export —
+both explicitly deferred to their own future sessions, not this one**:
+(1) Library thumbnails don't reflect edits (`ThumbnailGenerator` reads
+straight from the source file, bypassing `EditPipeline`/the sidecar
+entirely — a real, by-design gap since Phase 4 slice 2, never wired up).
+(2) The Editor's on-screen rendering looks brighter/less vivid ("more
+faded") than the same photo in Preview.app — a color-management question
+in `ImageRenderer`'s core pipeline (likely how the source image's own
+embedded color profile is or isn't accounted for going into the linear
+working space), not export-specific. This is a genuine correctness
+concern deserving its own careful, empirical investigation (matching
+every other color-math question in this project's history), not a
+guess-fix.
+
+**Next: options** (ask the user which, don't guess): (1) checkbox
+multi-select for export (the user's own immediate follow-up request,
+above); (2) investigate the Editor-vs-Preview color/brightness
+discrepancy (a real correctness bug, likely the highest-value fix of the
+open items); (3) make Library thumbnails reflect edits; (4) Phase 5
+slice 2 — presets (save/apply named edit-state presets); (5) Library
+polish — sort/filter/search (by rating/flag/collection/folder), removing
+photos, detecting missing files, renaming/deleting collections; (6)
+hardening the reviewer's non-blocking note from Batch export —
+`ExportOptionsView`'s own Export button isn't gated on `isExporting`, a
+low-probability double-click race; (7) hardening the reviewer's
 non-blocking notes from folder-mirrored collections — no index on
-`collection.folderPath` (full-table scan per folder node on import, fine
-at today's sizes), no symlink-loop guard in `PhotoImporter.scanNode`
-(low real-world risk for a personal library), `findOrCreateFolderCollection`
-silently ignoring a mismatched `parentID` on re-import from a different
-root (safe, just undocumented); (4) hardening the reviewer's non-blocking
-note, generalized across ALL of `CatalogModel`'s mutations (ratings/flags
-AND collections) — overlapping `Task.detached` + `refresh()` calls with
-no cancellation/sequencing can transiently show stale data in the grid
-(self-heals, not a persisted-data bug) — via a generation-counter or
-`Task` cancellation guard; (5) `collection.name` having no `UNIQUE`
+`collection.folderPath`, no symlink-loop guard in `PhotoImporter.scanNode`,
+`findOrCreateFolderCollection` silently ignoring a mismatched `parentID`
+on re-import from a different root; (8) hardening the reviewer's
+non-blocking note, generalized across ALL of `CatalogModel`'s mutations
+— overlapping `Task.detached` + `refresh()` calls with no cancellation/
+sequencing can transiently show stale data in the grid (self-heals, not
+a persisted-data bug); (9) `collection.name` having no `UNIQUE`
 constraint, so rapid double-submits of "New Collection…" could create
-duplicate-named collections (consistent with rename/delete being out of
-scope, not urgent); (6) revisit the still-deferred sidebar content-shift-
-on-scroll cosmetic bug (see its own section above, including the "Lesson
-recorded" note for whoever attempts it); (7) the reviewer's non-blocking
-note from the Edit-menu work — consider suppressing/redesigning the
-default ⌘N "New Window" behavior before any multi-window UI is added,
-since `document` is now shared app-wide; (8) the reviewer's non-blocking
-note from the sidecar-persistence work — investigate the one unexplained
-"you don't have permission" flake further if it recurs (Console.app
-sandbox-denial logs would help pin it down next time); (9) the
-reviewer's non-blocking note from Library slice 2 — `activateKnownFolders`
-keys `activeFolders` by the bookmark's original path, so a folder
-renamed/moved between sessions could get its scope started twice on
-re-import (a corner case, not a regression). Lens distortion correction
-remains explicitly OUT of scope (needs camera-profile data, a separate
-concern) unless the user asks for it specifically.
+duplicates; (10) revisit the still-deferred sidebar content-shift-on-
+scroll cosmetic bug (see its own section above, including the "Lesson
+recorded" note); (11) the reviewer's non-blocking note from the
+Edit-menu work — consider suppressing/redesigning the default ⌘N "New
+Window" behavior before any multi-window UI is added; (12) the
+reviewer's non-blocking note from the sidecar-persistence work —
+investigate the one unexplained "you don't have permission" flake
+further if it recurs; (13) the reviewer's non-blocking note from
+Library slice 2 — `activateKnownFolders` keys `activeFolders` by the
+bookmark's original path, so a folder renamed/moved between sessions
+could get its scope started twice on re-import. Lens distortion
+correction and RAW support (Phase 6, explicitly declined for this
+session per `CLAUDE.md`'s "do not start early") remain explicitly OUT of
+scope unless the user asks for them specifically.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

@@ -30,10 +30,14 @@ final class CatalogModel: ObservableObject {
     @Published private(set) var photos: [Photo] = []
     @Published private(set) var collections: [PhotoCollection] = []
     /// Which photos `photos` reflects. Setting this re-filters `photos` —
-    /// see `didSet` below and `refresh()`.
+    /// see `didSet` below and `refresh()`. Also clears `selectedPhotoIDs`
+    /// — switching what the grid shows always starts from a clean
+    /// selection, so an off-screen photo can never be silently still
+    /// selected without the user realizing it.
     @Published var selectedFilter: LibraryFilter = .allPhotos {
         didSet {
             guard oldValue != selectedFilter else { return }
+            selectedPhotoIDs.removeAll()
             Task { await refresh() }
         }
     }
@@ -43,6 +47,12 @@ final class CatalogModel: ObservableObject {
     /// each cell's collection-membership checkmarks a synchronous
     /// dictionary lookup.
     @Published private(set) var membershipsByPhotoID: [Int64: Set<Int64>] = [:]
+    /// Which photos are checked in the Library grid, for batch export —
+    /// pure in-memory UI state (unlike every other `@Published` mutation
+    /// in this class, this never touches the database, so it needs no
+    /// `Task.detached`/`refresh()`). Not persisted across relaunches,
+    /// same as `selectedFilter`.
+    @Published private(set) var selectedPhotoIDs: Set<Int64> = []
 
     /// `nil` until the background open+migrate in `init()` completes (or
     /// forever, if it failed — see `initError`). `CatalogDatabase()`
@@ -233,6 +243,28 @@ final class CatalogModel: ObservableObject {
     /// at `init`) has resolved its stored bookmark.
     func thumbnail(for photo: Photo) async -> CGImage? {
         await thumbnailCache.thumbnail(for: photo.path)
+    }
+
+    // MARK: - Selection (Phase 5 slice 1 follow-up — export a hand-picked subset)
+
+    /// Toggles whether `photo` is checked. Purely in-memory — no DB
+    /// write, no `refresh()`.
+    func toggleSelection(of photo: Photo) {
+        guard let id = photo.id else { return }
+        if selectedPhotoIDs.contains(id) {
+            selectedPhotoIDs.remove(id)
+        } else {
+            selectedPhotoIDs.insert(id)
+        }
+    }
+
+    func isSelected(_ photo: Photo) -> Bool {
+        guard let id = photo.id else { return false }
+        return selectedPhotoIDs.contains(id)
+    }
+
+    func clearSelection() {
+        selectedPhotoIDs.removeAll()
     }
 
     // MARK: - Ratings and flags (Phase 4 slice 3)

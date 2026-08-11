@@ -61,15 +61,49 @@ private struct LibraryThumbnailCell: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            ZStack {
+            ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color.gray.opacity(0.2))
                 if let image {
+                    // `.frame(width:height:)` BEFORE `.clipShape` here is
+                    // load-bearing, not cosmetic: without it, `.aspectRatio(
+                    // contentMode: .fill)` reports a DIFFERENT (often much
+                    // larger) size to the enclosing ZStack depending on
+                    // each photo's own native aspect ratio. That was
+                    // invisible with the ZStack's old default (.center)
+                    // alignment, but once `alignment: .topLeading` was
+                    // added (for the badge below), it caused the badge to
+                    // sit at a different effective position per photo —
+                    // caught live. Pinning the image's own reported size
+                    // to exactly 140x140 makes the ZStack's content box
+                    // (and therefore "top-leading") consistent for every
+                    // photo regardless of its native dimensions.
                     Image(decorative: image, scale: 1)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
+                        .frame(width: 140, height: 140)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
+                // Always-visible selection checkbox — tapping IT toggles
+                // selection (a `Button` claims its own tap before the
+                // cell's whole-VStack `.onTapGesture` below sees it, the
+                // same already-proven pattern the star row/flag/menu
+                // controls use); tapping anywhere else on the thumbnail
+                // still opens the photo, unchanged.
+                Button {
+                    catalog.toggleSelection(of: photo)
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(.black.opacity(0.35))
+                            .frame(width: 22, height: 22)
+                        Image(systemName: catalog.isSelected(photo) ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 18))
+                            .foregroundStyle(catalog.isSelected(photo) ? Color.accentColor : .white)
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(6)
             }
             .frame(width: 140, height: 140)
             .clipped()

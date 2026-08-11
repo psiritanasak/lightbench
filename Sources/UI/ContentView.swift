@@ -19,6 +19,16 @@ struct ContentView: View {
     /// view (no Scene-level command, no other view) needs to observe it.
     @StateObject private var exportModel = ExportModel()
 
+    /// What "Export…" actually exports. A pure refinement on top of the
+    /// existing filtered set: if 1+ photos are checked in the grid,
+    /// export ONLY those (overriding whatever Collection/Folder is
+    /// active in the sidebar); with nothing checked, behaves exactly as
+    /// before this feature existed — the current filtered set.
+    private var photosToExport: [Photo] {
+        guard !catalog.selectedPhotoIDs.isEmpty else { return catalog.photos }
+        return catalog.photos.filter { catalog.isSelected($0) }
+    }
+
     /// Phase 4 slice 2: toggles the main window between the single-photo
     /// Editor (the existing `HSplitView`, unchanged) and the Library
     /// thumbnail grid. Presentation-only — switching back to the Editor
@@ -266,8 +276,8 @@ struct ContentView: View {
                 Text(message)
             }
             .sheet(isPresented: $exportModel.isPresentingOptions) {
-                ExportOptionsView(exportModel: exportModel, photoCount: catalog.photos.count) {
-                    exportModel.runExport(photos: catalog.photos)
+                ExportOptionsView(exportModel: exportModel, photoCount: photosToExport.count) {
+                    exportModel.runExport(photos: photosToExport)
                 }
             }
             .overlay(alignment: .bottom) {
@@ -342,10 +352,21 @@ struct ContentView: View {
             }
             if showLibrary {
                 ToolbarItem(placement: .automatic) {
-                    Button("Export…") {
+                    Button(
+                        catalog.selectedPhotoIDs.isEmpty
+                            ? "Export…"
+                            : "Export Selected (\(catalog.selectedPhotoIDs.count))…"
+                    ) {
                         exportModel.beginExport()
                     }
-                    .disabled(catalog.photos.isEmpty || exportModel.isExporting)
+                    .disabled(photosToExport.isEmpty || exportModel.isExporting)
+                }
+                if !catalog.selectedPhotoIDs.isEmpty {
+                    ToolbarItem(placement: .automatic) {
+                        Button("Clear Selection") {
+                            catalog.clearSelection()
+                        }
+                    }
                 }
             }
             ToolbarItem(placement: .automatic) {

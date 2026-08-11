@@ -146,6 +146,56 @@ final class CatalogModel: ObservableObject {
         }
     }
 
+    /// Folder-mirrored nested collections: recursively imports `folder`
+    /// and every subfolder, creating (or reusing, on re-import) a
+    /// collection per folder and associating each photo with its DIRECT
+    /// containing folder's collection. A separate action from
+    /// `importFolder()` — that one stays a flat, single-level import,
+    /// unchanged.
+    func importFolderTree() {
+        guard let database else {
+            importStatusMessage = initError.map { "Couldn't open the photo catalog: \($0.localizedDescription)" }
+                ?? "The photo catalog isn't ready yet — try again in a moment."
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a folder to import as a nested collection tree, mirroring its subfolders."
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+
+        let accessWarning = activateFolderAccess(for: folder)
+
+        Task.detached { [weak self] in
+            // The recursive scan is synchronous, blocking filesystem I/O
+            // (mirrors `PhotoImporter.imageFiles(in:)`'s existing need to
+            // run off-main) — must happen here, inside `Task.detached`,
+            // not on `@MainActor`.
+            guard let node = PhotoImporter.scanFolderTree(at: folder) else {
+                await MainActor.run { self?.importStatusMessage = "No photos found in that folder." }
+                return
+            }
+            do {
+                let result = try await database.importFolderTree(node)
+                await self?.refresh()
+                await MainActor.run {
+                    var message = Self.summary(for: result)
+                    if let accessWarning {
+                        message += " \(accessWarning)"
+                    }
+                    self?.importStatusMessage = message
+                }
+            } catch {
+                await MainActor.run {
+                    self?.importStatusMessage = "Import failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     /// Re-reads `photoCount`/`photos`/`collections`/`membershipsByPhotoID`
     /// from the catalog. Safe to call repeatedly (e.g. after every import
     /// or rating/flag/membership change) — `CatalogDatabase`'s own methods

@@ -5,7 +5,9 @@
 (Library) are ALL COMPLETE.** Phase 4's four slices — catalog DB
 foundation + basic folder import, thumbnail grid browsing view, ratings
 and flags, and collections — all shipped, reviewer-approved, and
-manually verified live; see below. The original six
+manually verified live; see below. A user-requested follow-up feature,
+folder-mirrored nested collections (outside Phase 4's original scope),
+has ALSO shipped since — see its own section below. The original six
 roadmap items, five
 backlog tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
@@ -1641,7 +1643,23 @@ restructure. 1 commit.
   commit.
 
 ## Open reviewer issues
-Two non-blocking notes carried forward (last reviewer verdict was
+Three non-blocking notes carried forward (last reviewer verdict was
+APPROVE, first pass, for Folder-mirrored nested collections): (1)
+`collection.folderPath` has no index at all (not even a plain non-unique
+one — SQLite's restriction is specifically on `UNIQUE`/`PRIMARY KEY` via
+`ALTER TABLE ADD COLUMN`, a separate `CREATE INDEX` isn't restricted), so
+every folder node in a tree import does a full-table scan to find-or-
+create — fine at today's personal-library sizes, cheap to fix later with
+a dedicated index migration; (2) `PhotoImporter.scanNode` has no
+symlink-loop guard or recursion-depth cap — a folder tree containing a
+symlink cycle would recurse unboundedly; low real-world likelihood for a
+personal photo library, a one-line defensive guard would be cheap
+insurance; (3) `findOrCreateFolderCollection` matches purely by
+`folderPath` and silently ignores a mismatched `parentID` on an existing
+row (never reparents on re-import from a different root) — safe (never
+silently moves a branch) but undocumented.
+
+Before that: two non-blocking notes carried forward (reviewer verdict was
 APPROVE, first pass, for Collections): (1) the SAME "overlapping
 `refresh()` calls can complete out of order" class of issue already
 recorded below for ratings/flags now generalizes to EVERY mutation
@@ -2172,6 +2190,75 @@ commit, per workflow rules).
 roadmap line 4 shipped: import, catalog DB, thumbnail grid, ratings/
 flags, collections.
 
+### Folder-mirrored nested collections (complete, verified live) — user-requested follow-up, outside Phase 4's original scope
+- The user, while verifying Collections, asked whether importing could
+  auto-create a collection per on-disk folder (they organize photos as
+  Year → Trip → Day) with a mirrored tree in the sidebar. Confirmed up
+  front: a NEW, separate "Import Folder Tree…" action (the existing flat
+  "Import Folder…" stays completely unchanged); a separate "Folders"
+  sidebar section below the existing "Collections" section; idempotent
+  re-import (matched by on-disk folder path, no duplicate branches).
+  Explicitly OUT of scope: renaming/deleting folder collections,
+  detecting folders/files removed on disk since import, nested submenus
+  in the existing per-photo assignment menu.
+- `Sources/Catalog/Migrations/004_folder_collections.swift` (new): adds
+  `parentId`/`isFolder`/`folderPath` to the existing `collection` table —
+  the project's first foreign key added via `ALTER TABLE` (every prior FK
+  was only ever on `CREATE TABLE`) and first self-referencing one
+  (`parentId` → `collection.id`). Reviewer verified against the actual
+  vendored GRDB source (not just trusting it compiles) that this is a
+  genuinely supported construct — the same column-SQL generator handles
+  both `CREATE`/`ALTER` paths including the self-reference branch — and
+  confirmed SQLite really does disallow a `UNIQUE` column via
+  `ALTER TABLE ADD COLUMN` (the stated reason `folderPath` has no SQL
+  `UNIQUE` constraint); idempotency instead comes from a check-then-insert
+  inside one `dbQueue.write` transaction, which `DatabaseQueue` genuinely
+  serializes (also verified, not assumed).
+- `Sources/Catalog/PhotoImporter.swift`: the project's first recursive
+  directory walk (`scanFolderTree`/`scanNode`), building a `FolderScanNode`
+  tree that excludes any subfolder with no images anywhere in its own
+  subtree (keeps the tree free of empty dead-end branches).
+- `Sources/Catalog/CatalogDatabase.swift`: `importFolderTree` walks the
+  whole tree — every folder-collection find-or-create, every photo
+  insert-or-skip, every membership row — inside ONE transaction (reviewer
+  confirmed the recursion never re-enters `dbQueue.write`, one real
+  transaction for the whole tree). `importPhotos` was refactored
+  (behavior-preserving, reviewer diffed old vs new) to share its
+  insert-or-skip logic via a new `insertPhotoIfNeeded` helper, so a photo
+  already imported flat gets correctly associated — not duplicated — the
+  first time a tree import reaches it.
+- `Sources/UI/CatalogModel.swift`: `importFolderTree()` mirrors
+  `importFolder()`'s exact shape; the blocking recursive scan runs inside
+  `Task.detached`, never on `@MainActor` (no repeat of the earlier
+  `CatalogDatabase()`-on-main bug from Phase 4 slice 1).
+- `Sources/UI/CollectionSidebarView.swift`: the app's first `OutlineGroup`
+  — a client-side `FolderTreeNode`/`buildFolderTree` turns the flat
+  `collections` array into a tree (grouped by `parentId`; `children`
+  computed as `nil`, not empty, so `OutlineGroup` hides disclosure
+  triangles on leaf folders), in a new "Folders" section below the
+  unchanged "Collections" section. `Sources/UI/ContentView.swift`: one new
+  "Import Folder Tree…" toolbar button.
+- 9 new tests (4 `PhotoImporterTests` for `scanFolderTree` against real
+  temp directories; 5 `CatalogDatabaseTests` for `importFolderTree`
+  against hand-built `FolderScanNode` trees — nested `parentId` chain,
+  direct-folder-only membership, idempotent re-import, picks up genuinely
+  new photos, associates a previously-flat-imported photo). All 269 tests
+  pass (260 prior + 9 new).
+- Reviewer verdict: APPROVE on the first pass. Three non-blocking notes
+  carried forward — see "Open reviewer issues" above.
+- Manually verified live end-to-end with a real nested test tree (Year →
+  Trip → Day1/Day2, one deliberately empty subfolder, 6 real photos):
+  correct nested sidebar structure with the empty subfolder absent,
+  clicking a nested folder or an ancestor-with-its-own-direct-photo both
+  filter correctly, "All Photos" still works, re-running the import on
+  the same folder created no duplicate branches, and a full quit/relaunch
+  cycle confirmed the whole tree and its memberships persisted against
+  the real, already-populated on-disk catalog (exercising migration
+  `004`).
+- 3 commits (migration + `PhotoImporter` + `CatalogDatabase` + their
+  tests; `CatalogModel.importFolderTree()`; sidebar tree UI + toolbar
+  button).
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
@@ -2179,46 +2266,53 @@ window-resize re-fit behavior, opened-file mtime check.
 ## Exact next step
 **Phase 2, Phase 3, AND Phase 4 are ALL COMPLETE.** Phase 4's four slices
 (catalog DB + import, thumbnail grid, ratings/flags, collections) are all
-shipped, reviewer-approved, and manually verified live — see "Phase 4,
-Slice 1/2/3/4" above. 260 tests passing, app fully functional. Next up
-per `CLAUDE.md`'s roadmap: **Phase 5 (Presets + export)**.
+shipped — see "Phase 4, Slice 1/2/3/4" above. **Folder-mirrored nested
+collections** (a user-requested follow-up, outside Phase 4's original
+scope) has ALSO shipped since — "Import Folder Tree…" recursively imports
+a folder, mirroring its subfolder structure as a nested collection tree
+in a new sidebar "Folders" section — see its own section above. Both
+reviewer-approved (Collections: APPROVE first pass; folder-mirrored:
+APPROVE first pass, verified against the actual vendored GRDB source for
+its novel ALTER-TABLE self-referencing FK) and manually verified live,
+including full quit/relaunch cycles. 269 tests passing, app fully
+functional. Next up per `CLAUDE.md`'s roadmap: **Phase 5 (Presets +
+export)**.
 
-**Nothing is currently planned.** The user asked, while verifying
-Collections, whether importing could auto-create a collection per
-on-disk folder (they organize photos as Year → Trip → Day) with a
-mirrored tree in the sidebar — explicitly NOT built this session (told
-them it's a distinct feature deserving its own planning session, not a
-fold-in). Worth surfacing as an option next time Library work resumes.
+**Nothing is currently planned.**
 
 **Next: options** (ask the user which, don't guess): (1) Phase 5
 (Presets + export: save/apply presets, batch export) per CLAUDE.md's
-roadmap — the natural next phase; (2) folder-mirrored/nested collections
-(the user's own follow-up idea above) or other Library polish — sort/
-filter/search (by rating/flag/collection), removing photos, detecting
-missing files, renaming/deleting collections; (3) hardening the
-reviewer's non-blocking note, now generalized across ALL of `CatalogModel`'s
-mutations (ratings/flags AND collections) — overlapping `Task.detached`
-+ `refresh()` calls with no cancellation/sequencing can transiently show
-stale data in the grid (self-heals, not a persisted-data bug) — via a
-generation-counter or `Task` cancellation guard; (4) `collection.name`
-having no `UNIQUE` constraint, so rapid double-submits of "New
-Collection…" could create duplicate-named collections (consistent with
-rename/delete being out of scope, not urgent); (5) revisit the
-still-deferred sidebar content-shift-on-scroll cosmetic bug (see its own
-section above, including the "Lesson recorded" note for whoever attempts
-it); (6) the reviewer's non-blocking note from the Edit-menu work —
-consider suppressing/redesigning the default ⌘N "New Window" behavior
-before any multi-window UI is added, since `document` is now shared
-app-wide; (7) the reviewer's non-blocking note from the sidecar-
-persistence work — investigate the one unexplained "you don't have
-permission" flake further if it recurs (Console.app sandbox-denial logs
-would help pin it down next time); (8) the reviewer's non-blocking note
-from Library slice 2 — `activateKnownFolders` keys `activeFolders` by
-the bookmark's original path, so a folder renamed/moved between sessions
-could get its scope started twice on re-import (a corner case, not a
-regression). Lens distortion correction remains explicitly OUT of scope
-(needs camera-profile data, a separate concern) unless the user asks for
-it specifically.
+roadmap — the natural next phase; (2) Library polish — sort/filter/search
+(by rating/flag/collection/folder), removing photos, detecting missing
+files, renaming/deleting collections; (3) hardening the reviewer's
+non-blocking notes from folder-mirrored collections — no index on
+`collection.folderPath` (full-table scan per folder node on import, fine
+at today's sizes), no symlink-loop guard in `PhotoImporter.scanNode`
+(low real-world risk for a personal library), `findOrCreateFolderCollection`
+silently ignoring a mismatched `parentID` on re-import from a different
+root (safe, just undocumented); (4) hardening the reviewer's non-blocking
+note, generalized across ALL of `CatalogModel`'s mutations (ratings/flags
+AND collections) — overlapping `Task.detached` + `refresh()` calls with
+no cancellation/sequencing can transiently show stale data in the grid
+(self-heals, not a persisted-data bug) — via a generation-counter or
+`Task` cancellation guard; (5) `collection.name` having no `UNIQUE`
+constraint, so rapid double-submits of "New Collection…" could create
+duplicate-named collections (consistent with rename/delete being out of
+scope, not urgent); (6) revisit the still-deferred sidebar content-shift-
+on-scroll cosmetic bug (see its own section above, including the "Lesson
+recorded" note for whoever attempts it); (7) the reviewer's non-blocking
+note from the Edit-menu work — consider suppressing/redesigning the
+default ⌘N "New Window" behavior before any multi-window UI is added,
+since `document` is now shared app-wide; (8) the reviewer's non-blocking
+note from the sidecar-persistence work — investigate the one unexplained
+"you don't have permission" flake further if it recurs (Console.app
+sandbox-denial logs would help pin it down next time); (9) the
+reviewer's non-blocking note from Library slice 2 — `activateKnownFolders`
+keys `activeFolders` by the bookmark's original path, so a folder
+renamed/moved between sessions could get its scope started twice on
+re-import (a corner case, not a regression). Lens distortion correction
+remains explicitly OUT of scope (needs camera-profile data, a separate
+concern) unless the user asks for it specifically.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

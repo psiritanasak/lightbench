@@ -117,10 +117,34 @@ Edits are stored as parameter sets and rendered live on the GPU.
    Reviewer confirmed this is the sound, standard fix. Sort/filter/search,
    removing photos from the catalog, detecting files deleted on disk
    since import, a three-state pick/reject model, keyboard shortcuts for
-   rating/flagging, renaming/deleting collections, and folder-mirrored/
-   nested collections (a user-suggested follow-up, matching how they
-   organize photos on disk) are all NOT started — candidates for a future
-   session, not part of Phase 4's scope.
+   rating/flagging, and renaming/deleting collections are all NOT
+   started — candidates for a future session, not part of Phase 4's
+   scope.
+
+   **Post-Phase-4 follow-up (shipped, outside the original roadmap
+   scope): folder-mirrored nested collections.** The user organizes
+   photos on disk as Year/Trip/Day and asked for the Library to mirror
+   that automatically. A new, separate "Import Folder Tree…" action
+   (the original flat "Import Folder…" is untouched) recursively scans a
+   folder (`PhotoImporter.scanFolderTree`, the project's first recursive
+   directory walk) and creates a matching nested `PhotoCollection` tree
+   (`Migrations/004_folder_collections.swift` adds `parentId`/`isFolder`/
+   `folderPath` to `collection` — the first FK added via `ALTER TABLE`
+   and the first self-referencing one; verified against the actual
+   vendored GRDB source, not assumed, including that SQLite genuinely
+   disallows a `UNIQUE` column via `ALTER TABLE ADD COLUMN`, which is why
+   `folderPath` uniqueness is enforced by a check-then-insert inside one
+   `dbQueue.write` transaction instead). `CatalogDatabase.importPhotos`
+   was refactored (behavior-preserving) to share its insert-or-skip logic
+   with the new `importFolderTree`, so a photo imported flat first still
+   gets correctly associated, not duplicated, when a later tree import
+   reaches it. `CollectionSidebarView` gained the app's first
+   `OutlineGroup`, showing the tree in a new "Folders" section below the
+   existing flat "Collections" section. Reviewer APPROVED on the first
+   pass; three non-blocking notes carried forward in `PROGRESS.md` (no
+   index on `folderPath`, no symlink-loop guard in the recursive scan, a
+   mismatched `parentID` on re-import from a different root is silently
+   ignored rather than reparenting).
 5. Presets + export: save/apply presets, batch export (resize, quality, format)
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases

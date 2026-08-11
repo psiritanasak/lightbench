@@ -14,6 +14,11 @@ struct ContentView: View {
     /// also observe.
     @ObservedObject var catalog: CatalogModel
 
+    /// Phase 5 slice 1: batch export. Scoped to this view (not lifted to
+    /// `PhotoAppApp`) — unlike `document`/`catalog`, nothing outside this
+    /// view (no Scene-level command, no other view) needs to observe it.
+    @StateObject private var exportModel = ExportModel()
+
     /// Phase 4 slice 2: toggles the main window between the single-photo
     /// Editor (the existing `HSplitView`, unchanged) and the Library
     /// thumbnail grid. Presentation-only — switching back to the Editor
@@ -246,6 +251,42 @@ struct ContentView: View {
             } message: { message in
                 Text(message)
             }
+            .alert(
+                "Export",
+                isPresented: Binding(
+                    get: { exportModel.statusMessage != nil },
+                    set: { isPresented in
+                        if !isPresented { exportModel.statusMessage = nil }
+                    }
+                ),
+                presenting: exportModel.statusMessage
+            ) { _ in
+                Button("OK") {}
+            } message: { message in
+                Text(message)
+            }
+            .sheet(isPresented: $exportModel.isPresentingOptions) {
+                ExportOptionsView(exportModel: exportModel, photoCount: catalog.photos.count) {
+                    exportModel.runExport(photos: catalog.photos)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let progress = exportModel.progress {
+                    exportProgressView(progress)
+                }
+            }
+    }
+
+    private func exportProgressView(_ progress: ExportProgress) -> some View {
+        VStack(spacing: 6) {
+            Text("Exporting \(progress.completed) of \(progress.total)…")
+                .font(.caption)
+            ProgressView(value: Double(progress.completed), total: Double(max(progress.total, 1)))
+                .frame(width: 220)
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.bottom, 16)
     }
 
     private var mainContent: some View {
@@ -297,6 +338,14 @@ struct ContentView: View {
             ToolbarItem(placement: .automatic) {
                 Button("Import Folder Tree…") {
                     catalog.importFolderTree()
+                }
+            }
+            if showLibrary {
+                ToolbarItem(placement: .automatic) {
+                    Button("Export…") {
+                        exportModel.beginExport()
+                    }
+                    .disabled(catalog.photos.isEmpty || exportModel.isExporting)
                 }
             }
             ToolbarItem(placement: .automatic) {

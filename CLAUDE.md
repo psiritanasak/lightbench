@@ -167,15 +167,30 @@ Edits are stored as parameter sets and rendered live on the GPU.
    doesn't regress). Reviewer's first pass caught 2 real bugs (no
    re-entrancy guard around a destination-filename race; no validation
    against a non-positive resize value, silently corrupting output) —
-   both fixed, re-reviewed, APPROVED. Presets (save/apply named
-   edit-state presets) and checkbox multi-select for export (the user's
-   own immediate follow-up ask) are NOT started. Two unrelated real
-   issues surfaced live during this slice's verification, explicitly
-   deferred to their own future sessions: Library thumbnails don't
-   reflect edits (`ThumbnailGenerator` bypasses `EditPipeline` entirely
-   — a Phase 4 gap), and the Editor's on-screen rendering looks
-   brighter/less saturated than Preview.app (a color-management question
-   in `ImageRenderer`, not export).
+   both fixed, re-reviewed, APPROVED. **Selecting individual photos for
+   export** (the user's immediate follow-up ask) ✅ COMPLETE: an
+   always-visible checkbox badge on each Library thumbnail
+   (`CatalogModel.selectedPhotoIDs`, pure in-memory — no DB write, unlike
+   every other mutator in that class); `ContentView.photosToExport` is a
+   pure refinement (non-empty selection overrides the sidebar's
+   Collection/Folder filter, empty selection is a no-op — zero behavior
+   change for anyone not using it). No changes needed to `ExportModel`/
+   `PhotoExporter`/`ExportOptionsView` — `runExport(photos:)` was already
+   subset-agnostic. **A real bug caught by live testing** (a screenshot,
+   not the reviewer): adding `alignment: .topLeading` to the thumbnail
+   `ZStack` (for the badge) exposed a latent sizing issue —
+   `Image().resizable().aspectRatio(contentMode: .fill)` had no `.frame`
+   of its own, so it reported a different effective size to the ZStack
+   per photo depending on that photo's own aspect ratio (invisible under
+   the old default `.center` alignment); fixed by pinning the image's
+   own `.frame(width:140,height:140)` before `.clipShape`. Presets
+   (save/apply named edit-state presets) are NOT started. Two unrelated
+   real issues surfaced live during batch export's own verification,
+   still explicitly deferred to their own future sessions: Library
+   thumbnails don't reflect edits (`ThumbnailGenerator` bypasses
+   `EditPipeline` entirely — a Phase 4 gap), and the Editor's on-screen
+   rendering looks brighter/less saturated than Preview.app (a
+   color-management question in `ImageRenderer`, not export).
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases
 

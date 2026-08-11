@@ -1650,6 +1650,19 @@ restructure. 1 commit.
 
 ## Open reviewer issues
 One non-blocking note carried forward (last reviewer verdict was
+APPROVE, first pass, for photo selection for export): `selectedPhotoIDs`
+is only pruned via `selectedFilter`'s `didSet`, not on every `refresh()`
+— if a user selects a photo while viewing a Collection, then removes
+that same photo from that Collection via its own folder-badge menu
+(`toggleMembership`) WITHOUT changing `selectedFilter`, its ID lingers in
+`selectedPhotoIDs` after it drops out of `catalog.photos`. Cosmetic
+only — the toolbar label's raw count can overstate, but `photosToExport`
+(and the sheet's displayed count) always filter against live
+`catalog.photos`, so the actual exported set is always correct. Worth
+pruning `selectedPhotoIDs` to intersect with `photos` at the end of
+`refresh()` sometime, not urgent.
+
+Before that: one non-blocking note carried forward (reviewer verdict was
 APPROVE, second pass, for Batch export — after one FIX FIRST round, see
 "Phase 5, Slice 1" below): `ExportOptionsView`'s own "Export" button
 isn't gated on `exportModel.isExporting` and doesn't disable itself
@@ -2375,6 +2388,60 @@ flags, collections.
   empirical investigation (matching how every other color-math question
   in this project has been handled), not a guess-fix.
 
+### Phase 5, Slice 1 follow-up — Select individual photos for export (complete, verified live)
+- The user asked for this immediately after batch export shipped.
+  Confirmed up front: an always-visible small checkbox badge in the
+  corner of every grid thumbnail (tapping it toggles selection; tapping
+  elsewhere still opens the photo, unchanged — no selection "mode" to
+  enter/exit); selection is a pure refinement on top of the existing
+  filter-based export (non-empty selection overrides the sidebar filter,
+  empty selection behaves exactly as before).
+- `Sources/UI/CatalogModel.swift`: `selectedPhotoIDs` (pure in-memory
+  `Set<Int64>`, no DB write — unlike every other mutator in this class)
+  + `toggleSelection`/`isSelected`/`clearSelection`. `selectedFilter`'s
+  existing `didSet` gained a `selectedPhotoIDs.removeAll()` so switching
+  Collections/Folders always starts from a clean selection.
+- `Sources/UI/LibraryGridView.swift`: a checkbox `Button` overlay on each
+  thumbnail (dark circular backing + `circle`/`checkmark.circle.fill`),
+  following the same already-proven "`Button` inside a parent
+  `.onTapGesture`" pattern as the existing star row/flag/collection menu
+  in the same cell.
+- **A real bug caught by LIVE testing** (via a screenshot, not the
+  reviewer): after adding `alignment: .topLeading` to the thumbnail
+  `ZStack` (needed for the badge), the badge appeared at an inconsistent
+  position on different photos. Root cause: the thumbnail `Image` used
+  `.aspectRatio(contentMode: .fill)` with no `.frame` of its own, so it
+  reported a different effective size to the ZStack depending on each
+  photo's own native aspect ratio — invisible under the ZStack's old
+  `.center` alignment, but exposed once alignment started mattering for
+  the badge. Fixed by pinning the image's own `.frame(width:140,
+  height:140)` before `.clipShape`, so every photo reports the same size
+  regardless of its own dimensions. Reviewer independently confirmed
+  this reasoning and the fix's correctness/placement.
+- `Sources/UI/ContentView.swift`: `photosToExport` (empty selection →
+  `catalog.photos` unchanged; non-empty → filtered to just the selected
+  ones) replaces the 3 existing `catalog.photos` call sites in the
+  export wiring. Toolbar button relabels to "Export Selected (N)…" with
+  a "Clear Selection" button appearing alongside it. Zero changes to
+  `ExportModel`/`PhotoExporter`/`ExportOptionsView` — `runExport(photos:)`
+  was already fully subset-agnostic.
+- No new tests — pure UI-glue state, matching this project's established
+  precedent for `CatalogModel`'s other mutators. Reviewer agreed no
+  coverage gap here.
+- Reviewer verdict: APPROVE on the first pass. One non-blocking note
+  carried forward — see "Open reviewer issues" above.
+- Manually verified live end-to-end, including: checkbox badges
+  consistently positioned after the fix; tapping the badge toggles
+  selection and updates the toolbar; tapping elsewhere still opens the
+  photo (confirmed with the user that opening a selected photo does NOT
+  clear its — or any other photo's — selection, by design, since
+  selection and single-photo-editing are intentionally orthogonal);
+  "Export Selected…" exports only the checked photos; switching the
+  sidebar filter clears selection; empty selection still exports the
+  filtered set exactly as before.
+- 2 commits (`CatalogModel` selection state; checkbox UI + the
+  badge-position bug fix + `ContentView` wiring).
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
@@ -2382,47 +2449,37 @@ window-resize re-fit behavior, opened-file mtime check.
 ## Exact next step
 **Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus a user-requested
 follow-up (folder-mirrored nested collections) — see their own sections
-above. **Phase 5 (Presets + export) has STARTED**: slice 1, batch export,
-is DONE — see "Phase 5, Slice 1" above for the full write-up, including
-the extensive live-debugging saga (culminating in a sandbox entitlement
-fix, `user-selected.read-only` → `read-write`, re-verified not to
-regress the "Open…" picker this time) and the two real bugs the reviewer
-caught and had fixed (re-entrancy guard; non-positive resize-value
-validation). Reviewer APPROVED (second pass). 284 tests passing, app
-fully functional.
-
-**Immediately requested, NOT yet started**: the user asked for the
-ability to hand-pick individual photos to export (checkbox-style
-multi-select in the Library grid), rather than only exporting via the
-sidebar's Collection/Folder filter. This was explicitly scoped OUT of
-slice 1 (confirmed with the user at the time) and is the natural next
-Phase 5 sub-feature — needs its own Plan Mode session (new selection
-state on `CatalogModel`/`LibraryGridView`, a checkbox overlay per cell,
-an "Export Selected…" action, and deciding how selection coexists with
-the existing single-tap-to-open gesture).
+above. **Phase 5 (Presets + export) has STARTED**: slice 1, batch export
+(including the entitlement-fix debugging saga and 2 reviewer-caught
+bugs), AND its immediate follow-up, selecting individual photos for
+export (including a live-caught checkbox-positioning bug), are BOTH
+DONE — see their own sections above. Both reviewer-APPROVED. 284 tests
+passing, app fully functional.
 
 **Two real, unfixed issues surfaced live while verifying batch export —
-both explicitly deferred to their own future sessions, not this one**:
-(1) Library thumbnails don't reflect edits (`ThumbnailGenerator` reads
-straight from the source file, bypassing `EditPipeline`/the sidecar
-entirely — a real, by-design gap since Phase 4 slice 2, never wired up).
-(2) The Editor's on-screen rendering looks brighter/less vivid ("more
-faded") than the same photo in Preview.app — a color-management question
-in `ImageRenderer`'s core pipeline (likely how the source image's own
-embedded color profile is or isn't accounted for going into the linear
-working space), not export-specific. This is a genuine correctness
-concern deserving its own careful, empirical investigation (matching
-every other color-math question in this project's history), not a
-guess-fix.
+both explicitly deferred to their own future sessions, not yet
+started**: (1) Library thumbnails don't reflect edits (`ThumbnailGenerator`
+reads straight from the source file, bypassing `EditPipeline`/the
+sidecar entirely — a real, by-design gap since Phase 4 slice 2, never
+wired up). (2) The Editor's on-screen rendering looks brighter/less
+vivid ("more faded") than the same photo in Preview.app — a color-
+management question in `ImageRenderer`'s core pipeline (likely how the
+source image's own embedded color profile is or isn't accounted for
+going into the linear working space), not export-specific. This is a
+genuine correctness concern deserving its own careful, empirical
+investigation (matching every other color-math question in this
+project's history), not a guess-fix.
 
-**Next: options** (ask the user which, don't guess): (1) checkbox
-multi-select for export (the user's own immediate follow-up request,
-above); (2) investigate the Editor-vs-Preview color/brightness
-discrepancy (a real correctness bug, likely the highest-value fix of the
-open items); (3) make Library thumbnails reflect edits; (4) Phase 5
-slice 2 — presets (save/apply named edit-state presets); (5) Library
-polish — sort/filter/search (by rating/flag/collection/folder), removing
-photos, detecting missing files, renaming/deleting collections; (6)
+**Next: options** (ask the user which, don't guess): (1) investigate the
+Editor-vs-Preview color/brightness discrepancy (a real correctness bug,
+likely the highest-value fix of the open items); (2) make Library
+thumbnails reflect edits; (3) Phase 5 slice 2 — presets (save/apply
+named edit-state presets); (4) Library polish — sort/filter/search (by
+rating/flag/collection/folder), removing photos, detecting missing
+files, renaming/deleting collections; (5) hardening the reviewer's
+non-blocking note from photo selection — `selectedPhotoIDs` isn't pruned
+on every `refresh()`, only on filter change (cosmetic toolbar-count
+overstatement only, the actual exported set is always correct); (6)
 hardening the reviewer's non-blocking note from Batch export —
 `ExportOptionsView`'s own Export button isn't gated on `isExporting`, a
 low-probability double-click race; (7) hardening the reviewer's

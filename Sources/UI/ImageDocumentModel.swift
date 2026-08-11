@@ -126,7 +126,13 @@ final class ImageDocumentModel: ObservableObject {
         resetHistory() // undo history is per-photo too — can't undo into the previous photo
     }
 
-    private static func exifOrientation(of url: URL) -> CGImagePropertyOrientation {
+    /// `nonisolated` (not `private`) since `Sources/Rendering/PhotoExporter.swift`
+    /// (Phase 5 batch export) needs to reproduce `load(from:)`'s own
+    /// orientation handling from off-main code — same treatment already
+    /// given to `sidecarURL(for:)` above, for the same reason (a pure,
+    /// non-actor-isolated helper another type needs to call). No behavior
+    /// change to this method itself or to `load(from:)`'s existing use of it.
+    nonisolated static func exifOrientation(of url: URL) -> CGImagePropertyOrientation {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
               let raw = properties[kCGImagePropertyOrientation as String] as? UInt32,

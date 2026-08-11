@@ -227,4 +227,117 @@ final class CatalogDatabaseTests: XCTestCase {
         let memberships = try await db.allMemberships()
         XCTAssertEqual(memberships, [CollectionPhoto(collectionId: collectionID, photoId: photoID)])
     }
+
+    // MARK: - Folder-mirrored collections
+
+    /// Builds a `FolderScanNode` tree directly (no real filesystem walk —
+    /// that's `PhotoImporterTests`' concern) so these tests exercise only
+    /// `CatalogDatabase`'s DB-writing logic. Fake `/tmp/...` paths match
+    /// this file's existing convention (`FileManager.attributesOfItem` is
+    /// wrapped in `try?` inside `insertPhotoIfNeeded`, so a nonexistent
+    /// path just yields a `nil` `fileSize`, not an error).
+    private func yearTripDayTree(dayFileCount: Int = 1) -> FolderScanNode {
+        let day = FolderScanNode(
+            url: URL(fileURLWithPath: "/tmp/2024/Trip/Day1"),
+            imageFiles: (1...dayFileCount).map { URL(fileURLWithPath: "/tmp/2024/Trip/Day1/\($0).jpg") },
+            children: []
+        )
+        let trip = FolderScanNode(
+            url: URL(fileURLWithPath: "/tmp/2024/Trip"),
+            imageFiles: [URL(fileURLWithPath: "/tmp/2024/Trip/group.jpg")],
+            children: [day]
+        )
+        return FolderScanNode(
+            url: URL(fileURLWithPath: "/tmp/2024"),
+            imageFiles: [],
+            children: [trip]
+        )
+    }
+
+    func testImportFolderTreeCreatesNestedCollectionsWithParentChain() async throws {
+        let db = try makeDatabase()
+
+        _ = try await db.importFolderTree(yearTripDayTree())
+
+        let collections = try await db.allCollections()
+        let year = try XCTUnwrap(collections.first { $0.name == "2024" })
+        let trip = try XCTUnwrap(collections.first { $0.name == "Trip" })
+        let day = try XCTUnwrap(collections.first { $0.name == "Day1" })
+
+        XCTAssertTrue(year.isFolder)
+        XCTAssertNil(year.parentId)
+        XCTAssertEqual(year.folderPath, "/tmp/2024")
+
+        XCTAssertEqual(trip.parentId, year.id)
+        XCTAssertEqual(trip.folderPath, "/tmp/2024/Trip")
+
+        XCTAssertEqual(day.parentId, trip.id)
+        XCTAssertEqual(day.folderPath, "/tmp/2024/Trip/Day1")
+    }
+
+    func testImportFolderTreePhotosAreMembersOfDirectFolderOnly() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importFolderTree(yearTripDayTree())
+
+        let collections = try await db.allCollections()
+        let trip = try XCTUnwrap(collections.first { $0.name == "Trip" })
+        let day = try XCTUnwrap(collections.first { $0.name == "Day1" })
+        let tripID = try XCTUnwrap(trip.id)
+        let dayID = try XCTUnwrap(day.id)
+
+        let tripPhotos = try await db.photos(inCollection: tripID)
+        XCTAssertEqual(tripPhotos.map(\.filename), ["group.jpg"], "Trip's own collection should hold only its DIRECT photo, not Day1's")
+
+        let dayPhotos = try await db.photos(inCollection: dayID)
+        XCTAssertEqual(dayPhotos.map(\.filename), ["1.jpg"])
+    }
+
+    func testImportFolderTreeIsIdempotentOnReimport() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importFolderTree(yearTripDayTree())
+
+        _ = try await db.importFolderTree(yearTripDayTree())
+
+        let collections = try await db.allCollections()
+        XCTAssertEqual(collections.count, 3, "re-importing the same tree must not create duplicate collections")
+        let photoCount = try await db.photoCount()
+        // yearTripDayTree() has 2 photos total: Trip/group.jpg + Day1/1.jpg
+        // (the year node itself has no direct photos).
+        XCTAssertEqual(photoCount, 2, "re-importing the same tree must not duplicate photos")
+    }
+
+    func testImportFolderTreePicksUpNewPhotosOnReimport() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importFolderTree(yearTripDayTree(dayFileCount: 1))
+
+        let result = try await db.importFolderTree(yearTripDayTree(dayFileCount: 2))
+
+        XCTAssertEqual(result.inserted, 1, "only the newly-added Day1 photo should count as inserted")
+        let collections = try await db.allCollections()
+        XCTAssertEqual(collections.count, 3, "no new/duplicate collections from the second import")
+        let day = try XCTUnwrap(collections.first { $0.name == "Day1" })
+        let dayID = try XCTUnwrap(day.id)
+        let dayPhotos = try await db.photos(inCollection: dayID)
+        XCTAssertEqual(Set(dayPhotos.map(\.filename)), ["1.jpg", "2.jpg"])
+    }
+
+    func testImportFolderTreeAssociatesAPreviouslyFlatImportedPhoto() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/2024/Trip/Day1/1.jpg")])
+        let photoCountBefore = try await db.photoCount()
+
+        _ = try await db.importFolderTree(yearTripDayTree(dayFileCount: 1))
+
+        // Trip/group.jpg is genuinely new (+1); Day1/1.jpg already existed
+        // from the flat import above and must NOT be duplicated.
+        let photoCountAfter = try await db.photoCount()
+        XCTAssertEqual(photoCountAfter, photoCountBefore + 1, "only the new group.jpg should be added; 1.jpg must not be duplicated")
+        let allPhotos = try await db.allPhotos()
+        XCTAssertEqual(allPhotos.filter { $0.filename == "1.jpg" }.count, 1, "1.jpg must appear exactly once across the whole catalog")
+        let collections = try await db.allCollections()
+        let day = try XCTUnwrap(collections.first { $0.name == "Day1" })
+        let dayID = try XCTUnwrap(day.id)
+        let dayPhotos = try await db.photos(inCollection: dayID)
+        XCTAssertEqual(dayPhotos.map(\.filename), ["1.jpg"], "the tree import should associate the pre-existing photo with Day1's collection")
+    }
 }

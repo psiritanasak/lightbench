@@ -57,4 +57,66 @@ final class PhotoImporterTests: XCTestCase {
         let missing = tempDir.appendingPathComponent("does-not-exist", isDirectory: true)
         XCTAssertEqual(PhotoImporter.imageFiles(in: missing), [])
     }
+
+    // MARK: - scanFolderTree (folder-mirrored nested collections)
+
+    private func makeDir(_ relativePath: String) throws -> URL {
+        let url = tempDir.appendingPathComponent(relativePath, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func touch(_ name: String, in folder: URL) {
+        FileManager.default.createFile(atPath: folder.appendingPathComponent(name).path, contents: Data())
+    }
+
+    func testScanFolderTreeBuildsNestedStructureMatchingYearTripDay() throws {
+        let year = try makeDir("2024")
+        let trip = try makeDir("2024/Japan-Trip")
+        let day1 = try makeDir("2024/Japan-Trip/Day1")
+        let day2 = try makeDir("2024/Japan-Trip/Day2")
+        touch("cover.jpg", in: year)
+        touch("group.jpg", in: trip)
+        touch("a.jpg", in: day1)
+        touch("b.jpg", in: day1)
+        touch("c.jpg", in: day2)
+
+        let node = try XCTUnwrap(PhotoImporter.scanFolderTree(at: year))
+
+        XCTAssertEqual(node.imageFiles.map(\.lastPathComponent), ["cover.jpg"])
+        let tripNode = try XCTUnwrap(node.children.first(where: { $0.url.lastPathComponent == "Japan-Trip" }))
+        XCTAssertEqual(tripNode.imageFiles.map(\.lastPathComponent), ["group.jpg"])
+        XCTAssertEqual(tripNode.children.count, 2)
+        let day1Node = try XCTUnwrap(tripNode.children.first(where: { $0.url.lastPathComponent == "Day1" }))
+        XCTAssertEqual(Set(day1Node.imageFiles.map(\.lastPathComponent)), ["a.jpg", "b.jpg"])
+        let day2Node = try XCTUnwrap(tripNode.children.first(where: { $0.url.lastPathComponent == "Day2" }))
+        XCTAssertEqual(day2Node.imageFiles.map(\.lastPathComponent), ["c.jpg"])
+    }
+
+    func testScanFolderTreeExcludesSubfoldersWithNoImagesAnywhere() throws {
+        let root = try makeDir("root")
+        let withPhoto = try makeDir("root/HasPhoto")
+        _ = try makeDir("root/Empty")
+        _ = try makeDir("root/OnlyNonImages")
+        touch("a.jpg", in: withPhoto)
+        touch("notes.txt", in: tempDir.appendingPathComponent("root/OnlyNonImages"))
+
+        let node = try XCTUnwrap(PhotoImporter.scanFolderTree(at: root))
+
+        XCTAssertEqual(node.children.map(\.url.lastPathComponent), ["HasPhoto"])
+    }
+
+    func testScanFolderTreeReturnsNilForEntirelyEmptyRoot() throws {
+        let root = try makeDir("empty-root")
+        _ = try makeDir("empty-root/AlsoEmpty")
+
+        XCTAssertNil(PhotoImporter.scanFolderTree(at: root))
+    }
+
+    func testScanFolderTreeReturnsNilWhenRootHasOnlyNonImageFiles() throws {
+        let root = try makeDir("non-image-root")
+        touch("readme.txt", in: root)
+
+        XCTAssertNil(PhotoImporter.scanFolderTree(at: root))
+    }
 }

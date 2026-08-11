@@ -9,6 +9,15 @@ struct ImportResult: Equatable, Sendable {
     var skipped: Int
 }
 
+/// Thrown only in the "should be impossible" case where GRDB's own
+/// `didInsert` callback somehow left a just-inserted record's `id` unset
+/// — lets callers avoid a force-unwrap (`CLAUDE.md`: "no force-unwraps
+/// outside tests") while still surfacing a real error instead of
+/// crashing if that invariant is ever violated.
+struct CatalogDatabaseError: Error {
+    let message: String
+}
+
 /// Owns the catalog's GRDB connection and every query against it. No UI
 /// import — `CLAUDE.md`: "Keep modules separated: Catalog / EditEngine /
 /// Rendering / UI." Every public method is `async` and does its actual
@@ -53,6 +62,7 @@ final class CatalogDatabase: Sendable {
         Migration001Initial.register(in: &migrator)
         Migration002RatingsAndFlags.register(in: &migrator)
         Migration003Collections.register(in: &migrator)
+        Migration004FolderCollections.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 
@@ -64,25 +74,38 @@ final class CatalogDatabase: Sendable {
             var inserted = 0
             var skipped = 0
             for url in urls {
-                let path = url.path
-                if try Photo.filter(Photo.Columns.path == path).fetchCount(db) > 0 {
-                    skipped += 1
-                    continue
-                }
-                let attributes = try? FileManager.default.attributesOfItem(atPath: path)
-                let fileSize = attributes?[.size] as? Int64
-                var photo = Photo(
-                    id: nil,
-                    path: path,
-                    filename: url.lastPathComponent,
-                    fileSize: fileSize,
-                    importedAt: Date()
-                )
-                try photo.insert(db)
-                inserted += 1
+                let (_, wasInserted) = try Self.insertPhotoIfNeeded(url: url, db: db)
+                if wasInserted { inserted += 1 } else { skipped += 1 }
             }
             return ImportResult(inserted: inserted, skipped: skipped)
         }
+    }
+
+    /// Inserts `url` as a new `Photo` if no row with that `path` already
+    /// exists, or returns the existing row's id unchanged. Shared by
+    /// `importPhotos` (above) and `importFolderTree` (below) so a photo
+    /// swept up by BOTH a flat import and a later folder-tree import ends
+    /// up as exactly one row either way — `wasInserted` lets each caller
+    /// still report its own inserted-vs-skipped counts.
+    private static func insertPhotoIfNeeded(url: URL, db: Database) throws -> (photoID: Int64, wasInserted: Bool) {
+        let path = url.path
+        if let existing = try Photo.filter(Photo.Columns.path == path).fetchOne(db), let id = existing.id {
+            return (id, false)
+        }
+        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+        let fileSize = attributes?[.size] as? Int64
+        var photo = Photo(
+            id: nil,
+            path: path,
+            filename: url.lastPathComponent,
+            fileSize: fileSize,
+            importedAt: Date()
+        )
+        try photo.insert(db)
+        guard let id = photo.id else {
+            throw CatalogDatabaseError(message: "insert(db) did not assign photo.id")
+        }
+        return (id, true)
     }
 
     func photoCount() async throws -> Int {
@@ -180,5 +203,78 @@ final class CatalogDatabase: Sendable {
                     .deleteAll(db)
             }
         }
+    }
+
+    // MARK: - Folder-mirrored nested collections
+
+    /// Imports an entire recursively-scanned folder tree: every folder
+    /// becomes (or reuses) a `PhotoCollection` row, every image becomes
+    /// (or reuses, via `insertPhotoIfNeeded`) a `Photo` row and a
+    /// membership in its DIRECT folder's collection, and every subfolder
+    /// recurses with its own collection as the new parent. The whole tree
+    /// is one `dbQueue.write` — atomic, and what makes find-or-create
+    /// idempotency (no SQL-level `UNIQUE` on `folderPath`, see
+    /// `Migrations/004_folder_collections.swift`) safe: GRDB serializes
+    /// all writes on this queue, so no other write can interleave and
+    /// race a check-then-insert here.
+    func importFolderTree(_ node: FolderScanNode, parentCollectionID: Int64? = nil) async throws -> ImportResult {
+        try await dbQueue.write { db in
+            try Self.importNode(node, parentCollectionID: parentCollectionID, db: db)
+        }
+    }
+
+    private static func importNode(_ node: FolderScanNode, parentCollectionID: Int64?, db: Database) throws -> ImportResult {
+        let collectionID = try findOrCreateFolderCollection(
+            name: node.url.lastPathComponent,
+            folderPath: node.url.path,
+            parentID: parentCollectionID,
+            db: db
+        )
+
+        var result = ImportResult(inserted: 0, skipped: 0)
+        for url in node.imageFiles {
+            let (photoID, wasInserted) = try insertPhotoIfNeeded(url: url, db: db)
+            try CollectionPhoto(collectionId: collectionID, photoId: photoID).insert(db, onConflict: .ignore)
+            if wasInserted { result.inserted += 1 } else { result.skipped += 1 }
+        }
+
+        for child in node.children {
+            let childResult = try importNode(child, parentCollectionID: collectionID, db: db)
+            result.inserted += childResult.inserted
+            result.skipped += childResult.skipped
+        }
+
+        return result
+    }
+
+    /// Reuses an existing collection row for `folderPath` if one exists
+    /// (this is the "re-import reuses the same tree" idempotency — see
+    /// `importFolderTree`'s own doc comment for why no SQL `UNIQUE`
+    /// constraint is needed), otherwise creates a new one marked
+    /// `isFolder: true`.
+    private static func findOrCreateFolderCollection(
+        name: String,
+        folderPath: String,
+        parentID: Int64?,
+        db: Database
+    ) throws -> Int64 {
+        if let existing = try PhotoCollection
+            .filter(PhotoCollection.Columns.folderPath == folderPath)
+            .fetchOne(db), let id = existing.id {
+            return id
+        }
+        var collection = PhotoCollection(
+            id: nil,
+            name: name,
+            createdAt: Date(),
+            parentId: parentID,
+            isFolder: true,
+            folderPath: folderPath
+        )
+        try collection.insert(db)
+        guard let id = collection.id else {
+            throw CatalogDatabaseError(message: "insert(db) did not assign collection.id")
+        }
+        return id
     }
 }

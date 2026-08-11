@@ -295,6 +295,11 @@ struct ContentView: View {
                 }
             }
             ToolbarItem(placement: .automatic) {
+                Button("Import Folder Tree…") {
+                    catalog.importFolderTree()
+                }
+            }
+            ToolbarItem(placement: .automatic) {
                 Button {
                     document.undo()
                 } label: {

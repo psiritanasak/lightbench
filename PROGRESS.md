@@ -2500,19 +2500,82 @@ flags, collections.
   "Adjust tab regrouping into labeled sections" restyle). 284/284 tests
   unchanged. 1 commit.
 
+### Custom thin slider — Apple Photos look (complete, verified live)
+- Immediate follow-up to the Adjust-tab sidebar restyle: the user pointed
+  at the native macOS `Slider`'s chunky glossy 3D knob and said it didn't
+  match the flat dark theme. Native `Slider` can't be restyled to remove
+  that knob, so — confirmed via AskUserQuestion — went with a fully
+  custom-drawn slider rather than a native tint-only tweak.
+- NEW `Sources/UI/ThinSlider.swift`: `ThinSliderGeometry`, a pure
+  SwiftUI-independent value↔pixel-mapping enum (mirrors the
+  `CropAspectMath.swift` precedent for testable UI-layer math) —
+  `fraction(of:in:)`/`value(atFraction:in:)` (clamped linear map) and
+  `thumbCenterX`/`fraction(atX:)` (true inverses, both built from the
+  same `usableSpan` term so they can't drift apart; NaN-safe on a
+  zero-width value range or a track narrower than the thumb — e.g. a
+  `GeometryReader` briefly reporting near-zero width before layout
+  settles). `ThinSlider` itself: a `GeometryReader` + `DragGesture(
+  minimumDistance: 0)` (so a plain click also seeks) drawing a thin flat
+  track + small white capsule thumb, with the exact same
+  `Binding<Double>`/`ClosedRange<Double>` public shape as the native
+  `Slider(value:in:)` it replaces — so `EditSliderRow`
+  (`ContentView.swift`) needed exactly ONE line changed, and all ~18
+  existing Adjust/Crop rows kept working with zero call-site changes.
+  Custom `accessibilityElement`/`accessibilityValue`/
+  `accessibilityAdjustableAction` (arrow-key increment/decrement) since
+  a hand-drawn control loses the native `Slider`'s built-in VoiceOver
+  support otherwise.
+- **Deliberately pure SwiftUI (`DragGesture`/`GeometryReader`), no
+  AppKit interop, unlike the reverted "StableScrollInsets" regression**
+  this exact sidebar has history with (see that section above) — that
+  prior incident passed two reviewer passes AND the full test suite yet
+  still broke all slider click/drag, caught only by live testing, via an
+  `NSViewRepresentable` reaching into `NSScrollView` internals. This
+  change's mechanism is structurally different and lower-risk (reviewer
+  independently confirmed: macOS delivers trackpad/scroll-wheel scrolling
+  as a separate `NSEvent` stream from mouse-drag, so there's no
+  scroll-vs-drag arbitration happening the way there would be on iOS
+  touch) — but per that lesson, this still got the same live hands-on
+  drag/click/scroll verification before commit, not just review + tests.
+- Thumb shape and fill color were tuned live, twice, from direct user
+  feedback after seeing the first version rendered: thumb changed from a
+  14pt white circle to a thinner 5×18pt white vertical bar/capsule ("too
+  much of a blob"), and the filled-track color changed from the app's
+  accent blue to white (a fully monochrome look, closer to the
+  reference).
+- Reviewer APPROVE — independently re-verified the `git diff` really is
+  only the one-line `ContentView.swift` swap (not taken on faith),
+  algebraically confirmed `thumbCenterX`/`fraction(atX:)` are true
+  inverses, and reasoned through the scroll-gesture risk given this
+  project's specific history rather than dismissing it. One non-blocking
+  note — the new accessibility value/adjustable-action had no
+  `.accessibilityLabel`, so VoiceOver would announce only a bare
+  percentage with no indication of which slider — fixed before commit
+  (`.accessibilityLabel(label)` at the `EditSliderRow` call site,
+  mirroring how the per-row Reset button already does the same).
+- NEW `Tests/EditEngineTests/ThinSliderGeometryTests.swift` (16 tests,
+  mirrors `CropAspectMathTests`' structure) — endpoints/midpoint mapping,
+  clamping in both directions, the inverse round-trip, and NaN-safety on
+  both documented degenerate cases. No tests for the drawn view/gesture
+  itself (UI-interaction code, not unit-testable here — consistent with
+  every prior UI-only restyle, and exactly the category this project's
+  own history says needs live testing instead).
+- 300 tests total (16 new). 1 commit.
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus two user-requested
+**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus three user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
-sidebar restyle) — see their own sections above. **Phase 5 (Presets +
-export) has STARTED**: slice 1, batch export (including the entitlement-fix
-debugging saga and 2 reviewer-caught bugs), AND its immediate follow-up,
-selecting individual photos for export (including a live-caught
-checkbox-positioning bug), are BOTH DONE — see their own sections above.
-Both reviewer-APPROVED. 284 tests passing, app fully functional.
+sidebar restyle; the custom thin slider) — see their own sections above.
+**Phase 5 (Presets + export) has STARTED**: slice 1, batch export
+(including the entitlement-fix debugging saga and 2 reviewer-caught bugs),
+AND its immediate follow-up, selecting individual photos for export
+(including a live-caught checkbox-positioning bug), are BOTH DONE — see
+their own sections above. Both reviewer-APPROVED. 300 tests passing, app
+fully functional.
 
 **Two real, unfixed issues surfaced live while verifying batch export —
 both explicitly deferred to their own future sessions, not yet

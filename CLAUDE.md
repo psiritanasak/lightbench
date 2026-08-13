@@ -211,6 +211,25 @@ Edits are stored as parameter sets and rendered live on the GPU.
    re-centering the swatch row to fit the sidebar's minimum width.
    Zero `EditState`/`EditPipeline` changes. Reviewer APPROVE on first
    pass (one non-blocking accessibility nit, fixed before commit).
+
+   **Post-Phase-5 follow-up #2 (shipped): custom thin slider replacing
+   the native `Slider`.** The native macOS slider's glossy 3D knob
+   doesn't restyle to match the flat dark theme, so — confirmed via
+   AskUserQuestion — built a fully custom one instead of a native tint
+   tweak. NEW `Sources/UI/ThinSlider.swift`: `ThinSliderGeometry` (pure,
+   unit-tested value↔pixel mapping, same testable-UI-math pattern as
+   `CropAspectMath.swift`) plus `ThinSlider`, a `GeometryReader`+
+   `DragGesture` view with the exact same `Binding<Double>`/
+   `ClosedRange<Double>` shape as `Slider(value:in:)` — so
+   `EditSliderRow` needed exactly one line changed, zero call-site
+   changes across ~18 existing rows. Deliberately pure SwiftUI, no
+   AppKit interop, unlike the reverted "StableScrollInsets" regression
+   this sidebar has history with (see `PROGRESS.md`) — still got live
+   drag/click/scroll verification before commit per that lesson (review
+   + tests alone weren't sufficient last time). Thumb shape/fill color
+   tuned live from user feedback (circle → thin bar, accent blue →
+   white). Reviewer APPROVE (one non-blocking accessibility-label gap,
+   fixed before commit). 300 tests (16 new).
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases
 

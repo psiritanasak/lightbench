@@ -27,7 +27,18 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     private let workingColorSpace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)
         ?? CGColorSpace(name: CGColorSpace.linearSRGB)
         ?? CGColorSpaceCreateDeviceRGB()
-    private let outputColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    /// Not `private`: `MetalImageView.makeNSView` tags the presenting
+    /// `CAMetalLayer` with this SAME instance, so the drawable's declared
+    /// color space can never drift from what `render(...)` below actually
+    /// encodes into. Without that layer tag, CoreAnimation doesn't know
+    /// this `.rgba16Float` drawable's sRGB-gamma-encoded values are sRGB
+    /// (float formats have no `_sRGB` pixel-format variant to imply it),
+    /// so it under-decodes them on display — a real, live-verified bug:
+    /// the Editor rendered visibly brighter/less saturated than the same
+    /// file in Preview.app or this app's own (correctly-tagged) exported
+    /// files, despite identical working/output color-space math in both
+    /// paths.
+    let outputColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
     var image: CIImage?
     var editState: EditState = .identity

@@ -14,6 +14,21 @@ struct MetalImageView: NSViewRepresentable {
         view.isPaused = true
         view.enableSetNeedsDisplay = true
         view.delegate = renderer
+        // Tag the presenting layer with the SAME color space
+        // `ImageRenderer.draw(in:)` encodes its final render into
+        // (`outputColorSpace`, sRGB). MTKView is layer-backed by a
+        // `CAMetalLayer` from init, so it's available here. Without this,
+        // the sRGB-gamma-encoded float values written into this
+        // `.rgba16Float` drawable are presented untagged — CoreAnimation
+        // doesn't decode them as sRGB, so the Editor renders visibly
+        // brighter/less saturated than Preview.app or this app's own
+        // exported files (which ARE correctly sRGB-tagged via
+        // `CIContext.write*Representation(colorSpace:)`) despite identical
+        // color-space math in both paths — a real, live-verified bug, not
+        // a hypothetical.
+        let metalLayer = view.layer as? CAMetalLayer
+        assert(metalLayer != nil, "MTKView's backing layer was expected to be a CAMetalLayer")
+        metalLayer?.colorspace = renderer.outputColorSpace
         return view
     }
 

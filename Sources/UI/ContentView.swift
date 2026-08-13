@@ -297,6 +297,14 @@ struct ContentView: View {
                     exportProgressView(progress)
                 }
             }
+            // Bridges these two otherwise fully-decoupled models (same
+            // direction of composition as `LibraryGridView`'s own
+            // `document.load(from:)` callback below) so editing a photo
+            // invalidates its stale Library thumbnail instead of leaving
+            // it showing the original forever.
+            .onAppear {
+                document.onSidecarSaved = { url in catalog.invalidateThumbnail(for: url) }
+            }
     }
 
     private func exportProgressView(_ progress: ExportProgress) -> some View {
@@ -320,6 +328,18 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
+        // Leaving the Editor for the Library: flush any still-debounced
+        // sidecar save NOW, not up to ~1s later. `LibraryGridView` is torn
+        // down/recreated on every visit (see `showLibrary`'s `if/else`
+        // above), so its thumbnails re-fetch immediately on appearing —
+        // without this flush, a just-undone/edited photo could still be
+        // mid-debounce, so its sidecar (and therefore `onSidecarSaved`'s
+        // cache invalidation) wouldn't have happened yet, showing a stale
+        // thumbnail until some LATER action (e.g. opening another photo)
+        // happened to flush it — a real bug caught live.
+        .onChange(of: showLibrary) { _, isNowShowingLibrary in
+            if isNowShowingLibrary { document.flushPendingSidecarSave() }
+        }
         // Opening a new photo resets `editState` (including crop) to
         // identity; return to the Adjust tab too so the crop overlay
         // doesn't linger showing a stale (now-meaningless) full-frame rect

@@ -62,4 +62,46 @@ final class ThumbnailGeneratorTests: XCTestCase {
         try "hello".write(to: url, atomically: true, encoding: .utf8)
         XCTAssertNil(ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200))
     }
+
+    // MARK: - thumbnail(for:maxPixelSize:editState:) — edit-aware thumbnails
+
+    func testIdentityEditStateReturnsAThumbnailOfTheRequestedSize() throws {
+        let url = try writeSolidColorPNG(size: 800)
+
+        let thumbnail = ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200, editState: .identity)
+
+        let image = try XCTUnwrap(thumbnail)
+        XCTAssertLessThanOrEqual(max(image.width, image.height), 200)
+    }
+
+    /// A real, visible adjustment must actually run through `EditPipeline`
+    /// — proven structurally (r == g == b on a known-colored, non-gray
+    /// source), the same style of assertion this project's own
+    /// `EditPipelineTests` already uses for Black & White, rather than a
+    /// fabricated exact pixel value.
+    func testNonIdentityEditStateActuallyAppliesTheAdjustment() throws {
+        let url = try writeSolidColorPNG(size: 200) // solid red — r != g, r != b
+
+        var editState = EditState()
+        editState.blackAndWhite = true
+        let thumbnail = try XCTUnwrap(ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200, editState: editState))
+
+        let data = try XCTUnwrap(thumbnail.dataProvider?.data)
+        let bytes = CFDataGetBytePtr(data)
+        let bytesPerRow = thumbnail.bytesPerRow
+        // Sample the center pixel — RGBA8, so 4 bytes/pixel.
+        let x = thumbnail.width / 2
+        let y = thumbnail.height / 2
+        let offset = y * bytesPerRow + x * 4
+        let r = bytes?[offset]
+        let g = bytes?[offset + 1]
+        let b = bytes?[offset + 2]
+        XCTAssertEqual(r, g)
+        XCTAssertEqual(g, b)
+    }
+
+    func testEditAwareThumbnailOfNonexistentFileReturnsNil() {
+        let missing = tempDir.appendingPathComponent("does-not-exist.png")
+        XCTAssertNil(ThumbnailGenerator.thumbnail(for: missing, maxPixelSize: 200, editState: .identity))
+    }
 }

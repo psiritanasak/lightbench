@@ -20,6 +20,16 @@ final class ImageDocumentModel: ObservableObject {
     /// folder-access prompt — that's an ordinary, silent choice, not an
     /// error condition.
     @Published var sidecarSaveErrorMessage: String?
+    /// Fired after a REAL, successful sidecar write (not on a decline/skip/
+    /// error) — lets `ContentView` bridge this otherwise fully-decoupled
+    /// model to `CatalogModel`, so the Library grid's thumbnail cache can
+    /// be invalidated for the edited photo. A plain closure, not a direct
+    /// reference to `CatalogModel`, keeps these two sibling models (both
+    /// owned by `PhotoAppApp`, with no existing relationship to each
+    /// other) decoupled — `ContentView` does the wiring, same as it
+    /// already bridges the opposite direction (Library selection →
+    /// `document.load(from:)`).
+    var onSidecarSaved: ((URL) -> Void)?
     @Published var editState = EditState() {
         didSet {
             scheduleHistogramUpdate()
@@ -552,8 +562,13 @@ final class ImageDocumentModel: ObservableObject {
     }
 
     /// Called from `load(from:)` before switching to a new photo, so the
-    /// OUTGOING photo's last ~1s of unsaved edits aren't dropped.
-    private func flushPendingSidecarSave() {
+    /// OUTGOING photo's last ~1s of unsaved edits aren't dropped. Not
+    /// `private` — `ContentView` also calls this when leaving the Editor
+    /// for the Library, so a just-undone/edited photo's sidecar (and
+    /// therefore its Library thumbnail, via `onSidecarSaved`) is actually
+    /// up to date by the time the grid appears, rather than possibly
+    /// still sitting in the ~1s debounce window.
+    func flushPendingSidecarSave() {
         guard sidecarSaveWorkItem != nil else { return }
         sidecarSaveWorkItem?.cancel()
         sidecarSaveWorkItem = nil
@@ -581,6 +596,7 @@ final class ImageDocumentModel: ObservableObject {
         do {
             let data = try JSONEncoder().encode(editState)
             try data.write(to: Self.sidecarURL(for: currentURL), options: .atomic)
+            onSidecarSaved?(currentURL)
         } catch {
             sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"
         }

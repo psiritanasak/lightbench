@@ -242,7 +242,20 @@ final class CatalogModel: ObservableObject {
     /// and true after a relaunch once `activateKnownFolders()` (run once
     /// at `init`) has resolved its stored bookmark.
     func thumbnail(for photo: Photo) async -> CGImage? {
-        await thumbnailCache.thumbnail(for: photo.path)
+        await thumbnailCache.thumbnail(for: photo)
+    }
+
+    /// Drops the cached thumbnail for the photo at `url` — called when
+    /// that photo's edits are saved (wired from `ImageDocumentModel.
+    /// onSidecarSaved` in `ContentView`), so the NEXT time it's decoded
+    /// (naturally triggered by returning to the Library) it reflects the
+    /// new edits instead of serving the stale pre-edit thumbnail forever.
+    /// Sync wrapper (matching this class's other mutators) — the actual
+    /// invalidation hops to the `ThumbnailCache` actor via a fire-and-
+    /// forget `Task`.
+    func invalidateThumbnail(for url: URL) {
+        let path = url.path
+        Task { await thumbnailCache.invalidate(path: path) }
     }
 
     // MARK: - Selection (Phase 5 slice 1 follow-up — export a hand-picked subset)
@@ -412,21 +425,64 @@ private actor ThumbnailCache {
         return cache
     }()
     private var inFlight: [String: Task<CGImage?, Never>] = [:]
+    /// Per-path monotonic counter, bumped by `invalidate(path:)`.
+    /// Reviewer-caught: `Task.cancel()` on `Never`-throwing tasks whose
+    /// body never checks `Task.isCancelled` (true here — `ThumbnailGenerator`
+    /// is a plain synchronous decode/render) is PURELY COSMETIC, not actual
+    /// cancellation — a slow decode started BEFORE an `invalidate()` call
+    /// can still finish AFTER it and would otherwise silently overwrite a
+    /// newer, correct cache entry with stale data. Each in-flight request
+    /// captures the generation at start; on completion it only touches the
+    /// cache/`inFlight` bookkeeping if its generation is still current —
+    /// if a newer `invalidate()` ran while it was decoding, it just hands
+    /// its (possibly-stale) result back to whichever caller was already
+    /// awaiting IT specifically, without polluting shared state that a
+    /// later, newer request now owns.
+    private var generation: [String: Int] = [:]
 
-    func thumbnail(for path: String) async -> CGImage? {
+    /// Loads `photo`'s saved `EditState` (via `PhotoExporter.loadEditState`
+    /// — `.identity` if none, the common case) so the thumbnail reflects
+    /// actual edits, not just the original file. Only paid on a cache MISS
+    /// — a cache hit still returns with no sidecar read at all, so
+    /// repeat-scroll performance is unchanged from before this existed.
+    func thumbnail(for photo: Photo) async -> CGImage? {
+        let path = photo.path
         let key = path as NSString
         if let cached = cache.object(forKey: key) { return cached }
         if let existing = inFlight[path] { return await existing.value }
 
+        let requestGeneration = generation[path, default: 0]
         let task = Task<CGImage?, Never> {
-            ThumbnailGenerator.thumbnail(for: URL(fileURLWithPath: path), maxPixelSize: Self.maxPixelSize)
+            let editState = PhotoExporter.loadEditState(for: photo)
+            return ThumbnailGenerator.thumbnail(
+                for: URL(fileURLWithPath: path), maxPixelSize: Self.maxPixelSize, editState: editState
+            )
         }
         inFlight[path] = task
         let result = await task.value
+        // See `generation`'s doc comment — skip touching shared state
+        // entirely if this path was invalidated while we were decoding.
+        guard generation[path, default: 0] == requestGeneration else { return result }
         inFlight[path] = nil
         if let result {
             cache.setObject(result, forKey: key, cost: result.bytesPerRow * result.height)
         }
         return result
+    }
+
+    /// Drops `path`'s cached thumbnail and bumps its generation (see
+    /// `generation`'s doc comment for why a `Task.cancel()` alone wouldn't
+    /// be sufficient here) — called when that photo's sidecar is saved.
+    /// Clears `inFlight[path]` too: NOT to stop the old decode (it can't),
+    /// but so the NEXT caller for this path starts a fresh request instead
+    /// of awaiting the stale one already running. Does NOT proactively
+    /// regenerate anything; the next `thumbnail(for:)` call (naturally
+    /// triggered by returning to the Library, since `LibraryGridView` is
+    /// torn down and recreated on every Editor↔Library switch) will decode
+    /// fresh.
+    func invalidate(path: String) {
+        generation[path, default: 0] += 1
+        cache.removeObject(forKey: path as NSString)
+        inFlight[path] = nil
     }
 }

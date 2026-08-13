@@ -2562,71 +2562,126 @@ flags, collections.
   own history says needs live testing instead).
 - 300 tests total (16 new). 1 commit.
 
+### Editor-vs-Preview color discrepancy — FIXED (complete, verified live)
+- Long-standing deferred item (first surfaced live during Phase 5 batch
+  export verification): the Editor's on-screen rendering looked visibly
+  brighter and less saturated ("faded") than the same file in Preview.app,
+  at identity edits — a genuine color-management bug, not a stylistic
+  difference. Investigated per this project's empirical discipline: an
+  Explore agent traced the FULL color path end to end (decode → pipeline →
+  on-screen renderer → export, with exact file:line references), cross-
+  checked directly by reading the same files myself.
+- **Root cause**: decode (`ImageDocumentModel.load`, bare
+  `CIImage(contentsOf:)`) is fully color-managed and identical between the
+  on-screen and export paths — not the cause. `EditPipeline` never touches
+  color SPACE (only the unrelated perceptual sRGB-gamma domain a few
+  adjustments already use). The on-screen renderer
+  (`Sources/Rendering/ImageRenderer.swift`) and the exporter
+  (`Sources/Rendering/PhotoExporter.swift`) define BYTE-FOR-BYTE IDENTICAL
+  working/output color spaces and both encode their final `CIContext` call
+  into sRGB via `colorSpace: outputColorSpace`. The only real divergence:
+  export writes to a FILE via `write*Representation(colorSpace:)`, which
+  bakes an sRGB ICC tag into the file (Preview then color-manages it
+  correctly); the on-screen path renders into an `.rgba16Float` `MTKView`
+  drawable whose underlying `CAMetalLayer` was NEVER assigned a
+  `colorspace` (confirmed via grep — none existed anywhere in the
+  codebase). Float pixel formats have no `_sRGB` variant to imply that tag
+  implicitly, so CoreAnimation presented the sRGB-gamma-encoded values
+  without decoding them as sRGB — under-decoding lifts midtones and
+  desaturates, exactly the observed symptom.
+- **Fix**: `Sources/Rendering/ImageRenderer.swift`'s `outputColorSpace`
+  widened from `private` to internal, so `Sources/Rendering/
+  MetalImageView.swift`'s `makeNSView` can tag the presenting
+  `CAMetalLayer` with the EXACT SAME `CGColorSpace` instance the renderer
+  already encodes into (`(view.layer as? CAMetalLayer)?.colorspace =
+  renderer.outputColorSpace`) — a single source of truth so the two can
+  never drift apart. A debug-only `assert` (reviewer's suggestion) fires
+  if the layer cast ever fails, so a future regression here is at least
+  detectable rather than silently resurrecting the exact same "faded" bug
+  with zero signal. No pixel math, working space, output encoding, or
+  pipeline logic touched — purely a missing display-side color tag.
+- No new tests — deliberate and justified: the fix changes only the
+  drawable layer's color TAG, not any pixel value, so an offscreen
+  readback would be byte-identical before and after; this is a
+  live-compositor-only artifact, unreachable by this project's existing
+  offscreen test infrastructure, same category as the y-flip and
+  crop-tiling bugs `PROGRESS.md` already records as invisible to unit
+  tests. 300 tests unchanged (all still pass).
+- Reviewer independently re-derived the diagnosis (why an untagged float
+  drawable under-decodes rather than over-decodes or no-ops), confirmed
+  tagging the layer with the SAME color space used to encode is a single
+  matched encode→decode pair (not a double-conversion — corroborated by
+  the live result showing no over-darkening/over-saturation), verified
+  `view.layer` is guaranteed a `CAMetalLayer` at that point in
+  `makeNSView` (MTKView forces `wantsLayer`/`layerClass` at init,
+  independent of window attachment), and confirmed no actor-isolation
+  regression from widening `outputColorSpace`'s access level under Swift 6
+  strict concurrency. APPROVE, one non-blocking suggestion (the debug
+  assert above) adopted before commit.
+- **Live-verified by the user** side-by-side against Preview.app on
+  multiple photos (including a saturated one): brightness/saturation now
+  match, no over-correction. Closes out this deferred item — see updated
+  "Exact next step" below. 1 commit.
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus three user-requested
+**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus four user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
-sidebar restyle; the custom thin slider) — see their own sections above.
-**Phase 5 (Presets + export) has STARTED**: slice 1, batch export
-(including the entitlement-fix debugging saga and 2 reviewer-caught bugs),
-AND its immediate follow-up, selecting individual photos for export
-(including a live-caught checkbox-positioning bug), are BOTH DONE — see
-their own sections above. Both reviewer-APPROVED. 300 tests passing, app
-fully functional.
+sidebar restyle; the custom thin slider; the Editor-vs-Preview color-fix)
+— see their own sections above. **Phase 5 (Presets + export) has
+STARTED**: slice 1, batch export (including the entitlement-fix debugging
+saga and 2 reviewer-caught bugs), AND its immediate follow-up, selecting
+individual photos for export (including a live-caught checkbox-positioning
+bug), are BOTH DONE — see their own sections above. Both reviewer-APPROVED.
+300 tests passing, app fully functional.
 
-**Two real, unfixed issues surfaced live while verifying batch export —
-both explicitly deferred to their own future sessions, not yet
-started**: (1) Library thumbnails don't reflect edits (`ThumbnailGenerator`
-reads straight from the source file, bypassing `EditPipeline`/the
-sidecar entirely — a real, by-design gap since Phase 4 slice 2, never
-wired up). (2) The Editor's on-screen rendering looks brighter/less
-vivid ("more faded") than the same photo in Preview.app — a color-
-management question in `ImageRenderer`'s core pipeline (likely how the
-source image's own embedded color profile is or isn't accounted for
-going into the linear working space), not export-specific. This is a
-genuine correctness concern deserving its own careful, empirical
-investigation (matching every other color-math question in this
-project's history), not a guess-fix.
+**One real, unfixed issue remains from batch export's own verification,
+still explicitly deferred to a future session, not yet started**: Library
+thumbnails don't reflect edits (`ThumbnailGenerator` reads straight from
+the source file, bypassing `EditPipeline`/the sidecar entirely — a real,
+by-design gap since Phase 4 slice 2, never wired up). The other issue
+recorded alongside it (the Editor-vs-Preview color/brightness discrepancy)
+is now FIXED — see its own section above.
 
-**Next: options** (ask the user which, don't guess): (1) investigate the
-Editor-vs-Preview color/brightness discrepancy (a real correctness bug,
-likely the highest-value fix of the open items); (2) make Library
-thumbnails reflect edits; (3) Phase 5 slice 2 — presets (save/apply
-named edit-state presets); (4) Library polish — sort/filter/search (by
-rating/flag/collection/folder), removing photos, detecting missing
-files, renaming/deleting collections; (5) hardening the reviewer's
-non-blocking note from photo selection — `selectedPhotoIDs` isn't pruned
-on every `refresh()`, only on filter change (cosmetic toolbar-count
-overstatement only, the actual exported set is always correct); (6)
-hardening the reviewer's non-blocking note from Batch export —
-`ExportOptionsView`'s own Export button isn't gated on `isExporting`, a
-low-probability double-click race; (7) hardening the reviewer's
-non-blocking notes from folder-mirrored collections — no index on
-`collection.folderPath`, no symlink-loop guard in `PhotoImporter.scanNode`,
-`findOrCreateFolderCollection` silently ignoring a mismatched `parentID`
-on re-import from a different root; (8) hardening the reviewer's
-non-blocking note, generalized across ALL of `CatalogModel`'s mutations
-— overlapping `Task.detached` + `refresh()` calls with no cancellation/
-sequencing can transiently show stale data in the grid (self-heals, not
-a persisted-data bug); (9) `collection.name` having no `UNIQUE`
-constraint, so rapid double-submits of "New Collection…" could create
-duplicates; (10) revisit the still-deferred sidebar content-shift-on-
-scroll cosmetic bug (see its own section above, including the "Lesson
-recorded" note); (11) the reviewer's non-blocking note from the
-Edit-menu work — consider suppressing/redesigning the default ⌘N "New
-Window" behavior before any multi-window UI is added; (12) the
-reviewer's non-blocking note from the sidecar-persistence work —
-investigate the one unexplained "you don't have permission" flake
-further if it recurs; (13) the reviewer's non-blocking note from
-Library slice 2 — `activateKnownFolders` keys `activeFolders` by the
-bookmark's original path, so a folder renamed/moved between sessions
-could get its scope started twice on re-import. Lens distortion
-correction and RAW support (Phase 6, explicitly declined for this
-session per `CLAUDE.md`'s "do not start early") remain explicitly OUT of
-scope unless the user asks for them specifically.
+**Next: options** (ask the user which, don't guess): (1) make Library
+thumbnails reflect edits (now the sole remaining open correctness item);
+(2) Phase 5 slice 2 — presets (save/apply named edit-state presets); (3)
+Library polish — sort/filter/search (by rating/flag/collection/folder),
+removing photos, detecting missing files, renaming/deleting collections;
+(4) hardening the reviewer's non-blocking note from photo selection —
+`selectedPhotoIDs` isn't pruned on every `refresh()`, only on filter change
+(cosmetic toolbar-count overstatement only, the actual exported set is
+always correct); (5) hardening the reviewer's non-blocking note from Batch
+export — `ExportOptionsView`'s own Export button isn't gated on
+`isExporting`, a low-probability double-click race; (6) hardening the
+reviewer's non-blocking notes from folder-mirrored collections — no index
+on `collection.folderPath`, no symlink-loop guard in
+`PhotoImporter.scanNode`, `findOrCreateFolderCollection` silently ignoring
+a mismatched `parentID` on re-import from a different root; (7) hardening
+the reviewer's non-blocking note, generalized across ALL of
+`CatalogModel`'s mutations — overlapping `Task.detached` + `refresh()`
+calls with no cancellation/sequencing can transiently show stale data in
+the grid (self-heals, not a persisted-data bug); (8) `collection.name`
+having no `UNIQUE` constraint, so rapid double-submits of "New
+Collection…" could create duplicates; (9) revisit the still-deferred
+sidebar content-shift-on-scroll cosmetic bug (see its own section above,
+including the "Lesson recorded" note); (10) the reviewer's non-blocking
+note from the Edit-menu work — consider suppressing/redesigning the
+default ⌘N "New Window" behavior before any multi-window UI is added; (11)
+the reviewer's non-blocking note from the sidecar-persistence work —
+investigate the one unexplained "you don't have permission" flake further
+if it recurs; (12) the reviewer's non-blocking note from Library slice 2 —
+`activateKnownFolders` keys `activeFolders` by the bookmark's original
+path, so a folder renamed/moved between sessions could get its scope
+started twice on re-import; (13) the reviewer's non-blocking suggestion
+from the color-space fix — a debug-only `assert` already covers the
+`CAMetalLayer` cast, no further action needed unless it ever fires.
+Lens distortion correction and RAW support (Phase 6, explicitly declined
+for this session per `CLAUDE.md`'s "do not start early") remain explicitly
+OUT of scope unless the user asks for them specifically.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

@@ -230,6 +230,24 @@ Edits are stored as parameter sets and rendered live on the GPU.
    tuned live from user feedback (circle → thin bar, accent blue →
    white). Reviewer APPROVE (one non-blocking accessibility-label gap,
    fixed before commit). 300 tests (16 new).
+
+   **Post-Phase-5 follow-up #3 (shipped): fixed Editor-vs-Preview color
+   discrepancy.** The Editor rendered visibly brighter/less saturated
+   than Preview.app at identity edits. Root cause: the on-screen renderer
+   (`ImageRenderer.swift`) and exporter (`PhotoExporter.swift`) encode
+   byte-for-byte identical working/output color spaces into sRGB, but the
+   `.rgba16Float` `MTKView`'s `CAMetalLayer` was never tagged with a
+   `colorspace` (no `_sRGB` variant exists for float pixel formats to
+   imply it) — so CoreAnimation presented the sRGB-gamma-encoded values
+   undecoded, while export's file-based `write*Representation` correctly
+   bakes in an sRGB tag. Fixed by tagging the presenting layer with the
+   exact same `CGColorSpace` instance the renderer already encodes into
+   (`outputColorSpace` widened `private` → internal), plus a debug
+   `assert` on the layer cast so a future regression here is detectable.
+   Display-tag-only — no pixel math/pipeline changes. Reviewer APPROVE.
+   Live-verified against Preview.app on multiple photos, no
+   over-correction. 300 tests unchanged (live-compositor-only artifact,
+   not unit-testable, same category as the y-flip/crop-tiling bugs).
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases
 

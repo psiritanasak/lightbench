@@ -91,6 +91,18 @@ struct ContentView: View {
     /// Defaults to `.luminance` to match this histogram's original look.
     @State private var histogramDisplayMode: HistogramDisplayMode = .luminance
 
+    /// Which Adjust-tab sections are expanded — Apple-Photos-style
+    /// collapsible sections. Defaults `false` (all collapsed) per user
+    /// request; one bool each rather than a `Set`, matching this file's
+    /// existing convention of separate named `@State` per
+    /// presentation-only concern.
+    @State private var isLightSectionExpanded = false
+    @State private var isColorSectionExpanded = false
+    @State private var isSelectiveColorSectionExpanded = false
+    @State private var isBlackAndWhiteSectionExpanded = false
+    @State private var isEffectsSectionExpanded = false
+    @State private var isRedEyeSectionExpanded = false
+
     /// The image pane's `EditorTabBar` row's actual rendered height,
     /// measured live (not guessed) — see `editControls`'s top padding,
     /// which uses this to match the sidebar's top clearance to it exactly.
@@ -598,27 +610,52 @@ struct ContentView: View {
     }
 
     private var adjustTabContent: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            lightSection
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Adjust")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            AdjustSectionContainer(icon: "sun.max", title: "Light", isExpanded: $isLightSectionExpanded) {
+                lightSection
+            }
             Divider()
-            colorSection
+            AdjustSectionContainer(icon: "paintpalette", title: "Color", isExpanded: $isColorSectionExpanded) {
+                colorSection
+            }
             Divider()
-            selectiveColorSection
+            AdjustSectionContainer(
+                icon: "square.grid.3x3", title: "Selective Color", isExpanded: $isSelectiveColorSectionExpanded
+            ) {
+                selectiveColorSection
+            }
             Divider()
-            blackAndWhiteSection
+            AdjustSectionContainer(
+                icon: "circle.lefthalf.filled", title: "Black & White", isExpanded: $isBlackAndWhiteSectionExpanded
+            ) {
+                blackAndWhiteSection
+            }
             Divider()
-            effectsSection
+            AdjustSectionContainer(icon: "sparkles", title: "Effects", isExpanded: $isEffectsSectionExpanded) {
+                effectsSection
+            }
             Divider()
-            redEyeSection
+            AdjustSectionContainer(
+                icon: "eye.trianglebadge.exclamationmark", title: "Red-Eye", isExpanded: $isRedEyeSectionExpanded
+            ) {
+                redEyeSection
+            }
+            Divider()
+            resetAdjustmentsButton
         }
     }
 
     /// Tone/exposure-family controls, matching Apple Photos' own "Light"
     /// group — everything here operates on brightness/contrast/tonal
-    /// range, not color.
+    /// range, not color. Just the rows — `AdjustSectionContainer` (see
+    /// `adjustTabContent`) supplies the section's own header/icon/
+    /// disclosure chrome and its own `VStack(spacing: 14)` wrapper.
     private var lightSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Light").font(.headline)
+        Group {
             EditSliderRow(
                 label: "Exposure", value: $document.editState.exposureEV,
                 range: -5...5, identity: 0
@@ -672,10 +709,9 @@ struct ContentView: View {
     }
 
     /// Color/white-balance-family controls, matching Apple Photos' own
-    /// "Color" group.
+    /// "Color" group. Just the rows — see `lightSection`'s comment.
     private var colorSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Color").font(.headline)
+        Group {
             EditSliderRow(
                 label: "Temperature", value: $document.editState.whiteBalanceTemperature,
                 range: 3500...9500, identity: 6500
@@ -719,18 +755,16 @@ struct ContentView: View {
     /// Just the monochrome-mode toggle, given its own small section —
     /// matches Apple Photos giving Black & White its own distinct panel
     /// entry rather than lumping a mode toggle in with continuous sliders.
+    /// Just the row — see `lightSection`'s comment.
     private var blackAndWhiteSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Black & White").font(.headline)
-            EditToggleRow(label: "Black & White", value: $document.editState.blackAndWhite)
-        }
+        EditToggleRow(label: "Black & White", value: $document.editState.blackAndWhite)
     }
 
     /// Vignette/Definition/Sharpen/Noise Reduction — the "finishing"
-    /// controls, matching Apple Photos' own Effects/Detail grouping.
+    /// controls, matching Apple Photos' own Effects/Detail grouping. Just
+    /// the rows — see `lightSection`'s comment.
     private var effectsSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Effects").font(.headline)
+        Group {
             EditSliderRow(
                 label: "Vignette", value: $document.editState.vignetteStrength,
                 range: -1...1, identity: 0
@@ -757,10 +791,10 @@ struct ContentView: View {
     /// Red-Eye: a "Fix Red-Eye" toggle button (arms the tap-to-place/tap-
     /// to-remove overlay), shared Size/Strength sliders (apply to every
     /// placed point at once — this app has no per-point sliders, matching
-    /// its established scope-cut pattern), and a "Clear All" button.
+    /// its established scope-cut pattern), and a "Clear All" button. Just
+    /// the rows — see `lightSection`'s comment.
     private var redEyeSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Red-Eye").font(.headline)
+        Group {
             Button {
                 isPlacingRedEyeCorrections.toggle()
                 if isPlacingRedEyeCorrections { isPickingWhiteBalance = false }
@@ -783,6 +817,89 @@ struct ContentView: View {
             }
             .disabled(document.editState.redEyePoints.isEmpty)
         }
+    }
+
+    /// Resets every Light/Color/Selective Color/B&W/Effects/Red-Eye field
+    /// to its own default — the SAME identity value each field's own
+    /// `EditSliderRow`/`EditToggleRow` already resets to individually via
+    /// its per-row Reset button, just all at once. Deliberately does NOT
+    /// touch crop/straighten/perspective/flip (those live in the Crop
+    /// tab, out of this button's scope, matching how the reference
+    /// screenshot's own "Reset Adjustments" is scoped to the Adjust panel
+    /// it's shown in) and does NOT clear placed Red-Eye correction points
+    /// (a separate, more destructive action with its own dedicated
+    /// "Clear All Red-Eye Corrections" button above) — this only resets
+    /// continuous adjustment VALUES.
+    private var isAdjustTabAtIdentity: Bool {
+        let state = document.editState
+        return state.exposureEV == 0
+            && state.brightness == 0
+            && state.brilliance == 0
+            && state.contrast == 0
+            && state.curvesHighlights == 0
+            && state.curvesShadows == 0
+            && state.blackPoint == 0
+            && state.levelsBlackPoint == 0
+            && state.levelsWhitePoint == 1
+            && state.levelsGamma == 1.0
+            && state.whiteBalanceTemperature == 6500
+            && state.whiteBalanceTint == 0
+            && state.hslHue == 0
+            && state.vibrance == 0
+            && state.hslSaturation == 0
+            && state.selectiveColorRange == 0.5
+            && SelectiveColorBand.allCases.allSatisfy { band in
+                selectiveColorHueBinding(for: band).wrappedValue == 0
+                    && selectiveColorSaturationBinding(for: band).wrappedValue == 0
+                    && selectiveColorLuminanceBinding(for: band).wrappedValue == 0
+            }
+            && !state.blackAndWhite
+            && state.vignetteStrength == 0
+            && state.vignetteRadius == 0.5
+            && state.definition == 0
+            && state.sharpness == 0
+            && state.noiseReduction == 0
+            && state.redEyeSize == 0.5
+            && state.redEyeStrength == 0.7
+    }
+
+    private var resetAdjustmentsButton: some View {
+        Button {
+            document.editState.exposureEV = 0
+            document.editState.brightness = 0
+            document.editState.brilliance = 0
+            document.editState.contrast = 0
+            document.editState.curvesHighlights = 0
+            document.editState.curvesShadows = 0
+            document.editState.blackPoint = 0
+            document.editState.levelsBlackPoint = 0
+            document.editState.levelsWhitePoint = 1
+            document.editState.levelsGamma = 1.0
+            document.editState.whiteBalanceTemperature = 6500
+            document.editState.whiteBalanceTint = 0
+            document.editState.hslHue = 0
+            document.editState.vibrance = 0
+            document.editState.hslSaturation = 0
+            document.editState.selectiveColorRange = 0.5
+            for band in SelectiveColorBand.allCases {
+                selectiveColorHueBinding(for: band).wrappedValue = 0
+                selectiveColorSaturationBinding(for: band).wrappedValue = 0
+                selectiveColorLuminanceBinding(for: band).wrappedValue = 0
+            }
+            document.editState.blackAndWhite = false
+            document.editState.vignetteStrength = 0
+            document.editState.vignetteRadius = 0.5
+            document.editState.definition = 0
+            document.editState.sharpness = 0
+            document.editState.noiseReduction = 0
+            document.editState.redEyeSize = 0.5
+            document.editState.redEyeStrength = 0.7
+        } label: {
+            Text("Reset Adjustments")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .disabled(isAdjustTabAtIdentity)
     }
 
     private var cropTabContent: some View {
@@ -834,12 +951,19 @@ struct ContentView: View {
     /// `EditorTab` (that's fixed to mirror Apple Photos' own tab bar, see
     /// `EditorTab`'s doc comment; Photos itself doesn't give this a
     /// separate top-level tab either), and NOT 24 simultaneous rows, which
-    /// wouldn't fit this panel's scale.
+    /// wouldn't fit this panel's scale. Just the rows — see
+    /// `lightSection`'s comment (spacing is now 14, from
+    /// `AdjustSectionContainer`, not this section's own former 8).
     private var selectiveColorSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Selective Color")
-                .font(.headline)
-            HStack(spacing: 10) {
+        Group {
+            // 22pt circles + 6pt spacing = 8*22 + 7*6 = 218pt — fits the
+            // sidebar's own MINIMUM width (260pt, ~228pt usable after
+            // horizontal padding) with ~10pt to spare. The original
+            // regression was 22pt circles at 10pt spacing (246pt, didn't
+            // fit); keeping the 22pt diameter the user asked for but at
+            // the tighter 6pt spacing recovers that size without
+            // reintroducing the overflow.
+            HStack(spacing: 6) {
                 ForEach(SelectiveColorBand.allCases, id: \.self) { band in
                     Button {
                         selectedSelectiveColorBand = band
@@ -855,6 +979,7 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .center)
             EditSliderRow(
                 label: "Range", value: $document.editState.selectiveColorRange,
                 range: 0...1, identity: 0.5
@@ -914,6 +1039,35 @@ struct ContentView: View {
     }
 }
 
+/// A collapsible Adjust-tab section — an icon + title + native disclosure
+/// chevron (`DisclosureGroup`'s own, not hand-drawn) that expands to a
+/// `VStack(spacing: 14)` of whatever rows `content` provides. Every
+/// section's own computed property (`lightSection`, `colorSection`, etc.)
+/// supplies only its rows; this supplies the shared header/collapse
+/// chrome — matches Apple Photos' own per-section header treatment.
+/// Plain SwiftUI (`DisclosureGroup` is a built-in view, no custom
+/// gesture/AppKit-interop code), unrelated to this sidebar's documented
+/// `NSScrollView`-probing history (see the "StableScrollInsets saga" in
+/// `PROGRESS.md`) — that was a hand-written `NSViewRepresentable`, this
+/// is not.
+private struct AdjustSectionContainer<Content: View>: View {
+    let icon: String
+    let title: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 14) {
+                content()
+            }
+            .padding(.top, 8)
+        } label: {
+            Label(title, systemImage: icon).font(.headline)
+        }
+    }
+}
+
 /// A single edit-adjustment control: label + live readout on one line, with
 /// a Reset button, and a full-width slider below — label-above-slider,
 /// matching Lightroom/Photos' sidebar inspector convention (as opposed to a
@@ -933,10 +1087,15 @@ private struct EditSliderRow: View {
                 Text(format(value))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
-                Button("Reset") {
+                Button {
                     value = identity
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
                 .disabled(value == identity)
+                .accessibilityLabel("Reset \(label)")
             }
             Slider(value: $value, in: range)
         }

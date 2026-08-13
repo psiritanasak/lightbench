@@ -1097,7 +1097,8 @@ private struct EditSliderRow: View {
                 .disabled(value == identity)
                 .accessibilityLabel("Reset \(label)")
             }
-            Slider(value: $value, in: range)
+            ThinSlider(value: $value, range: range)
+                .accessibilityLabel(label)
         }
     }
 }

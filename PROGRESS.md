@@ -2442,19 +2442,77 @@ flags, collections.
 - 2 commits (`CatalogModel` selection state; checkbox UI + the
   badge-position bug fix + `ContentView` wiring).
 
+### Editor Adjust-tab sidebar restyle — Apple Photos look (complete, verified live)
+- User shared a screenshot of Apple Photos' own Adjust panel and asked
+  for a similar look. Scoped down via AskUserQuestion to VISUAL RESTYLE
+  ONLY (icons, collapsible sections, "ADJUST" header, a "Reset
+  Adjustments" button, disclosure chevrons) — explicitly deferred: the
+  reference's per-section live mini-preview filmstrips (a real rendering
+  feature), per-section "AUTO" buttons (needs a real auto-adjust
+  algorithm), and per-section enable/disable toggle circles (new
+  behavior). Zero `EditState`/`EditPipeline`/shader changes.
+- `Sources/UI/ContentView.swift`: new `AdjustSectionContainer<Content:
+  View>` wraps each of the 6 existing Adjust-tab sections (Light, Color,
+  Selective Color, Black & White, Effects, Red-Eye) in a native
+  `DisclosureGroup` with an icon+title header — the app's first use of
+  `DisclosureGroup`, deliberately NOT touching `Slider` itself (this
+  sidebar has a documented painful history, the "StableScrollInsets
+  saga," of custom AppKit-adjacent interaction code silently breaking
+  slider click/drag). Each section's inner rows kept their exact
+  pre-existing bindings/ranges/identities/formats — only the outer shell
+  changed. All 6 sections default COLLAPSED (`@State ... = false` each,
+  one bool per section, matching this file's existing convention) per
+  explicit user request mid-session, overriding the original plan's
+  `true` default.
+- `EditSliderRow`'s per-row Reset control changed from a text "Reset"
+  button to an icon-only `arrow.uturn.backward` button (same
+  `.disabled(value == identity)` behavior); a new
+  `resetAdjustmentsButton` + `isAdjustTabAtIdentity` at the bottom of the
+  tab reset every Light/Color/White-Balance/HSL/Selective-Color/
+  B&W/Vignette/Definition/Sharpen/Noise-Reduction/Red-Eye field back to
+  its identity in one action — deliberately excludes `redEyePoints` (has
+  its own "Clear All" button) and every Crop-tab field (crop insets,
+  straighten, perspective, flip — out of scope, has its own separate
+  `resetCropTab()`).
+- **A real, pre-existing bug re-surfaced by making sections
+  collapsible, caught live by the user (not the reviewer)**: the
+  Selective Color section's 8-swatch band-picker `HStack` (originally
+  22pt circles / 10pt spacing ≈ 246pt) exceeded the sidebar's usable
+  width at its 260pt minimum (~228pt after padding), forcing the whole
+  sidebar wider whenever that section was expanded — invisible before
+  sections could collapse/expand (nothing to compare width against).
+  Fixed in two live-tested passes: first shrunk to 18pt/6pt (186pt) to
+  stop the overflow; user then asked for the swatches bigger again, so
+  settled on 22pt circles at the tighter 6pt spacing (218pt, still under
+  the ~228pt usable width) plus `.frame(maxWidth: .infinity, alignment:
+  .center)` to center the row (was left-aligned with dead trailing
+  space).
+- Reviewer APPROVE on first pass — independently confirmed every
+  section's rows kept their exact original bindings (no transposition),
+  the Reset Adjustments field list is complete and correctly excludes
+  `redEyePoints`/Crop-tab fields, and the 218pt swatch-row arithmetic
+  genuinely fits the sidebar's minimum width. One non-blocking nit
+  (the new icon-only per-row Reset button had no `accessibilityLabel`,
+  a minor VoiceOver regression from the old text button) — fixed before
+  commit, not deferred.
+- No new tests — pure UI restyling of already-bound/already-tested
+  fields, matching this project's established precedent (the earlier
+  "Adjust tab regrouping into labeled sections" restyle). 284/284 tests
+  unchanged. 1 commit.
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus a user-requested
-follow-up (folder-mirrored nested collections) — see their own sections
-above. **Phase 5 (Presets + export) has STARTED**: slice 1, batch export
-(including the entitlement-fix debugging saga and 2 reviewer-caught
-bugs), AND its immediate follow-up, selecting individual photos for
-export (including a live-caught checkbox-positioning bug), are BOTH
-DONE — see their own sections above. Both reviewer-APPROVED. 284 tests
-passing, app fully functional.
+**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus two user-requested
+follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
+sidebar restyle) — see their own sections above. **Phase 5 (Presets +
+export) has STARTED**: slice 1, batch export (including the entitlement-fix
+debugging saga and 2 reviewer-caught bugs), AND its immediate follow-up,
+selecting individual photos for export (including a live-caught
+checkbox-positioning bug), are BOTH DONE — see their own sections above.
+Both reviewer-APPROVED. 284 tests passing, app fully functional.
 
 **Two real, unfixed issues surfaced live while verifying batch export —
 both explicitly deferred to their own future sessions, not yet

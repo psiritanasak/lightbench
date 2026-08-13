@@ -191,6 +191,26 @@ Edits are stored as parameter sets and rendered live on the GPU.
    `EditPipeline` entirely — a Phase 4 gap), and the Editor's on-screen
    rendering looks brighter/less saturated than Preview.app (a
    color-management question in `ImageRenderer`, not export).
+
+   **Post-Phase-5 follow-up (shipped, outside the original roadmap
+   scope): Editor Adjust-tab sidebar restyle to match Apple Photos'
+   Adjust panel.** Visual-restyle-only, confirmed with the user up front
+   (deferred: per-section live preview filmstrips, AUTO buttons,
+   per-section enable toggles — all real new features, not styling).
+   `Sources/UI/ContentView.swift`'s 6 Adjust-tab sections (Light, Color,
+   Selective Color, Black & White, Effects, Red-Eye) are now wrapped in
+   a new `AdjustSectionContainer` (the app's first `DisclosureGroup`),
+   collapsible with an icon header, all collapsed by default; a new
+   `resetAdjustmentsButton` resets every Adjust-tab field (not
+   Crop-tab fields) to identity in one action; `EditSliderRow`'s
+   per-row reset became an icon-only button. **A real, pre-existing bug
+   re-surfaced by making sections collapsible, caught live by the user**:
+   the Selective Color band-swatch row was wide enough to force the
+   whole sidebar wider once expanded — invisible before sections could
+   collapse/expand, nothing to compare width against; fixed by resizing/
+   re-centering the swatch row to fit the sidebar's minimum width.
+   Zero `EditState`/`EditPipeline` changes. Reviewer APPROVE on first
+   pass (one non-blocking accessibility nit, fixed before commit).
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases
 

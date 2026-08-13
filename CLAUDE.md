@@ -248,6 +248,34 @@ Edits are stored as parameter sets and rendered live on the GPU.
    Live-verified against Preview.app on multiple photos, no
    over-correction. 300 tests unchanged (live-compositor-only artifact,
    not unit-testable, same category as the y-flip/crop-tiling bugs).
+
+   **Post-Phase-5 follow-up #4 (shipped): Library thumbnails now reflect
+   saved edits.** `ThumbnailGenerator` was pure ImageIO and never built a
+   `CIImage`, so `EditPipeline` never ran; `CatalogModel`'s
+   `ThumbnailCache` had no invalidation either. Added an `EditState`-aware
+   overload that runs `EditPipeline` on the ALREADY-SMALL, EXIF-oriented
+   ImageIO thumbnail (not a second full-res decode — pipeline geometry is
+   extent-relative, so this is proportionally correct) via a `CIContext`
+   using the app's own `extendedLinearSRGB`/`RGBAh` working space —
+   matching `ImageRenderer`/`PhotoExporter`/`WhiteBalanceSolver`, a mistake
+   the reviewer caught on the first pass (an earlier draft used a bare
+   `CIContext()`, wrongly citing `HistogramComputer` as precedent).
+   `ImageDocumentModel` gained `onSidecarSaved`, wired in `ContentView` to
+   `CatalogModel.invalidateThumbnail` — `LibraryGridView` is torn down and
+   rebuilt on every Editor↔Library switch, so cache invalidation alone (no
+   live-reactivity machinery) is enough for the next visit to show the
+   edit. **Two real bugs, one reviewer-caught, one live-caught by the
+   user**: (1, reviewer) `ThumbnailCache.invalidate`'s `Task.cancel()` was
+   cosmetic (the decode never checks `isCancelled`), so a slow
+   pre-invalidation decode could finish after a newer one and silently
+   overwrite the cache with stale data — fixed with a per-path generation
+   counter, not cancellation. (2, live) Undo then immediately switching to
+   Library didn't update the thumbnail (the ~1s debounced sidecar save
+   hadn't landed yet) — fixed by flushing the pending save
+   (`flushPendingSidecarSave`, widened from `private`) on every
+   Editor→Library transition, not just on switching to a different photo.
+   Reviewer: FIX FIRST (missing working color space; the cache race) →
+   both fixed → APPROVE. 303 tests (3 new).
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases
 

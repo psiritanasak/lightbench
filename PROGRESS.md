@@ -2623,62 +2623,143 @@ flags, collections.
   match, no over-correction. Closes out this deferred item — see updated
   "Exact next step" below. 1 commit.
 
+### Library thumbnails reflect edits — FIXED (complete, verified live)
+- The other long-tracked deferred item from batch export's own
+  verification: Library grid thumbnails always showed a photo's ORIGINAL
+  pixels, even after real, saved edits — `ThumbnailGenerator` was pure
+  ImageIO (`CGImageSourceCreateThumbnailAtIndex`), decoding straight to a
+  small `CGImage` and never building a `CIImage`, so `EditPipeline` never
+  ran; even if it had, `CatalogModel`'s `ThumbnailCache` actor had no
+  invalidation, so a stale thumbnail would never refresh.
+- `Sources/Rendering/ThumbnailGenerator.swift` gained a second overload,
+  `thumbnail(for:maxPixelSize:editState:)`: reuses the EXISTING fast
+  ImageIO thumbnail (already small, already EXIF-oriented) as
+  `EditPipeline`'s input rather than a second full-res decode — correct
+  because the pipeline's geometric stages (crop, straighten, vignette/
+  sharpen radius) already derive from the image's own current extent, so
+  they scale proportionally. `editState == .identity` (the common,
+  unedited case) takes a fast path — byte-identical to the old behavior,
+  zero extra cost. Renders via a new `CIContext` with the app's own
+  `extendedLinearSRGB` working space and `RGBAh` format — matching
+  `ImageRenderer`/`PhotoExporter`/`WhiteBalanceSolver` exactly, not a
+  default/untagged context (a mistake the reviewer caught on the first
+  pass — see below).
+- `Sources/UI/CatalogModel.swift`'s `ThumbnailCache.thumbnail(for:)` now
+  takes a `Photo` (was a bare path string) and loads its saved
+  `EditState` via the already-existing `PhotoExporter.loadEditState(for:)`
+  on a cache MISS only — a cache HIT still short-circuits before any
+  sidecar read, so repeat-scroll performance is unchanged. New
+  `invalidate(path:)` drops the cache entry; `CatalogModel` gained
+  `invalidateThumbnail(for:)`.
+- `Sources/UI/ImageDocumentModel.swift` gained `onSidecarSaved: ((URL) ->
+  Void)?`, fired only after a REAL successful sidecar write (not a
+  decline/skip/error). `Sources/UI/ContentView.swift` wires it to
+  `catalog.invalidateThumbnail` — the two models are otherwise fully
+  decoupled siblings, both owned by `PhotoAppApp`. Since
+  `LibraryGridView` is torn down and freshly recreated on every
+  Editor↔Library switch (a genuine `if/else` branch, confirmed directly,
+  not assumed), each cell's `.task(id:)` naturally re-fires on return —
+  so invalidating the cache on save, without any live-reactivity-while-
+  visible machinery, is sufficient for the thumbnail to update by the
+  next visit.
+- **A real bug caught live by the user** (not the reviewer): editing a
+  photo via Undo, then immediately switching to the Library, didn't
+  update the thumbnail — had to do something else (like open another
+  photo) first. Root cause: sidecar saves are debounced ~1s
+  (`scheduleSidecarSave`); switching to Library didn't flush a pending
+  save the way switching to a DIFFERENT photo already did (via the
+  pre-existing `flushPendingSidecarSave()`, previously `private`). Fixed
+  by widening that method's access and calling it from a new
+  `.onChange(of: showLibrary)` handler in `ContentView` whenever the user
+  leaves the Editor for the Library — confirmed fixed live afterward.
+- **Reviewer's first pass was FIX FIRST — two real issues**: (1) the new
+  `CIContext()` had zero options, omitting the working color space
+  `EditPipeline`'s math actually needs — the doc comment's claim that
+  this "mirrors `HistogramComputer`'s precedent" was backwards (Histogram
+  never runs `EditPipeline`; `WhiteBalanceSolver`, which DOES run
+  pipeline color math off-main in a small plain `CIContext`, was the
+  correct, unfollowed precedent) — fixed by matching
+  `ImageRenderer`/`PhotoExporter`/`WhiteBalanceSolver`'s
+  `extendedLinearSRGB`/`RGBAh` exactly. (2) `ThumbnailCache.invalidate`'s
+  `Task.cancel()` was purely cosmetic — the task body is a plain
+  synchronous decode that never checks `Task.isCancelled` — so a slow
+  decode started BEFORE an invalidation could still finish AFTER a newer
+  one and silently overwrite the cache with stale data; fixed with a
+  per-path monotonic generation counter (each request captures its
+  generation before decoding, only touches shared cache/`inFlight` state
+  on completion if nothing invalidated that path in the meantime). Both
+  fixed, re-reviewed (reviewer hand-traced the exact race against both
+  orderings), APPROVE.
+- No new tests for the cache-invalidation/flush plumbing (actor/async
+  UI-glue state, matching this project's established precedent for
+  `CatalogModel`'s other mutators). 3 new tests extend the existing
+  `ThumbnailGeneratorTests.swift` for the edit-aware overload (identity
+  fast path, a structural `r==g==b` proof the pipeline genuinely ran via
+  Black & White, nonexistent-file `nil`). 303 tests total. 1 commit.
+- **Live-verified by the user**: editing then returning to Library shows
+  the edit; unedited photos unaffected; Undo→immediate-switch now updates
+  correctly after the flush fix; no scroll/performance regression
+  reported. Closes out this deferred item.
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus four user-requested
+**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus five user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
-sidebar restyle; the custom thin slider; the Editor-vs-Preview color-fix)
-— see their own sections above. **Phase 5 (Presets + export) has
-STARTED**: slice 1, batch export (including the entitlement-fix debugging
-saga and 2 reviewer-caught bugs), AND its immediate follow-up, selecting
-individual photos for export (including a live-caught checkbox-positioning
-bug), are BOTH DONE — see their own sections above. Both reviewer-APPROVED.
-300 tests passing, app fully functional.
+sidebar restyle; the custom thin slider; the Editor-vs-Preview color-fix;
+Library thumbnails reflecting edits) — see their own sections above.
+**Phase 5 (Presets + export) has STARTED**: slice 1, batch export
+(including the entitlement-fix debugging saga and 2 reviewer-caught bugs),
+AND its immediate follow-up, selecting individual photos for export
+(including a live-caught checkbox-positioning bug), are BOTH DONE — see
+their own sections above. Both reviewer-APPROVED. 303 tests passing, app
+fully functional.
 
-**One real, unfixed issue remains from batch export's own verification,
-still explicitly deferred to a future session, not yet started**: Library
-thumbnails don't reflect edits (`ThumbnailGenerator` reads straight from
-the source file, bypassing `EditPipeline`/the sidecar entirely — a real,
-by-design gap since Phase 4 slice 2, never wired up). The other issue
-recorded alongside it (the Editor-vs-Preview color/brightness discrepancy)
-is now FIXED — see its own section above.
+**Both real issues surfaced live during batch export's own verification
+are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and
+Library thumbnails not reflecting edits, each with its own section above.
+No open correctness items remain from that batch.
 
-**Next: options** (ask the user which, don't guess): (1) make Library
-thumbnails reflect edits (now the sole remaining open correctness item);
-(2) Phase 5 slice 2 — presets (save/apply named edit-state presets); (3)
-Library polish — sort/filter/search (by rating/flag/collection/folder),
-removing photos, detecting missing files, renaming/deleting collections;
-(4) hardening the reviewer's non-blocking note from photo selection —
-`selectedPhotoIDs` isn't pruned on every `refresh()`, only on filter change
-(cosmetic toolbar-count overstatement only, the actual exported set is
-always correct); (5) hardening the reviewer's non-blocking note from Batch
+**Next: options** (ask the user which, don't guess): (1) Phase 5 slice 2 —
+presets (save/apply named edit-state presets); (2) Library polish —
+sort/filter/search (by rating/flag/collection/folder), removing photos,
+detecting missing files, renaming/deleting collections; (3) hardening the
+reviewer's non-blocking note from photo selection — `selectedPhotoIDs`
+isn't pruned on every `refresh()`, only on filter change (cosmetic
+toolbar-count overstatement only, the actual exported set is always
+correct); (4) hardening the reviewer's non-blocking note from Batch
 export — `ExportOptionsView`'s own Export button isn't gated on
-`isExporting`, a low-probability double-click race; (6) hardening the
+`isExporting`, a low-probability double-click race; (5) hardening the
 reviewer's non-blocking notes from folder-mirrored collections — no index
 on `collection.folderPath`, no symlink-loop guard in
 `PhotoImporter.scanNode`, `findOrCreateFolderCollection` silently ignoring
-a mismatched `parentID` on re-import from a different root; (7) hardening
+a mismatched `parentID` on re-import from a different root; (6) hardening
 the reviewer's non-blocking note, generalized across ALL of
 `CatalogModel`'s mutations — overlapping `Task.detached` + `refresh()`
 calls with no cancellation/sequencing can transiently show stale data in
-the grid (self-heals, not a persisted-data bug); (8) `collection.name`
+the grid (self-heals, not a persisted-data bug); (7) `collection.name`
 having no `UNIQUE` constraint, so rapid double-submits of "New
-Collection…" could create duplicates; (9) revisit the still-deferred
+Collection…" could create duplicates; (8) revisit the still-deferred
 sidebar content-shift-on-scroll cosmetic bug (see its own section above,
-including the "Lesson recorded" note); (10) the reviewer's non-blocking
+including the "Lesson recorded" note); (9) the reviewer's non-blocking
 note from the Edit-menu work — consider suppressing/redesigning the
-default ⌘N "New Window" behavior before any multi-window UI is added; (11)
+default ⌘N "New Window" behavior before any multi-window UI is added; (10)
 the reviewer's non-blocking note from the sidecar-persistence work —
 investigate the one unexplained "you don't have permission" flake further
-if it recurs; (12) the reviewer's non-blocking note from Library slice 2 —
+if it recurs; (11) the reviewer's non-blocking note from Library slice 2 —
 `activateKnownFolders` keys `activeFolders` by the bookmark's original
 path, so a folder renamed/moved between sessions could get its scope
-started twice on re-import; (13) the reviewer's non-blocking suggestion
+started twice on re-import; (12) the reviewer's non-blocking suggestion
 from the color-space fix — a debug-only `assert` already covers the
-`CAMetalLayer` cast, no further action needed unless it ever fires.
+`CAMetalLayer` cast, no further action needed unless it ever fires; (13)
+the reviewer's non-blocking, narrow-edge-case note from the thumbnail fix
+— `invalidateThumbnail(for:)` keys off `url.path` and could silently no-op
+if a differently-normalized-but-equivalent path string (Unicode NFC/NFD,
+symlink resolution) reached it, though every current call site round-trips
+through the same `Photo.path`/`URL(fileURLWithPath:)` pattern so this
+isn't reachable today.
 Lens distortion correction and RAW support (Phase 6, explicitly declined
 for this session per `CLAUDE.md`'s "do not start early") remain explicitly
 OUT of scope unless the user asks for them specifically.

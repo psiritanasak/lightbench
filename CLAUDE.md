@@ -114,12 +114,13 @@ Edits are stored as parameter sets and rendered live on the GPU.
    tag is a concrete value; the sidebar exposes a computed
    `Binding<LibraryFilter?>` (still required by `List`'s own API) that
    coerces the framework's "nothing selected" `nil` back to `.allPhotos`.
-   Reviewer confirmed this is the sound, standard fix. Sort/filter/search,
-   removing photos from the catalog, detecting files deleted on disk
-   since import, a three-state pick/reject model, keyboard shortcuts for
-   rating/flagging, and renaming/deleting collections are all NOT
-   started — candidates for a future session, not part of Phase 4's
-   scope.
+   Reviewer confirmed this is the sound, standard fix. Sort/filter/search
+   shipped later as a Post-Phase-5 follow-up (see below — kept out of
+   Phase 4's own scope at the time). Removing photos from the catalog,
+   detecting files deleted on disk since import, a three-state pick/reject
+   model, keyboard shortcuts for rating/flagging, and renaming/deleting
+   collections are all still NOT started — candidates for a future
+   session.
 
    **Post-Phase-4 follow-up (shipped, outside the original roadmap
    scope): folder-mirrored nested collections.** The user organizes
@@ -338,6 +339,28 @@ Edits are stored as parameter sets and rendered live on the GPU.
    flip, confirmed the crop-bleed fix's completeness for any zoom, and
    confirmed the build compiles clean under this project's real Swift 6
    settings. 337 tests (18 new).
+
+   **Post-Phase-5 follow-up #7 (shipped): Library sort/filter/search —
+   Library polish, slice 1.** Scoped down from the broader "Library
+   polish" backlog item (removing photos, detecting missing files,
+   renaming/deleting collections are still deferred). New
+   `Sources/Catalog/LibraryFilterSort.swift`: a pure, unit-tested
+   `LibraryFilterSort.apply` (sort: oldest/newest/rating/name;
+   minimum-rating threshold; flagged-only; filename search) applied
+   entirely IN-MEMORY over the already-loaded `photos` array — not a new
+   DB query, avoiding what would have been this codebase's first GRDB
+   `LIKE` query and a DB round-trip per keystroke, composing on top of
+   the pre-existing `selectedFilter` Collection/Folder selector without
+   touching it. Default sort matches the existing DB order exactly
+   (reviewer-verified). `LibraryGridView` gained a filter bar and two
+   distinct empty states (true-empty library vs. filtered-to-nothing).
+   **Two live-caught follow-ups**: re-sorting caused a visible delay
+   before thumbnails reappeared (`LazyVGrid` only keeps a limited
+   instantiated window, so re-sorting scrambles which photos land in it,
+   forcing fresh decodes for previously off-screen ones) — fixed by
+   bumping `ThumbnailCache` from 64MB (~270 thumbnails) to 256MB (~1165)
+   and adding a small loading spinner to the placeholder. Reviewer
+   APPROVE on first pass. 350 tests (13 new).
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases
 

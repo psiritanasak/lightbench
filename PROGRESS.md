@@ -2877,25 +2877,90 @@ flags, collections.
   a live perf check on a large image if scrolling ever feels janky there.
 - 337 tests total (18 new). 1 commit.
 
+### Library sort/filter/search (complete, verified live) — Library polish, slice 1
+- Scoped down (AskUserQuestion) from the broader "Library polish" backlog
+  item to just sort/filter/search this session — removing photos,
+  detecting missing files, and renaming/deleting collections are still
+  explicitly deferred (not started).
+- NEW `Sources/Catalog/LibraryFilterSort.swift`: `LibrarySortOption`
+  (`.dateOldest` default/`.dateNewest`/`.ratingHighToLow`/`.nameAZ`) +
+  pure `LibraryFilterSort.apply(to:sort:minimumRating:flaggedOnly:
+  searchText:)`. **Design decision, reviewer-confirmed sound**: entirely
+  in-memory (a view-level refinement over the already-loaded `photos`
+  array), NOT a new DB query — a personal library is at most a few
+  thousand rows already fully materialized, so this avoids what would
+  have been this codebase's first GRDB `LIKE` query and a DB round-trip
+  per keystroke, and composes on top of the pre-existing `selectedFilter`
+  (Collection/Folder) source-set selector without touching it or
+  `refresh()`. `.dateOldest` default deliberately matches
+  `CatalogDatabase.allPhotos()`/`photos(inCollection:)`'s existing
+  `ORDER BY importedAt, id` ascending exactly (reviewer verified: `Array.
+  sort()`'s stability since Swift 5 plus the DB's own tie-break makes
+  this functionally identical) — nothing changes for anyone not touching
+  the new controls. Minimum rating is a threshold ("N+ stars"), not exact
+  match; name sort uses `localizedStandardCompare` for Finder-style
+  natural numeric ordering ("Photo 2" before "Photo 10").
+- `Sources/UI/CatalogModel.swift`: 4 new `@Published` fields
+  (`sortOption`, `minimumRating`, `flaggedOnly`, `searchText`,
+  deliberately NOT reset on Collection/Folder switch — persists while
+  browsing) and a computed `displayedPhotos` applying the filter fresh on
+  every access (reviewer flagged, non-blocking: this means ANY unrelated
+  `@Published` mutation — e.g. a rating change's `refresh()` — also
+  re-filters the whole array, and it's read twice per `LibraryGridView`
+  body pass; cheap enough at this project's target scale, not worth
+  memoizing yet). New `clearLibraryFilters()`.
+- `Sources/UI/LibraryGridView.swift`: `ForEach(catalog.photos)` →
+  `ForEach(catalog.displayedPhotos)`; new filter bar (sort/rating
+  pickers, flag toggle, search field) above the grid. **Two distinct
+  empty states, reviewer-verified no gap**: true-empty library (the
+  pre-existing "Import Folder…" state, byte-unchanged) vs. photos
+  existing but none matching the current filter (new "No photos match" +
+  "Clear Filters" button).
+- **Two live-caught follow-up fixes** (not in the original plan): after
+  shipping, the user reported a noticeable delay before thumbnails
+  reappeared after re-sorting — `LazyVGrid` only keeps a limited window
+  of cells instantiated, so re-sorting scrambles which photos land in
+  that window, and previously off-screen/evicted photos need a fresh
+  decode. Fixed with two remediations together: `ThumbnailCache`'s
+  `totalCostLimit` bumped from 64MB (~270 thumbnails) to 256MB (~1165,
+  reviewer verified the arithmetic and that 256MB is a reasonable
+  commitment), and a small `ProgressView` added to the loading
+  placeholder (reviewer confirmed it reports the same fixed 140×140 size
+  as the loaded image, so it does NOT reintroduce the documented
+  `.aspectRatio(contentMode:.fill)`-reports-native-size bug that shaped
+  this same cell's sizing before). User confirmed this "seems better."
+- Reviewer APPROVE on first pass — independently verified the DB-order-
+  match claim against the actual `CatalogDatabase` code, spot-checked the
+  filter/sort logic, confirmed the two-empty-states logic has no gap, and
+  confirmed the `ProgressView` addition's sizing is safe. Two
+  non-blocking, cosmetic-only notes (tie-break ordering undocumented;
+  `displayedPhotos` evaluated twice per body pass), neither requiring a
+  fix.
+- 350 tests total (13 new). 1 commit.
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check. Non-blocking
 reviewer note from zoom/pan: `handleScrollZoom`'s Side-by-Side path
 recomputes `EditPipeline.apply` per scroll tick — worth a live perf check
 on a large image if Side-by-Side scrolling ever feels janky (see its own
-section above for detail).
+section above for detail). Non-blocking reviewer notes from Library sort/
+filter/search: `dateNewest`/`ratingHighToLow` tie-break ordering is an
+undocumented stable-sort artifact (harmless); `displayedPhotos` recomputes
+on every access, including from unrelated `@Published` mutations, cheap at
+this project's target scale but not memoized.
 
 ## Exact next step
-**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus seven user-requested
+**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus eight user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
 sidebar restyle; the custom thin slider; the Editor-vs-Preview color-fix;
-Library thumbnails reflecting edits; Compare mode; zoom and pan) — see
-their own sections above. **Phase 5 (Presets + export) has STARTED**:
-slice 1, batch export (including the entitlement-fix debugging saga and 2
-reviewer-caught bugs), AND its immediate follow-up, selecting individual
-photos for export (including a live-caught checkbox-positioning bug), are
-BOTH DONE — see their own sections above. Both reviewer-APPROVED. 337
-tests passing, app fully functional.
+Library thumbnails reflecting edits; Compare mode; zoom and pan; Library
+sort/filter/search) — see their own sections above. **Phase 5 (Presets +
+export) has STARTED**: slice 1, batch export (including the entitlement-fix
+debugging saga and 2 reviewer-caught bugs), AND its immediate follow-up,
+selecting individual photos for export (including a live-caught
+checkbox-positioning bug), are BOTH DONE — see their own sections above.
+Both reviewer-APPROVED. 350 tests passing, app fully functional.
 
 **Both real issues surfaced live during batch export's own verification
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and
@@ -2903,9 +2968,10 @@ Library thumbnails not reflecting edits, each with its own section above.
 No open correctness items remain from that batch.
 
 **Next: options** (ask the user which, don't guess): (1) Phase 5 slice 2 —
-presets (save/apply named edit-state presets); (2) Library polish —
-sort/filter/search (by rating/flag/collection/folder), removing photos,
-detecting missing files, renaming/deleting collections; (3) hardening the
+presets (save/apply named edit-state presets); (2) Library polish,
+remaining slices — removing photos from the catalog, detecting files
+deleted on disk since import, renaming/deleting collections (sort/filter/
+search, the first slice, is DONE — see its own section above); (3) hardening the
 reviewer's non-blocking note from photo selection — `selectedPhotoIDs`
 isn't pruned on every `refresh()`, only on filter change (cosmetic
 toolbar-count overstatement only, the actual exported set is always

@@ -517,6 +517,69 @@ struct EditState: Equatable, Codable {
 
     /// The no-op edit state: every adjustment at its default (identity) value.
     static let identity = EditState()
+
+    /// The "original" side for the Compare feature: the CURRENT geometry
+    /// (crop/straighten/perspective/flip) is KEPT — copied via `var s =
+    /// self` below — so both compared images share one extent and align
+    /// pixel-for-pixel, while every color/tone adjustment is reset to its
+    /// identity value. Same field list as `ContentView`'s
+    /// `resetAdjustmentsButton`/`isAdjustTabAtIdentity`, PLUS clearing
+    /// `redEyePoints` — a real difference, not an oversight:
+    /// `EditPipeline`'s red-eye stage is active whenever `redEyePoints`
+    /// is non-empty AND `redEyeStrength != 0`, and the identity/default
+    /// `redEyeStrength` (0.7) is non-zero, so merely resetting the
+    /// sliders (as the Reset Adjustments button intentionally does,
+    /// leaving user-placed points alone) would still show red-eye
+    /// correction applied on the "original" side — wrong for a view
+    /// whose whole point is "zero retouching." This makes
+    /// `comparisonOriginal()` a superset of `resetAdjustmentsButton`'s
+    /// reset, not identical to it.
+    func comparisonOriginal() -> EditState {
+        var s = self
+        // light/tone
+        s.exposureEV = 0
+        s.brightness = 0
+        s.brilliance = 0
+        s.contrast = 0
+        s.curvesHighlights = 0
+        s.curvesShadows = 0
+        s.blackPoint = 0
+        s.levelsBlackPoint = 0
+        s.levelsWhitePoint = 1
+        s.levelsGamma = 1.0
+        // white balance
+        s.whiteBalanceTemperature = 6500
+        s.whiteBalanceTint = 0
+        // hsl / color
+        s.hslHue = 0
+        s.vibrance = 0
+        s.hslSaturation = 0
+        // selective color (range + all 8 bands' hue/saturation/luminance)
+        s.selectiveColorRange = 0.5
+        s.redHue = 0; s.redSaturation = 0; s.redLuminance = 0
+        s.orangeHue = 0; s.orangeSaturation = 0; s.orangeLuminance = 0
+        s.yellowHue = 0; s.yellowSaturation = 0; s.yellowLuminance = 0
+        s.greenHue = 0; s.greenSaturation = 0; s.greenLuminance = 0
+        s.aquaHue = 0; s.aquaSaturation = 0; s.aquaLuminance = 0
+        s.blueHue = 0; s.blueSaturation = 0; s.blueLuminance = 0
+        s.purpleHue = 0; s.purpleSaturation = 0; s.purpleLuminance = 0
+        s.magentaHue = 0; s.magentaSaturation = 0; s.magentaLuminance = 0
+        // black & white + effects
+        s.blackAndWhite = false
+        s.vignetteStrength = 0
+        s.vignetteRadius = 0.5
+        s.definition = 0
+        s.sharpness = 0
+        s.noiseReduction = 0
+        // red-eye: reset sliders AND clear points (see doc comment above)
+        s.redEyeSize = 0.5
+        s.redEyeStrength = 0.7
+        s.redEyePoints.removeAll()
+        // geometry (cropInset*, straightenAngle, verticalPerspective,
+        // horizontalPerspective, flipHorizontal, flipVertical) is left
+        // untouched — inherited from `self` via `var s = self` above.
+        return s
+    }
 }
 
 // MARK: - Custom decoding (schema-tolerant)

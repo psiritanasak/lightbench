@@ -78,6 +78,19 @@ struct ContentView: View {
     /// toggled off or the user leaves the Adjust tab.
     @State private var isPlacingRedEyeCorrections = false
 
+    /// Compare feature state — Off / Side by Side / Split (before/after).
+    /// Presentation-only, same reasoning as `selectedTab`/`selectedAspect`:
+    /// `EditState`/`EditPipeline` are untouched, this only controls what
+    /// `MetalImageView` is asked to render (see `compareOriginalEditState`
+    /// and the `compare:` argument at its call site below). Mutually
+    /// exclusive with crop-editing/WB-picking/red-eye-placement — see the
+    /// toolbar `Menu`'s `.disabled(...)` and the `.onChange` handlers below.
+    @State private var compareMode: CompareViewMode = .off
+    /// Only meaningful while `compareMode == .split`.
+    @State private var splitOrientation: SplitOrientation = .vertical
+    /// The Split divider's position, 0...1, driven by `CompareDividerOverlay`.
+    @State private var splitPosition: Double = 0.5
+
     /// Which Selective Color band's Hue/Saturation/Luminance sliders are
     /// currently shown. Presentation-only, same reasoning as `selectedTab`/
     /// `selectedAspect` — `EditState` holds all 8 bands' values at once
@@ -206,6 +219,32 @@ struct ContentView: View {
         state.cropInsetLeft = 0
         state.cropInsetRight = 0
         return state
+    }
+
+    /// The Compare feature's "original" side — same presentation-only-
+    /// substitution pattern as `displayEditState` above, `document.editState`
+    /// remains the single source of truth. See `EditState.comparisonOriginal()`
+    /// for exactly what it resets vs. keeps.
+    private var compareOriginalEditState: EditState { document.editState.comparisonOriginal() }
+
+    /// `nil` when Compare is off (the default, unchanged single-image
+    /// render path); otherwise bundles everything `ImageRenderer` needs.
+    /// Compare only ever runs on the Adjust tab (see the toolbar `Menu`'s
+    /// `.disabled(...)` and the tab-change reset below), so
+    /// `compareOriginalEditState`/`displayEditState` are never substituting
+    /// for crop-editing mode at the same time.
+    private var compareRenderConfig: CompareRenderConfig? {
+        switch compareMode {
+        case .off:
+            return nil
+        case .sideBySide:
+            return CompareRenderConfig(originalState: compareOriginalEditState, mode: .sideBySide)
+        case .split:
+            return CompareRenderConfig(
+                originalState: compareOriginalEditState,
+                mode: .split(orientation: splitOrientation, position: splitPosition)
+            )
+        }
     }
 
     var body: some View {
@@ -351,14 +390,20 @@ struct ContentView: View {
             customAspectRatio = nil
             isPickingWhiteBalance = false
             isPlacingRedEyeCorrections = false
+            compareMode = .off
+            splitOrientation = .vertical
+            splitPosition = 0.5
         }
         // Leaving the Adjust tab disarms both point-interaction modes —
         // neither has meaning while cropping (their overlays are gated on
-        // `!isCroppingActive` anyway) or in the other, not-yet-built tabs.
+        // `!isCroppingActive` anyway) or in the other, not-yet-built tabs —
+        // and Compare, which only ever runs on the Adjust tab (see the
+        // toolbar Menu's `.disabled(...)`).
         .onChange(of: selectedTab) { _, newTab in
             if newTab != .adjust {
                 isPickingWhiteBalance = false
                 isPlacingRedEyeCorrections = false
+                compareMode = .off
             }
         }
         .toolbar {
@@ -429,6 +474,39 @@ struct ContentView: View {
                 }
                 .disabled(document.currentImage == nil || document.editState == .identity)
             }
+            ToolbarItem(placement: .automatic) {
+                Menu {
+                    Picker("Compare", selection: $compareMode) {
+                        Text("Off").tag(CompareViewMode.off)
+                        Text("Side by Side").tag(CompareViewMode.sideBySide)
+                        Text("Split (Before/After)").tag(CompareViewMode.split)
+                    }
+                    if compareMode == .split {
+                        Divider()
+                        Picker("Orientation", selection: $splitOrientation) {
+                            Text("Vertical").tag(SplitOrientation.vertical)
+                            Text("Horizontal").tag(SplitOrientation.horizontal)
+                        }
+                    }
+                } label: {
+                    Label("Compare", systemImage: "rectangle.split.2x1")
+                }
+                // Only meaningful on the Adjust tab with no other
+                // point-interaction mode armed — same one-at-a-time
+                // invariant the WB/red-eye buttons already keep (see their
+                // own `.disabled`/mutual-disarm below).
+                .disabled(
+                    document.currentImage == nil || isCroppingActive
+                        || isPickingWhiteBalance || isPlacingRedEyeCorrections
+                )
+                .tint(compareMode != .off ? .yellow : nil)
+                .onChange(of: compareMode) { _, newMode in
+                    if newMode != .off {
+                        isPickingWhiteBalance = false
+                        isPlacingRedEyeCorrections = false
+                    }
+                }
+            }
             if selectedTab == .crop {
                 ToolbarItem(placement: .automatic) {
                     Button("Done") { selectedTab = .adjust }
@@ -467,7 +545,7 @@ struct ContentView: View {
                     }
                 GeometryReader { proxy in
                     ZStack {
-                        MetalImageView(image: document.currentImage, editState: displayEditState)
+                        MetalImageView(image: document.currentImage, editState: displayEditState, compare: compareRenderConfig)
                         // Fit against the ACTUAL displayed extent (post-
                         // straighten/perspective, crop-zeroed), not the raw
                         // `image.extent`. Every feature before Straighten
@@ -531,6 +609,14 @@ struct ContentView: View {
                         if isPlacingRedEyeCorrections, !isCroppingActive, !isPickingWhiteBalance,
                            let fitRect = currentFitRect {
                             RedEyeOverlayView(fitRect: fitRect, points: $document.editState.redEyePoints)
+                        }
+                        // Compare Split's draggable divider. `compareMode`
+                        // can only be non-`.off` on the Adjust tab with no
+                        // other point-interaction mode armed (see the
+                        // toolbar Menu's `.disabled(...)`), so this can
+                        // never overlap the three overlays above.
+                        if compareMode == .split, let fitRect = currentFitRect {
+                            CompareDividerOverlay(fitRect: fitRect, orientation: splitOrientation, position: $splitPosition)
                         }
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
@@ -742,7 +828,10 @@ struct ContentView: View {
             ) { String(format: "%+.0f", $0) }
             Button {
                 isPickingWhiteBalance.toggle()
-                if isPickingWhiteBalance { isPlacingRedEyeCorrections = false }
+                if isPickingWhiteBalance {
+                    isPlacingRedEyeCorrections = false
+                    compareMode = .off
+                }
             } label: {
                 Label("Pick White Balance", systemImage: "eyedropper")
                     .frame(maxWidth: .infinity)
@@ -817,7 +906,10 @@ struct ContentView: View {
         Group {
             Button {
                 isPlacingRedEyeCorrections.toggle()
-                if isPlacingRedEyeCorrections { isPickingWhiteBalance = false }
+                if isPlacingRedEyeCorrections {
+                    isPickingWhiteBalance = false
+                    compareMode = .off
+                }
             } label: {
                 Label("Fix Red-Eye", systemImage: "eye.trianglebadge.exclamationmark")
                     .frame(maxWidth: .infinity)

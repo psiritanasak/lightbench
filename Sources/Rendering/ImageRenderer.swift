@@ -42,6 +42,9 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
 
     var image: CIImage?
     var editState: EditState = .identity
+    /// Non-nil enables the Compare feature (Side by Side / Split);
+    /// `nil` is the default, single-image path — see `draw(in:)`.
+    var compare: CompareRenderConfig?
 
     init(device: MTLDevice) {
         guard let queue = device.makeCommandQueue() else {
@@ -58,6 +61,20 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
+    /// Scales/translates `image` to occupy exactly `fitRect` — the SAME
+    /// arithmetic `draw(in:)` always used inline, extracted (not
+    /// rewritten) so the Compare feature's extra fitted images go through
+    /// the identical math as the single-image path, byte for byte. See
+    /// `draw(in:)`'s own comment for why there's deliberately no y-flip
+    /// here.
+    private func fitted(_ image: CIImage, into fitRect: CGRect) -> CIImage {
+        let scale = fitRect.width / image.extent.width
+        let transform = CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
+            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
+            .concatenating(CGAffineTransform(translationX: fitRect.minX, y: fitRect.minY))
+        return image.transformed(by: transform)
+    }
+
     func draw(in view: MTKView) {
         guard let image,
               let drawable = view.currentDrawable,
@@ -72,28 +89,25 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
         // stage will change extent, so this must stay `edited` — don't
         // "simplify" it back to `image`.
         let drawableSize = view.drawableSize
-        let fitRect = AspectFit.rect(fitting: edited.extent.size, in: drawableSize)
-        guard fitRect.width > 0, fitRect.height > 0 else { return }
 
-        // No manual y-flip here. Empirically verified against this exact live
-        // on-screen MTKView (colorPixelFormat = .rgba16Float, framebufferOnly =
-        // false — see MetalImageView.swift) with a real photo (EXIF orientation
-        // 1/identity): adding a y-flip made the on-screen result appear rotated
-        // 180°; removing it displays correctly. The exact mechanism isn't fully
-        // understood — an earlier version added the flip because it tested
-        // "correct" against an offline, manually-created MTLTexture read back on
-        // the CPU, so something about that offscreen setup doesn't faithfully
-        // reproduce this live drawable's behavior. Do NOT assume "no flip" holds
-        // for other destinations or configs — in particular, Phase 5 batch
-        // export and Phase 7 tiled rendering will render to offscreen/standalone
-        // MTLTextures (the same shape of destination that misled the earlier
-        // test), so that path must be independently re-derived and verified
-        // against real output when it's built, not assumed identical to this.
-        let scale = fitRect.width / edited.extent.width
-        let transform = CGAffineTransform(translationX: -edited.extent.minX, y: -edited.extent.minY)
-            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
-            .concatenating(CGAffineTransform(translationX: fitRect.minX, y: fitRect.minY))
-        let fittedImage = edited.transformed(by: transform)
+        // No manual y-flip anywhere in this file. Empirically verified against
+        // this exact live on-screen MTKView (colorPixelFormat = .rgba16Float,
+        // framebufferOnly = false — see MetalImageView.swift) with a real photo
+        // (EXIF orientation 1/identity): adding a y-flip made the on-screen
+        // result appear rotated 180°; removing it displays correctly. The exact
+        // mechanism isn't fully understood — an earlier version added the flip
+        // because it tested "correct" against an offline, manually-created
+        // MTLTexture read back on the CPU, so something about that offscreen
+        // setup doesn't faithfully reproduce this live drawable's behavior. Do
+        // NOT assume "no flip" holds for other destinations or configs — in
+        // particular, Phase 5 batch export and Phase 7 tiled rendering render to
+        // offscreen/standalone MTLTextures (the same shape of destination that
+        // misled the earlier test), so those paths were independently
+        // re-derived and verified, not assumed identical to this. The Compare
+        // feature's horizontal-split orientation has the SAME open question —
+        // which drawable-space half is visually "top" — and MUST be verified
+        // live on a real photo (see `splitRects`' call site below), not
+        // assumed from the geometry alone.
 
         // Composite over an explicit full-bounds black background before
         // rendering. Without this, CIContext.render only guarantees pixels
@@ -111,7 +125,63 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
         // only ever had its own footprint overwritten, never the margins
         // around it.
         let background = CIImage(color: .black).cropped(to: CGRect(origin: .zero, size: drawableSize))
-        let composited = fittedImage.composited(over: background)
+
+        let composited: CIImage
+        if let compare {
+            // `original`'s geometry (crop/straighten/perspective/flip) is
+            // identical to `edited`'s by construction — `comparisonOriginal()`
+            // only resets color/tone fields — so `original.extent ==
+            // edited.extent` always holds, and both sides can share ONE
+            // `fitRect`/`AspectFit` computation below.
+            let original = EditPipeline.apply(compare.originalState, to: image)
+            switch compare.mode {
+            case .sideBySide:
+                let (leftRect, rightRect) = CompareLayout.sideBySideFitRects(
+                    imageSize: edited.extent.size, drawableSize: drawableSize
+                )
+                guard leftRect.width > 0, leftRect.height > 0 else { return }
+                // Original on the left, edited on the right — fixed layout,
+                // matching the confirmed design (no orientation choice for
+                // Side by Side).
+                let fittedOriginal = fitted(original, into: leftRect)
+                let fittedEdited = fitted(edited, into: rightRect)
+                composited = fittedOriginal.composited(over: fittedEdited.composited(over: background))
+            case .split(let orientation, let position):
+                let fitRect = AspectFit.rect(fitting: edited.extent.size, in: drawableSize)
+                guard fitRect.width > 0, fitRect.height > 0 else { return }
+                let fittedEdited = fitted(edited, into: fitRect)
+                let fittedOriginal = fitted(original, into: fitRect)
+                // `CompareDividerOverlay` measures `position` in SwiftUI's
+                // top-down space (0 = visual top, matching `fitRect.minY`
+                // there). THIS fitRect is in Core Image's bottom-up space,
+                // where `minY` is the visual BOTTOM — the same convention
+                // this file's documented "no y-flip" finding establishes —
+                // the OPPOSITE of the overlay's, for the y axis specifically.
+                // The x axis has no such inversion (confirmed live: Side by
+                // Side's fixed left/right layout matches expectations with
+                // no adjustment). So for `.vertical`, `position`/`.first`
+                // are used as-is; for `.horizontal`, the position fed into
+                // `splitRects` is inverted, and `.second` (not `.first`) is
+                // what actually lands in the visually-above-the-line region
+                // the overlay draws — MEASURED LIVE, not assumed: the
+                // pre-fix version put the rendered seam nowhere near the
+                // drawn line, and dragging moved the edited region in the
+                // visually opposite direction from the cursor.
+                let originalRegion: CGRect
+                switch orientation {
+                case .vertical:
+                    originalRegion = CompareLayout.splitRects(fitRect, orientation: .vertical, position: position).first
+                case .horizontal:
+                    originalRegion = CompareLayout.splitRects(fitRect, orientation: .horizontal, position: 1 - position).second
+                }
+                composited = fittedOriginal.cropped(to: originalRegion)
+                    .composited(over: fittedEdited.composited(over: background))
+            }
+        } else {
+            let fitRect = AspectFit.rect(fitting: edited.extent.size, in: drawableSize)
+            guard fitRect.width > 0, fitRect.height > 0 else { return }
+            composited = fitted(edited, into: fitRect).composited(over: background)
+        }
 
         ciContext.render(
             composited,

@@ -1,0 +1,137 @@
+import XCTest
+import CoreImage
+@testable import PhotoApp
+
+/// Verifies `EditState.comparisonOriginal()` — the Compare feature's
+/// "original" side. The two invariants this design rests on: every
+/// color/tone field resets to identity (so the "original" really looks
+/// unedited), and every geometry field is preserved EXACTLY (so both
+/// compared images share one extent and align pixel-for-pixel). Also the
+/// regression guard for the red-eye decision (see the method's own doc
+/// comment): `redEyePoints` must be cleared, not just the size/strength
+/// sliders reset, or red-eye correction would still visibly apply on the
+/// "original" side.
+final class EditStateComparisonOriginalTests: XCTestCase {
+    /// A fully non-identity `EditState`: every color/tone field pushed away
+    /// from its default, every geometry field pushed away from its
+    /// default, and a real red-eye point placed.
+    private func fullyEditedState() -> EditState {
+        var s = EditState()
+        // light/tone
+        s.exposureEV = 1.5
+        s.brightness = 0.3
+        s.brilliance = 0.4
+        s.contrast = 0.2
+        s.curvesHighlights = -0.3
+        s.curvesShadows = 0.3
+        s.blackPoint = 0.1
+        s.levelsBlackPoint = 0.05
+        s.levelsWhitePoint = 0.9
+        s.levelsGamma = 1.4
+        // white balance
+        s.whiteBalanceTemperature = 8000
+        s.whiteBalanceTint = 20
+        // hsl / color
+        s.hslHue = 0.2
+        s.vibrance = 0.4
+        s.hslSaturation = 0.3
+        // selective color
+        s.selectiveColorRange = 0.7
+        s.redHue = 0.1; s.redSaturation = 0.1; s.redLuminance = 0.1
+        s.orangeHue = 0.1; s.orangeSaturation = 0.1; s.orangeLuminance = 0.1
+        s.yellowHue = 0.1; s.yellowSaturation = 0.1; s.yellowLuminance = 0.1
+        s.greenHue = 0.1; s.greenSaturation = 0.1; s.greenLuminance = 0.1
+        s.aquaHue = 0.1; s.aquaSaturation = 0.1; s.aquaLuminance = 0.1
+        s.blueHue = 0.1; s.blueSaturation = 0.1; s.blueLuminance = 0.1
+        s.purpleHue = 0.1; s.purpleSaturation = 0.1; s.purpleLuminance = 0.1
+        s.magentaHue = 0.1; s.magentaSaturation = 0.1; s.magentaLuminance = 0.1
+        // black & white + effects
+        s.blackAndWhite = true
+        s.vignetteStrength = 0.5
+        s.vignetteRadius = 0.7
+        s.definition = 0.4
+        s.sharpness = 0.6
+        s.noiseReduction = 0.3
+        // red-eye
+        s.redEyeSize = 0.8
+        s.redEyeStrength = 0.9
+        s.redEyePoints = [RedEyePoint(x: 0.3, y: 0.4), RedEyePoint(x: 0.6, y: 0.5)]
+        // geometry
+        s.straightenAngle = 12
+        s.verticalPerspective = 0.2
+        s.horizontalPerspective = -0.15
+        s.flipHorizontal = true
+        s.flipVertical = true
+        s.cropInsetTop = 0.1
+        s.cropInsetBottom = 0.1
+        s.cropInsetLeft = 0.2
+        s.cropInsetRight = 0.15
+        return s
+    }
+
+    func testColorAndToneFieldsAreResetToIdentity() {
+        let original = fullyEditedState().comparisonOriginal()
+        let identity = EditState.identity
+        XCTAssertEqual(original.exposureEV, identity.exposureEV)
+        XCTAssertEqual(original.brightness, identity.brightness)
+        XCTAssertEqual(original.brilliance, identity.brilliance)
+        XCTAssertEqual(original.contrast, identity.contrast)
+        XCTAssertEqual(original.curvesHighlights, identity.curvesHighlights)
+        XCTAssertEqual(original.curvesShadows, identity.curvesShadows)
+        XCTAssertEqual(original.blackPoint, identity.blackPoint)
+        XCTAssertEqual(original.levelsBlackPoint, identity.levelsBlackPoint)
+        XCTAssertEqual(original.levelsWhitePoint, identity.levelsWhitePoint)
+        XCTAssertEqual(original.levelsGamma, identity.levelsGamma)
+        XCTAssertEqual(original.whiteBalanceTemperature, identity.whiteBalanceTemperature)
+        XCTAssertEqual(original.whiteBalanceTint, identity.whiteBalanceTint)
+        XCTAssertEqual(original.hslHue, identity.hslHue)
+        XCTAssertEqual(original.vibrance, identity.vibrance)
+        XCTAssertEqual(original.hslSaturation, identity.hslSaturation)
+        XCTAssertEqual(original.selectiveColorRange, identity.selectiveColorRange)
+        XCTAssertEqual(original.redHue, 0); XCTAssertEqual(original.magentaLuminance, 0)
+        XCTAssertEqual(original.blackAndWhite, identity.blackAndWhite)
+        XCTAssertEqual(original.vignetteStrength, identity.vignetteStrength)
+        XCTAssertEqual(original.vignetteRadius, identity.vignetteRadius)
+        XCTAssertEqual(original.definition, identity.definition)
+        XCTAssertEqual(original.sharpness, identity.sharpness)
+        XCTAssertEqual(original.noiseReduction, identity.noiseReduction)
+        XCTAssertEqual(original.redEyeSize, identity.redEyeSize)
+        XCTAssertEqual(original.redEyeStrength, identity.redEyeStrength)
+    }
+
+    /// The real regression guard: NOT just resetting the sliders, but
+    /// actually clearing placed points — see the method's own doc comment
+    /// for why leaving them populated would still show red-eye correction.
+    func testRedEyePointsAreCleared() {
+        let edited = fullyEditedState()
+        XCTAssertFalse(edited.redEyePoints.isEmpty, "test fixture should start with points placed")
+        XCTAssertTrue(edited.comparisonOriginal().redEyePoints.isEmpty)
+    }
+
+    func testGeometryFieldsAreLeftByteIdenticalToTheInput() {
+        let edited = fullyEditedState()
+        let original = edited.comparisonOriginal()
+        XCTAssertEqual(original.straightenAngle, edited.straightenAngle)
+        XCTAssertEqual(original.verticalPerspective, edited.verticalPerspective)
+        XCTAssertEqual(original.horizontalPerspective, edited.horizontalPerspective)
+        XCTAssertEqual(original.flipHorizontal, edited.flipHorizontal)
+        XCTAssertEqual(original.flipVertical, edited.flipVertical)
+        XCTAssertEqual(original.cropInsetTop, edited.cropInsetTop)
+        XCTAssertEqual(original.cropInsetBottom, edited.cropInsetBottom)
+        XCTAssertEqual(original.cropInsetLeft, edited.cropInsetLeft)
+        XCTAssertEqual(original.cropInsetRight, edited.cropInsetRight)
+    }
+
+    /// The invariant the whole single-`fitRect` Compare design rests on:
+    /// running `EditPipeline` on both the edited state and its comparison
+    /// original must produce the SAME extent, since only geometry (not
+    /// color/tone) affects extent.
+    func testComparisonOriginalProducesTheSameExtentAsTheEditedState() {
+        let edited = fullyEditedState()
+        let original = edited.comparisonOriginal()
+        let image = CIImage(color: .red).cropped(to: CGRect(x: 0, y: 0, width: 400, height: 300))
+        let editedExtent = EditPipeline.apply(edited, to: image).extent
+        let originalExtent = EditPipeline.apply(original, to: image).extent
+        XCTAssertEqual(editedExtent, originalExtent)
+    }
+}

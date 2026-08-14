@@ -5,6 +5,8 @@ import SwiftUI
 struct MetalImageView: NSViewRepresentable {
     var image: CIImage?
     var editState: EditState
+    /// Non-nil enables the Compare feature. See `ImageRenderer.compare`.
+    var compare: CompareRenderConfig?
 
     func makeNSView(context: Context) -> MTKView {
         let renderer = context.coordinator
@@ -32,20 +34,26 @@ struct MetalImageView: NSViewRepresentable {
         return view
     }
 
-    /// Skips the redraw entirely when neither `image` nor `editState` actually
-    /// changed since the last call. SwiftUI re-invokes `updateNSView` on any
-    /// observed document change, but during an interactive crop drag the
-    /// image shown here (`ContentView`'s `displayEditState`, with crop insets
-    /// zeroed) is intentionally held constant while only the crop overlay
-    /// moves — this guard keeps those frames free of redundant Core Image
-    /// pipeline re-runs. `image` is compared by reference (`currentImage` is
-    /// only ever reassigned wholesale on load, never mutated in place) and
-    /// `editState` by value (`Equatable`).
+    /// Skips the redraw entirely when neither `image` nor `editState` (nor,
+    /// now, `compare`) actually changed since the last call. SwiftUI
+    /// re-invokes `updateNSView` on any observed document change, but during
+    /// an interactive crop drag the image shown here (`ContentView`'s
+    /// `displayEditState`, with crop insets zeroed) is intentionally held
+    /// constant while only the crop overlay moves — this guard keeps those
+    /// frames free of redundant Core Image pipeline re-runs. `image` is
+    /// compared by reference (`currentImage` is only ever reassigned
+    /// wholesale on load, never mutated in place); `editState`/`compare` by
+    /// value (`Equatable`) — `compare` must be included here or dragging the
+    /// Compare divider (which only changes `compare.mode`'s `position`,
+    /// nothing else) would never trigger a redraw.
     func updateNSView(_ nsView: MTKView, context: Context) {
         let renderer = context.coordinator
-        guard image !== renderer.image || editState != renderer.editState else { return }
+        guard image !== renderer.image || editState != renderer.editState || compare != renderer.compare else {
+            return
+        }
         renderer.image = image
         renderer.editState = editState
+        renderer.compare = compare
         nsView.setNeedsDisplay(nsView.bounds)
     }
 

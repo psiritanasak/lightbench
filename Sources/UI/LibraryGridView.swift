@@ -12,23 +12,70 @@ struct LibraryGridView: View {
     private let columns = [GridItem(.adaptive(minimum: 140), spacing: 12)]
 
     var body: some View {
-        Group {
-            if catalog.photos.isEmpty {
-                emptyState
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(catalog.photos) { photo in
-                            LibraryThumbnailCell(catalog: catalog, photo: photo) {
-                                onOpen(photo)
+        VStack(spacing: 0) {
+            // Grid-scoped controls live here, not ContentView's main
+            // toolbar — that toolbar is already crowded (Import Folder/
+            // Import Folder Tree/Export/Compare), and these refine what
+            // THIS view shows, not app-level actions.
+            if !catalog.photos.isEmpty {
+                filterBar
+            }
+            Group {
+                if catalog.photos.isEmpty {
+                    emptyState
+                } else if catalog.displayedPhotos.isEmpty {
+                    noMatchesState
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 12) {
+                            ForEach(catalog.displayedPhotos) { photo in
+                                LibraryThumbnailCell(catalog: catalog, photo: photo) {
+                                    onOpen(photo)
+                                }
                             }
                         }
+                        .padding()
                     }
-                    .padding()
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var filterBar: some View {
+        HStack(spacing: 12) {
+            Picker("Sort", selection: $catalog.sortOption) {
+                ForEach(LibrarySortOption.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .frame(maxWidth: 160)
+
+            Picker("Rating", selection: $catalog.minimumRating) {
+                Text("Any Rating").tag(0)
+                ForEach(1...5, id: \.self) { stars in
+                    Text(String(repeating: "★", count: stars) + "+").tag(stars)
+                }
+            }
+            .frame(maxWidth: 130)
+
+            Button {
+                catalog.flaggedOnly.toggle()
+            } label: {
+                Image(systemName: catalog.flaggedOnly ? "flag.fill" : "flag")
+            }
+            .buttonStyle(.bordered)
+            .foregroundStyle(catalog.flaggedOnly ? .yellow : .secondary)
+            .help("Flagged only")
+
+            Spacer(minLength: 12)
+
+            TextField("Search filename…", text: $catalog.searchText)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 220)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
     }
 
     private var emptyState: some View {
@@ -42,6 +89,29 @@ struct LibraryGridView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Distinct from `emptyState` — photos EXIST for the current
+    /// Collection/Folder selection, they just don't match the current
+    /// sort/filter/search refinement. Without this distinction, a
+    /// filtered-to-nothing grid would misleadingly look like an empty
+    /// library.
+    private var noMatchesState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text("No photos match")
+                .font(.headline)
+            Text("Try a different search or adjust the rating/flag filters.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Clear Filters") {
+                catalog.clearLibraryFilters()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -64,6 +134,16 @@ private struct LibraryThumbnailCell: View {
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color.gray.opacity(0.2))
+                if image == nil {
+                    // Feedback while the thumbnail decodes — most visible
+                    // right after re-sorting, which scrambles which photos
+                    // land in the LazyVGrid's currently-rendered window,
+                    // so previously off-screen/uncached photos briefly
+                    // show this instead of a silent blank box.
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 140, height: 140)
+                }
                 if let image {
                     // `.frame(width:height:)` BEFORE `.clipShape` here is
                     // load-bearing, not cosmetic: without it, `.aspectRatio(

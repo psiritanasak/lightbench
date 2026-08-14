@@ -54,6 +54,46 @@ final class CatalogModel: ObservableObject {
     /// same as `selectedFilter`.
     @Published private(set) var selectedPhotoIDs: Set<Int64> = []
 
+    /// Sort/filter/search refinement, applied entirely in memory on top of
+    /// whatever source set `selectedFilter` already produced — see
+    /// `displayedPhotos`. Deliberately INDEPENDENT of `selectedFilter`
+    /// (not reset on Collection/Folder switch, unlike `selectedPhotoIDs`
+    /// above): a persistent search/filter while browsing between
+    /// collections is more useful than silently losing it every time the
+    /// sidebar selection changes.
+    @Published var sortOption: LibrarySortOption = .dateOldest
+    /// A THRESHOLD ("N stars and up"), not exact match — `0` = no rating
+    /// filter. See `LibraryFilterSort.apply`'s own doc comment.
+    @Published var minimumRating: Int = 0
+    @Published var flaggedOnly: Bool = false
+    @Published var searchText: String = ""
+
+    /// What the Library grid actually renders — `photos` (the
+    /// `selectedFilter`-selected source set) refined by the four published
+    /// fields above via the pure `LibraryFilterSort.apply`. A cheap,
+    /// synchronous in-memory transform (not a DB query), so this can be
+    /// recomputed on every keystroke/toggle with no debounce needed —
+    /// unlike this file's `Task.detached`-based DB mutators, or
+    /// `ImageDocumentModel`'s histogram/sidecar-save debouncing, both of
+    /// which debounce specifically because the underlying operation IS
+    /// expensive; this one isn't.
+    var displayedPhotos: [Photo] {
+        LibraryFilterSort.apply(
+            to: photos, sort: sortOption, minimumRating: minimumRating,
+            flaggedOnly: flaggedOnly, searchText: searchText
+        )
+    }
+
+    /// Resets all four sort/filter/search fields to their defaults — the
+    /// Library grid's "Clear Filters" action, for when they've filtered
+    /// the current source set down to nothing.
+    func clearLibraryFilters() {
+        sortOption = .dateOldest
+        minimumRating = 0
+        flaggedOnly = false
+        searchText = ""
+    }
+
     /// `nil` until the background open+migrate in `init()` completes (or
     /// forever, if it failed — see `initError`). `CatalogDatabase()`
     /// itself does real, synchronous I/O (creating the Application
@@ -414,10 +454,17 @@ final class CatalogModel: ObservableObject {
 /// (cost tracked per-thumbnail as its approximate decoded byte size).
 private actor ThumbnailCache {
     private static let maxPixelSize = 240
-    /// ~270 thumbnails at 240px RGBA before eviction kicks in — generous
-    /// for what's likely on screen/recently scrolled, not sized to hold
-    /// an entire large library resident at once.
-    private static let totalCostLimit = 64 * 1024 * 1024
+    /// ~1165 thumbnails at 240px RGBA before eviction kicks in. Bumped up
+    /// from an original 64MB (~270 thumbnails) after a live report:
+    /// re-sorting the Library grid scrambles which photos land in the
+    /// LazyVGrid's currently-rendered window, so previously off-screen
+    /// (evicted or never-decoded) photos show a placeholder until they
+    /// decode — a bigger cache means a resort is far less likely to have
+    /// evicted photos the user already scrolled past earlier in the same
+    /// session. Still bounded, not sized to hold an entire large library
+    /// resident at once — 256MB is a small, easily-affordable cost on any
+    /// Mac this app targets.
+    private static let totalCostLimit = 256 * 1024 * 1024
 
     private let cache: NSCache<NSString, CGImage> = {
         let cache = NSCache<NSString, CGImage>()

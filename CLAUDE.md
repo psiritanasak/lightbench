@@ -276,6 +276,39 @@ Edits are stored as parameter sets and rendered live on the GPU.
    Editor→Library transition, not just on switching to a different photo.
    Reviewer: FIX FIRST (missing working color space; the cache race) →
    both fixed → APPROVE. 303 tests (3 new).
+
+   **Post-Phase-5 follow-up #5 (shipped): Compare mode (Side by Side +
+   Split before/after).** New Editor toolbar `Menu`: Off / Side by Side /
+   Split, with a vertical or horizontal divider for Split. Confirmed
+   design (AskUserQuestion): "original" keeps the current crop/straighten/
+   perspective/flip geometry — only color/tone resets to identity — so
+   both sides always share one extent and align pixel-for-pixel
+   (`EditState.comparisonOriginal()`, a superset of the pre-existing
+   `resetAdjustmentsButton`'s field list — also clears `redEyePoints`,
+   since `EditPipeline`'s red-eye stage stays active on points alone
+   regardless of the strength slider's default, reviewer-verified against
+   the actual pipeline code). `ImageRenderer`/`MetalImageView` gain an
+   optional `CompareRenderConfig`; `nil` keeps the existing single-image
+   path byte-identical via an extracted `fitted(_:into:)` transform
+   helper. New `Sources/UI/CompareLayout.swift` holds the pure,
+   unit-tested side-by-side/split-rect/divider-fraction geometry
+   (`CropAspectMath`/`ThinSliderGeometry` precedent). Mutually exclusive
+   with crop-editing/WB-eyedropper/red-eye-placement (arming one disarms
+   the others). **Two real bugs caught live, both fixed**: (1) the
+   renderer's own `fitRect` has visual-BOTTOM at `minY` (this app's
+   existing documented Metal y-convention) while the SwiftUI overlay has
+   visual-TOP at `minY` — opposite for the y axis only — so horizontal
+   split needed its position inverted and the opposite region picked;
+   vertical needed no change (x has no such inversion). (2) The divider's
+   grab-vs-click-elsewhere gesture was first a single gesture with manual
+   distance bookkeeping, which worked for one orientation but not the
+   other (root cause not pinned down) — replaced with two separate
+   hit-tested regions (a wide invisible grab strip layered over a
+   background jump layer) so SwiftUI's own hit-testing routes the gesture
+   instead of custom state. Reviewer APPROVE on first pass — independently
+   re-derived the y-axis coordinate math and the red-eye field-clearing
+   requirement from first principles rather than trusting the diff or the
+   live-test outcome. 319 tests (16 new).
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases
 

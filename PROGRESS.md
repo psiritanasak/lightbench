@@ -2701,20 +2701,105 @@ flags, collections.
   correctly after the flush fix; no scroll/performance regression
   reported. Closes out this deferred item.
 
+### Compare mode — Side by Side + Split (before/after) (complete, verified live)
+- User-requested new Editor feature: compare the original photo against
+  the current edit, two ways — (1) both full images side by side, (2) one
+  image area with a draggable divider (vertical or horizontal), original
+  on one side. Both modes confirmed in scope via AskUserQuestion; a
+  second AskUserQuestion confirmed the "original" semantics: KEEP the
+  current crop/straighten/perspective/flip geometry, only reset
+  color/tone — so both compared images always share one extent and align
+  pixel-for-pixel (the user explicitly rejected "true original before any
+  crop," which would have had mismatched framing whenever crop/straighten
+  was active). A Plan agent, given this full context plus a prior Explore
+  pass mapping the render architecture, produced the concrete design;
+  independently verified against the actual pipeline code before
+  implementation (see the red-eye finding below).
+- `Sources/EditEngine/EditState.swift`: new `comparisonOriginal()` —
+  resets every color/tone field to identity (the SAME field list
+  `resetAdjustmentsButton`/`isAdjustTabAtIdentity` already use) while
+  preserving every geometry field untouched. **Also clears
+  `redEyePoints`** — a deliberate difference from `resetAdjustmentsButton`
+  (which keeps points, has its own "Clear All" button), directly verified
+  against `EditPipeline`: red-eye correction stays active whenever
+  `redEyePoints` is non-empty AND `redEyeStrength != 0`, and the identity
+  `redEyeStrength` (0.7) is non-zero — so merely resetting the slider
+  would still show red-eye correction on the "original" side.
+- NEW `Sources/UI/CompareLayout.swift`: `CompareViewMode`/
+  `SplitOrientation`/`CompareRenderMode`/`CompareRenderConfig`, plus a
+  pure `CompareLayout` enum (`sideBySideFitRects`, `splitRects`,
+  `dividerFraction`) — mirrors the `CropAspectMath`/`ThinSliderGeometry`
+  precedent for testable UI-layer geometry.
+- `Sources/Rendering/ImageRenderer.swift`/`MetalImageView.swift`: gained
+  an optional `CompareRenderConfig` (`nil` = off, the default). The
+  existing single-image transform math was extracted into a private
+  `fitted(_:into:)` helper so the off-path stays byte-identical to
+  before, verified by the reviewer directly (not just "tests still
+  pass"). Side by Side fits original/edited into independent left/right
+  halves; Split shares ONE `fitRect` (both images have identical extent
+  by construction) and crops each to its side. `MetalImageView`'s redraw
+  guard widened to include `compare` (dragging the divider only changes
+  one associated value, nothing else the old guard already watched).
+- `Sources/UI/ContentView.swift`: new toolbar `Menu` (mode + orientation
+  pickers), a new `CompareDividerOverlay` in the image pane's `ZStack`,
+  and `compareOriginalEditState`/`compareRenderConfig` computed
+  properties mirroring the pre-existing `displayEditState` presentation-
+  substitution pattern. Mutually exclusive with crop-editing/WB-
+  eyedropper/red-eye-placement in both directions (arming one disarms the
+  others); resets to Off on tab-leave and new-photo-load.
+- **Two real bugs, both caught live by the user, neither by the
+  reviewer**: (1) **Horizontal split showed the wrong regions entirely**
+  ("line doesn't split photo," "moving the line up moves the edited area
+  down — opposite direction"). Root cause: `ImageRenderer`'s own `fitRect`
+  has visual BOTTOM at `minY` (this app's pre-existing documented Metal
+  "no y-flip" quirk — the CI image's bottom-left-origin/y-up convention
+  passes straight through to the drawable, unflipped, and displays
+  correctly) — the OPPOSITE of the SwiftUI overlay's `fitRect`, where
+  visual TOP is at `minY`. This inversion only affects the y axis; x
+  (vertical split) has no such inversion, and vertical was correct from
+  the first pass. Fixed by inverting `position` and swapping which region
+  is picked, for `.horizontal` only. (2) **The divider's grab-vs-click
+  gesture worked for one orientation but not the other** — a plain click
+  near the handle would make the line jump sideways before the drag even
+  registered. First fix attempt (manual "how close to the line counts as
+  a grab" distance bookkeeping in `@State`, decided once per gesture)
+  didn't fully resolve it and the root cause wasn't pinned down. Replaced
+  entirely with a different design: two separate hit-tested `ZStack`
+  layers (a background for click-elsewhere-jump, under a wide invisible
+  grab strip for smooth delta-tracked dragging) so SwiftUI's own
+  hit-testing routes the gesture, rather than custom disambiguation
+  logic — confirmed working for both orientations afterward.
+- NEW `Tests/EditEngineTests/CompareLayoutTests.swift` (12 tests) +
+  `EditStateComparisonOriginalTests.swift` (4 tests, including one that
+  runs the real `EditPipeline` to confirm `comparisonOriginal()` and the
+  edited state produce the SAME extent — the invariant the whole
+  single-`fitRect` design rests on). No tests for the divider
+  gesture/toolbar itself — UI-interaction-only, relies on live
+  verification, consistent with this project's established precedent
+  (the crop drag, the WB tap).
+- Reviewer APPROVE on first pass — independently re-derived the y-axis
+  coordinate math from the stated coordinate-space facts (not just
+  trusting the live-test outcome) and the red-eye field-clearing
+  requirement against the actual `EditPipeline` code, confirmed the
+  off-path is genuinely byte-identical, and confirmed the mutual-
+  exclusion state machine has no gap. Two non-blocking style nits, no
+  fix-first needed.
+- 319 tests total (16 new). 1 commit.
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
 window-resize re-fit behavior, opened-file mtime check.
 
 ## Exact next step
-**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus five user-requested
+**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus six user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
 sidebar restyle; the custom thin slider; the Editor-vs-Preview color-fix;
-Library thumbnails reflecting edits) — see their own sections above.
-**Phase 5 (Presets + export) has STARTED**: slice 1, batch export
-(including the entitlement-fix debugging saga and 2 reviewer-caught bugs),
-AND its immediate follow-up, selecting individual photos for export
+Library thumbnails reflecting edits; Compare mode) — see their own
+sections above. **Phase 5 (Presets + export) has STARTED**: slice 1, batch
+export (including the entitlement-fix debugging saga and 2 reviewer-caught
+bugs), AND its immediate follow-up, selecting individual photos for export
 (including a live-caught checkbox-positioning bug), are BOTH DONE — see
-their own sections above. Both reviewer-APPROVED. 303 tests passing, app
+their own sections above. Both reviewer-APPROVED. 319 tests passing, app
 fully functional.
 
 **Both real issues surfaced live during batch export's own verification

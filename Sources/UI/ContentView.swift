@@ -65,6 +65,15 @@ struct ContentView: View {
     /// reads more clearly at each of its several use sites below.
     private var isCroppingActive: Bool { selectedTab == .crop }
 
+    /// Whether scroll-to-zoom/click-drag-to-pan are currently armable.
+    /// Compare being active does NOT block zoom (the whole point is being
+    /// able to zoom in while comparing) — only the three overlay-owning
+    /// point-interaction/crop modes do, since their overlays are
+    /// positioned against `currentFitRect` assuming no zoom/pan is active.
+    private var canZoom: Bool {
+        document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance && !isPlacingRedEyeCorrections
+    }
+
     /// Whether a tap on the image should be captured as a WB eyedropper
     /// sample. Its own overlay only exists while this is true AND cropping
     /// is not active (see `body`), so the two point-interactions are
@@ -90,6 +99,20 @@ struct ContentView: View {
     @State private var splitOrientation: SplitOrientation = .vertical
     /// The Split divider's position, 0...1, driven by `CompareDividerOverlay`.
     @State private var splitPosition: Double = 0.5
+
+    /// Zoom/pan feature state — 1 = fit (no zoom); presentation-only, same
+    /// reasoning as `compareMode` above: `EditState`/`EditPipeline` are
+    /// untouched, this only controls the on-screen render via
+    /// `MetalImageView`'s `zoomScale`/`panOffset`/`onScrollZoom`.
+    /// Available in the normal Adjust view AND Compare (both modes); NOT
+    /// available in Crop/WB-picking/red-eye-placement — see `canZoom` and
+    /// the `.onChange`/arm-action resets below, mirroring `compareMode`'s
+    /// own established mutual-exclusion pattern.
+    @State private var zoomScale: CGFloat = 1
+    /// Fit-rect-normalized, SwiftUI y-DOWN — see `ImageRenderer.
+    /// fitted(_:into:zoomScale:panOffsetNorm:)`'s own doc comment for
+    /// where this gets converted to the renderer's y-UP space.
+    @State private var panOffset: CGSize = .zero
 
     /// Which Selective Color band's Hue/Saturation/Luminance sliders are
     /// currently shown. Presentation-only, same reasoning as `selectedTab`/
@@ -140,6 +163,47 @@ struct ContentView: View {
             fitting: EditPipeline.apply(displayEditState, to: image).extent.size,
             in: containerSize
         )
+    }
+
+    /// Side by Side's left/right fit rects, in the SAME `containerSize`
+    /// (points) space `currentFitRect` uses — reused by both the scroll
+    /// handler (to decide which half the cursor is zooming) and the
+    /// `PanOverlay`s rendered in `editorContent`'s `ZStack`. `nil` until
+    /// laid out, matching `currentFitRect`'s own contract.
+    private var sideBySideFitRects: (left: CGRect, right: CGRect)? {
+        guard let image = document.currentImage, containerSize.width > 0, containerSize.height > 0 else {
+            return nil
+        }
+        let edited = EditPipeline.apply(displayEditState, to: image)
+        return CompareLayout.sideBySideFitRects(imageSize: edited.extent.size, drawableSize: containerSize)
+    }
+
+    /// Turns a raw scroll-wheel event (from `MetalImageView.onScrollZoom`,
+    /// reported as a y-DOWN fraction of the WHOLE image pane) into a new
+    /// zoom level + cursor-centered pan. Re-expresses the pane-relative
+    /// cursor fraction against whichever fit rect is actually being
+    /// zoomed (the single `currentFitRect`, or — in Side by Side — the
+    /// specific half the cursor is over) before handing off to
+    /// `ZoomPanGeometry`, which only ever reasons in fit-rect-normalized
+    /// terms.
+    private func handleScrollZoom(paneFraction: CGPoint, delta: CGFloat) {
+        guard canZoom else { return }
+        let cursorPoint = CGPoint(x: paneFraction.x * containerSize.width, y: paneFraction.y * containerSize.height)
+        let targetFitRect: CGRect
+        if compareMode == .sideBySide, let (leftRect, rightRect) = sideBySideFitRects {
+            targetFitRect = cursorPoint.x < containerSize.width / 2 ? leftRect : rightRect
+        } else if let fitRect = currentFitRect {
+            targetFitRect = fitRect
+        } else {
+            return
+        }
+        let cursorFraction = ZoomPanGeometry.cursorFractionInFitRect(cursor: cursorPoint, fitRect: targetFitRect)
+        let newZoom = ZoomPanGeometry.steppedZoom(current: zoomScale, scrollDelta: delta)
+        let newPan = ZoomPanGeometry.panForZoomAboutCursor(
+            oldZoom: zoomScale, newZoom: newZoom, cursorFraction: cursorFraction, oldPan: panOffset
+        )
+        zoomScale = newZoom
+        panOffset = ZoomPanGeometry.clampedPan(newPan, zoom: newZoom)
     }
 
     /// Resolves `selectedAspect` to an actual width:height ratio, or `nil`
@@ -346,6 +410,21 @@ struct ContentView: View {
             }
     }
 
+    /// Small feedback badge while zoomed past fit — same `.regularMaterial`
+    /// HUD styling `exportProgressView` already uses, so it reads as the
+    /// same family of transient overlay. Purely informational, matches
+    /// `zoomScale`'s own "1 = fit" convention (shown as 100%).
+    private var zoomPercentageHUD: some View {
+        Text("\(Int((zoomScale * 100).rounded()))%")
+            .font(.caption)
+            .monospacedDigit()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+            .padding(12)
+            .allowsHitTesting(false)
+    }
+
     private func exportProgressView(_ progress: ExportProgress) -> some View {
         VStack(spacing: 6) {
             Text("Exporting \(progress.completed) of \(progress.total)…")
@@ -393,18 +472,29 @@ struct ContentView: View {
             compareMode = .off
             splitOrientation = .vertical
             splitPosition = 0.5
+            zoomScale = 1
+            panOffset = .zero
         }
         // Leaving the Adjust tab disarms both point-interaction modes —
         // neither has meaning while cropping (their overlays are gated on
         // `!isCroppingActive` anyway) or in the other, not-yet-built tabs —
-        // and Compare, which only ever runs on the Adjust tab (see the
-        // toolbar Menu's `.disabled(...)`).
+        // and Compare/zoom, which only ever run on the Adjust tab (see the
+        // toolbar Menu's `.disabled(...)` and `canZoom`).
         .onChange(of: selectedTab) { _, newTab in
             if newTab != .adjust {
                 isPickingWhiteBalance = false
                 isPlacingRedEyeCorrections = false
                 compareMode = .off
+                zoomScale = 1
+                panOffset = .zero
             }
+        }
+        // A Compare-mode switch gets a fresh zoom/pan — the fit rect
+        // differs between single-image, Side by Side's halves, and Split,
+        // so a pan/zoom computed for one doesn't map cleanly onto another.
+        .onChange(of: compareMode) { _, _ in
+            zoomScale = 1
+            panOffset = .zero
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
@@ -545,7 +635,11 @@ struct ContentView: View {
                     }
                 GeometryReader { proxy in
                     ZStack {
-                        MetalImageView(image: document.currentImage, editState: displayEditState, compare: compareRenderConfig)
+                        MetalImageView(
+                            image: document.currentImage, editState: displayEditState, compare: compareRenderConfig,
+                            zoomScale: zoomScale, panOffset: panOffset, zoomEnabled: canZoom,
+                            onScrollZoom: { fraction, delta in handleScrollZoom(paneFraction: fraction, delta: delta) }
+                        )
                         // Fit against the ACTUAL displayed extent (post-
                         // straighten/perspective, crop-zeroed), not the raw
                         // `image.extent`. Every feature before Straighten
@@ -618,10 +712,32 @@ struct ContentView: View {
                         if compareMode == .split, let fitRect = currentFitRect {
                             CompareDividerOverlay(fitRect: fitRect, orientation: splitOrientation, position: $splitPosition)
                         }
+                        // Click-drag-to-pan, once zoomed past fit. Not
+                        // shown in Split — the divider above already owns
+                        // click-drag there; scroll-to-zoom still works in
+                        // Split (the `NSEvent` monitor doesn't depend on
+                        // this overlay), you just can't ALSO drag to
+                        // reposition without changing zoom. In Side by
+                        // Side, TWO overlays (one per half, both bound to
+                        // the same `$zoomScale`/`$panOffset`) so dragging
+                        // either photo pans both in sync.
+                        if canZoom, zoomScale > 1 {
+                            if compareMode == .sideBySide, let (leftRect, rightRect) = sideBySideFitRects {
+                                PanOverlay(fitRect: leftRect, zoomScale: $zoomScale, panOffset: $panOffset)
+                                PanOverlay(fitRect: rightRect, zoomScale: $zoomScale, panOffset: $panOffset)
+                            } else if compareMode != .split, let fitRect = currentFitRect {
+                                PanOverlay(fitRect: fitRect, zoomScale: $zoomScale, panOffset: $panOffset)
+                            }
+                        }
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .onAppear { containerSize = proxy.size }
                     .onChange(of: proxy.size) { _, newSize in containerSize = newSize }
+                    .overlay(alignment: .bottomTrailing) {
+                        if zoomScale > 1 {
+                            zoomPercentageHUD
+                        }
+                    }
                 }
             }
             .frame(minWidth: 480, minHeight: 360)
@@ -831,6 +947,8 @@ struct ContentView: View {
                 if isPickingWhiteBalance {
                     isPlacingRedEyeCorrections = false
                     compareMode = .off
+                    zoomScale = 1
+                    panOffset = .zero
                 }
             } label: {
                 Label("Pick White Balance", systemImage: "eyedropper")
@@ -909,6 +1027,8 @@ struct ContentView: View {
                 if isPlacingRedEyeCorrections {
                     isPickingWhiteBalance = false
                     compareMode = .off
+                    zoomScale = 1
+                    panOffset = .zero
                 }
             } label: {
                 Label("Fix Red-Eye", systemImage: "eye.trianglebadge.exclamationmark")

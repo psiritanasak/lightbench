@@ -1,0 +1,79 @@
+import CoreGraphics
+
+/// Pure, SwiftUI-independent geometry for the Editor's zoom/pan feature —
+/// mirrors `CompareLayout`'s/`CropAspectMath`'s/`ThinSliderGeometry`'s
+/// established pattern (a plain `CoreGraphics`-only enum of static
+/// functions, unit-tested directly) rather than burying this arithmetic
+/// inside `ImageRenderer` or a gesture closure. Every quantity here is
+/// normalized to the on-screen fit rect and expressed in SwiftUI's
+/// top-left-origin/y-DOWN convention — the renderer (`ImageRenderer.
+/// fitted(_:into:zoomScale:panOffsetNorm:)`) is the ONE place that
+/// converts to its own y-UP drawable convention, so none of this file
+/// needs to reason about that distinction.
+enum ZoomPanGeometry {
+    static let minZoom: CGFloat = 1
+    static let maxZoom: CGFloat = 8
+
+    /// A multiplicative zoom step from a raw scroll delta, clamped to
+    /// `[minZoom, maxZoom]`. Multiplicative (not additive) so each scroll
+    /// "notch" feels like a consistent proportional zoom regardless of
+    /// the current zoom level — matches how every other zoom UI (Preview,
+    /// Photos, browsers) feels. `sensitivity` and the delta's sign are
+    /// feel parameters, tuned live against real trackpad/mouse-wheel
+    /// deltas, not derived — only the shape (monotonic, clamped) is
+    /// something to get right here.
+    static func steppedZoom(
+        current: CGFloat, scrollDelta: CGFloat, sensitivity: CGFloat = 0.01,
+        minZoom: CGFloat = minZoom, maxZoom: CGFloat = maxZoom
+    ) -> CGFloat {
+        let factor = exp(scrollDelta * sensitivity)
+        return min(max(current * factor, minZoom), maxZoom)
+    }
+
+    /// The new normalized pan that keeps the point under `cursorFraction`
+    /// fixed on screen as zoom changes from `oldZoom` to `newZoom`.
+    /// Derived (not eyeballed) from requiring the content-space point the
+    /// cursor sits over to map back to the same on-screen fraction after
+    /// the zoom change; `r = newZoom / oldZoom`:
+    /// `p' = (f - 0.5) * (1 - r) + r * p`
+    /// — verified by hand at `f = 0.5` (any zoom leaves pan unchanged,
+    /// i.e. zooming about dead-center never needs to pan) and at `f = 0`/
+    /// `f = 1` (the corresponding edge of the content stays pinned to
+    /// that edge of the fit rect through the zoom change).
+    static func panForZoomAboutCursor(
+        oldZoom: CGFloat, newZoom: CGFloat, cursorFraction: CGPoint, oldPan: CGSize
+    ) -> CGSize {
+        let r = newZoom / oldZoom
+        return CGSize(
+            width: (cursorFraction.x - 0.5) * (1 - r) + r * oldPan.width,
+            height: (cursorFraction.y - 0.5) * (1 - r) + r * oldPan.height
+        )
+    }
+
+    /// Clamps `pan` so the zoomed content always fully covers the fit
+    /// rect — never reveals background past the image's own edge.
+    /// Derived from requiring the content interval `[0.5 - z/2 + p,
+    /// 0.5 + z/2 + p]` to contain `[0, 1]`: `p ∈ [-(z-1)/2, (z-1)/2]`.
+    /// At `zoom == 1` this collapses to exactly `0` (no pan possible at
+    /// fit, matching that there's nothing to pan to yet).
+    static func clampedPan(_ pan: CGSize, zoom: CGFloat) -> CGSize {
+        let maxOffset = max(0, (zoom - 1) / 2)
+        return CGSize(
+            width: min(max(pan.width, -maxOffset), maxOffset),
+            height: min(max(pan.height, -maxOffset), maxOffset)
+        )
+    }
+
+    /// A cursor point (in the SAME point space `fitRect`/`containerSize`
+    /// are already in) converted to a fraction of `fitRect`, y-DOWN.
+    /// Degenerate zero-size `fitRect` returns the center `(0.5, 0.5)`
+    /// rather than dividing by zero — matches `CompareLayout.
+    /// dividerFraction`'s NaN-avoidance for the same class of input.
+    static func cursorFractionInFitRect(cursor: CGPoint, fitRect: CGRect) -> CGPoint {
+        guard fitRect.width > 0, fitRect.height > 0 else { return CGPoint(x: 0.5, y: 0.5) }
+        return CGPoint(
+            x: (cursor.x - fitRect.minX) / fitRect.width,
+            y: (cursor.y - fitRect.minY) / fitRect.height
+        )
+    }
+}

@@ -45,6 +45,14 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     /// Non-nil enables the Compare feature (Side by Side / Split);
     /// `nil` is the default, single-image path — see `draw(in:)`.
     var compare: CompareRenderConfig?
+    /// 1 = fit (no zoom), up to `ZoomPanGeometry.maxZoom`. Applied via
+    /// `fitted(_:into:zoomScale:panOffsetNorm:)`, on top of every render
+    /// path (off/sideBySide/split) uniformly.
+    var zoomScale: CGFloat = 1
+    /// Fit-rect-normalized, SwiftUI y-DOWN (see `fitted(_:into:zoomScale:
+    /// panOffsetNorm:)`'s own doc comment for where/why this gets flipped
+    /// to this renderer's y-UP space).
+    var panOffset: CGSize = .zero
 
     init(device: MTLDevice) {
         guard let queue = device.makeCommandQueue() else {
@@ -67,11 +75,32 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     /// the identical math as the single-image path, byte for byte. See
     /// `draw(in:)`'s own comment for why there's deliberately no y-flip
     /// here.
-    private func fitted(_ image: CIImage, into fitRect: CGRect) -> CIImage {
-        let scale = fitRect.width / image.extent.width
+    ///
+    /// `zoomScale`/`panOffsetNorm` are optional (default to 1/`.zero`, an
+    /// exact no-op — every existing call reusing these defaults renders
+    /// byte-identically to before zoom/pan existed). When active: the
+    /// scaled content is centered on `fitRect`'s own center (so zooming
+    /// about the middle needs no pan) and then shifted by `panOffsetNorm`
+    /// — fit-rect-normalized fractions in SwiftUI's y-DOWN convention
+    /// (`ZoomPanGeometry`'s convention throughout). This renderer's own
+    /// space is y-UP (visual bottom at low y — the same "no y-flip"
+    /// finding `draw(in:)` documents), the OPPOSITE of SwiftUI's for the
+    /// y axis specifically — exactly the asymmetry Compare's horizontal
+    /// split already had to get right — so `panY` is negated here and
+    /// ONLY here; every other zoom/pan call site (state storage, the
+    /// gesture, `ZoomPanGeometry`) stays uniformly y-DOWN and never has
+    /// to reason about this.
+    private func fitted(
+        _ image: CIImage, into fitRect: CGRect, zoomScale: CGFloat = 1, panOffsetNorm: CGSize = .zero
+    ) -> CIImage {
+        let scale = (fitRect.width / image.extent.width) * zoomScale
+        let panX = panOffsetNorm.width * fitRect.width
+        let panY = -panOffsetNorm.height * fitRect.height
+        let zoomedMinX = fitRect.midX - fitRect.width * zoomScale / 2 + panX
+        let zoomedMinY = fitRect.midY - fitRect.height * zoomScale / 2 + panY
         let transform = CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
             .concatenating(CGAffineTransform(scaleX: scale, y: scale))
-            .concatenating(CGAffineTransform(translationX: fitRect.minX, y: fitRect.minY))
+            .concatenating(CGAffineTransform(translationX: zoomedMinX, y: zoomedMinY))
         return image.transformed(by: transform)
     }
 
@@ -143,14 +172,38 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
                 // Original on the left, edited on the right — fixed layout,
                 // matching the confirmed design (no orientation choice for
                 // Side by Side).
-                let fittedOriginal = fitted(original, into: leftRect)
-                let fittedEdited = fitted(edited, into: rightRect)
+                // SAME zoomScale/panOffset into both halves: since pan is
+                // normalized to each (congruent) rect's own dimensions,
+                // this alone keeps both sides showing the identical
+                // relative detail through any zoom/pan — the "same detail
+                // on both sides" sync this feature needs, with no extra
+                // code beyond passing the same two values twice.
+                //
+                // `.cropped(to:)` each side to its OWN half is required
+                // once zoom is in play — a real, live-caught bug: at
+                // zoomScale == 1 the fitted image exactly fills its half,
+                // so cropping was a no-op and easy to omit; but zoomed
+                // past 1 the fitted image is LARGER than its half-rect and
+                // bleeds into the neighboring half, where it sits on TOP
+                // (composited first) and visually covers that side
+                // entirely — looked like "one side enlarges and takes over
+                // the other."
+                let fittedOriginal = fitted(original, into: leftRect, zoomScale: zoomScale, panOffsetNorm: panOffset)
+                    .cropped(to: leftRect)
+                let fittedEdited = fitted(edited, into: rightRect, zoomScale: zoomScale, panOffsetNorm: panOffset)
+                    .cropped(to: rightRect)
                 composited = fittedOriginal.composited(over: fittedEdited.composited(over: background))
             case .split(let orientation, let position):
                 let fitRect = AspectFit.rect(fitting: edited.extent.size, in: drawableSize)
                 guard fitRect.width > 0, fitRect.height > 0 else { return }
-                let fittedEdited = fitted(edited, into: fitRect)
-                let fittedOriginal = fitted(original, into: fitRect)
+                // Zoom/pan applied to BOTH fitted images identically; the
+                // divider's own `originalRegion` below is computed from
+                // the UN-zoomed `fitRect`, so the seam stays fixed on
+                // screen while the content zooms/pans underneath it —
+                // exactly matching how the divider's screen position is
+                // independent of zoom in every other mode too.
+                let fittedEdited = fitted(edited, into: fitRect, zoomScale: zoomScale, panOffsetNorm: panOffset)
+                let fittedOriginal = fitted(original, into: fitRect, zoomScale: zoomScale, panOffsetNorm: panOffset)
                 // `CompareDividerOverlay` measures `position` in SwiftUI's
                 // top-down space (0 = visual top, matching `fitRect.minY`
                 // there). THIS fitRect is in Core Image's bottom-up space,
@@ -180,7 +233,8 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
         } else {
             let fitRect = AspectFit.rect(fitting: edited.extent.size, in: drawableSize)
             guard fitRect.width > 0, fitRect.height > 0 else { return }
-            composited = fitted(edited, into: fitRect).composited(over: background)
+            composited = fitted(edited, into: fitRect, zoomScale: zoomScale, panOffsetNorm: panOffset)
+                .composited(over: background)
         }
 
         ciContext.render(

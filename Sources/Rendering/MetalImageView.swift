@@ -7,6 +7,18 @@ struct MetalImageView: NSViewRepresentable {
     var editState: EditState
     /// Non-nil enables the Compare feature. See `ImageRenderer.compare`.
     var compare: CompareRenderConfig?
+    /// See `ImageRenderer.zoomScale`/`panOffset`.
+    var zoomScale: CGFloat = 1
+    var panOffset: CGSize = .zero
+    /// Whether scroll-to-zoom is currently armed — mirrors `ContentView.
+    /// canZoom` (false during crop-editing/WB-picking/red-eye-placement).
+    var zoomEnabled: Bool = false
+    /// Fired by `ResizingMTKView`'s scroll monitor with a y-DOWN,
+    /// view-bounds-normalized cursor fraction and the raw scroll delta.
+    /// `ContentView` owns turning this into an actual zoom/pan update
+    /// (it needs to know which fit rect — single-image vs. a Side-by-Side
+    /// half — the cursor fraction should be interpreted against).
+    var onScrollZoom: ((CGPoint, CGFloat) -> Void)?
 
     func makeNSView(context: Context) -> MTKView {
         let renderer = context.coordinator
@@ -34,26 +46,37 @@ struct MetalImageView: NSViewRepresentable {
         return view
     }
 
-    /// Skips the redraw entirely when neither `image` nor `editState` (nor,
-    /// now, `compare`) actually changed since the last call. SwiftUI
-    /// re-invokes `updateNSView` on any observed document change, but during
-    /// an interactive crop drag the image shown here (`ContentView`'s
+    /// Skips the redraw entirely when nothing that actually affects the
+    /// render changed since the last call. SwiftUI re-invokes
+    /// `updateNSView` on any observed document change, but during an
+    /// interactive crop drag the image shown here (`ContentView`'s
     /// `displayEditState`, with crop insets zeroed) is intentionally held
-    /// constant while only the crop overlay moves — this guard keeps those
-    /// frames free of redundant Core Image pipeline re-runs. `image` is
-    /// compared by reference (`currentImage` is only ever reassigned
-    /// wholesale on load, never mutated in place); `editState`/`compare` by
-    /// value (`Equatable`) — `compare` must be included here or dragging the
-    /// Compare divider (which only changes `compare.mode`'s `position`,
-    /// nothing else) would never trigger a redraw.
+    /// constant while only the crop overlay moves — this guard keeps
+    /// those frames free of redundant Core Image pipeline re-runs.
+    /// `image` is compared by reference (`currentImage` is only ever
+    /// reassigned wholesale on load, never mutated in place); the rest by
+    /// value (`Equatable`) — EVERY one of these must be included, or the
+    /// corresponding interaction silently stops redrawing mid-gesture
+    /// (already learned once for `compare`: dragging the Compare divider
+    /// only changes `compare.mode`'s `position`, nothing else the guard
+    /// was watching; the same risk applies to `zoomScale`/`panOffset`
+    /// changing during a scroll/pan).
     func updateNSView(_ nsView: MTKView, context: Context) {
         let renderer = context.coordinator
-        guard image !== renderer.image || editState != renderer.editState || compare != renderer.compare else {
+        guard image !== renderer.image || editState != renderer.editState || compare != renderer.compare
+            || zoomScale != renderer.zoomScale || panOffset != renderer.panOffset
+        else {
+            (nsView as? ResizingMTKView)?.onScrollZoom = onScrollZoom
+            (nsView as? ResizingMTKView)?.zoomEnabled = zoomEnabled
             return
         }
         renderer.image = image
         renderer.editState = editState
         renderer.compare = compare
+        renderer.zoomScale = zoomScale
+        renderer.panOffset = panOffset
+        (nsView as? ResizingMTKView)?.onScrollZoom = onScrollZoom
+        (nsView as? ResizingMTKView)?.zoomEnabled = zoomEnabled
         nsView.setNeedsDisplay(nsView.bounds)
     }
 
@@ -66,8 +89,24 @@ struct MetalImageView: NSViewRepresentable {
 }
 
 /// MTKView redraws on `setNeedsDisplay` only (no run loop); this subclass
-/// requests a redraw on resize so the image stays correctly fitted.
+/// requests a redraw on resize so the image stays correctly fitted, and
+/// owns capturing scroll-wheel input for the zoom feature.
 private final class ResizingMTKView: MTKView {
+    /// Set (every `updateNSView` call) from `MetalImageView.onScrollZoom`.
+    var onScrollZoom: ((CGPoint, CGFloat) -> Void)?
+    /// Set from `MetalImageView.zoomEnabled` — mirrors `ContentView.
+    /// canZoom`.
+    var zoomEnabled: Bool = false
+
+    /// `nonisolated(unsafe)`: `deinit` is always `nonisolated` in Swift
+    /// (deallocation isn't tied to any actor), so it can't touch a plain
+    /// `@MainActor`-inferred stored property — but this token is just an
+    /// opaque, safely-nilable reference with no real concurrency hazard;
+    /// `deinit` runs exactly once, with no concurrent access possible.
+    /// This is the standard, accepted pattern for tearing down an
+    /// `NSEvent` monitor (or similar legacy-API handle) from `deinit`.
+    nonisolated(unsafe) private var scrollMonitor: Any?
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         setNeedsDisplay(bounds)
@@ -87,5 +126,49 @@ private final class ResizingMTKView: MTKView {
     /// outright rather than guessing at a magic frame size to compensate.
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+
+    /// A LOCAL `NSEvent` monitor, not a `scrollWheel(with:)` override —
+    /// deliberate. In Compare's Split mode, `CompareDividerOverlay`'s
+    /// full-area background `Color.clear` sits ON TOP of this view (same
+    /// SwiftUI `ZStack`), so an unhandled scroll event on a plain override
+    /// would never even reach this view — SwiftUI's own hosting responder
+    /// chain would route the event elsewhere first, the same "sibling
+    /// overlay swallows it" trap `CompareDividerOverlay`'s own gesture
+    /// redesign already had to work around for click-drag. A local
+    /// monitor intercepts the event BEFORE that dispatch, so it fires
+    /// identically regardless of what SwiftUI overlays happen to be
+    /// stacked on top this frame — needed for zoom to work in Split too.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installScrollMonitorIfNeeded()
+    }
+
+    private func installScrollMonitorIfNeeded() {
+        guard window != nil, scrollMonitor == nil else { return }
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self,
+                  let window = self.window, event.window === window, self.zoomEnabled,
+                  let onScrollZoom = self.onScrollZoom
+            else { return event }
+            let pointInView = self.convert(event.locationInWindow, from: nil)
+            guard self.bounds.contains(pointInView) else { return event }
+            // MTKView is unflipped (y-UP, origin bottom-left) — flip
+            // once, here, back to SwiftUI's y-DOWN convention, so
+            // nothing else in this feature (ZoomPanGeometry,
+            // ContentView's state, the pan gesture) ever has to
+            // reason about this view's own coordinate flavor.
+            let fraction = CGPoint(
+                x: pointInView.x / self.bounds.width, y: 1 - pointInView.y / self.bounds.height
+            )
+            onScrollZoom(fraction, event.scrollingDeltaY)
+            return nil // consumed — don't let it fall through to anything else
+        }
+    }
+
+    deinit {
+        if let scrollMonitor {
+            NSEvent.removeMonitor(scrollMonitor)
+        }
     }
 }

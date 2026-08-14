@@ -309,6 +309,35 @@ Edits are stored as parameter sets and rendered live on the GPU.
    re-derived the y-axis coordinate math and the red-eye field-clearing
    requirement from first principles rather than trusting the diff or the
    live-test outcome. 319 tests (16 new).
+
+   **Post-Phase-5 follow-up #6 (shipped): scroll-to-zoom + click-drag-to-
+   pan.** Works in the normal Editor view and both Compare modes (unavailable
+   during Crop/WB-eyedropper/red-eye-placement, mirroring Compare's own
+   mutual-exclusion). New `Sources/UI/ZoomPanGeometry.swift` (pure,
+   unit-tested — `CompareLayout`/`CropAspectMath` precedent): a
+   cursor-centered-zoom formula and a pan-clamp formula, both derived and
+   independently re-derived by the reviewer, not eyeballed. `ImageRenderer`'s
+   shared `fitted(_:into:)` widened with defaulted zoom/pan params
+   (byte-identical at defaults — verified) so all three render paths
+   (off/sideBySide/split) get zoom for free; Side by Side syncs both halves
+   by feeding the same values into each (pan is normalized per-rect).
+   Scroll capture uses an `NSEvent` local monitor on the `MTKView` subclass,
+   not a `scrollWheel` override — a plain override would never fire in
+   Split mode, since `CompareDividerOverlay`'s background overlay sits on
+   top of the MTKView in the same `ZStack` and would swallow the event via
+   SwiftUI's own responder chain first. Swift 6: the monitor's token is
+   `nonisolated(unsafe)` so `deinit` can remove it (a real compile error —
+   `NSEvent` is non-`Sendable` — ruled out wrapping the closure in
+   `MainActor.assumeIsolated`; `NSView` subclasses are already implicitly
+   `@MainActor`-isolated here). **A real bug caught live**: Side by Side
+   didn't crop each fitted image to its own half — harmless at
+   `zoomScale == 1` but once zoomed past 1 the larger fitted image bled
+   into the neighboring half and visually covered it; fixed by cropping
+   each side to its own rect before compositing. Reviewer APPROVE on first
+   pass — independently re-derived both geometry formulas and the y-axis
+   flip, confirmed the crop-bleed fix's completeness for any zoom, and
+   confirmed the build compiles clean under this project's real Swift 6
+   settings. 337 tests (18 new).
 6. RAW support: LibRaw bridge, demosaic, camera profiles
 7. Polish: tiled rendering for large images, perf, edge cases
 

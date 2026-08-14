@@ -2786,21 +2786,116 @@ flags, collections.
   fix-first needed.
 - 319 tests total (16 new). 1 commit.
 
+### Zoom and pan — Editor + Compare (complete, verified live)
+- User-requested: scroll wheel/trackpad scroll to zoom (centered on the
+  cursor), click-drag to pan once zoomed — confirmed via two rounds of
+  AskUserQuestion (scroll not pinch; click-drag not two-finger-scroll for
+  pan). Must work in the normal Adjust view AND both Compare modes.
+  Scoping decision (mirrors Compare mode's own precedent, not re-asked):
+  unavailable during Crop/WB-eyedropper/red-eye-placement — those
+  overlays are positioned against `currentFitRect`, which assumes no
+  zoom/pan.
+- NEW `Sources/UI/ZoomPanGeometry.swift`: pure, unit-tested geometry
+  (`CompareLayout`/`CropAspectMath` precedent) — `steppedZoom` (
+  multiplicative, clamped 1...8), `panForZoomAboutCursor` (the
+  cursor-centered-zoom formula, `p' = (f-0.5)*(1-r) + r*p`, derived from
+  requiring the content point under the cursor to map back to the same
+  screen fraction after a zoom change — independently re-derived by both
+  the orchestrating session and the reviewer before shipping), `clampedPan`
+  (derived from requiring the zoomed content to always fully cover the fit
+  rect: `p ∈ [-(z-1)/2, (z-1)/2]`), `cursorFractionInFitRect` (NaN-safe on
+  degenerate input). Everything normalized to the fit rect, SwiftUI y-DOWN
+  throughout — the y-axis flip to this app's renderer-space convention
+  happens in exactly ONE place (`ImageRenderer.fitted`), nowhere else.
+- `Sources/Rendering/ImageRenderer.swift`: the shared `fitted(_:into:)`
+  transform helper (already extracted during Compare mode) widened to
+  `fitted(_:into:zoomScale:panOffsetNorm:)` with both new params defaulted
+  — every pre-existing call site behaves byte-identically (verified by
+  both the orchestrating session and the reviewer: at the defaults,
+  `zoomedMinX`/`zoomedMinY` reduce to exactly `fitRect.minX`/`fitRect.minY`).
+  All three render paths (off/sideBySide/split) thread `zoomScale`/
+  `panOffset` through; Side by Side passes the SAME values into both
+  halves (pan is normalized to each congruent rect's own dimensions, so
+  this alone syncs "same detail on both sides" with no extra code); Split
+  shares one `fitRect` for both images, with the divider's own crop region
+  still derived from the UN-zoomed `fitRect` so the seam stays fixed on
+  screen while content zooms underneath it. Still one `ciContext.render(...)`
+  call, one color space.
+- `Sources/Rendering/MetalImageView.swift`: `ResizingMTKView` (the private
+  `MTKView` subclass) installs an `NSEvent.addLocalMonitorForEvents(
+  matching: .scrollWheel)` in `viewDidMoveToWindow()` — deliberately NOT a
+  `scrollWheel(with:)` override, because in Compare's Split mode
+  `CompareDividerOverlay`'s full-area background sits on top of the MTKView
+  in the same `ZStack`, so an unhandled override would never even reach
+  this view (SwiftUI's own responder chain routes it elsewhere first); a
+  local monitor intercepts the event BEFORE that dispatch, immune to
+  overlay stacking. Guards against consuming scroll events meant for other
+  UI (`event.window === window`, `bounds.contains(pointInView)`, falls
+  through via `return event` otherwise — reviewer confirmed this can never
+  swallow the sidebar's/Library grid's own scrolling). **Swift 6
+  concurrency**: `scrollMonitor`'s token marked `nonisolated(unsafe)` so
+  `deinit` (always `nonisolated`) can remove it — a real compile error was
+  hit first (wrapping the closure body in `MainActor.assumeIsolated`
+  failed because `NSEvent` is explicitly non-`Sendable`); removing that
+  wrapper and accessing `self` directly compiled clean, confirming
+  `NSView` subclasses are already implicitly `@MainActor`-isolated here.
+  `updateNSView`'s redraw guard widened to include `zoomScale`/`panOffset`
+  (the same lesson already learned once for `compare`).
+- NEW `Sources/UI/PanOverlay.swift`: click-drag-to-pan, structured like
+  `CompareDividerOverlay`'s grab strip (start-snapshot delta drag); also a
+  double-tap to reset zoom/pan to identity. In Side by Side, two instances
+  (one per half) both bound to the same `$zoomScale`/`$panOffset` so
+  dragging either photo pans both in sync.
+- `Sources/UI/ContentView.swift`: `canZoom` (Compare active does NOT block
+  zoom); `sideBySideFitRects`/`handleScrollZoom` (converts the scroll
+  monitor's pane-relative cursor fraction into the correct fit-rect-relative
+  fraction, picking the right half in Side by Side); resets to identity on
+  new-photo-load, leaving Adjust, arming WB/red-eye, and a new
+  `.onChange(of: compareMode)` (a mode switch gets a fresh zoom/pan, since
+  the fit-rect geometry differs between modes). A small "N%" HUD
+  (`zoomPercentageHUD`, styled like the pre-existing export-progress HUD)
+  added per a live follow-up request, shown only while zoomed past fit.
+- **A real bug caught live by the user** (not the reviewer): Side by Side
+  didn't crop each fitted image to its own half — harmless at `zoomScale
+  == 1` (exact fit, no overflow) but once zoomed past 1 the fitted image
+  became larger than its half-rect and bled into the neighboring half,
+  where — composited on top — it visually covered that side entirely
+  ("one side enlarges and takes over the other"). Fixed by cropping each
+  side to its own rect before compositing; reviewer independently
+  confirmed the fix is complete for any zoom/pan combination.
+- Reviewer APPROVE on first pass — independently re-derived both
+  `ZoomPanGeometry` formulas and the y-axis flip from first principles,
+  confirmed the widened `fitted(_:into:)`'s byte-identity at defaults,
+  confirmed the crop-bleed fix's completeness, verified `MTKView`/`NSView`
+  are genuinely unflipped (not assumed), traced every mutual-exclusion
+  path for dangling zoom state, and confirmed the build actually compiles
+  clean under this project's real Swift 6 strict-concurrency settings (not
+  just "stopped complaining" from an earlier failed attempt). One
+  non-blocking note: `handleScrollZoom` runs a full `EditPipeline.apply`
+  on every scroll tick in Side by Side to compute `sideBySideFitRects` —
+  likely cheap (Core Image builds a lazy graph, doesn't render), but worth
+  a live perf check on a large image if scrolling ever feels janky there.
+- 337 tests total (18 new). 1 commit.
+
 ## In progress / blocked
 Nothing blocked. Nice-to-have not yet eyeballed (low risk, not required):
-window-resize re-fit behavior, opened-file mtime check.
+window-resize re-fit behavior, opened-file mtime check. Non-blocking
+reviewer note from zoom/pan: `handleScrollZoom`'s Side-by-Side path
+recomputes `EditPipeline.apply` per scroll tick — worth a live perf check
+on a large image if Side-by-Side scrolling ever feels janky (see its own
+section above for detail).
 
 ## Exact next step
-**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus six user-requested
+**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus seven user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
 sidebar restyle; the custom thin slider; the Editor-vs-Preview color-fix;
-Library thumbnails reflecting edits; Compare mode) — see their own
-sections above. **Phase 5 (Presets + export) has STARTED**: slice 1, batch
-export (including the entitlement-fix debugging saga and 2 reviewer-caught
-bugs), AND its immediate follow-up, selecting individual photos for export
-(including a live-caught checkbox-positioning bug), are BOTH DONE — see
-their own sections above. Both reviewer-APPROVED. 319 tests passing, app
-fully functional.
+Library thumbnails reflecting edits; Compare mode; zoom and pan) — see
+their own sections above. **Phase 5 (Presets + export) has STARTED**:
+slice 1, batch export (including the entitlement-fix debugging saga and 2
+reviewer-caught bugs), AND its immediate follow-up, selecting individual
+photos for export (including a live-caught checkbox-positioning bug), are
+BOTH DONE — see their own sections above. Both reviewer-APPROVED. 337
+tests passing, app fully functional.
 
 **Both real issues surfaced live during batch export's own verification
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and

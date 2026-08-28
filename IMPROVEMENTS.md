@@ -221,7 +221,7 @@ adjustable action, not 5 unlabeled buttons), the selection checkbox
 (state), `CompareDividerOverlay` (adjustable), crop handles. VoiceOver-walk
 the Editor and Library once each.
 
-### D7. Code design: split ContentView.swift (1352 lines)
+### ~~D7. Code design: split ContentView.swift (1352 lines)~~ — SHIPPED 2026-08-28
 
 It currently holds: tab state, crop/aspect logic, zoom/pan gesture math
 call-throughs, compare config, export progress HUD, the whole Adjust tab
@@ -232,6 +232,20 @@ the coordinator. Do this BEFORE any of D1–D4 lands if possible — every one
 of those touches ContentView, and the file is already at the size where
 merge pain and accidental coupling start. Pure-refactor sessions still get
 a reviewer pass per CLAUDE.md (it verifies behavior-preservation).
+
+**Shipped 2026-08-28** exactly as described, as a pure move: `ContentView.swift`
+1352 -> 766 lines, with `AdjustTabView` (482), `CropTabView` (88),
+`EditorChromeViews` (54) and `EditControlRows` (48) alongside it in
+`Sources/UI/` (note: this item said `Sources/App/`, which was wrong -- the file
+has always been under `Sources/UI/`). The one non-obvious constraint found while
+doing it: the Adjust tab's eight presentation states (6 section-expansion bools,
+`histogramDisplayMode`, `selectedSelectiveColorBand`) CANNOT become the child's
+own `@State`, because `editControls` picks the tab body with a `switch` and the
+subtree is destroyed on each switch to Crop. They are grouped into
+`AdjustPanelState` but still owned by `ContentView`. Build clean, 364 tests
+passing, reviewer APPROVE (with one non-blocking note: one struct binding
+instead of eight coarsens SwiftUI invalidation granularity -- no observable
+behavior change at this panel's scale).
 
 ---
 

@@ -3064,6 +3064,64 @@ worth doing on performance grounds as well as correctness.
   `ContentView.photosToExport` intersects with `photos`.
 - 364 tests (7 new), 0 failures, stable across 3 consecutive full-suite runs.
 
+### ContentView split into Adjust/Crop/chrome views (complete, NOT yet verified live) — IMPROVEMENTS.md D7
+
+Pure, behavior-preserving refactor. `Sources/UI/ContentView.swift` went from
+1352 lines to **766**, with four new files beside it in `Sources/UI/`:
+`AdjustTabView.swift` (482 — the six collapsible sections, "Reset
+Adjustments", `isAdjustTabAtIdentity`, the three selective-color binding
+dispatchers, and `AdjustSectionContainer`), `CropTabView.swift` (88 —
+straighten/perspective/flip, the Aspect list, the four crop-inset sliders),
+`EditorChromeViews.swift` (54 — `ZoomPercentageHUD`, `ExportProgressHUD`,
+`PlaceholderTab`), and `EditControlRows.swift` (48 — `EditSliderRow` and
+`EditToggleRow`, now internal since both tabs use them). `ContentView` stays
+the coordinator: tab/library state, viewport state, crop-aspect math,
+`body`/`mainContent`/`libraryContent`/`editorContent`/`editControls`.
+
+`IMPROVEMENTS.md` asked for this BEFORE D1–D4, since all of those touch
+`ContentView`. (That item gave the path as `Sources/App/ContentView.swift`;
+it has always been `Sources/UI/` — a reminder that its claims need checking,
+which is what its own working agreement 5 says.)
+
+- **The one non-obvious constraint, and the real regression risk.** The Adjust
+  tab's eight presentation-only states (6 section-expansion bools,
+  `histogramDisplayMode`, `selectedSelectiveColorBand`) CANNOT be moved into
+  `AdjustTabView` as its own `@State`. `editControls` picks the tab body with a
+  `switch`, so the Adjust subtree is destroyed on every switch to Crop —
+  child-owned `@State` would re-collapse every section, reset the histogram
+  picker to Luminance and the band to Red on each round-trip. They are grouped
+  into a new `AdjustPanelState` struct that `ContentView` still owns as one
+  `@State`, passed down as a single `@Binding`.
+- `isPickingWhiteBalance`/`isPlacingRedEyeCorrections` stay `@Binding`:
+  `canZoom`, the WB/red-eye tap overlays, the photo-change reset, the
+  library-toggle reset and the crop-arming mutual exclusion all still read or
+  write them from `ContentView`.
+- The compare/zoom/pan triple the two point-picking buttons performed inline
+  (`compareMode = .off; zoomScale = 1; panOffset = .zero`) is now an
+  `onEnterPointPickingMode` callback supplied by `ContentView`, so the panel
+  doesn't take bindings to three unrelated viewport states. Order is unchanged.
+- Crop's aspect math (`effectiveAspectRatio`, `selectAspect`, `resetCropTab`)
+  deliberately stayed in `ContentView` — it needs `currentFitRect`/
+  `containerSize`, and `editorContent` reads `effectiveAspectRatio` for the
+  on-image overlay. `CropTabView` gets `selectedAspect` by value plus
+  `onSelectAspect`/`onReset` closures.
+- Verified as a pure move by diffing each new file against the exact
+  pre-change line ranges: the ONLY differences are the intended transforms
+  (`adjustTabContent`/`cropTabContent` → `body`, the eight states re-rooted
+  through `panel.`, the triple → callback, the two crop closures, `private` →
+  internal on the two shared rows). No dropped modifier, no changed
+  range/identity/format string, no reordered statement, no lost comment.
+- No `project.yml` change needed (it globs `path: Sources`); `xcodegen
+  generate` picks the new files up.
+- Build clean, **364 tests, 0 failures**. Reviewer **APPROVE**, with one
+  non-blocking note: one struct binding instead of eight coarsens SwiftUI
+  invalidation granularity — an invalidation-scope change only, no observable
+  behavior difference at this panel's scale.
+- **NOT yet verified live** — the session that shipped it had no Screen
+  Recording or Accessibility permission, so the app could only be launched
+  (it runs, no crash) and not driven. Outstanding manual checklist, in the
+  "Exact next step" section below.
+
 ## Exact next step
 **Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus eight user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
@@ -3074,7 +3132,7 @@ export) has STARTED**: slice 1, batch export (including the entitlement-fix
 debugging saga and 2 reviewer-caught bugs), AND its immediate follow-up,
 selecting individual photos for export (including a live-caught
 checkbox-positioning bug), are BOTH DONE — see their own sections above.
-Both reviewer-APPROVED. 350 tests passing, app fully functional.
+Both reviewer-APPROVED. 364 tests passing, app fully functional.
 
 **Both real issues surfaced live during batch export's own verification
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and
@@ -3082,10 +3140,24 @@ Library thumbnails not reflecting edits, each with its own section above.
 No open correctness items remain from that batch.
 
 A codebase-wide improvement review now lives in `IMPROVEMENTS.md` at the repo
-root (performance + design backlog, written 2026-08-28). Its first item, P1,
-was attempted and DISPROVED by measurement — see the section immediately above;
-the file's remaining items are unmeasured candidates, not commitments, and
-nothing in it outranks the roadmap options below.
+root (performance + design backlog, written 2026-08-28). Three of its items are
+now closed: P1 was attempted and DISPROVED by measurement, P4 was measured and
+SHIPPED, and D7 (split ContentView) SHIPPED — each has its own section above.
+Its remaining items are unmeasured candidates, not commitments, and nothing in
+it outranks the roadmap options below. Its own next recommendations are D1(a)
+(⌘←/⌘→ prev/next in the Editor — the best user-visible one, and D7 has now
+cleared its path) and P3 (cache the post-pipeline `CIImage`, measure first).
+
+**FIRST, before anything else: the D7 split above needs its live pass.** Open
+a photo, expand two Adjust sections, set the histogram picker to RGB, select a
+non-Red Selective Color band, switch to Crop and back — all four must persist
+(this is the exact regression `AdjustPanelState`'s ownership guards against).
+Then: "Pick White Balance" while zoomed and in Compare must exit Compare, snap
+zoom to 100% and turn yellow; same for "Fix Red-Eye", each clearing the other.
+Then: Adjust sliders still drive the render, "Reset Adjustments" enables only
+off-identity, Crop aspect presets checkmark and reshape, Crop "Reset" clears
+everything and returns Aspect to Freeform, the zoom % HUD and export progress
+HUD both still appear, and Filters/Clean Up still show placeholder text.
 
 **Next: options** (ask the user which, don't guess): (1) Phase 5 slice 2 —
 presets (save/apply named edit-state presets); (2) Library polish,

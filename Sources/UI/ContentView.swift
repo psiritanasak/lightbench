@@ -32,8 +32,11 @@ struct ContentView: View {
     /// Phase 4 slice 2: toggles the main window between the single-photo
     /// Editor (the existing `HSplitView`, unchanged) and the Library
     /// thumbnail grid. Presentation-only — switching back to the Editor
-    /// leaves whatever photo was already loaded exactly as it was.
-    @State private var showLibrary = false
+    /// leaves whatever photo was already loaded exactly as it was. Owned by
+    /// `PhotoAppApp` rather than this view (it was `@State` here until the
+    /// Photo menu's ⌘←/⌘→ commands needed to disable while the grid is up);
+    /// everything below uses it exactly as before, through the binding.
+    @Binding var showLibrary: Bool
 
     /// Which top-level editing tool is active — Apple Photos-style tab bar.
     /// Selecting `.crop` IS entering crop-editing mode (see `isCroppingActive`
@@ -418,7 +421,13 @@ struct ContentView: View {
         // doesn't linger showing a stale (now-meaningless) full-frame rect
         // over the new photo, and reset the aspect lock (a fresh photo has
         // no meaningful "current" ratio to keep enforcing).
-        .onChange(of: document.currentFileName) { _, _ in
+        //
+        // Keyed on `currentURL`, not `currentFileName`: two photos in
+        // different folders can share a filename, in which case a filename
+        // key silently skips this whole reset. Reachable now that ⌘←/⌘→ can
+        // step straight between them — the Name (A–Z) sort puts identical
+        // filenames adjacent.
+        .onChange(of: document.currentURL) { _, _ in
             selectedTab = .adjust
             selectedAspect = .freeform
             customAspectRatio = nil
@@ -762,5 +771,5 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView(document: ImageDocumentModel(), catalog: CatalogModel())
+    ContentView(document: ImageDocumentModel(), catalog: CatalogModel(), showLibrary: .constant(false))
 }

@@ -8,11 +8,15 @@ import UniformTypeIdentifiers
 final class ImageDocumentModel: ObservableObject {
     @Published private(set) var currentImage: CIImage?
     @Published private(set) var currentFileName: String?
-    /// The full URL of the currently-open photo — NOT `@Published` (no UI
-    /// reads it directly), kept purely so a sidecar path can be derived
-    /// from it. Before sidecar persistence, `load(from:)` never retained
-    /// anything beyond the bare filename string.
-    private var currentURL: URL?
+    /// The full URL of the currently-open photo. Originally kept purely so a
+    /// sidecar path could be derived from it (before sidecar persistence,
+    /// `load(from:)` never retained anything beyond the bare filename
+    /// string), and therefore NOT `@Published`. It is now published, because
+    /// the Photo menu's ⌘←/⌘→ commands locate this photo in
+    /// `CatalogModel.displayedPhotos` by its path, and their enabled state has
+    /// to track it — the same reason `canUndo`/`canRedo` are published for the
+    /// Edit menu. Writes stay internal; `load(from:)` is the only one.
+    @Published private(set) var currentURL: URL?
     @Published var loadErrorMessage: String?
     /// User-facing feedback when saving a sidecar fails (folder-bookmark
     /// resolution or the write itself) — mirrors `whiteBalanceSampleMessage`'s

@@ -168,7 +168,7 @@ than for P2's on-screen preview).
 
 ## Part 2 — Design improvements (UX, then code design)
 
-### D1. Editor has no way to move between photos (biggest UX gap) — (a) SHIPPED 2026-08-28, (b) filmstrip still open
+### ~~D1. Editor has no way to move between photos (biggest UX gap)~~ — (a) SHIPPED 2026-08-28, (b) SHIPPED 2026-08-28
 
 Currently: edit one photo → toolbar back to Library → click the next photo.
 Lightroom/Photos solve this with a filmstrip. Recommend, in ascending scope:
@@ -188,8 +188,24 @@ through the existing `load(from:)` exactly as instructed above. Decisions taken:
 no wraparound, and both items disable when the open photo isn't in the displayed
 set or while the Library is showing. New pure `LibraryNavigation` type in
 `Sources/Catalog` with 10 tests; `currentURL` is now `@Published`; `showLibrary`
-lifted to `PhotoAppApp`. **(b), the filmstrip, is still open** and is now the
-cheaper half of D1 — the ordering and load-path questions are settled.
+lifted to `PhotoAppApp`.
+
+**(b) shipped 2026-08-28** as `Sources/UI/EditorFilmstripView.swift` — a
+collapsible horizontal strip below the Editor's `HSplitView`, reusing
+`CatalogModel.thumbnail(for:)` (the same cache `LibraryThumbnailCell`
+uses, exactly as recommended above) and the exact same `load(from:)` call
+(a) already uses, so the existing tab/crop-aspect/WB/red-eye/Compare/
+zoom/pan reset applies to filmstrip taps for free. A real, unplanned
+compiler-limits detour: adding one more toolbar button tipped the whole
+`.toolbar { }` closure into "unable to type-check in reasonable time";
+fixed by splitting it into five named `@ToolbarContentBuilder`
+properties (root-caused to total statement count in one builder closure,
+not any single expression's complexity — confirmed by testing that
+extracting only the new button did NOT fix it). Reviewer APPROVE, one
+non-blocking doc-comment fix (an overclaimed invalidation-scope
+guarantee, corrected to state the honest reasoning — see PROGRESS.md).
+No new tests, same precedent as Crop v2/Compare divider/D7. 374 tests
+unchanged. NOT yet verified live — full detail in PROGRESS.md.
 
 One measurement worth carrying to P6: the menu's enabled state re-derives
 `displayedPhotos` on every Scene body pass, i.e. every slider tick.
@@ -277,13 +293,15 @@ behavior change at this panel's scale).
 2. For every performance item: MEASURE before and after (os_signpost or
    simple timing), on a real large photo / real library, and record numbers
    in PROGRESS.md. No speculative optimization lands without a number.
-3. P1 is retired (disproved) and P4 has shipped. Of what remains, D7 is the
-   best next design session and D1 the best user-visible one. P2 is the
-   biggest potential win but the most complex — do it only after P3, and
-   only if measurement justifies it. Note P4 is the one item so far whose
+3. P1 is retired (disproved), P4 has shipped, D7 and D1 (both halves) have
+   shipped. Of what remains, D2/D3 are the cheapest next design sessions;
+   D4/D5/D6 need their own Plan Mode scoping. P2 is the biggest potential
+   win but the most complex — do it only after P3, and only if
+   measurement justifies it. Note P4 is the one item so far whose
    measurement DID justify it; P1's did not. Measure, don't assume.
-4. D7 (split ContentView) is the best first design session; D1(a)
-   (prev/next keys) is the best first user-visible one.
+4. D7 (split ContentView) and D1 (⌘←/⌘→ + the filmstrip) were the best
+   first sessions and are now both done — see their own struck-through
+   entries above for what shipped.
 5. Verify each item's factual claims against the code before acting — this
    file describes the code as of 2026-08-28.
 6. Update PROGRESS.md when an item ships; strike it through here.

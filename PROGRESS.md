@@ -3064,7 +3064,7 @@ worth doing on performance grounds as well as correctness.
   `ContentView.photosToExport` intersects with `photos`.
 - 364 tests (7 new), 0 failures, stable across 3 consecutive full-suite runs.
 
-### ContentView split into Adjust/Crop/chrome views (complete, NOT yet verified live) — IMPROVEMENTS.md D7
+### ContentView split into Adjust/Crop/chrome views (complete, verified live 2026-08-28) — IMPROVEMENTS.md D7
 
 Pure, behavior-preserving refactor. `Sources/UI/ContentView.swift` went from
 1352 lines to **766**, with four new files beside it in `Sources/UI/`:
@@ -3117,12 +3117,18 @@ which is what its own working agreement 5 says.)
   non-blocking note: one struct binding instead of eight coarsens SwiftUI
   invalidation granularity — an invalidation-scope change only, no observable
   behavior difference at this panel's scale.
-- **NOT yet verified live** — the session that shipped it had no Screen
-  Recording or Accessibility permission, so the app could only be launched
-  (it runs, no crash) and not driven. Outstanding manual checklist, in the
-  "Exact next step" section below.
+- **Verified live 2026-08-28** (a later session, via Accessibility-driven UI
+  automation once Screen Recording/Accessibility permission was granted):
+  expanded Light and Selective Color, set the histogram picker to RGB,
+  selected a non-Red Selective Color band (Purple), switched to Crop and
+  back to Adjust — all four persisted exactly as `AdjustPanelState` is
+  designed to guarantee. `Filters` tab's placeholder text also confirmed
+  live. WB-eyedropper/Red-eye-button Compare-clearing, Crop aspect-preset
+  reshaping, and Crop's own Reset button were NOT exercised this pass
+  (scope cut for time, not a failure) — still open if this checklist is
+  revisited.
 
-### Previous/Next photo — ⌘←/⌘→ (complete, NOT yet verified live) — IMPROVEMENTS.md D1(a)
+### Previous/Next photo — ⌘←/⌘→ (complete, verified live 2026-08-28) — IMPROVEMENTS.md D1(a)
 
 `IMPROVEMENTS.md` called D1 the biggest UX gap: editing a second photo meant
 toolbar → Library → click the next thumbnail. A new `CommandMenu("Photo")` in
@@ -3192,9 +3198,87 @@ current scale.
   and `catalog` already were — same bounded single-window assumption), and a
   same-URL early return in `load(from:)` would be cheap hardening against rapid
   repeated ⌘→ resetting the re-opened photo's undo history.
-- **NOT yet verified live** — same permission limitation as the D7 session
-  below; the app launches and quits cleanly but could not be driven. Checklist
-  in "Exact next step".
+- **Verified live 2026-08-28**, same session as the D7 live pass. Walked a
+  small 3-photo test set with ⌘→/⌘← (grid order matched navigation order:
+  Profile→IMG_1691→ATM_0662). **The case that actually matters, confirmed**:
+  set Exposure to +1.81 EV on photo A, ⌘→ to B (Exposure read back as
+  +0.00 EV — untouched), ⌘← back to A (Exposure still +1.81 EV, and the
+  render visibly brightened once the frame caught up — the edit is real,
+  not just a stale slider readout). ⌘Z on A back at rest immediately
+  afterward was a no-op (nothing left to undo) — consistent with
+  `resetHistory()` firing on the photo reload, i.e. undo genuinely cannot
+  reach across the round-trip. `Previous Photo` confirmed disabled
+  (greyed) at the first photo in the list. NOT exercised this pass: sort/
+  rating-filter reordering navigation, filtering the open photo out of
+  view, disabling while the Library grid is showing, and the
+  zoom/Compare/Crop-tab reset behavior on navigate — still open if this
+  checklist is revisited.
+
+### Bottom filmstrip in the Editor (complete, NOT yet verified live) — IMPROVEMENTS.md D1(b)
+
+The cheaper half of D1, now that D1(a) settled the navigation-order and
+load-path questions. New `Sources/UI/EditorFilmstripView.swift`:
+`EditorFilmstripView` (a `ScrollViewReader` + horizontal `ScrollView`/
+`LazyHStack` over `catalog.displayedPhotos` — the same sort/filter/search-
+respecting array D1(a) and the Library grid already use) and a private
+`FilmstripCell` (a compact 56×56 thumbnail, no rating/flag/filename —
+those stay Library-grid-only concerns). Cells fetch through the exact
+same `catalog.thumbnail(for:)` path `LibraryThumbnailCell`
+(`LibraryGridView.swift`) uses, sharing its `ThumbnailCache` actor, and
+repeat that cell's documented load-bearing `.frame` BEFORE `.clipShape`
+ordering. Tapping a cell calls the exact same
+`document.load(from: URL(fileURLWithPath: photo.path))`
+`libraryContent`'s onTap and `PhotoAppApp.open(_:)` already call, so the
+existing `.onChange(of: document.currentURL)` reset (tab, crop aspect,
+WB/red-eye picking, Compare, zoom/pan) applies to filmstrip taps for
+free — no new mode-exclusion logic needed, same guarantee D1(a) already
+has. `ContentView.editorContent` now wraps the pre-existing `HSplitView`
+(extracted unchanged into `editorSplitView`) in an outer `VStack` with
+the filmstrip below it, toggled by a new toolbar button
+(`isFilmstripVisible`, defaults on) using the same active-state
+yellow-`.tint` convention the Compare menu button already uses.
+
+**A real, unplanned compiler-limits detour**: adding the new toolbar
+button to the existing single `.toolbar { }` closure made the WHOLE
+closure fail to compile — "the compiler is unable to type-check this
+expression in reasonable time" — even though the new button itself was
+trivial. Root-caused to total statement/branch COUNT in one `@ViewBuilder`/
+`@ToolbarContentBuilder` closure, not any one sub-expression's own
+complexity (confirmed by first extracting only the new button into its
+own `@ToolbarContentBuilder` property, which did NOT fix it). Fixed by
+splitting the entire toolbar into five named `@ToolbarContentBuilder`
+properties (`libraryToolbarItems`, `editHistoryToolbarItems`,
+`compareToolbarItem`, `filmstripToolbarItem`, `cropDoneToolbarItem`),
+each independently type-checked — behavior-preserving, confirmed by the
+reviewer item-by-item against the diff (same `ToolbarItem`s, same order,
+same `.disabled`/`.tint`/`.onChange`/conditionals, just relocated).
+- Reviewer **APPROVE**, one non-blocking doc-comment fix made before
+  commit: the new file originally claimed `EditorFilmstripView` being a
+  separate `View` (observing only `catalog`, taking `currentURL` by
+  value) meant its `body` provably does NOT re-run on every
+  `document.editState` publish/slider tick. Reviewer correctly pointed
+  out this overclaims — `onSelect` is a fresh closure built on every
+  `ContentView` body pass, making the view non-`Equatable`, so SwiftUI
+  can't actually prove it unchanged and likely re-evaluates `body`
+  anyway. The comment was corrected to state the real, honest reasoning:
+  the COST of that re-evaluation is small regardless (`LazyHStack`
+  diffing is cheap, `.task(id:)` only re-fires on a `photo.path` change,
+  `@State` images persist), so it wasn't worth chasing a real guarantee.
+- No new tests — matching the precedent already set for Crop v2's drag
+  rectangle, the Compare divider, and D7's own ContentView split: pure
+  SwiftUI composition/interaction, zero `EditEngine` changes, reusing
+  already-tested `CatalogModel.thumbnail(for:)`,
+  `ImageDocumentModel.load(from:)`, and `LibraryFilterSort`/
+  `LibraryNavigation`.
+- Build clean, **374 tests, 0 failures** (unchanged — no new tests
+  expected). 1 commit.
+- **NOT yet verified live** — same Accessibility-driven approach as the
+  D7/D1(a) pass should be used next session: confirm the strip shows/
+  highlights the open photo, tapping a cell switches photos (title,
+  Adjust tab, unzoomed, out of Compare), ⌘→/⌘← keeps the highlight AND
+  scroll position in sync, the toolbar toggle collapses/reappears the
+  strip, and navigating via the strip while zoomed/in Compare/on the Crop
+  tab resets the same way keyboard nav already does.
 
 ## Exact next step
 **Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus eight user-requested
@@ -3214,38 +3298,30 @@ Library thumbnails not reflecting edits, each with its own section above.
 No open correctness items remain from that batch.
 
 A codebase-wide improvement review now lives in `IMPROVEMENTS.md` at the repo
-root (performance + design backlog, written 2026-08-28). Three of its items are
+root (performance + design backlog, written 2026-08-28). Four of its items are
 now closed: P1 was attempted and DISPROVED by measurement, P4 was measured and
-SHIPPED, and D7 (split ContentView) SHIPPED — each has its own section above.
+SHIPPED, D7 (split ContentView) SHIPPED, and D1 is now fully shipped —
+(a) ⌘←/⌘→ and (b) the bottom filmstrip, both with their own sections above.
 Its remaining items are unmeasured candidates, not commitments, and nothing in
-it outranks the roadmap options below. D1(a) has now shipped too, so its own
-remaining recommendations are D1(b) (the bottom filmstrip — now the cheaper
-half, since D1(a) settled the ordering and load-path questions), D7's siblings
-D2/D3/D4/D6, and P3 (cache the post-pipeline `CIImage`, measure first).
+it outranks the roadmap options below: D2 (thumbnail-size slider), D3 (edit
+badge in Library), D4 (Library keyboard support — needs Plan Mode + user
+scope confirmation), D5 (Library management gaps — rename/delete
+collections, remove-from-catalog, missing-file detection), D6 (accessibility
+pass), and P2/P3/P5/P6 (performance — measure before implementing, per
+IMPROVEMENTS.md's own working agreements).
 
-**FIRST, before anything else: two shipped items need their live pass** — the
-D7 split and the ⌘←/⌘→ navigation above. Neither could be driven in the app by
-the session that wrote them (no Screen Recording/Accessibility permission).
-
-For ⌘←/⌘→: open a photo mid-list and walk it with ⌘→/⌘←, confirming grid order.
-Then the one that actually matters — **edit photo A, ⌘→ to B, ⌘← back to A: A's
-edits must still be there, and Undo must not reach back into B.** Then: ⌘← is
-greyed at the first photo and ⌘→ at the last; changing the sort to Name (A–Z)
-or setting a rating filter re-orders navigation to match, and filtering the open
-photo out of view disables both items; switching to the Library greys both; and
-navigating while zoomed / in Compare / on the Crop tab brings the new photo up
-on Adjust, unzoomed, out of Compare, aspect unlocked.
-
-For D7: open
-a photo, expand two Adjust sections, set the histogram picker to RGB, select a
-non-Red Selective Color band, switch to Crop and back — all four must persist
-(this is the exact regression `AdjustPanelState`'s ownership guards against).
-Then: "Pick White Balance" while zoomed and in Compare must exit Compare, snap
-zoom to 100% and turn yellow; same for "Fix Red-Eye", each clearing the other.
-Then: Adjust sliders still drive the render, "Reset Adjustments" enables only
-off-identity, Crop aspect presets checkmark and reshape, Crop "Reset" clears
-everything and returns Aspect to Freeform, the zoom % HUD and export progress
-HUD both still appear, and Filters/Clean Up still show placeholder text.
+**Both shipped items got their live pass on 2026-08-28** — see their own
+sections above for the full detail. Summary: D7's panel-state persistence
+(section expansion, histogram RGB mode, Selective Color band, across a
+Crop↔Adjust round-trip) confirmed working; ⌘←/⌘→'s grid-order navigation,
+first-photo boundary graying, and — the case that actually mattered — edit
+isolation across an A→B→A round-trip (A's edit survives, undo history
+resets rather than reaching into B) all confirmed working. Not exercised
+in that pass, still open if revisited: sort/rating-filter reordering
+navigation, filtering the open photo out of view, Library-view disabling
+both nav items, zoom/Compare/Crop-tab reset on navigate, "Pick White
+Balance"/"Fix Red-Eye" Compare-clearing, Crop aspect-preset reshaping, and
+Crop's own "Reset" button.
 
 **Next: options** (ask the user which, don't guess): (1) Phase 5 slice 2 —
 presets (save/apply named edit-state presets); (2) Library polish,

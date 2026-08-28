@@ -129,6 +129,12 @@ final class CatalogDatabase: Sendable {
     /// `importPhotos` above). Clamping happens here, not in `Photo`
     /// itself, matching this project's `EditState` precedent of not
     /// self-enforcing ranges in the model.
+    ///
+    /// `CatalogModel.setRating` MIRRORS this clamp for its optimistic local
+    /// update, and the two must stay in sync: that caller no longer re-reads
+    /// the stored value, so widening or narrowing the range here without
+    /// changing it there would let the grid display a rating this method
+    /// actually rejected.
     func setRating(_ rating: Int, for photoID: Int64) async throws {
         let clamped = min(max(rating, 0), 5)
         try await dbQueue.write { db in

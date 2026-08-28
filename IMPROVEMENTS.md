@@ -157,13 +157,18 @@ than for P2's on-screen preview).
   `catalog` (including each selection-checkbox tap) re-evaluates the body.
   Fine at hundreds of photos (documented reasoning in the code); if the
   library grows to tens of thousands, derive it into a cached published
-  property instead. Measure first; do not do this speculatively.
+  property instead. NOW PARTLY MEASURED (2026-08-28, while shipping D1(a)):
+  one `LibraryFilterSort.apply` is 0.37 ms at 1,000 photos, 3.61 ms at 10,000
+  and 18.50 ms at 50,000. D1(a) also put this on the EDITOR's hot path — the
+  Photo menu's enabled state re-derives it on every Scene body pass, i.e. every
+  slider tick — so this fix now has a measured case behind it at 10,000+
+  photos, though it stays unjustified at this project's current scale.
 
 ---
 
 ## Part 2 — Design improvements (UX, then code design)
 
-### D1. Editor has no way to move between photos (biggest UX gap)
+### D1. Editor has no way to move between photos (biggest UX gap) — (a) SHIPPED 2026-08-28, (b) filmstrip still open
 
 Currently: edit one photo → toolbar back to Library → click the next photo.
 Lightroom/Photos solve this with a filmstrip. Recommend, in ascending scope:
@@ -176,6 +181,23 @@ sidecar saves correctly); (b) a collapsible bottom filmstrip reusing
 so this is cheap). Do (a) first — one small session. Note: prev/next must
 respect `ImageDocumentModel.load(from:)`'s existing flush-outgoing-sidecar
 behavior — it already does this; don't build a parallel load path.
+
+**(a) shipped 2026-08-28** as a `CommandMenu("Photo")` in `PhotoAppApp`, ⌘←/⌘→,
+walking `displayedPhotos` (so it follows the grid's current sort/filter/search),
+through the existing `load(from:)` exactly as instructed above. Decisions taken:
+no wraparound, and both items disable when the open photo isn't in the displayed
+set or while the Library is showing. New pure `LibraryNavigation` type in
+`Sources/Catalog` with 10 tests; `currentURL` is now `@Published`; `showLibrary`
+lifted to `PhotoAppApp`. **(b), the filmstrip, is still open** and is now the
+cheaper half of D1 — the ordering and load-path questions are settled.
+
+One measurement worth carrying to P6: the menu's enabled state re-derives
+`displayedPhotos` on every Scene body pass, i.e. every slider tick.
+`LibraryFilterSort.apply` costs **0.37 ms at 1,000 photos, 3.61 ms at 10,000,
+18.50 ms at 50,000** (measured 2026-08-28). The commands resolve both
+neighbours in ONE pass behind cheap disqualifiers, so the cost is paid once, but
+this is the first thing to put real main-thread pressure on that computed
+property.
 
 ### D2. Library thumbnails don't scale with the grid
 

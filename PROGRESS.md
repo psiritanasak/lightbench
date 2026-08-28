@@ -3122,6 +3122,80 @@ which is what its own working agreement 5 says.)
   (it runs, no crash) and not driven. Outstanding manual checklist, in the
   "Exact next step" section below.
 
+### Previous/Next photo — ⌘←/⌘→ (complete, NOT yet verified live) — IMPROVEMENTS.md D1(a)
+
+`IMPROVEMENTS.md` called D1 the biggest UX gap: editing a second photo meant
+toolbar → Library → click the next thumbnail. A new `CommandMenu("Photo")` in
+`PhotoAppApp` adds "Previous Photo" (⌘←) and "Next Photo" (⌘→).
+
+- **Order is `CatalogModel.displayedPhotos`**, the post-sort/filter/search list
+  the grid itself renders — ⌘→ goes to the photo the user would SEE next, not
+  to a hidden catalog order.
+- **Decisions taken and documented in code** (D1 asked for them explicitly): no
+  wraparound at either end (matching Photos/Lightroom — the items just
+  disable); both items disable when the open photo isn't in `displayedPhotos`
+  at all (filtered out, or the sidebar moved to another collection) rather than
+  guessing a position; and both disable while the Library grid is showing,
+  since this is EDITOR navigation.
+- **Reuses `ImageDocumentModel.load(from:)`** rather than a parallel load path,
+  exactly as `IMPROVEMENTS.md` instructed. That method already flushes the
+  OUTGOING photo's still-debounced sidecar save (while `currentURL`/`editState`
+  still belong to it, so A's edits land in A's sidecar), restores the incoming
+  photo's edits, and calls `resetHistory()` so undo can't reach across photos.
+  Reviewer traced the A→B→A round-trip and confirmed no edit loss and no
+  cross-photo sidecar write, including mid-debounce.
+- New `Sources/Catalog/LibraryNavigation.swift` — pure
+  `neighbor(of:in:offset:)`, placed beside `LibraryFilterSort` for the same
+  stated reason (pure logic extracted so it gets direct unit tests), with 10
+  tests in `Tests/CatalogTests/LibraryNavigationTests.swift`.
+- `ImageDocumentModel.currentURL` is now `@Published` (`private(set)`
+  unchanged, `load(from:)` still the only writer) so the menu items can locate
+  the open photo and track their enabled state — the same reason
+  `canUndo`/`canRedo` are published for the Edit menu.
+- `showLibrary` lifted from `ContentView` `@State` to `PhotoAppApp` `@State`
+  passed as a `@Binding` — the same lift, for the same reason, that `document`
+  and `catalog` already had: a Scene-level command can't read a view's private
+  state.
+- **Rider fix.** `ContentView`'s photo-change reset keyed on
+  `document.currentFileName`, so two photos in different folders sharing a
+  filename silently skipped the whole reset (tab, aspect lock, point-picking,
+  compare, zoom/pan). Prev/next makes that easy to reach — the Name (A–Z) sort
+  puts identical filenames adjacent — so it now keys on `currentURL`.
+
+**Perf, measured before shipping rather than after.** The menu's enabled state
+depends on `displayedPhotos`, a full filter+sort, and the Scene body
+re-evaluates on every `document.editState` publish — i.e. every slider tick
+while editing. Measured `LibraryFilterSort.apply`: **0.37 ms at 1,000 photos,
+3.61 ms at 10,000, 18.50 ms at 50,000**. The naive shape (one `.disabled` per
+item) would pay that TWICE per tick, so both neighbours now resolve from ONE
+pass per body evaluation (`PhotoAppApp.photoNeighbors`), behind cheap
+disqualifiers so "no photo open" and "browsing the grid" never touch the sort at
+all. This is the first thing to put real main-thread pressure on that computed
+property; `IMPROVEMENTS.md` P6's cached-`displayedPhotos` fix now has a measured
+case behind it at 10,000+ photos, though it stays unjustified at this project's
+current scale.
+
+- Build clean, **374 tests (10 new), 0 failures**. Reviewer **APPROVE**, having
+  traced the sidecar flush ordering, the `currentURL` publish (no widened write
+  path, no feedback loop), the `showLibrary` lift (all five uses identical), and
+  the captured-`neighbors` binding (self-consistent; worst case re-opens the
+  same photo, which is safe and already reachable via a grid tap).
+- One reviewer note was a real doc error and was FIXED before commit:
+  `LibraryNavigation`'s comment claimed `currentURL` only ever comes from
+  `URL(fileURLWithPath: photo.path)`. It doesn't — `openImage()`'s `NSOpenPanel`
+  URL also feeds `load(from:)`, and a panel URL can normalize differently
+  (`/tmp` vs `/private/tmp`). The comment now states the real behavior: such a
+  photo simply won't match, degrading to "both commands disabled", never to a
+  wrong jump.
+- Two other reviewer notes left as-is, both non-blocking and pre-existing:
+  `showLibrary` is App-level so it is shared across ⌘N windows (as `document`
+  and `catalog` already were — same bounded single-window assumption), and a
+  same-URL early return in `load(from:)` would be cheap hardening against rapid
+  repeated ⌘→ resetting the re-opened photo's undo history.
+- **NOT yet verified live** — same permission limitation as the D7 session
+  below; the app launches and quits cleanly but could not be driven. Checklist
+  in "Exact next step".
+
 ## Exact next step
 **Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus eight user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
@@ -3132,7 +3206,7 @@ export) has STARTED**: slice 1, batch export (including the entitlement-fix
 debugging saga and 2 reviewer-caught bugs), AND its immediate follow-up,
 selecting individual photos for export (including a live-caught
 checkbox-positioning bug), are BOTH DONE — see their own sections above.
-Both reviewer-APPROVED. 364 tests passing, app fully functional.
+Both reviewer-APPROVED. 374 tests passing, app fully functional.
 
 **Both real issues surfaced live during batch export's own verification
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and
@@ -3144,11 +3218,25 @@ root (performance + design backlog, written 2026-08-28). Three of its items are
 now closed: P1 was attempted and DISPROVED by measurement, P4 was measured and
 SHIPPED, and D7 (split ContentView) SHIPPED — each has its own section above.
 Its remaining items are unmeasured candidates, not commitments, and nothing in
-it outranks the roadmap options below. Its own next recommendations are D1(a)
-(⌘←/⌘→ prev/next in the Editor — the best user-visible one, and D7 has now
-cleared its path) and P3 (cache the post-pipeline `CIImage`, measure first).
+it outranks the roadmap options below. D1(a) has now shipped too, so its own
+remaining recommendations are D1(b) (the bottom filmstrip — now the cheaper
+half, since D1(a) settled the ordering and load-path questions), D7's siblings
+D2/D3/D4/D6, and P3 (cache the post-pipeline `CIImage`, measure first).
 
-**FIRST, before anything else: the D7 split above needs its live pass.** Open
+**FIRST, before anything else: two shipped items need their live pass** — the
+D7 split and the ⌘←/⌘→ navigation above. Neither could be driven in the app by
+the session that wrote them (no Screen Recording/Accessibility permission).
+
+For ⌘←/⌘→: open a photo mid-list and walk it with ⌘→/⌘←, confirming grid order.
+Then the one that actually matters — **edit photo A, ⌘→ to B, ⌘← back to A: A's
+edits must still be there, and Undo must not reach back into B.** Then: ⌘← is
+greyed at the first photo and ⌘→ at the last; changing the sort to Name (A–Z)
+or setting a rating filter re-orders navigation to match, and filtering the open
+photo out of view disables both items; switching to the Library greys both; and
+navigating while zoomed / in Compare / on the Crop tab brings the new photo up
+on Adjust, unzoomed, out of Compare, aspect unlocked.
+
+For D7: open
 a photo, expand two Adjust sections, set the histogram picker to RGB, select a
 non-Red Selective Color band, switch to Crop and back — all four must persist
 (this is the exact regression `AdjustPanelState`'s ownership guards against).

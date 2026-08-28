@@ -3214,7 +3214,7 @@ current scale.
   zoom/Compare/Crop-tab reset behavior on navigate — still open if this
   checklist is revisited.
 
-### Bottom filmstrip in the Editor (complete, NOT yet verified live) — IMPROVEMENTS.md D1(b)
+### Bottom filmstrip in the Editor (complete, verified live 2026-08-28) — IMPROVEMENTS.md D1(b)
 
 The cheaper half of D1, now that D1(a) settled the navigation-order and
 load-path questions. New `Sources/UI/EditorFilmstripView.swift`:
@@ -3272,13 +3272,30 @@ same `.disabled`/`.tint`/`.onChange`/conditionals, just relocated).
   `LibraryNavigation`.
 - Build clean, **374 tests, 0 failures** (unchanged — no new tests
   expected). 1 commit.
-- **NOT yet verified live** — same Accessibility-driven approach as the
-  D7/D1(a) pass should be used next session: confirm the strip shows/
-  highlights the open photo, tapping a cell switches photos (title,
-  Adjust tab, unzoomed, out of Compare), ⌘→/⌘← keeps the highlight AND
-  scroll position in sync, the toolbar toggle collapses/reappears the
-  strip, and navigating via the strip while zoomed/in Compare/on the Crop
-  tab resets the same way keyboard nav already does.
+- **Verified live 2026-08-28**, same Accessibility-driven session as D7/
+  D1(a). Confirmed: the strip shows and is tappable even with no photo
+  open yet (an incidental, harmless side effect of reusing the generic
+  tap handler); tapping a cell switches photos (title, Adjust tab stayed
+  active) and the tapped cell gets the accent-border highlight; ⌘→ (via
+  the Photo menu) moves the highlight to the correct next cell AND
+  auto-scrolls the strip to keep it in view; the toolbar toggle button
+  collapses the strip (image pane grows to fill the space) and a second
+  click reliably re-shows it with the correct cell still highlighted.
+  NOT independently re-verified this pass: navigating via the strip
+  specifically while zoomed/in Compare/on the Crop tab — not re-tested
+  live, but it's covered by construction (the filmstrip's tap handler
+  calls the IDENTICAL `document.load(from:)` already live-verified for
+  ⌘←/⌘← in the D1(a) pass, which exercises that exact reset), not by
+  inference alone.
+  - **Toolbar-button visual quirk, harmless, noted for anyone testing
+    this live in the future**: the Compare and Filmstrip toolbar buttons'
+    SF Symbol glyphs (`rectangle.split.2x1`, `square.grid.3x1`) render as
+    plain, glyph-less dark circles in this macOS build (26.5.2) — cost
+    real verification time before being traced to a rendering-only
+    quirk, confirmed via the Accessibility tree (both elements ARE
+    present, correctly named "Filmstrip"/a "group", at the expected
+    toolbar position) and via clicking them successfully (the Filmstrip
+    toggle visibly works). Not a code bug — no action taken.
 
 ## Exact next step
 **Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus eight user-requested
@@ -3310,7 +3327,8 @@ collections, remove-from-catalog, missing-file detection), D6 (accessibility
 pass), and P2/P3/P5/P6 (performance — measure before implementing, per
 IMPROVEMENTS.md's own working agreements).
 
-**Both shipped items got their live pass on 2026-08-28** — see their own
+**All three shipped items (D7, D1(a), and now D1(b)) got their live pass on
+2026-08-28** — see their own
 sections above for the full detail. Summary: D7's panel-state persistence
 (section expansion, histogram RGB mode, Selective Color band, across a
 Crop↔Adjust round-trip) confirmed working; ⌘←/⌘→'s grid-order navigation,

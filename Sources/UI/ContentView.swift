@@ -43,6 +43,11 @@ struct ContentView: View {
     /// below); there's no separate in-sidebar toggle anymore.
     @State private var selectedTab: EditorTab = .adjust
 
+    /// IMPROVEMENTS.md D1(b): whether the bottom filmstrip (browsing
+    /// between photos without leaving the Editor) is shown. Presentation-
+    /// only, defaults on to match Lightroom/Photos' own default.
+    @State private var isFilmstripVisible = true
+
     /// Tracks the image pane's actual on-screen size (from the
     /// `GeometryReader` in `body`), so `fitRect` can be computed from
     /// OUTSIDE that scope too — specifically, the aspect-ratio picker's
@@ -461,115 +466,142 @@ struct ContentView: View {
             panOffset = .zero
         }
         .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button(showLibrary ? "Editor" : "Library") {
-                    showLibrary.toggle()
-                }
+            libraryToolbarItems
+            editHistoryToolbarItems
+            compareToolbarItem
+            filmstripToolbarItem
+            cropDoneToolbarItem
+        }
+        .navigationTitle(showLibrary ? "Library" : (document.currentFileName ?? "PhotoApp"))
+    }
+
+    /// Library-mode toggle + file-import + export/selection items, split
+    /// out of `mainContent`'s `.toolbar { }` (alongside the other
+    /// `*ToolbarItem`/`*ToolbarItems` properties below) purely to keep that
+    /// closure's statement count low enough for the Swift type-checker —
+    /// see `filmstripToolbarItem`'s doc comment for the full story; this
+    /// split predates D1(b) reaching in but was needed once it did.
+    @ToolbarContentBuilder
+    private var libraryToolbarItems: some ToolbarContent {
+        ToolbarItem(placement: .automatic) {
+            Button(showLibrary ? "Editor" : "Library") {
+                showLibrary.toggle()
             }
-            ToolbarItem(placement: .automatic) {
-                Button("Open…") {
-                    document.openImage()
-                }
+        }
+        ToolbarItem(placement: .automatic) {
+            Button("Open…") {
+                document.openImage()
             }
-            ToolbarItem(placement: .automatic) {
-                Button("Import Folder…") {
-                    catalog.importFolder()
-                }
+        }
+        ToolbarItem(placement: .automatic) {
+            Button("Import Folder…") {
+                catalog.importFolder()
             }
-            ToolbarItem(placement: .automatic) {
-                Button("Import Folder Tree…") {
-                    catalog.importFolderTree()
-                }
+        }
+        ToolbarItem(placement: .automatic) {
+            Button("Import Folder Tree…") {
+                catalog.importFolderTree()
             }
-            if showLibrary {
+        }
+        if showLibrary {
+            ToolbarItem(placement: .automatic) {
+                Button(
+                    catalog.selectedPhotoIDs.isEmpty
+                        ? "Export…"
+                        : "Export Selected (\(catalog.selectedPhotoIDs.count))…"
+                ) {
+                    exportModel.beginExport()
+                }
+                .disabled(photosToExport.isEmpty || exportModel.isExporting)
+            }
+            if !catalog.selectedPhotoIDs.isEmpty {
                 ToolbarItem(placement: .automatic) {
-                    Button(
-                        catalog.selectedPhotoIDs.isEmpty
-                            ? "Export…"
-                            : "Export Selected (\(catalog.selectedPhotoIDs.count))…"
-                    ) {
-                        exportModel.beginExport()
+                    Button("Clear Selection") {
+                        catalog.clearSelection()
                     }
-                    .disabled(photosToExport.isEmpty || exportModel.isExporting)
-                }
-                if !catalog.selectedPhotoIDs.isEmpty {
-                    ToolbarItem(placement: .automatic) {
-                        Button("Clear Selection") {
-                            catalog.clearSelection()
-                        }
-                    }
-                }
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    document.undo()
-                } label: {
-                    Label("Undo", systemImage: "arrow.uturn.backward")
-                }
-                // No .keyboardShortcut here — the Edit menu
-                // (`PhotoAppApp`'s `.commands { CommandGroup(replacing:
-                // .undoRedo) }`) is the canonical ⌘Z/⇧⌘Z owner now, so two
-                // separate views don't both claim the same key combo.
-                .disabled(!document.canUndo)
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    document.redo()
-                } label: {
-                    Label("Redo", systemImage: "arrow.uturn.forward")
-                }
-                .disabled(!document.canRedo)
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    document.revertToOriginal()
-                } label: {
-                    Label("Revert to Original", systemImage: "arrow.counterclockwise")
-                }
-                .disabled(document.currentImage == nil || document.editState == .identity)
-            }
-            ToolbarItem(placement: .automatic) {
-                Menu {
-                    Picker("Compare", selection: $compareMode) {
-                        Text("Off").tag(CompareViewMode.off)
-                        Text("Side by Side").tag(CompareViewMode.sideBySide)
-                        Text("Split (Before/After)").tag(CompareViewMode.split)
-                    }
-                    if compareMode == .split {
-                        Divider()
-                        Picker("Orientation", selection: $splitOrientation) {
-                            Text("Vertical").tag(SplitOrientation.vertical)
-                            Text("Horizontal").tag(SplitOrientation.horizontal)
-                        }
-                    }
-                } label: {
-                    Label("Compare", systemImage: "rectangle.split.2x1")
-                }
-                // Only meaningful on the Adjust tab with no other
-                // point-interaction mode armed — same one-at-a-time
-                // invariant the WB/red-eye buttons already keep (see their
-                // own `.disabled`/mutual-disarm below).
-                .disabled(
-                    document.currentImage == nil || isCroppingActive
-                        || isPickingWhiteBalance || isPlacingRedEyeCorrections
-                )
-                .tint(compareMode != .off ? .yellow : nil)
-                .onChange(of: compareMode) { _, newMode in
-                    if newMode != .off {
-                        isPickingWhiteBalance = false
-                        isPlacingRedEyeCorrections = false
-                    }
-                }
-            }
-            if selectedTab == .crop {
-                ToolbarItem(placement: .automatic) {
-                    Button("Done") { selectedTab = .adjust }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.yellow)
                 }
             }
         }
-        .navigationTitle(showLibrary ? "Library" : (document.currentFileName ?? "PhotoApp"))
+    }
+
+    @ToolbarContentBuilder
+    private var editHistoryToolbarItems: some ToolbarContent {
+        ToolbarItem(placement: .automatic) {
+            Button {
+                document.undo()
+            } label: {
+                Label("Undo", systemImage: "arrow.uturn.backward")
+            }
+            // No .keyboardShortcut here — the Edit menu
+            // (`PhotoAppApp`'s `.commands { CommandGroup(replacing:
+            // .undoRedo) }`) is the canonical ⌘Z/⇧⌘Z owner now, so two
+            // separate views don't both claim the same key combo.
+            .disabled(!document.canUndo)
+        }
+        ToolbarItem(placement: .automatic) {
+            Button {
+                document.redo()
+            } label: {
+                Label("Redo", systemImage: "arrow.uturn.forward")
+            }
+            .disabled(!document.canRedo)
+        }
+        ToolbarItem(placement: .automatic) {
+            Button {
+                document.revertToOriginal()
+            } label: {
+                Label("Revert to Original", systemImage: "arrow.counterclockwise")
+            }
+            .disabled(document.currentImage == nil || document.editState == .identity)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var compareToolbarItem: some ToolbarContent {
+        ToolbarItem(placement: .automatic) {
+            Menu {
+                Picker("Compare", selection: $compareMode) {
+                    Text("Off").tag(CompareViewMode.off)
+                    Text("Side by Side").tag(CompareViewMode.sideBySide)
+                    Text("Split (Before/After)").tag(CompareViewMode.split)
+                }
+                if compareMode == .split {
+                    Divider()
+                    Picker("Orientation", selection: $splitOrientation) {
+                        Text("Vertical").tag(SplitOrientation.vertical)
+                        Text("Horizontal").tag(SplitOrientation.horizontal)
+                    }
+                }
+            } label: {
+                Label("Compare", systemImage: "rectangle.split.2x1")
+            }
+            // Only meaningful on the Adjust tab with no other
+            // point-interaction mode armed — same one-at-a-time
+            // invariant the WB/red-eye buttons already keep (see their
+            // own `.disabled`/mutual-disarm below).
+            .disabled(
+                document.currentImage == nil || isCroppingActive
+                    || isPickingWhiteBalance || isPlacingRedEyeCorrections
+            )
+            .tint(compareMode != .off ? .yellow : nil)
+            .onChange(of: compareMode) { _, newMode in
+                if newMode != .off {
+                    isPickingWhiteBalance = false
+                    isPlacingRedEyeCorrections = false
+                }
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var cropDoneToolbarItem: some ToolbarContent {
+        if selectedTab == .crop {
+            ToolbarItem(placement: .automatic) {
+                Button("Done") { selectedTab = .adjust }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.yellow)
+            }
+        }
     }
 
     /// The Library, in an `HSplitView` alongside `editorContent` (Phase 4
@@ -590,7 +622,42 @@ struct ContentView: View {
     /// The single-photo editor — unchanged from before the Library grid
     /// was added, just extracted out of `mainContent` so `mainContent` can
     /// switch between this and `LibraryGridView`.
+    /// IMPROVEMENTS.md D1(b)'s filmstrip toggle, extracted out of the main
+    /// `.toolbar { }` closure into its own `@ToolbarContentBuilder` property
+    /// — inlining it there pushed that closure's item count past the point
+    /// where the Swift type-checker could resolve it in reasonable time
+    /// (a real build failure, not a style preference); splitting complex
+    /// `ToolbarContent`/`ViewBuilder` closures into named sub-properties is
+    /// the standard fix.
+    @ToolbarContentBuilder
+    private var filmstripToolbarItem: some ToolbarContent {
+        if !showLibrary {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    isFilmstripVisible.toggle()
+                } label: {
+                    Label("Filmstrip", systemImage: "square.grid.3x1")
+                }
+                .tint(isFilmstripVisible ? .yellow : nil)
+            }
+        }
+    }
+
     private var editorContent: some View {
+        VStack(spacing: 0) {
+            editorSplitView
+            if isFilmstripVisible {
+                EditorFilmstripView(catalog: catalog, currentURL: document.currentURL) { photo in
+                    document.load(from: URL(fileURLWithPath: photo.path))
+                }
+            }
+        }
+    }
+
+    /// The Editor's image pane + control sidebar — unchanged from before
+    /// D1(b) added the filmstrip below it, just extracted so `editorContent`
+    /// can wrap it in a `VStack` alongside `EditorFilmstripView`.
+    private var editorSplitView: some View {
         HSplitView {
             VStack(spacing: 0) {
                 EditorTabBar(selectedTab: $selectedTab)

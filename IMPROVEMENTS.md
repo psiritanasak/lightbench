@@ -118,29 +118,20 @@ check. Reusing one `CIImage` graph object across draws also lets `CIContext`'s
 internal caching work better. Low risk, small-but-real win for zoom/pan/
 divider interactivity; combines well with P2.
 
-### P4. `CatalogModel.refresh()` refetches the whole library on every rating/flag/membership tap
+### ~~P4. `CatalogModel.refresh()` refetches the whole library on every rating/flag/membership tap~~ — SHIPPED 2026-08-28
 
-**Where:** `Sources/UI/CatalogModel.swift` — `setRating`, `setFlagged`,
-`toggleMembership` each do `Task.detached { write; await refresh() }`, and
-`refresh()` does FOUR round-trips (`photoCount`, `allCollections`,
-`allMemberships`, `allPhotos`/`photos(inCollection:)`) plus a full `photos`
-republish → full grid re-render. One star tap = the whole world reloads.
-This is also the root cause of the documented known issue (PROGRESS.md,
-Phase 4 slice 3): rapid repeated taps transiently show a stale rating —
-an older refresh's full snapshot lands after a newer tap.
+Measured first, then fixed. The four queries `refresh()` issued cost **6.45 ms
+per tap at 1,000 photos and 30.37 ms at 5,000** on an on-disk catalog, scaling
+linearly, before the wholesale `photos` republish re-rendered the grid — so
+unlike P1 this was a real performance problem as well as a correctness one.
 
-**Fix:** after a successful single-row write, update that one `Photo` in
-`photos` in place (find by id, mutate the field) instead of calling
-`refresh()`. Membership toggles: update `membershipsByPhotoID` in place.
-Keep `refresh()` for import and filter switches, where a full reload is
-correct. This is simultaneously an optimization AND the fix for the
-documented stale-rating bug — call that out to the reviewer.
-
-**Care:** in-place update must respect current sort — rating is a sort key
-(`.ratingHighest`); decide whether re-sorting live mid-tap is desirable
-(`displayedPhotos` recomputes automatically, so it will just work — verify
-that's the UX you want; a photo jumping position on tap may be fine or may
-be jarring. Check what Lightroom does: it re-sorts. Ask the user if unsure.)
+The three tap mutators now update local state synchronously on `@MainActor` and
+then write, instead of writing and re-reading the entire catalog. That also
+fixes the documented Phase 4 slice 3 stale-rating bug (PROGRESS.md's deferred
+option 6), since taps now land in tap order by construction. `CatalogModel`
+gained an `init(database:)` testing seam and its first 7 tests, each verified to
+fail against the old implementation. A narrower write-ordering window remains
+and is recorded as a known limitation. Full write-up in PROGRESS.md.
 
 ### P5. Histogram / average-color renders: verify the downsample position
 
@@ -250,10 +241,11 @@ a reviewer pass per CLAUDE.md (it verifies behavior-preservation).
 2. For every performance item: MEASURE before and after (os_signpost or
    simple timing), on a real large photo / real library, and record numbers
    in PROGRESS.md. No speculative optimization lands without a number.
-3. P4 is now the best value-per-risk (it fixes a known bug as well as a
-   structural inefficiency). P2 is the biggest potential win but the most
-   complex — do it only after P3, and only if measurement justifies it.
-   P1 is retired; see its struck-through entry before reviving the idea.
+3. P1 is retired (disproved) and P4 has shipped. Of what remains, D7 is the
+   best next design session and D1 the best user-visible one. P2 is the
+   biggest potential win but the most complex — do it only after P3, and
+   only if measurement justifies it. Note P4 is the one item so far whose
+   measurement DID justify it; P1's did not. Measure, don't assume.
 4. D7 (split ContentView) is the best first design session; D1(a)
    (prev/next keys) is the best first user-visible one.
 5. Verify each item's factual claims against the code before acting — this

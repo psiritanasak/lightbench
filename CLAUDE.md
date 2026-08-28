@@ -88,9 +88,11 @@ Edits are stored as parameter sets and rendered live on the GPU.
    `setFlagged` are the first `UPDATE` queries (every prior write was
    `importPhotos`'s `INSERT`); rating is clamped to 0...5 in Swift before
    the query runs. Reviewer APPROVED on the first pass; one non-blocking
-   note carried forward in `PROGRESS.md` (rapid repeated taps can
-   transiently show a stale rating in the grid — self-heals, not a
-   persisted-data bug). Collections ✅ COMPLETE: photos can belong to any
+   note carried forward in `PROGRESS.md` (rapid repeated taps could
+   transiently show a stale rating in the grid) — SINCE FIXED, see
+   `PROGRESS.md`'s "Library tap mutators update in place": the tap
+   mutators now update local state synchronously instead of re-reading
+   the whole catalog. Collections ✅ COMPLETE: photos can belong to any
    number of user-created albums, browsed via a left sidebar next to the
    grid (`Sources/UI/CollectionSidebarView.swift` — the app's first
    `List`) plus a per-cell `Menu` to toggle membership.

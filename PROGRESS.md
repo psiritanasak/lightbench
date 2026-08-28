@@ -2997,6 +2997,73 @@ review pass. **It is false, and the measurements retired it.**
   assert *structural* facts that are true by inspection — but a real
   structural inefficiency still does not prove a fix is measurably faster.
 
+### Library tap mutators update in place (complete) — IMPROVEMENTS.md P4
+
+Every star tap, flag toggle, and membership toggle used to run
+`Task.detached { write; await refresh() }`, and `refresh()` re-read the ENTIRE
+catalog — `photoCount`, `allCollections`, `allMemberships`, `allPhotos` — to
+learn one changed field. Three of those four reads cannot change as a result of
+a star tap.
+
+**MEASURED FIRST, before any production change** (deliberately, after P1 — see
+the section above — proved that a structurally real inefficiency can still be
+worth nothing). Timed against an ON-DISK catalog, the four queries alone:
+**6.45 ms per tap at 1,000 photos, 30.37 ms at 5,000**, scaling linearly, on
+top of which the wholesale `photos` republish re-rendered the grid. At 5,000
+photos that is roughly two dropped frames per tap, so unlike P1 this one was
+worth doing on performance grounds as well as correctness.
+
+- **Fixes the documented Phase 4 slice 3 bug** (rapid repeated taps transiently
+  showing a stale rating), which was also deferred option (6). Root cause: each
+  tap's independent `refresh()` could publish an OLDER snapshot after a newer
+  one. The mutators now update local state synchronously on `@MainActor`, so
+  taps land in tap order by construction, then write to the database.
+- `updatePhotoInPlace(id:_:)` is the shared helper. `setRating` mirrors
+  `CatalogDatabase.setRating`'s 0...5 clamp — a deliberate duplication that must
+  stay in sync, since the UI no longer learns the stored value by re-reading.
+- **Genuine behavior change:** a failed write is no longer swallowed (`try?`).
+  With the local update applied first, silence would leave the grid showing a
+  value the catalog never accepted, so the failure path now falls back to a full
+  `refresh()`, resyncing from the database as the authority — the old behavior,
+  now reserved for the rare case that needs it.
+- **Ghost-cell case handled:** while the sidebar is filtered to a collection,
+  `photos` IS that collection's membership list, so removing a photo must drop
+  it from `photos` too, not just from `membershipsByPhotoID`. Re-adding while
+  that same filter is active still calls `refresh()`, since only a re-read knows
+  the correct sort position (and that direction is unreachable from the UI
+  anyway — every visible cell is already a member).
+- `refresh()` is untouched and still used where a full reload is genuinely
+  required: `init`, both imports, `createCollection`, and the `selectedFilter`
+  `didSet`.
+- **New testing seam:** `CatalogModel.init(database:)` takes an already-open
+  catalog and skips `activateKnownFolders()` (which touches `UserDefaults` and
+  real sandbox scopes). `CatalogModel` previously had ZERO tests; it now has 7,
+  and **each was verified to FAIL against the old implementation** before being
+  accepted — the rating tests and both membership tests were run against the
+  reverted code and did fail, so they are real regression tests rather than
+  tests that merely pass.
+- **KNOWN LIMITATION, pre-existing and unchanged:** the database writes are
+  still independent `Task.detached` calls, so two very rapid taps could still
+  reach GRDB's write queue out of order and persist the older value. The
+  DISPLAY bug is fixed; this narrower write-ordering window is not, and would
+  need per-photo write serialization. `testRapidRepeatedRatingTapsShowTheLastValue`
+  deliberately asserts only the displayed value for this reason. Note the
+  reviewer observed this is the same persisted-data window as before, but now
+  HIDDEN rather than shown: the display follows the last tap even if the
+  database kept an older value, which surfaces only on relaunch.
+- **Two non-blocking reviewer notes carried forward** (neither gated the
+  commit): (1) the failure-path `refresh()` can itself race a SUBSEQUENT tap —
+  if tap1's write fails and its resync reads before tap2's write commits, the
+  republished snapshot omits tap2 and nothing republishes afterward, leaving a
+  stale display until the next full refresh. Needs a write failure overlapping
+  a tap, so it is rare, and the fix is the same per-photo write serialization
+  the limitation above needs — address them together. (2) The in-place removal
+  leaves the photo's ID in `selectedPhotoIDs`, so the "Export Selected (N)"
+  count can over-count ghosts; pre-existing (the old `refresh()` behaved
+  identically) and harmless to the actual exported set, since
+  `ContentView.photosToExport` intersects with `photos`.
+- 364 tests (7 new), 0 failures, stable across 3 consecutive full-suite runs.
+
 ## Exact next step
 **Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus eight user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
@@ -3034,11 +3101,11 @@ export — `ExportOptionsView`'s own Export button isn't gated on
 reviewer's non-blocking notes from folder-mirrored collections — no index
 on `collection.folderPath`, no symlink-loop guard in
 `PhotoImporter.scanNode`, `findOrCreateFolderCollection` silently ignoring
-a mismatched `parentID` on re-import from a different root; (6) hardening
-the reviewer's non-blocking note, generalized across ALL of
-`CatalogModel`'s mutations — overlapping `Task.detached` + `refresh()`
-calls with no cancellation/sequencing can transiently show stale data in
-the grid (self-heals, not a persisted-data bug); (7) `collection.name`
+a mismatched `parentID` on re-import from a different root; (6) DONE — see
+"Library tap mutators update in place" above; the three tap mutators no
+longer call `refresh()` at all, so overlapping snapshots can no longer
+show stale data in the grid. A narrower write-ordering window remains,
+recorded as a known limitation in that section; (7) `collection.name`
 having no `UNIQUE` constraint, so rapid double-submits of "New
 Collection…" could create duplicates; (8) revisit the still-deferred
 sidebar content-shift-on-scroll cosmetic bug (see its own section above,

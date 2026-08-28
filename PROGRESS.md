@@ -2950,6 +2950,53 @@ undocumented stable-sort artifact (harmless); `displayedPhotos` recomputes
 on every access, including from unrelated `@Published` mutations, cheap at
 this project's target scale but not memoized.
 
+### ThumbnailCache test coverage + a DISPROVED performance theory (complete)
+
+Triggered by `IMPROVEMENTS.md` (a codebase-wide improvement review written
+2026-08-28, repo root), item P1: the claim that `ThumbnailCache`'s decode
+`Task { }`, created inside an actor-isolated method, inherits that isolation
+via `@_inheritActorContext` and so holds the actor's serial executor for the
+whole decode — serializing all thumbnail decoding AND stalling cache hits.
+The theory was argued from the code, then re-confirmed by a second analytical
+review pass. **It is false, and the measurements retired it.**
+
+- Wrote `Tests/RenderingTests/ThumbnailCacheTests.swift` (7 tests) and used it
+  to measure: 8 concurrent decodes vs the same 8 sequential ran at **ratio
+  0.32 — already ~3x parallel**. Rewriting to `Task.detached` measured **0.32
+  too, i.e. no change at all**. A cache HIT issued while 8 large decodes were
+  in flight returned in **0.0 ms**, disproving the second half as well.
+- **Production behavior therefore left UNCHANGED** — the `Task.detached`
+  rewrite was reverted; the executable code in `ThumbnailCache` is
+  byte-identical to what it was, verified by a comments-stripped diff against
+  `HEAD`. `Task.detached` would also have dropped priority/task-local
+  propagation, a downgrade for zero measured gain.
+- What DID ship: (1) `ThumbnailCache` extracted from the bottom of
+  `CatalogModel.swift` into `Sources/UI/ThumbnailCache.swift` and widened
+  `private` → internal so tests can reach it (the same
+  private→internal-for-testability precedent `PhotoExporter.resized`
+  documents); `CatalogModel.swift` drops 535 → 442 lines. (2) The 7 tests —
+  this type had ZERO coverage despite owning the Library's subtlest
+  concurrency logic, including the reviewer-caught generation counter.
+  (3) A doc comment on `thumbnail(for:)` recording the measurement so the
+  theory can't be independently rediscovered and re-implemented.
+- **A flaky assertion of our own making, caught only by the FULL suite:** two
+  tests originally asserted a re-request returns the identical `CGImage`
+  instance. They passed in isolation but failed in a full-suite run — other
+  tests' memory pressure evicts `NSCache` entries, and `NSCache` guarantees
+  no residency at all, so re-decoding there is correct behavior. Rewritten to
+  assert equivalence (dimensions) instead, with the reasoning recorded in the
+  test file. A reminder that running one test file green is not the same as
+  running the suite green.
+- 357 tests (7 new), 0 failures, stable across 3 consecutive full-suite runs
+  (ratio 0.25–0.32 each time).
+- Lesson, and the reason this section exists at all: P1 was derived by reading
+  code and reasoning about Swift concurrency semantics, and survived a review
+  pass, and was still wrong. This project's existing "verify empirically,
+  don't assume" pattern (recorded below as hit six times across Phase 2)
+  extends to performance claims. `IMPROVEMENTS.md`'s remaining items P3/P4/P5
+  assert *structural* facts that are true by inspection — but a real
+  structural inefficiency still does not prove a fix is measurably faster.
+
 ## Exact next step
 **Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus eight user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
@@ -2966,6 +3013,12 @@ Both reviewer-APPROVED. 350 tests passing, app fully functional.
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and
 Library thumbnails not reflecting edits, each with its own section above.
 No open correctness items remain from that batch.
+
+A codebase-wide improvement review now lives in `IMPROVEMENTS.md` at the repo
+root (performance + design backlog, written 2026-08-28). Its first item, P1,
+was attempted and DISPROVED by measurement — see the section immediately above;
+the file's remaining items are unmeasured candidates, not commitments, and
+nothing in it outranks the roadmap options below.
 
 **Next: options** (ask the user which, don't guess): (1) Phase 5 slice 2 —
 presets (save/apply named edit-state presets); (2) Library polish,

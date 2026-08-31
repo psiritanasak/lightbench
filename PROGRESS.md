@@ -3297,6 +3297,86 @@ same `.disabled`/`.tint`/`.onChange`/conditionals, just relocated).
     toolbar position) and via clicking them successfully (the Filmstrip
     toggle visibly works). Not a code bug — no action taken.
 
+### Remove photos from the Library catalog (complete, NOT yet verified live) — IMPROVEMENTS.md D5, part 1 of 3
+
+D5 bundles three separate items (remove-from-catalog, missing-file
+detection, rename/delete collections), each flagged as needing its own
+session. This ships the first, chosen because it was the exact friction
+that surfaced two sessions ago (had to hand-edit the SQLite database
+directly to remove 3 test photos). **Scope: catalog row only — the
+original file on disk is never touched**, confirmed correct by the
+reviewer (no `FileManager` deletion API called anywhere in the new code)
+and consistent with three independent facts: the app only holds
+READ-ONLY security-scoped bookmarks on imported folders (no write access
+to delete a file even if it wanted to), `Photo.swift`'s own doc comment
+already states the original is never touched, and D5's own wording lists
+"detect files deleted on disk" as a separate item — implying catalog and
+disk are expected to be able to diverge. The confirmation alert says so
+explicitly ("The original file on disk is not affected").
+
+`Sources/Catalog/CatalogDatabase.swift` gained `deletePhoto(id:)` — the
+project's first live row-DELETE on `photo` (`try Photo.filter(...).deleteAll(db)`).
+No migration needed. `collection_photo` memberships are cleaned up by the
+existing `ON DELETE CASCADE` FK from `Migrations/003_collections.swift`,
+verified — not just trusted — by tracing GRDB's vendored source
+(`Configuration.swift`'s `foreignKeysEnabled = true` default, never
+overridden anywhere in `CatalogDatabase`) and by a new test,
+`testDeletePhotoCascadeDeletesCollectionMemberships`, that genuinely
+discriminates a working cascade from a broken one (reviewer confirmed:
+nothing else deletes the membership row, so either FK-off or
+FK-on-but-RESTRICT would fail the test) — the first time this cascade,
+shipped in Phase 4, has actually been exercised by a live DELETE.
+
+`Sources/UI/CatalogModel.swift` gained `removePhoto(_:)`, following the
+same local-first-then-write P4 pattern every tap mutator uses
+(`setRating`/`setFlagged`), but the first one that's a PERMANENT removal
+rather than a re-toggleable field — so unlike `toggleMembership`'s
+transient "ghost cell" (expected to resolve on the next `refresh()`),
+this one also prunes `selectedPhotoIDs` and `membershipsByPhotoID[id]`
+outright (both permanently stale otherwise) and invalidates the
+thumbnail cache entry so a later re-import of the same path can't
+resurrect a stale cached image.
+
+`Sources/UI/LibraryGridView.swift`: `LibraryThumbnailCell`'s existing
+per-photo collections `Menu` gained a `Divider()` + `Button(role:
+.destructive)` "Remove from Library" — the first `Divider()` and first
+`role: .destructive` in any Menu in this codebase. The confirmation
+`.alert` lives on `LibraryGridView` itself, deliberately NOT
+`ContentView` — `ContentView.body` was already split once specifically
+because a 5th `.alert` pushed the type-checker past its limit, so a 6th
+alert there was a real compile-time risk this session didn't need to
+reintroduce. The alert generalizes `ContentView`'s own `presenting:`-driven
+shape from `String?` to `Photo?`.
+
+- Reviewer **APPROVE** on first pass — independently traced the cascade
+  claim against GRDB's vendored source rather than trusting the migration
+  comment, confirmed the catalog-only scope by checking no filesystem-
+  deletion API is called anywhere, confirmed the alert genuinely doesn't
+  compose into `ContentView`'s fragile alert chain (different `View` type
+  entirely), and confirmed `Set.remove`/`Dictionary.removeValue` on an
+  absent member/key are safe no-ops. Two non-blocking notes carried
+  forward, neither gating: (1) if the fire-and-forget DB write ever fails
+  after the local removal, the photo silently reappears on the next
+  `refresh()` with no error surfaced to the user — acceptable for now
+  (a local SQLite DELETE-by-id has essentially no realistic failure mode
+  short of disk catastrophe), same pattern already accepted for
+  `setRating`/`setFlagged`; (2) removing a photo currently open in the
+  background Editor doesn't force-close that Editor session — reachable
+  only via Library → remove → switch back to Editor, an accepted v1
+  limitation, same category as Straighten's documented corner-gap
+  limitation.
+- 380 tests (6 new: 3 `CatalogDatabaseTests` — remove-the-row, the cascade
+  proof, delete-a-nonexistent-ID-is-a-no-op — and 3 `CatalogModelTests` —
+  synchronous local removal, `selectedPhotoIDs` pruning, DB persistence).
+  1 commit.
+- **NOT yet verified live** — same Accessibility-driven approach as D7/
+  D1/D1(b): import a couple of throwaway test photos, open the per-cell
+  Menu, confirm "Remove from Library" appears below a divider, confirm
+  the alert wording, confirm Cancel is a no-op, confirm Remove drops the
+  cell immediately, and confirm the photo stays gone after quitting and
+  relaunching the app (proves the DB write landed, not just the
+  in-memory removal).
+
 ## Exact next step
 **Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus eight user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab

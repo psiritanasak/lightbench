@@ -243,13 +243,30 @@ focused-photo concept (distinct from the export checkbox set — keep them
 separate; Lightroom does). This is a real feature with design decisions —
 Plan Mode, confirm scope with the user first.
 
-### D5. Library management gaps (all already known/deferred, listed for priority)
+### D5. Library management gaps — part 1 of 3 (remove photos from catalog) SHIPPED 2026-08-31
 
-In rough value order: rename/delete collections (sidebar has no context
-menu at all today); remove photos from catalog; detect files deleted on disk
-since import (show as missing rather than broken thumbnails). Each is its own
-session. `Migrations/` are append-only per CLAUDE.md; deletes need FK-cascade
-thinking — collections already cascade (003), verify photo-delete paths.
+Three separate items, each its own session: rename/delete collections
+(sidebar has no context menu at all today); remove photos from catalog;
+detect files deleted on disk since import (show as missing rather than
+broken thumbnails). `Migrations/` are append-only per CLAUDE.md; deletes
+need FK-cascade thinking — collections already cascade (003), verify
+photo-delete paths.
+
+**Remove-from-catalog shipped 2026-08-31** as `CatalogDatabase.deletePhoto(id:)`
+(the project's first live row-DELETE) + `CatalogModel.removePhoto(_:)`
+(the first PERMANENT local-first mutator) + a destructive Menu item and
+confirmation alert in `LibraryGridView.swift`. Catalog-only — the file on
+disk is never touched, exactly as this entry's own wording anticipated by
+listing missing-file detection as a separate concern. The `collection_photo`
+cascade (003) was verified against GRDB's vendored source, not just
+trusted, and is now the subject of a real passing test
+(`testDeletePhotoCascadeDeletesCollectionMemberships`) — the first time it's
+actually been exercised by a live DELETE since it shipped in Phase 4.
+Reviewer APPROVE, two non-blocking notes (silent reappear on a DB-write
+failure; removing the Editor's currently-open photo doesn't force-close
+that session) — full write-up in PROGRESS.md. 380 tests (6 new). NOT yet
+verified live. **Rename/delete collections and missing-file detection are
+still open**, each still its own session.
 
 ### D6. Accessibility pass over custom controls
 

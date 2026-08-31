@@ -11,6 +11,14 @@ struct LibraryGridView: View {
 
     private let columns = [GridItem(.adaptive(minimum: 140), spacing: 12)]
 
+    /// D5 (IMPROVEMENTS.md): the photo a "Remove from Library" tap is
+    /// asking to confirm. Lives here, not `ContentView`, deliberately —
+    /// `ContentView.body` was already split once specifically because a
+    /// 5th `.alert` pushed the type-checker past its limit (see that
+    /// file's own `mainContent` doc comment); a 6th alert there would risk
+    /// the same failure again.
+    @State private var photoPendingRemoval: Photo?
+
     var body: some View {
         VStack(spacing: 0) {
             // Grid-scoped controls live here, not ContentView's main
@@ -31,6 +39,8 @@ struct LibraryGridView: View {
                             ForEach(catalog.displayedPhotos) { photo in
                                 LibraryThumbnailCell(catalog: catalog, photo: photo) {
                                     onOpen(photo)
+                                } onRequestRemoval: {
+                                    photoPendingRemoval = photo
                                 }
                             }
                         }
@@ -39,6 +49,19 @@ struct LibraryGridView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .alert(
+            "Remove from Library?",
+            isPresented: Binding(
+                get: { photoPendingRemoval != nil },
+                set: { isPresented in if !isPresented { photoPendingRemoval = nil } }
+            ),
+            presenting: photoPendingRemoval
+        ) { photo in
+            Button("Remove", role: .destructive) { catalog.removePhoto(photo) }
+            Button("Cancel", role: .cancel) {}
+        } message: { photo in
+            Text("\"\(photo.filename)\" will be removed from the Library. The original file on disk is not affected.")
         }
     }
 
@@ -126,6 +149,7 @@ private struct LibraryThumbnailCell: View {
     let catalog: CatalogModel
     let photo: Photo
     let onTap: () -> Void
+    let onRequestRemoval: () -> Void
 
     @State private var image: CGImage?
 
@@ -221,6 +245,12 @@ private struct LibraryThumbnailCell: View {
                                 }
                             }
                         }
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        onRequestRemoval()
+                    } label: {
+                        Label("Remove from Library", systemImage: "trash")
                     }
                 } label: {
                     Image(systemName: "folder.badge.plus")

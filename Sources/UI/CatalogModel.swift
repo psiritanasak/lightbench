@@ -385,6 +385,35 @@ final class CatalogModel: ObservableObject {
         }
     }
 
+    /// Removes `photo` from the catalog (D5, IMPROVEMENTS.md) — catalog
+    /// row only, the original file on disk is never touched (see
+    /// `CatalogDatabase.deletePhoto`'s own doc comment). Local-first, same
+    /// shape/failure-resync reasoning as `setRating`/`setFlagged`, but
+    /// UNLIKE them this is permanent rather than a re-toggleable field, so
+    /// it also prunes the two stale-reference gaps `toggleMembership`
+    /// leaves for OTHER mutators (there, the entry is expected to resolve
+    /// itself on the next `refresh()`; here the row is simply gone, so an
+    /// un-pruned `selectedPhotoIDs`/`membershipsByPhotoID` entry would be
+    /// permanently stale, not transiently so):
+    /// - `selectedPhotoIDs` (its own tracked gap — otherwise this photo's
+    ///   ID would linger forever, ghost-inflating the export-selection
+    ///   count)
+    /// - `membershipsByPhotoID[id]` (the whole entry, not one collection —
+    ///   the photo can't be a member of anything once it doesn't exist)
+    /// - the thumbnail cache, via the already-existing
+    ///   `invalidateThumbnail(for:)`, so a later re-import of the same
+    ///   path can't resurrect a stale cached image.
+    func removePhoto(_ photo: Photo) {
+        guard let database, let id = photo.id else { return }
+        photos.removeAll { $0.id == id }
+        selectedPhotoIDs.remove(id)
+        membershipsByPhotoID.removeValue(forKey: id)
+        invalidateThumbnail(for: URL(fileURLWithPath: photo.path))
+        Task.detached { [weak self] in
+            do { try await database.deletePhoto(id: id) } catch { await self?.refresh() }
+        }
+    }
+
     // MARK: - Collections (Phase 4 slice 4)
 
     /// Creates a new collection. An empty (or whitespace-only) name is

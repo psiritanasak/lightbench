@@ -142,6 +142,58 @@ final class CatalogDatabaseTests: XCTestCase {
         XCTAssertFalse(unflaggedPhoto.isFlagged)
     }
 
+    // MARK: - Removal (D5, IMPROVEMENTS.md)
+
+    func testDeletePhotoRemovesTheRow() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [
+            URL(fileURLWithPath: "/tmp/a.jpg"),
+            URL(fileURLWithPath: "/tmp/b.jpg")
+        ])
+        let photos = try await db.allPhotos()
+        let idToDelete = try XCTUnwrap(photos.first { $0.path == "/tmp/a.jpg" }?.id)
+
+        try await db.deletePhoto(id: idToDelete)
+
+        let remaining = try await db.allPhotos()
+        XCTAssertEqual(remaining.map(\.path), ["/tmp/b.jpg"])
+    }
+
+    /// A real, executable proof of the `ON DELETE CASCADE` FK
+    /// (`Migrations/003_collections.swift`) rather than trusting its own
+    /// comment — this is the first live DELETE on `photo` in the whole
+    /// project, so the cascade had never actually been exercised before.
+    func testDeletePhotoCascadeDeletesCollectionMemberships() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+        let importedPhotos = try await db.allPhotos()
+        let photoID = try XCTUnwrap(importedPhotos.first?.id)
+        let collection = try await db.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+        try await db.setMembership(photoID: photoID, collectionID: collectionID, isMember: true)
+        let membershipsBeforeDelete = try await db.allMemberships()
+        XCTAssertEqual(membershipsBeforeDelete.count, 1)
+
+        try await db.deletePhoto(id: photoID)
+
+        let membershipsAfterDelete = try await db.allMemberships()
+        XCTAssertTrue(membershipsAfterDelete.isEmpty)
+        // The collection itself must survive — only the membership row
+        // cascades, not the collection it points to.
+        let remainingCollections = try await db.allCollections()
+        XCTAssertEqual(remainingCollections.count, 1)
+    }
+
+    func testDeletingANonexistentIDIsANoOp() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+
+        try await db.deletePhoto(id: 999_999)
+
+        let remaining = try await db.allPhotos()
+        XCTAssertEqual(remaining.count, 1)
+    }
+
     // MARK: - Collections (Phase 4 slice 4)
 
     func testCreateCollectionAssignsAnID() async throws {

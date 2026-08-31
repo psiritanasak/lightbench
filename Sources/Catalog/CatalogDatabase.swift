@@ -151,6 +151,27 @@ final class CatalogDatabase: Sendable {
         }
     }
 
+    /// Removes `photoID` from the catalog (D5, IMPROVEMENTS.md) — the
+    /// project's first row-DELETE on `photo` (the only prior DELETE
+    /// precedent is `setMembership`'s `CollectionPhoto...deleteAll` below).
+    /// The photo's `collection_photo` memberships are cleaned up
+    /// automatically by the `ON DELETE CASCADE` FK from
+    /// `Migrations/003_collections.swift` — no explicit cleanup needed
+    /// here, and `CatalogDatabaseTests` exercises this cascade directly
+    /// rather than just trusting the migration comment. Deleting a
+    /// nonexistent ID is a silent no-op (`deleteAll` on an empty filter),
+    /// matching this file's other mutators' tolerance of stale IDs.
+    ///
+    /// Catalog-only: the original file on disk is never touched. This app
+    /// only holds READ-ONLY security-scoped bookmarks on imported folders,
+    /// so it has no write access to delete the file even if it wanted to
+    /// — see `CatalogModel`'s folder-bookmark handling.
+    func deletePhoto(id: Int64) async throws {
+        try await dbQueue.write { db in
+            _ = try Photo.filter(Photo.Columns.id == id).deleteAll(db)
+        }
+    }
+
     // MARK: - Collections (Phase 4 slice 4)
 
     /// Ordered by `name`, not `createdAt` (unlike `allPhotos()`) — a

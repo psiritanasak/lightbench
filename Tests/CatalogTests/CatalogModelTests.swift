@@ -119,6 +119,48 @@ final class CatalogModelTests: XCTestCase {
         }
     }
 
+    // MARK: - Removal (D5, IMPROVEMENTS.md)
+
+    func testRemovePhotoUpdatesPublishedPhotosSynchronously() async throws {
+        let model = await makeModel()
+        let photo = try XCTUnwrap(model.photos.first)
+        let remainingCount = model.photos.count - 1
+
+        model.removePhoto(photo)
+
+        // No await: same discipline as the rating tests — the local
+        // removal must already be visible when the call returns.
+        XCTAssertEqual(model.photos.count, remainingCount)
+        XCTAssertFalse(model.photos.contains { $0.id == photo.id })
+    }
+
+    /// Permanent removal is the one case where an un-pruned
+    /// `selectedPhotoIDs` entry would linger forever (unlike the OTHER
+    /// mutators' transient ghost-cell cases, which resolve on the next
+    /// `refresh()`) — this is the regression test for that.
+    func testRemovePhotoPrunesSelection() async throws {
+        let model = await makeModel()
+        let photo = try XCTUnwrap(model.photos.first)
+        let photoID = try XCTUnwrap(photo.id)
+        model.toggleSelection(of: photo)
+        XCTAssertTrue(model.selectedPhotoIDs.contains(photoID))
+
+        model.removePhoto(photo)
+
+        XCTAssertFalse(model.selectedPhotoIDs.contains(photoID))
+    }
+
+    func testRemovePhotoPersistsToTheCatalog() async throws {
+        let model = await makeModel()
+        let photo = try XCTUnwrap(model.photos.first)
+
+        model.removePhoto(photo)
+
+        try await waitUntil("removal to reach the database") {
+            try await !self.database.allPhotos().contains { $0.path == photo.path }
+        }
+    }
+
     // MARK: - Collection membership
 
     func testToggleMembershipUpdatesTheMembershipMapSynchronously() async throws {

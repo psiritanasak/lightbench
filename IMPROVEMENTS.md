@@ -215,7 +215,7 @@ neighbours in ONE pass behind cheap disqualifiers, so the cost is paid once, but
 this is the first thing to put real main-thread pressure on that computed
 property.
 
-### D2. Library thumbnails don't scale with the grid
+### ~~D2. Library thumbnails don't scale with the grid~~ — SHIPPED 2026-08-31
 
 `GridItem(.adaptive(minimum: 140))` lets columns grow, but cells hardcode
 140×140 (`LibraryThumbnailCell`, load-bearing frame — read its long comment
@@ -226,13 +226,31 @@ the `GridItem` minimum and the cell frame. `ThumbnailCache.maxPixelSize` is
 `maxPixelSize` (cost: cache memory per entry grows quadratically — adjust
 `totalCostLimit` reasoning in the same change).
 
-### D3. No indication in the Library of which photos have edits
+**Shipped**: capped the slider at 100...240 (didn't bump `maxPixelSize` —
+`ThumbnailCache` stayed completely untouched, avoiding both the quadratic
+memory cost AND the cache's own documented instance-capture/parallel-decode
+hazard). `@AppStorage`, not `@State` — `LibraryGridView` is torn down and
+recreated on every Editor↔Library switch, which would otherwise silently
+reset the slider. Reviewer APPROVE. Full write-up in PROGRESS.md.
+
+### ~~D3. No indication in the Library of which photos have edits~~ — SHIPPED 2026-08-31
 
 Lightroom shows a badge. The cheap version: a `FileManager.fileExists` check
 on `ImageDocumentModel.sidecarURL(for:)` per cell (fast, but N stat calls per
 grid render — do it inside the existing thumbnail `.task`, returning a
 `(image, hasEdits)` pair, so it's amortized with the decode and cached).
 Small overlay glyph (e.g. `slider.horizontal.3`) bottom-trailing on the cell.
+
+**Shipped**: NOT as a `(image, hasEdits)` pair out of `ThumbnailCache` as
+originally suggested here — that would have widened a return type shared
+with `EditorFilmstripView`'s `FilmstripCell` and every `ThumbnailCacheTests`
+call site. Instead the stat check rides along in `LibraryThumbnailCell`'s
+own `.task`, via `async let` so it runs concurrent with (not serialized
+behind) the decode. Reviewer's one non-blocking correction: `.task` actually
+inherits the view's `@MainActor` isolation, so the stat does run on the main
+actor (negligible for local volumes; revisit if network-volume libraries
+are ever supported). Filmstrip deliberately untouched. Full write-up in
+PROGRESS.md.
 
 ### D4. Library keyboard support
 

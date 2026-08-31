@@ -3377,6 +3377,73 @@ shape from `String?` to `Photo?`.
   relaunching the app (proves the DB write landed, not just the
   in-memory removal).
 
+### Library thumbnail-size slider + edited-photo badge (complete, NOT yet verified live) — IMPROVEMENTS.md D2 + D3
+
+Two small, self-contained Library-grid UI features, bundled into one
+session as the user's own choice. Both confined to
+`Sources/UI/LibraryGridView.swift` — no migration, no new catalog state.
+
+**D2**: a bottom-right `ThinSlider` (this app's own custom slider, not
+the native SwiftUI one) drives `@AppStorage("PhotoApp.libraryThumbnailSize")`,
+which now feeds both `columns` (`GridItem(.adaptive(minimum:
+thumbnailSize))`, previously a hardcoded `let`) and a new `cellSize:
+CGFloat` parameter on `LibraryThumbnailCell`, replacing all three
+previously-hardcoded `140`s. Deliberately capped at **100...240** and
+`ThumbnailCache` itself is completely untouched — the cache decodes at a
+fixed 240px and keys purely on path (no size component), so widening it
+would've meant either quadratic memory growth per entry or a genuine
+cache-key redesign; instead this only resizes the SAME already-decoded
+image for display, the identical trick `EditorFilmstripView`'s 56pt
+cells already rely on. `@AppStorage`, not `@State`, specifically because
+`LibraryGridView` is torn down and recreated on every Editor↔Library
+switch — a plain `@State` would silently reset the slider every time.
+
+**D3**: a small badge (same circular-backdrop visual language as the
+existing selection checkbox) appears bottom-trailing on any cell whose
+photo has a sidecar file, via `FileManager.fileExists` against
+`ImageDocumentModel.sidecarURL(for:)` (already `nonisolated static`,
+reusing the exact precedent `PhotoExporter.loadEditState(for:)` already
+established for calling it without an instance). Deliberately NOT
+implemented inside `ThumbnailCache` — its `NSCache<NSString, CGImage>`
+and its other call site (`EditorFilmstripView`'s `FilmstripCell`) both
+expect a bare `CGImage?`; widening that shared return type would have
+rippled into both cells and every `ThumbnailCacheTests` call site for a
+check only the Library grid needs. Instead rides along in
+`LibraryThumbnailCell`'s own existing `.task(id: photo.path)`, using
+`async let` so the cheap stat runs concurrently with the (much slower)
+thumbnail decode rather than serializing behind it. Filmstrip explicitly
+untouched — its own doc comment already states its cells are
+deliberately lighter than the Library grid's.
+
+- Reviewer **APPROVE** on first pass — confirmed the 100...240 cap is
+  real and nothing requests a display size outside it, confirmed
+  `@AppStorage`'s key doesn't collide with the app's two existing
+  `UserDefaults` keys, grepped for and found no surviving hardcoded
+  `140`, confirmed the frame-before-clipShape ordering (load-bearing for
+  the selection checkbox's positioning) still holds with `cellSize`
+  substituted in, confirmed the badge overlay is scoped to the ZStack
+  only (can't collide with the rating/flag row below), confirmed the
+  `async let` genuinely runs the stat and the decode concurrently, and
+  confirmed `EditorFilmstripView.swift`/`ThumbnailCache.swift`/its tests
+  are untouched by the diff. One non-blocking correction, carried
+  forward rather than fixed: `.task` bodies on a plain `View` actually
+  inherit that view's `@MainActor` isolation (not off-main-actor as
+  initially assumed while designing this) — so the sidecar
+  `FileManager.fileExists` stat in `LibraryThumbnailCell`'s `.task` does
+  run on the main actor. Negligible for a single local-volume syscall
+  per cell-appearance; worth moving to a background context only if
+  library folders on network shares ever become a supported case.
+- No new tests — matches this project's established judgment call for
+  UI-wiring-only changes with no new pure logic (Crop v2, the Compare
+  divider, D7, D1(b) all shipped the same way). 380 tests unchanged.
+  1 commit.
+- **NOT yet verified live**: drag the slider and confirm the grid's cell
+  size AND column count visibly respond live; quit and relaunch,
+  confirm the chosen size persisted; confirm the edited badge appears
+  only on photos with a sidecar file, positioned bottom-trailing without
+  colliding with the top-leading selection checkbox at both slider
+  extremes.
+
 ## Exact next step
 **Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus eight user-requested
 follow-ups (folder-mirrored nested collections; the Editor Adjust-tab

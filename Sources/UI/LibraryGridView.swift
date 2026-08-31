@@ -9,7 +9,22 @@ struct LibraryGridView: View {
     @ObservedObject var catalog: CatalogModel
     let onOpen: (Photo) -> Void
 
-    private let columns = [GridItem(.adaptive(minimum: 140), spacing: 12)]
+    /// D2 (IMPROVEMENTS.md): drives both the grid's column minimum and
+    /// each cell's own frame size (see `LibraryThumbnailCell.cellSize`).
+    /// `@AppStorage`, not `@State` — this view is torn down and recreated
+    /// on every Editor↔Library switch (see `ThumbnailCache.swift`'s own
+    /// doc comment), so a plain `@State` would silently reset the slider
+    /// on every trip through the Editor. No `@AppStorage` precedent
+    /// exists elsewhere in this app (its two `UserDefaults` uses are
+    /// hand-rolled bookmark dictionaries, a different shape), but it's
+    /// the standard tool for a single persisted scalar UI preference like
+    /// this one. Capped at 240 — `ThumbnailCache`'s own decode size — so
+    /// this never asks for a size the cache can't serve crisply; see
+    /// `LibraryThumbnailCell`'s doc comment for why the cache itself is
+    /// deliberately untouched.
+    @AppStorage("PhotoApp.libraryThumbnailSize") private var thumbnailSize: Double = 140
+
+    private var columns: [GridItem] { [GridItem(.adaptive(minimum: thumbnailSize), spacing: 12)] }
 
     /// D5 (IMPROVEMENTS.md): the photo a "Remove from Library" tap is
     /// asking to confirm. Lives here, not `ContentView`, deliberately —
@@ -37,7 +52,7 @@ struct LibraryGridView: View {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 12) {
                             ForEach(catalog.displayedPhotos) { photo in
-                                LibraryThumbnailCell(catalog: catalog, photo: photo) {
+                                LibraryThumbnailCell(catalog: catalog, photo: photo, cellSize: thumbnailSize) {
                                     onOpen(photo)
                                 } onRequestRemoval: {
                                     photoPendingRemoval = photo
@@ -49,6 +64,9 @@ struct LibraryGridView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if !catalog.photos.isEmpty {
+                thumbnailSizeBar
+            }
         }
         .alert(
             "Remove from Library?",
@@ -101,6 +119,27 @@ struct LibraryGridView: View {
         .padding(.vertical, 8)
     }
 
+    /// D2 (IMPROVEMENTS.md): bottom-right thumbnail-size slider, Photos'
+    /// own convention. `ThinSlider`, this app's custom-styled slider
+    /// (`Sources/UI/ThinSlider.swift`) — not the native SwiftUI `Slider`,
+    /// which was deliberately replaced app-wide already because its
+    /// glossy 3D knob doesn't restyle to match the flat dark theme.
+    private var thumbnailSizeBar: some View {
+        HStack(spacing: 10) {
+            Spacer()
+            Image(systemName: "photo")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ThinSlider(value: $thumbnailSize, range: 100...240)
+                .frame(width: 100)
+            Image(systemName: "photo")
+                .font(.body)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+    }
+
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "photo.on.rectangle.angled")
@@ -145,13 +184,25 @@ struct LibraryGridView: View {
 /// re-fetches). `catalog` is `let`, not `@ObservedObject` here — this cell
 /// only ever calls `catalog.thumbnail(for:)`, it doesn't need to
 /// re-render when unrelated `@Published` properties change.
+///
+/// D3 (IMPROVEMENTS.md): also checks for a sidecar file (`hasEdits`) in
+/// the SAME `.task`, deliberately NOT inside `ThumbnailCache` itself —
+/// the cache's `NSCache<NSString, CGImage>` and its other call site
+/// (`EditorFilmstripView`'s `FilmstripCell`) both expect a bare
+/// `CGImage?`; widening that shared return type would ripple into both
+/// cells and every `ThumbnailCacheTests` call site for a check only this
+/// cell needs. Still "amortized with the decode" in the sense that
+/// matters — once per cell-appearance, not once per render — just done
+/// at the view layer.
 private struct LibraryThumbnailCell: View {
     let catalog: CatalogModel
     let photo: Photo
+    let cellSize: CGFloat
     let onTap: () -> Void
     let onRequestRemoval: () -> Void
 
     @State private var image: CGImage?
+    @State private var hasEdits = false
 
     var body: some View {
         VStack(spacing: 4) {
@@ -166,7 +217,7 @@ private struct LibraryThumbnailCell: View {
                     // show this instead of a silent blank box.
                     ProgressView()
                         .controlSize(.small)
-                        .frame(width: 140, height: 140)
+                        .frame(width: cellSize, height: cellSize)
                 }
                 if let image {
                     // `.frame(width:height:)` BEFORE `.clipShape` here is
@@ -179,13 +230,15 @@ private struct LibraryThumbnailCell: View {
                     // added (for the badge below), it caused the badge to
                     // sit at a different effective position per photo —
                     // caught live. Pinning the image's own reported size
-                    // to exactly 140x140 makes the ZStack's content box
+                    // to exactly `cellSize` makes the ZStack's content box
                     // (and therefore "top-leading") consistent for every
-                    // photo regardless of its native dimensions.
+                    // photo regardless of its native dimensions — and is
+                    // exactly why the D3 edited-badge overlay below also
+                    // waits until AFTER this same frame+clip.
                     Image(decorative: image, scale: 1)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
-                        .frame(width: 140, height: 140)
+                        .frame(width: cellSize, height: cellSize)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 // Always-visible selection checkbox — tapping IT toggles
@@ -209,8 +262,13 @@ private struct LibraryThumbnailCell: View {
                 .buttonStyle(.plain)
                 .padding(6)
             }
-            .frame(width: 140, height: 140)
+            .frame(width: cellSize, height: cellSize)
             .clipped()
+            .overlay(alignment: .bottomTrailing) {
+                if hasEdits {
+                    editedBadge
+                }
+            }
 
             Text(photo.filename)
                 .font(.caption)
@@ -262,8 +320,27 @@ private struct LibraryThumbnailCell: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .task(id: photo.path) {
-            image = await catalog.thumbnail(for: photo)
+            // `async let` so the cheap synchronous sidecar stat doesn't
+            // serialize behind the (much slower) thumbnail decode.
+            async let thumbnail = catalog.thumbnail(for: photo)
+            let sidecarURL = ImageDocumentModel.sidecarURL(for: URL(fileURLWithPath: photo.path))
+            hasEdits = FileManager.default.fileExists(atPath: sidecarURL.path)
+            image = await thumbnail
         }
+    }
+
+    /// D3 (IMPROVEMENTS.md): same circular-backdrop visual language the
+    /// selection checkbox above already uses, for consistency.
+    private var editedBadge: some View {
+        ZStack {
+            Circle()
+                .fill(.black.opacity(0.35))
+                .frame(width: 22, height: 22)
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 11))
+                .foregroundStyle(.white)
+        }
+        .padding(6)
     }
 }
 

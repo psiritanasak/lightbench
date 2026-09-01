@@ -63,6 +63,7 @@ final class CatalogDatabase: Sendable {
         Migration002RatingsAndFlags.register(in: &migrator)
         Migration003Collections.register(in: &migrator)
         Migration004FolderCollections.register(in: &migrator)
+        Migration005Presets.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 
@@ -169,6 +170,35 @@ final class CatalogDatabase: Sendable {
     func deletePhoto(id: Int64) async throws {
         try await dbQueue.write { db in
             _ = try Photo.filter(Photo.Columns.id == id).deleteAll(db)
+        }
+    }
+
+    // MARK: - Presets (Phase 5 slice 2)
+
+    /// Ordered by `name`, same reasoning as `allCollections()` — a picker
+    /// list is more scannable alphabetically.
+    func allPresets() async throws -> [Preset] {
+        try await dbQueue.read { db in
+            try Preset.order(Preset.Columns.name).fetchAll(db)
+        }
+    }
+
+    /// `onConflict: .replace` makes saving under an existing name
+    /// transparently overwrite the old preset rather than erroring or
+    /// duplicating — the expected Lightroom-style behavior, and avoids a
+    /// separate "overwrite?" confirmation UI for v1.
+    func createPreset(name: String, editState: EditState) async throws -> Preset {
+        try await dbQueue.write { db in
+            var preset = Preset(id: nil, name: name, editState: editState, createdAt: Date())
+            try preset.insert(db, onConflict: .replace)
+            return preset
+        }
+    }
+
+    /// Deleting a nonexistent ID is a silent no-op, matching `deletePhoto`.
+    func deletePreset(id: Int64) async throws {
+        try await dbQueue.write { db in
+            _ = try Preset.filter(Preset.Columns.id == id).deleteAll(db)
         }
     }
 

@@ -580,6 +580,63 @@ struct EditState: Equatable, Codable {
         // untouched — inherited from `self` via `var s = self` above.
         return s
     }
+
+    /// Applies `self` as a saved preset onto `target`, returning the merged
+    /// result. Every field `comparisonOriginal()` resets to identity gets
+    /// copied from `self` (the preset) instead; everything that method
+    /// leaves untouched — crop/straighten/perspective/flip geometry, and
+    /// `redEyePoints` itself — is preserved from `target`, since both are
+    /// specific to ONE photo's composition/face positions, never part of a
+    /// reusable "look". Deliberately reuses `comparisonOriginal()`'s exact
+    /// field partition (see its own doc comment for the full reasoning)
+    /// rather than re-deriving a second list that could drift out of sync.
+    func applyingPreset(onto target: EditState) -> EditState {
+        var result = target
+        // light/tone
+        result.exposureEV = exposureEV
+        result.brightness = brightness
+        result.brilliance = brilliance
+        result.contrast = contrast
+        result.curvesHighlights = curvesHighlights
+        result.curvesShadows = curvesShadows
+        result.blackPoint = blackPoint
+        result.levelsBlackPoint = levelsBlackPoint
+        result.levelsWhitePoint = levelsWhitePoint
+        result.levelsGamma = levelsGamma
+        // white balance
+        result.whiteBalanceTemperature = whiteBalanceTemperature
+        result.whiteBalanceTint = whiteBalanceTint
+        // hsl / color
+        result.hslHue = hslHue
+        result.vibrance = vibrance
+        result.hslSaturation = hslSaturation
+        // selective color (range + all 8 bands' hue/saturation/luminance)
+        result.selectiveColorRange = selectiveColorRange
+        result.redHue = redHue; result.redSaturation = redSaturation; result.redLuminance = redLuminance
+        result.orangeHue = orangeHue; result.orangeSaturation = orangeSaturation; result.orangeLuminance = orangeLuminance
+        result.yellowHue = yellowHue; result.yellowSaturation = yellowSaturation; result.yellowLuminance = yellowLuminance
+        result.greenHue = greenHue; result.greenSaturation = greenSaturation; result.greenLuminance = greenLuminance
+        result.aquaHue = aquaHue; result.aquaSaturation = aquaSaturation; result.aquaLuminance = aquaLuminance
+        result.blueHue = blueHue; result.blueSaturation = blueSaturation; result.blueLuminance = blueLuminance
+        result.purpleHue = purpleHue; result.purpleSaturation = purpleSaturation; result.purpleLuminance = purpleLuminance
+        result.magentaHue = magentaHue; result.magentaSaturation = magentaSaturation; result.magentaLuminance = magentaLuminance
+        // black & white + effects
+        result.blackAndWhite = blackAndWhite
+        result.vignetteStrength = vignetteStrength
+        result.vignetteRadius = vignetteRadius
+        result.definition = definition
+        result.sharpness = sharpness
+        result.noiseReduction = noiseReduction
+        // red-eye correction INTENSITY only — `redEyePoints` (where the
+        // corrections sit) stays `target`'s own, untouched.
+        result.redEyeSize = redEyeSize
+        result.redEyeStrength = redEyeStrength
+        // geometry (cropInset*, straightenAngle, verticalPerspective,
+        // horizontalPerspective, flipHorizontal, flipVertical) and
+        // redEyePoints are NOT copied — they stay `target`'s own via
+        // `var result = target` above.
+        return result
+    }
 }
 
 // MARK: - Custom decoding (schema-tolerant)

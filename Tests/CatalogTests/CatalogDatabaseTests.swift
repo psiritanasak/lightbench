@@ -392,4 +392,94 @@ final class CatalogDatabaseTests: XCTestCase {
         let dayPhotos = try await db.photos(inCollection: dayID)
         XCTAssertEqual(dayPhotos.map(\.filename), ["1.jpg"], "the tree import should associate the pre-existing photo with Day1's collection")
     }
+
+    // MARK: - Presets (Phase 5 slice 2)
+
+    /// A fully non-identity `EditState` — every color/tone field pushed away
+    /// from default, plus geometry and red-eye points, so the round-trip
+    /// test below can't pass by coincidentally comparing two all-default
+    /// structs.
+    private func fullyEditedState() -> EditState {
+        var s = EditState()
+        s.exposureEV = 1.5
+        s.whiteBalanceTemperature = 8000
+        s.whiteBalanceTint = 20
+        s.hslHue = 0.2
+        s.selectiveColorRange = 0.7
+        s.redHue = 0.1; s.redSaturation = 0.2; s.redLuminance = 0.3
+        s.magentaHue = -0.1; s.magentaSaturation = -0.2; s.magentaLuminance = -0.3
+        s.blackAndWhite = true
+        s.vignetteStrength = 0.5
+        s.definition = 0.4
+        s.sharpness = 0.6
+        s.noiseReduction = 0.3
+        s.redEyeSize = 0.8
+        s.redEyeStrength = 0.9
+        s.redEyePoints = [RedEyePoint(x: 0.3, y: 0.4), RedEyePoint(x: 0.6, y: 0.5)]
+        s.straightenAngle = 12
+        s.cropInsetTop = 0.1
+        s.flipHorizontal = true
+        return s
+    }
+
+    /// A real, executable proof that GRDB's Codable-record support actually
+    /// serializes the nested `EditState` to a JSON column and back
+    /// correctly — including the 24 selective-color fields and the
+    /// variable-length `redEyePoints` array — not just an assumption from
+    /// the framework's docs. The first blob/JSON column in this codebase.
+    func testCreatePresetRoundTripsTheFullEditState() async throws {
+        let db = try makeDatabase()
+        let state = fullyEditedState()
+
+        let created = try await db.createPreset(name: "Moody", editState: state)
+
+        XCTAssertNotNil(created.id)
+        let fetched = try await db.allPresets()
+        XCTAssertEqual(fetched.count, 1)
+        XCTAssertEqual(fetched.first?.editState, state, "the fetched EditState must equal the saved one, field for field")
+    }
+
+    func testCreatePresetWithAnExistingNameReplacesRatherThanDuplicating() async throws {
+        let db = try makeDatabase()
+        _ = try await db.createPreset(name: "Moody", editState: EditState())
+        var updated = EditState()
+        updated.exposureEV = 2.0
+
+        _ = try await db.createPreset(name: "Moody", editState: updated)
+
+        let presets = try await db.allPresets()
+        XCTAssertEqual(presets.count, 1, "saving under an existing name must overwrite, not duplicate")
+        XCTAssertEqual(presets.first?.editState.exposureEV, 2.0)
+    }
+
+    func testDeletePresetRemovesIt() async throws {
+        let db = try makeDatabase()
+        let created = try await db.createPreset(name: "Moody", editState: EditState())
+        let id = try XCTUnwrap(created.id)
+
+        try await db.deletePreset(id: id)
+
+        let presets = try await db.allPresets()
+        XCTAssertTrue(presets.isEmpty)
+    }
+
+    func testDeletingANonexistentPresetIDIsANoOp() async throws {
+        let db = try makeDatabase()
+        _ = try await db.createPreset(name: "Moody", editState: EditState())
+
+        try await db.deletePreset(id: 999_999)
+
+        let presets = try await db.allPresets()
+        XCTAssertEqual(presets.count, 1)
+    }
+
+    func testAllPresetsOrdersByName() async throws {
+        let db = try makeDatabase()
+        _ = try await db.createPreset(name: "Zebra", editState: EditState())
+        _ = try await db.createPreset(name: "Apple", editState: EditState())
+
+        let presets = try await db.allPresets()
+
+        XCTAssertEqual(presets.map(\.name), ["Apple", "Zebra"])
+    }
 }

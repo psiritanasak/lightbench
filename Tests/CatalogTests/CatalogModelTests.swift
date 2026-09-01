@@ -161,6 +161,39 @@ final class CatalogModelTests: XCTestCase {
         }
     }
 
+    // MARK: - Presets (Phase 5 slice 2)
+
+    func testCreatePresetPersistsAndAppearsInThePublishedList() async throws {
+        let model = await makeModel()
+        var state = EditState()
+        state.exposureEV = 1.2
+
+        model.createPreset(name: "Moody", editState: state)
+
+        try await waitUntil("the preset to appear in the published list") {
+            await model.presets.contains { $0.name == "Moody" }
+        }
+        let stored = try await database.allPresets()
+        XCTAssertEqual(stored.first?.editState.exposureEV, 1.2)
+    }
+
+    func testDeletePresetPrunesLocalStateSynchronously() async throws {
+        let model = await makeModel()
+        model.createPreset(name: "Moody", editState: EditState())
+        try await waitUntil("the preset to appear before deleting it") {
+            await !model.presets.isEmpty
+        }
+        let preset = try XCTUnwrap(model.presets.first)
+
+        model.deletePreset(preset)
+
+        // No await: local-first, same discipline as removePhoto's own test.
+        XCTAssertTrue(model.presets.isEmpty)
+        try await waitUntil("the deletion to reach the database") {
+            try await self.database.allPresets().isEmpty
+        }
+    }
+
     // MARK: - Collection membership
 
     func testToggleMembershipUpdatesTheMembershipMapSynchronously() async throws {

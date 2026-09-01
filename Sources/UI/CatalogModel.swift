@@ -29,6 +29,10 @@ final class CatalogModel: ObservableObject {
     @Published var importStatusMessage: String?
     @Published private(set) var photos: [Photo] = []
     @Published private(set) var collections: [PhotoCollection] = []
+    /// Phase 5 slice 2: named, saved edit-state "looks", applicable to any
+    /// photo. Loaded in `refresh()` alongside `collections` — same shape,
+    /// same reasoning.
+    @Published private(set) var presets: [Preset] = []
     /// Which photos `photos` reflects. Setting this re-filters `photos` —
     /// see `didSet` below and `refresh()`. Also clears `selectedPhotoIDs`
     /// — switching what the grid shows always starts from a clean
@@ -257,8 +261,8 @@ final class CatalogModel: ObservableObject {
         }
     }
 
-    /// Re-reads `photoCount`/`photos`/`collections`/`membershipsByPhotoID`
-    /// from the catalog. Safe to call repeatedly (e.g. after every import
+    /// Re-reads `photoCount`/`photos`/`collections`/`presets`/
+    /// `membershipsByPhotoID` from the catalog. Safe to call repeatedly (e.g. after every import
     /// or rating/flag/membership change) — `CatalogDatabase`'s own methods
     /// are `async` and do their real work via GRDB's queue, not on this
     /// (`@MainActor`) call site, so this doesn't block the UI despite
@@ -272,6 +276,7 @@ final class CatalogModel: ObservableObject {
         do {
             photoCount = try await database.photoCount()
             collections = try await database.allCollections()
+            presets = try await database.allPresets()
             let memberships = try await database.allMemberships()
             membershipsByPhotoID = Dictionary(grouping: memberships, by: \.photoId)
                 .mapValues { Set($0.map(\.collectionId)) }
@@ -411,6 +416,36 @@ final class CatalogModel: ObservableObject {
         invalidateThumbnail(for: URL(fileURLWithPath: photo.path))
         Task.detached { [weak self] in
             do { try await database.deletePhoto(id: id) } catch { await self?.refresh() }
+        }
+    }
+
+    // MARK: - Presets (Phase 5 slice 2)
+
+    /// Creates (or, under an existing name, overwrites — see
+    /// `CatalogDatabase.createPreset`'s own doc comment) a saved preset.
+    /// Same shape as `createCollection`: validate up front, fire-and-forget
+    /// write, then `refresh()` — unlike `removePhoto`'s local-first
+    /// pattern, there's no local list position to guess at ahead of the
+    /// write (the list is alphabetical, not insertion-ordered), so a full
+    /// refresh is the simpler correct choice here, same as collections.
+    func createPreset(name: String, editState: EditState) {
+        guard let database else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task.detached { [weak self] in
+            _ = try? await database.createPreset(name: trimmed, editState: editState)
+            await self?.refresh()
+        }
+    }
+
+    /// Local-first prune, same shape as `removePhoto` — a preset deletion
+    /// is permanent, not a re-toggleable field, so the local list is
+    /// updated synchronously rather than waiting on a full `refresh()`.
+    func deletePreset(_ preset: Preset) {
+        guard let database, let id = preset.id else { return }
+        presets.removeAll { $0.id == id }
+        Task.detached { [weak self] in
+            do { try await database.deletePreset(id: id) } catch { await self?.refresh() }
         }
     }
 

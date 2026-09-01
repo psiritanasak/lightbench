@@ -438,6 +438,20 @@ final class ImageDocumentModel: ObservableObject {
         applyHistoryState(history.current)
     }
 
+    /// Applies a saved preset's color/tone "look" to the current photo
+    /// (Phase 5 slice 2) — structurally identical to `revertToOriginal()`
+    /// just above, for the exact same reason: flush any in-progress burst
+    /// first, then commit `history` DIRECTLY so this is always its own
+    /// atomic, immediately-committed undo step rather than risking a merge
+    /// with a same-instant follow-up edit. `EditState.applyingPreset(onto:)`
+    /// is what actually does the field-by-field merge — this method only
+    /// wires that into the undo/sidecar-save machinery.
+    func applyPreset(_ preset: Preset) {
+        finalizePendingCommit()
+        history.commit(preset.editState.applyingPreset(onto: editState))
+        applyHistoryState(history.current)
+    }
+
     // MARK: - Sidecar Persistence
 
     /// Whether the current `editState` assignment is `load(from:)` applying

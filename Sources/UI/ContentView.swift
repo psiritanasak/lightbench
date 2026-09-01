@@ -786,6 +786,7 @@ struct ContentView: View {
                 case .adjust:
                     AdjustTabView(
                         document: document,
+                        catalog: catalog,
                         panel: $adjustPanel,
                         isPickingWhiteBalance: $isPickingWhiteBalance,
                         isPlacingRedEyeCorrections: $isPlacingRedEyeCorrections,

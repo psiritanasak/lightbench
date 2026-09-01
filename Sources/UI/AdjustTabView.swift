@@ -34,12 +34,20 @@ struct AdjustPanelState {
     /// (24 flat fields), this just tracks which band's trio the panel
     /// displays right now.
     var selectedSelectiveColorBand: SelectiveColorBand = .red
+
+    /// Phase 5 slice 2: whether the Presets section is expanded. Same
+    /// reasoning as the six section bools above — must survive a Crop tab
+    /// round-trip.
+    var isPresetsSectionExpanded = false
 }
 
 /// The Editor's Adjust tab: the six collapsible Light/Color/Selective Color/
 /// Black & White/Effects/Red-Eye sections plus "Reset Adjustments".
 struct AdjustTabView: View {
     @ObservedObject var document: ImageDocumentModel
+    /// Phase 5 slice 2 (Presets) — the only reason this view needs
+    /// `CatalogModel` at all; every other section only touches `document`.
+    @ObservedObject var catalog: CatalogModel
     @Binding var panel: AdjustPanelState
     /// Owned by `ContentView` because the image pane reads them too — they
     /// gate zooming (`canZoom`), drive the tap overlays, and are cleared when
@@ -50,6 +58,15 @@ struct AdjustTabView: View {
     /// Compare and resets zoom/pan in response — passed as a callback so this
     /// view doesn't take bindings to three unrelated viewport states.
     let onEnterPointPickingMode: () -> Void
+
+    /// "Save Preset" alert state. Local `@State`, NOT lifted into
+    /// `AdjustPanelState` — safe because a presented `.alert` is modal on
+    /// macOS, so the user structurally cannot switch to the Crop tab (the
+    /// thing `AdjustPanelState` exists to survive) while it's up. Unlike
+    /// the persistent section-expansion bools, there's no round-trip to
+    /// preserve here.
+    @State private var isPresentingSaveAlert = false
+    @State private var newPresetName = ""
 
     /// Routes to the currently-selected Selective Color band's Hue field —
     /// `EditState` has 24 flat named fields (no array/dictionary, matching
@@ -131,7 +148,26 @@ struct AdjustTabView: View {
                 redEyeSection
             }
             Divider()
+            AdjustSectionContainer(icon: "list.star", title: "Presets", isExpanded: $panel.isPresetsSectionExpanded) {
+                presetsSection
+            }
+            Divider()
             resetAdjustmentsButton
+        }
+        .alert("Save Preset", isPresented: $isPresentingSaveAlert) {
+            TextField("Name", text: $newPresetName)
+            Button("Save") {
+                // `applyingPreset(onto: .identity)` strips OUT this photo's
+                // own geometry/redEyePoints before saving, reusing the same
+                // field partition `applyPreset` later reads FROM — so a
+                // saved preset is genuinely just "a look", never carrying
+                // one photo's crop/straighten/flip/red-eye-point positions
+                // as dead data alongside it.
+                let reusableState = document.editState.applyingPreset(onto: .identity)
+                catalog.createPreset(name: newPresetName, editState: reusableState)
+                newPresetName = ""
+            }
+            Button("Cancel", role: .cancel) { newPresetName = "" }
         }
     }
 
@@ -308,6 +344,44 @@ struct AdjustTabView: View {
                 document.editState.redEyePoints.removeAll()
             }
             .disabled(document.editState.redEyePoints.isEmpty)
+        }
+    }
+
+    /// Phase 5 slice 2: save the current photo's color/tone adjustments as
+    /// a named, reusable preset, or apply/delete an already-saved one.
+    /// Deliberately no nested `Menu` here (unlike the Library grid's
+    /// collections picker) — this session already hit a real Swift
+    /// type-checker failure from packing too much into one `@ViewBuilder`
+    /// closure (the toolbar's `.toolbar {}`), so this stays a flat list of
+    /// plain rows.
+    private var presetsSection: some View {
+        Group {
+            Button("Save Preset…") {
+                isPresentingSaveAlert = true
+            }
+            .frame(maxWidth: .infinity)
+            if catalog.presets.isEmpty {
+                Text("No saved presets yet")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(catalog.presets) { preset in
+                    HStack {
+                        Button(preset.name) {
+                            document.applyPreset(preset)
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                        Button {
+                            catalog.deletePreset(preset)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                    }
+                }
+            }
         }
     }
 

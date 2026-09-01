@@ -3297,7 +3297,7 @@ same `.disabled`/`.tint`/`.onChange`/conditionals, just relocated).
     toolbar position) and via clicking them successfully (the Filmstrip
     toggle visibly works). Not a code bug — no action taken.
 
-### Remove photos from the Library catalog (complete, NOT yet verified live) — IMPROVEMENTS.md D5, part 1 of 3
+### Remove photos from the Library catalog (complete, verified live 2026-09-01) — IMPROVEMENTS.md D5, part 1 of 3
 
 D5 bundles three separate items (remove-from-catalog, missing-file
 detection, rename/delete collections), each flagged as needing its own
@@ -3369,15 +3369,23 @@ shape from `String?` to `Photo?`.
   proof, delete-a-nonexistent-ID-is-a-no-op — and 3 `CatalogModelTests` —
   synchronous local removal, `selectedPhotoIDs` pruning, DB persistence).
   1 commit.
-- **NOT yet verified live** — same Accessibility-driven approach as D7/
-  D1/D1(b): import a couple of throwaway test photos, open the per-cell
-  Menu, confirm "Remove from Library" appears below a divider, confirm
-  the alert wording, confirm Cancel is a no-op, confirm Remove drops the
-  cell immediately, and confirm the photo stays gone after quitting and
-  relaunching the app (proves the DB write landed, not just the
-  in-memory removal).
+- **Verified live 2026-09-01** — by the user directly (this pass, unlike
+  D7/D1/D1(b), was driven manually rather than via Accessibility
+  automation, after automation overhead on this pass ran too high for
+  the value it was adding). Confirmed: the per-cell Menu shows "Remove
+  from Library" below a divider, the confirmation alert's wording and
+  buttons are correct, Cancel is a genuine no-op, Remove drops the cell
+  immediately, and the photo stays gone after quitting and relaunching
+  the app (the DB write landed, not just the in-memory removal).
+  **One real, live-caught visual bug, fixed same session**: the menu
+  item's `role: .destructive` did NOT render red text — unlike an
+  `.alert`'s destructive button (which the user confirmed WAS correctly
+  red), macOS `Menu` items don't automatically tint from that role
+  alone. Fixed with explicit `.foregroundStyle(.red)` on both the label
+  text and the trash icon. Rebuilt, retested (380 tests unchanged),
+  1 commit.
 
-### Library thumbnail-size slider + edited-photo badge (complete, NOT yet verified live) — IMPROVEMENTS.md D2 + D3
+### Library thumbnail-size slider + edited-photo badge (complete, verified live 2026-09-01) — IMPROVEMENTS.md D2 + D3
 
 Two small, self-contained Library-grid UI features, bundled into one
 session as the user's own choice. Both confined to
@@ -3437,12 +3445,16 @@ deliberately lighter than the Library grid's.
   UI-wiring-only changes with no new pure logic (Crop v2, the Compare
   divider, D7, D1(b) all shipped the same way). 380 tests unchanged.
   1 commit.
-- **NOT yet verified live**: drag the slider and confirm the grid's cell
-  size AND column count visibly respond live; quit and relaunch,
-  confirm the chosen size persisted; confirm the edited badge appears
-  only on photos with a sidecar file, positioned bottom-trailing without
-  colliding with the top-leading selection checkbox at both slider
-  extremes.
+- **Verified live 2026-09-01** (Accessibility-driven, via the slider's
+  own `accessibilityAdjustableAction` — AXIncrement/AXDecrement — since
+  the custom `ThinSlider` proved awkward to hit reliably with raw pixel
+  clicks on this multi-monitor setup): the grid's cell size AND column
+  count both responded live in both directions; quit-and-relaunch
+  confirmed the chosen size persisted via `@AppStorage`; the edited
+  badge was confirmed showing correctly only on the 3 photos with real
+  saved edits, not on any of the ~20 unedited ones in the library, with
+  no collision against the top-leading selection checkbox, confirmed at
+  both slider extremes.
 
 ## Exact next step
 **Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus eight user-requested
@@ -3462,17 +3474,25 @@ Library thumbnails not reflecting edits, each with its own section above.
 No open correctness items remain from that batch.
 
 A codebase-wide improvement review now lives in `IMPROVEMENTS.md` at the repo
-root (performance + design backlog, written 2026-08-28). Four of its items are
-now closed: P1 was attempted and DISPROVED by measurement, P4 was measured and
-SHIPPED, D7 (split ContentView) SHIPPED, and D1 is now fully shipped —
-(a) ⌘←/⌘→ and (b) the bottom filmstrip, both with their own sections above.
-Its remaining items are unmeasured candidates, not commitments, and nothing in
-it outranks the roadmap options below: D2 (thumbnail-size slider), D3 (edit
-badge in Library), D4 (Library keyboard support — needs Plan Mode + user
-scope confirmation), D5 (Library management gaps — rename/delete
-collections, remove-from-catalog, missing-file detection), D6 (accessibility
+root (performance + design backlog, written 2026-08-28). Seven of its items
+are now closed and verified live: P1 was attempted and DISPROVED by
+measurement, P4 was measured and SHIPPED, D7 (split ContentView) SHIPPED,
+D1 is fully shipped — (a) ⌘←/⌘→ and (b) the bottom filmstrip — D2
+(thumbnail-size slider) SHIPPED, D3 (edited-photo badge) SHIPPED, and D5
+part 1 of 3 (remove-from-catalog) SHIPPED — each with its own section
+above, all verified live 2026-09-01. Its remaining items are unmeasured
+candidates, not commitments, and nothing in it outranks the roadmap
+options below: D4 (Library keyboard support — needs Plan Mode + user
+scope confirmation), D5's other two parts (rename/delete collections,
+missing-file detection — each still its own session), D6 (accessibility
 pass), and P2/P3/P5/P6 (performance — measure before implementing, per
 IMPROVEMENTS.md's own working agreements).
+
+**Next up per the user's own stated sequence ("2 then 3 and 1")**: D5
+(done), D2+D3 (done) — **only option "1" remains: Phase 5 slice 2,
+Presets** (save/apply named edit-state presets). This is also the item
+CLAUDE.md's roadmap itself puts ahead of the whole IMPROVEMENTS.md
+backlog, so it's next regardless of the numbered sequence.
 
 **All three shipped items (D7, D1(a), and now D1(b)) got their live pass on
 2026-08-28** — see their own

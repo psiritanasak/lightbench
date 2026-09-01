@@ -8,12 +8,13 @@ and flags, and collections — all shipped, reviewer-approved, and
 manually verified live; see below. A user-requested follow-up feature,
 folder-mirrored nested collections (outside Phase 4's original scope),
 has ALSO shipped since — see its own section below. **Phase 5 (Presets +
-export) has STARTED** — slice 1, batch export, shipped; see its own
-section below. Two real, NOT-yet-fixed issues were found live while
-verifying that slice, both explicitly deferred to their own future
-sessions (see "Exact next step"): Library thumbnails don't reflect
-edits, and the Editor's on-screen color/brightness looks different from
-Preview.app. The original six
+export) is now COMPLETE** — slice 1 (batch export) and slice 2 (Presets,
+2026-09-01) both shipped and reviewer-approved; see their own sections
+below. (The two real issues found live during slice 1's own verification —
+Library thumbnails not reflecting edits, and the Editor-vs-Preview color
+discrepancy — were both fixed in later sessions, see their own sections.)
+Phase 6 (RAW support) is next per the roadmap, not yet started. The
+original six
 roadmap items, five
 backlog tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
@@ -3456,17 +3457,121 @@ deliberately lighter than the Library grid's.
   no collision against the top-leading selection checkbox, confirmed at
   both slider extremes.
 
+### Presets — save/apply named edit-state "looks" (complete, NOT yet verified live) — Phase 5 slice 2
+
+The last remaining piece of Phase 5 (batch export shipped earlier). CLAUDE.md
+had stated plainly: "Presets (save/apply named edit-state presets) are NOT
+started." Also outranks the entire IMPROVEMENTS.md backlog per the roadmap's
+own ordering rule.
+
+**Scope decision, grounded in code already shipped, not invented fresh**: a
+preset captures color/tone only — exposure, WB, curves, selective color,
+B&W, vignette, definition, sharpen, noise reduction, and the red-eye
+correction *intensity* sliders. It deliberately excludes crop/straighten/
+perspective/flip geometry and the actual placed `redEyePoints` (both
+specific to one photo's composition/face positions, never part of a
+reusable "look"). This exact partition already existed and was tested:
+`EditState.comparisonOriginal()` (the Compare feature's "original" side)
+resets precisely this field set to identity while preserving geometry — the
+new `EditState.applyingPreset(onto:)` reuses that SAME partition in the
+opposite direction (copy color/tone IN from the preset, keep geometry/
+red-eye-points OUT, preserved from the target) rather than re-deriving a
+second list that could drift out of sync.
+
+`Sources/Catalog/Preset.swift` (new) + `Migrations/005_presets.swift` (new)
+— the first blob/JSON-style column in this codebase: `editState: EditState`
+is a nested `Codable` property that GRDB's Codable-record support
+auto-serializes with zero manual encode/decode, reusing `EditState`'s own
+already-schema-tolerant `Codable`. `CatalogDatabase` gained
+`allPresets()`/`createPreset(name:editState:)` (`onConflict: .replace` —
+saving under an existing name transparently overwrites, matching
+Lightroom-style UX, no separate "overwrite?" confirmation needed)/
+`deletePreset(id:)`, all mirroring the collections/photo-removal methods'
+exact shapes. `CatalogModel` gained `@Published presets` + matching
+`createPreset`/`deletePreset` mutators (`createPreset` fire-and-forget-then-
+refresh like `createCollection`; `deletePreset` local-first-prune like
+`removePhoto`). `ImageDocumentModel` gained `applyPreset(_:)`, structurally
+identical to the already-shipped `revertToOriginal()` — commits directly to
+`history` as one atomic, immediately-committed undo step rather than the
+debounced path, for the same stale-canUndo reason `revertToOriginal()`
+already documented.
+
+`AdjustTabView` gained a 7th collapsible section ("Presets", after Red-Eye):
+a "Save Preset…" button (a `.alert` hosted on `AdjustTabView` itself, NOT
+`ContentView` — which already carries 5 alerts and was previously split
+specifically because a 6th broke the type-checker) and a flat list
+(deliberately no nested `Menu`, to avoid repeating the exact type-checker
+pathology that broke the toolbar `.toolbar {}` closure earlier this
+session) of saved presets, each row tap-to-apply plus a trash-icon delete
+with explicit `.foregroundStyle(.red)` (not relying on `role: .destructive`,
+already proven not to render red on a macOS Menu/button this session).
+
+- Reviewer **APPROVE** (Opus 5, after the default review model hit the
+  account's monthly spend limit mid-review on the first attempt — retried
+  successfully on Opus 5) — independently set-diffed `comparisonOriginal()`
+  and `applyingPreset(onto:)`'s field lists programmatically rather than
+  eyeballing (49 vs 48 fields, exact expected difference `{redEyePoints}`,
+  zero copy-paste-swapped identifiers), read the vendored GRDB source
+  directly to confirm the JSON round-trip is single-pass/not double-encoded
+  and that the round-trip test is genuinely discriminating (a mangled blob
+  throws during `EditState`'s custom decode rather than silently
+  defaulting), confirmed `applyPreset`'s undo-commit ordering reads the
+  CURRENT `editState` before any mutation, confirmed the `CatalogModel`
+  mutator shapes aren't swapped, and confirmed the prior red-text and
+  alert-placement lessons were genuinely applied (not just claimed). **Two
+  non-blocking findings fixed same session before commit**: (1) the
+  migration declared the `editState` column `.blob`, but GRDB's
+  Codable-record support actually persists nested `Codable` values as
+  TEXT (verified against GRDB's own source) — `.blob` "worked" only
+  because SQLite's BLOB affinity means "no type conversion", silently
+  storing the text verbatim; fixed to `.text` (the column type GRDB's own
+  docs recommend) while the table is still new/unshipped, since migrations
+  are append-only and this is the cheapest possible moment to fix it. (2)
+  the "Save Preset" button was saving `document.editState` wholesale,
+  meaning every preset's stored blob also carried the SOURCE photo's crop
+  insets/straighten angle/flips/placed red-eye points as inert dead data
+  (harmless today since `applyingPreset(onto:)` ignores it, but a future
+  preset-export or "apply full state" code path would silently inherit one
+  photo's composition) — fixed by saving
+  `document.editState.applyingPreset(onto: .identity)` instead, reusing the
+  exact same field-partition method the apply path already uses, so a
+  saved preset now only ever contains the reusable fields. Three other
+  non-blocking notes carried forward, all matching pre-existing patterns
+  rather than new gaps: preset-name sort uses SQLite's default
+  case-sensitive BINARY collation (same as `allCollections()`); the
+  trash-icon delete button has no `accessibilityLabel` (tracked under the
+  still-open D6 accessibility-pass backlog item, not fixed ad-hoc); and
+  `CatalogModel.createPreset`'s `try?` discards a genuine write failure
+  (matches `createCollection`'s own existing behavior exactly).
+- 390 tests (10 new: 3 `EditStatePresetTests` — color/tone copied from the
+  preset, target's geometry/red-eye-points survive untouched, and an
+  asymmetry-aware round-trip check against `comparisonOriginal()` that
+  deliberately does NOT assume naive symmetry, since `comparisonOriginal()`
+  clears `redEyePoints` while `applyingPreset` preserves the target's own —
+  5 `CatalogDatabaseTests` including a full-field round-trip through the
+  new JSON column, and 2 `CatalogModelTests`). 1 commit.
+- **NOT yet verified live**: open a photo, dial in several Adjust-tab
+  sliders, expand Presets, Save Preset with a name, confirm it appears;
+  switch to a DIFFERENT photo with its own crop/straighten already set,
+  apply the preset, confirm color/tone matches but that photo's OWN crop/
+  straighten/red-eye points are unchanged; delete the preset, confirm it's
+  gone after quit/relaunch; save under an existing name, confirm it
+  overwrites rather than duplicating.
+
 ## Exact next step
-**Phase 2, Phase 3, and Phase 4 are ALL COMPLETE**, plus eight user-requested
-follow-ups (folder-mirrored nested collections; the Editor Adjust-tab
-sidebar restyle; the custom thin slider; the Editor-vs-Preview color-fix;
-Library thumbnails reflecting edits; Compare mode; zoom and pan; Library
-sort/filter/search) — see their own sections above. **Phase 5 (Presets +
-export) has STARTED**: slice 1, batch export (including the entitlement-fix
-debugging saga and 2 reviewer-caught bugs), AND its immediate follow-up,
-selecting individual photos for export (including a live-caught
-checkbox-positioning bug), are BOTH DONE — see their own sections above.
-Both reviewer-APPROVED. 374 tests passing, app fully functional.
+**Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
+user-requested follow-ups (folder-mirrored nested collections; the Editor
+Adjust-tab sidebar restyle; the custom thin slider; the Editor-vs-Preview
+color-fix; Library thumbnails reflecting edits; Compare mode; zoom and pan;
+Library sort/filter/search) — see their own sections above. Phase 5's two
+slices: batch export (including the entitlement-fix debugging saga and 2
+reviewer-caught bugs) + its immediate follow-up (selecting individual
+photos for export), and Presets (2026-09-01, see its own section above,
+including the mid-review spend-limit switch to Opus 5 and 2 fixes applied
+before commit). All reviewer-APPROVED. 390 tests passing, app fully
+functional. **Phase 6 (RAW support) is next per the roadmap** — not yet
+started, and CLAUDE.md explicitly says not to start it early without the
+user asking specifically.
 
 **Both real issues surfaced live during batch export's own verification
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and
@@ -3488,11 +3593,14 @@ missing-file detection — each still its own session), D6 (accessibility
 pass), and P2/P3/P5/P6 (performance — measure before implementing, per
 IMPROVEMENTS.md's own working agreements).
 
-**Next up per the user's own stated sequence ("2 then 3 and 1")**: D5
-(done), D2+D3 (done) — **only option "1" remains: Phase 5 slice 2,
-Presets** (save/apply named edit-state presets). This is also the item
-CLAUDE.md's roadmap itself puts ahead of the whole IMPROVEMENTS.md
-backlog, so it's next regardless of the numbered sequence.
+**The user's own stated sequence ("2 then 3 and 1") is now fully done**: D5,
+D2+D3, and finally "1" (Phase 5 slice 2, Presets) all shipped. With the
+roadmap's own next item (Phase 6, RAW) explicitly out of scope until asked
+for, remaining options are back to IMPROVEMENTS.md's open items — D4
+(Library keyboard support), D5's other two parts (rename/delete
+collections, missing-file detection), D6 (accessibility pass), and
+P2/P3/P5/P6 (performance, measure first) — or Presets' own still-open live
+verification (see its section above), whichever the user picks next.
 
 **All three shipped items (D7, D1(a), and now D1(b)) got their live pass on
 2026-08-28** — see their own

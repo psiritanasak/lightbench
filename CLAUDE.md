@@ -149,7 +149,7 @@ Edits are stored as parameter sets and rendered live on the GPU.
    mismatched `parentID` on re-import from a different root is silently
    ignored rather than reparenting).
 5. Presets + export: save/apply presets, batch export (resize, quality,
-   format) — STARTED. Batch export ✅ COMPLETE: exports the Library's
+   format) — ✅ COMPLETE. Batch export ✅ COMPLETE: exports the Library's
    currently-filtered set (`catalog.photos` — all photos, or one
    Collection/Folder's members, whatever the sidebar selection is; no
    new multi-select UI in this slice) as JPEG/PNG/TIFF with quality/
@@ -186,14 +186,44 @@ Edits are stored as parameter sets and rendered live on the GPU.
    of its own, so it reported a different effective size to the ZStack
    per photo depending on that photo's own aspect ratio (invisible under
    the old default `.center` alignment); fixed by pinning the image's
-   own `.frame(width:140,height:140)` before `.clipShape`. Presets
-   (save/apply named edit-state presets) are NOT started. Two unrelated
-   real issues surfaced live during batch export's own verification,
-   still explicitly deferred to their own future sessions: Library
-   thumbnails don't reflect edits (`ThumbnailGenerator` bypasses
-   `EditPipeline` entirely — a Phase 4 gap), and the Editor's on-screen
-   rendering looks brighter/less saturated than Preview.app (a
-   color-management question in `ImageRenderer`, not export).
+   own `.frame(width:140,height:140)` before `.clipShape`. Two unrelated
+   real issues surfaced live during batch export's own verification, both
+   since fixed in later sessions (see PROGRESS.md): Library thumbnails not
+   reflecting edits, and the Editor's on-screen rendering looking
+   brighter/less saturated than Preview.app.
+
+   **Presets ✅ COMPLETE** (2026-09-01): save/apply named edit-state
+   "looks". Scope deliberately excludes crop/straighten/perspective/flip
+   geometry and placed `redEyePoints` — both specific to one photo's
+   composition, never part of a reusable look — reusing the EXACT field
+   partition `EditState.comparisonOriginal()` (Compare feature) already
+   established, via a new `EditState.applyingPreset(onto:)`. New
+   `Sources/Catalog/Preset.swift` + `Migrations/005_presets.swift` — the
+   first JSON-column record in this codebase (`editState: EditState`
+   nested `Codable`, auto-serialized by GRDB's Codable-record support to
+   a `.text` column, verified against GRDB's own source to be single-pass/
+   not double-encoded, not `.blob` as an earlier draft assumed — GRDB
+   persists nested Codable values as a JSON string, `.blob` only "worked"
+   because SQLite's BLOB affinity does no type conversion). `CatalogDatabase`/
+   `CatalogModel` gained `allPresets`/`createPreset` (`onConflict: .replace`
+   — same-name saves overwrite, no separate confirmation UI)/`deletePreset`,
+   mirroring the collections/photo-removal methods' exact shapes.
+   `ImageDocumentModel.applyPreset(_:)` is structurally identical to the
+   already-shipped `revertToOriginal()` — one atomic, immediately-committed
+   undo step. `AdjustTabView` gained a 7th collapsible section ("Presets"),
+   its own `.alert` (not `ContentView`'s, already at 5 and previously split
+   over a 6th breaking the type-checker), and a flat list with no nested
+   `Menu` (avoiding the exact type-checker pathology that broke the
+   toolbar's `.toolbar {}` closure earlier). Reviewer APPROVE (Opus 5,
+   after the default review model hit the account's monthly spend limit
+   mid-review) — independently set-diffed the two field-partition methods
+   programmatically and read the vendored GRDB source directly rather than
+   trusting the docs. Two non-blocking findings fixed before commit: the
+   `.blob`→`.text` column-type correction above, and the "Save Preset"
+   button switched from saving `document.editState` wholesale to saving
+   `document.editState.applyingPreset(onto: .identity)` — so a saved
+   preset only ever contains the reusable fields, not the source photo's
+   geometry as inert dead data. 390 tests (10 new). NOT yet verified live.
 
    **Post-Phase-5 follow-up (shipped, outside the original roadmap
    scope): Editor Adjust-tab sidebar restyle to match Apple Photos'

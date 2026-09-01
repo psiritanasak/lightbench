@@ -308,7 +308,19 @@ private struct LibraryThumbnailCell: View {
                     Button(role: .destructive) {
                         onRequestRemoval()
                     } label: {
-                        Label("Remove from Library", systemImage: "trash")
+                        // `role: .destructive` alone doesn't render red text
+                        // on a macOS `Menu` item the way it does in an
+                        // `.alert` — caught live (the alert's own Remove
+                        // button DID render correctly). Explicit red tint
+                        // added so the destructive action actually reads as
+                        // dangerous, not just semantically marked as such.
+                        Label {
+                            Text("Remove from Library")
+                                .foregroundStyle(.red)
+                        } icon: {
+                            Image(systemName: "trash")
+                                .foregroundStyle(.red)
+                        }
                     }
                 } label: {
                     Image(systemName: "folder.badge.plus")

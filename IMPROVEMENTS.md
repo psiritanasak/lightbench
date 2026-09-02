@@ -26,12 +26,15 @@ concrete fix for its option (6) (overlapping `Task.detached` + `refresh()`
 transiently showing stale data), and D5 restates its option (2) (Library
 polish, remaining slices). Every other item here — P2, P3, P5, D1, D2, D3,
 D6, D7 — is new and not on that list. Nothing here supersedes the user's
-roadmap: Presets (Phase 5's remaining slice) and Phase 6 (RAW) still outrank
-all of it.
+roadmap: Presets (Phase 5, shipped 2026-09-01) and Phase 6 slice 1 (RAW
+decode, shipped 2026-09-02 — see PROGRESS.md) are both done; Phase 6 slice 2
+(RAW-native controls) still outranks everything below until the user
+either ships it or explicitly points elsewhere.
 
-Do NOT jump the roadmap: Presets (Phase 5's remaining slice) and Phase 6 (RAW)
-remain the user's stated priorities. Items here are for sessions the user
-explicitly points at this file.
+Do NOT jump the roadmap: Phase 6 slice 2 (RAW-native controls — exposure/
+boost/lens correction/WB eyedropper/NR/sharpness as `EditState` fields, see
+CLAUDE.md's roadmap item 6) remains the user's stated priority. Items here
+are for sessions the user explicitly points at this file.
 
 ---
 

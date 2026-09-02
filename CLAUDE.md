@@ -9,7 +9,15 @@ Edits are stored as parameter sets and rendered live on the GPU.
 - Swift + SwiftUI (AppKit interop where needed)
 - Metal / Core Image for the GPU edit pipeline (custom kernels for curves, HSL, WB)
 - SQLite via GRDB for the catalog (photos, edits, collections, ratings)
-- LibRaw via C++ interop for RAW decoding (Phase 6 — do not start early)
+- RAW decoding via Core Image's `CIRAWFilter` (macOS 12+) — decided over the
+  originally-planned LibRaw/C++-interop route in Phase 6 slice 1 (2026-09-02),
+  after a user-approved tradeoff review: CIRAWFilter supplies demosaic and
+  camera profiles for ~784 bodies at zero new dependencies/build-toolchain risk,
+  vs. LibRaw's first-ever C++ interop, vendored binary, and hand-written
+  demosaic/profile handling. See roadmap item 6 below for what shipped and
+  what's deferred. LibRaw remains the documented fallback if a camera body
+  outside CIRAWFilter's support list is ever needed — do not "fix" this line
+  back to LibRaw without re-reading that history.
 - Xcode project is generated from `project.yml` via XcodeGen (`brew install xcodegen`,
   then `xcodegen generate`); the `.xcodeproj` itself is gitignored and regenerable.
 - Build/test from CLI: `xcodegen generate && xcodebuild -scheme PhotoApp build` /
@@ -393,7 +401,71 @@ Edits are stored as parameter sets and rendered live on the GPU.
    bumping `ThumbnailCache` from 64MB (~270 thumbnails) to 256MB (~1165)
    and adding a small loading spinner to the placeholder. Reviewer
    APPROVE on first pass. 350 tests (13 new).
-6. RAW support: LibRaw bridge, demosaic, camera profiles
+6. RAW support: LibRaw bridge, demosaic, camera profiles — **slice 1 (decode
+   only) ✅ COMPLETE** (2026-09-02), shipped on Core Image's `CIRAWFilter`
+   instead of LibRaw — see the Stack section above for why. New
+   `Sources/Rendering/RawDecoder.swift` is the app's first shared file-decode
+   chokepoint: before this, `ImageDocumentModel.load(from:)`,
+   `PhotoExporter.export`, and `ThumbnailGenerator.thumbnail(for:maxPixelSize:)`
+   each decoded a file URL independently (three separate call sites, no shared
+   helper beyond an orientation lookup); all three now route through
+   `RawDecoder.decode`/`isRaw`/`decodeDraft`, non-RAW behavior byte-identical
+   to before. `PhotoImporter.supportedExtensions` (a hardcoded non-RAW
+   extension `Set`) is now paired with `RawDecoder.isRaw`'s
+   `UniformTypeIdentifiers` classification (`.rawImage`/`public.camera-raw-image`)
+   rather than growing the literal set with every RAW extension by hand — this
+   tracks whatever RAW formats the OS itself knows about. Verified against the
+   user's real Nikon D610 library (930 `.NEF` files,
+   `/Users/praween/Pictures/Bolivia_trip/raw_files`) — `sips` and a direct
+   `CIRAWFilter` probe both confirmed this exact camera decodes correctly on
+   this machine before any code was written, retiring CIRAWFilter's one real
+   risk (an unsupported camera body) empirically rather than by assumption.
+   RAW thumbnails deliberately do NOT use ImageIO's thumbnail API (it would
+   return the camera's own embedded JPEG preview, not Apple's RAW rendering —
+   the same Editor-vs-grid mismatch post-Phase-5 follow-up #4 already fixed
+   once) — they go through `CIRAWFilter`'s own `isDraftModeEnabled`/`scaleFactor`
+   instead, matching `ImageRenderer`/`PhotoExporter`/`WhiteBalanceSolver`'s
+   `extendedLinearSRGB`/`RGBAh` working space.
+   **Orientation, measured live, not assumed** (this codebase has been bitten
+   by unverified coordinate assumptions before — the Metal y-flip, the
+   Compare-mode split inversion): `CIRAWFilter.orientation` is a readwrite
+   property whose default already matches the file's own EXIF value and whose
+   `outputImage` is pre-rotated accordingly — confirmed against a real NEF
+   with its orientation tag byte-patched to a non-identity value, not just the
+   header doc. So `RawDecoder` never chains `.oriented(_:)` after a RAW decode
+   (that would double-rotate), and only overrides `filter.orientation` when an
+   independent EXIF read actually succeeds — never with a guessed fallback,
+   since that could stomp an already-correct default for a RAW container
+   ImageIO parses differently than Core Image's own RAW decoder does (reviewer-
+   caught in an earlier draft). Reviewer (Opus 5, after the default model hit
+   the account's monthly spend limit mid-review — same as the Presets session):
+   FIX FIRST → APPROVE after fixing that orientation-stomping risk, a RAW-
+   thumbnail double-gamut-clip (edits were running on an already-flattened
+   8-bit sRGB intermediate instead of the raw extended-range/wide-gamut
+   `CIImage`, silently clipping exactly the headroom RAW provides before the
+   edit math ever saw it — same defect class as post-Phase-5 follow-up #4),
+   and an unclamped/unguarded `scaleFactor`. 399 tests (9 new; RAW *decode*
+   itself has no fixture-based automated test — no RAW file ships in the repo
+   — and was verified live instead; classification/importer behavior is
+   fixture-free and fully covered).
+   **Known limitation, logged not fixed this slice**: `CIRAWFilter.decoderVersion`
+   defaults to "the newest available decoder for the image type" and is
+   neither pinned nor serialized into `EditState` — replaying the same params
+   after an OS update could render a RAW photo slightly differently, an
+   exception to this file's "replaying the same params must be deterministic"
+   principle above. Not addressed here since it's coupled to slice 2 (below);
+   `decoderVersion` should become a serialized `EditState` field when RAW
+   controls ship.
+   **Explicitly deferred to slice 2** (a separate session): `CIRAWFilter`'s own
+   RAW-native controls as `EditState` fields — `baselineExposure`,
+   `boostAmount`/`boostShadowAmount`, `neutralTemperature`/`neutralTint`/
+   `neutralLocation` (a true no-search white-balance eyedropper vs.
+   `WhiteBalanceSolver`'s current ~52-evaluation numerical search),
+   `lensCorrectionEnabled` (would finally deliver the lens-distortion
+   correction the Transform/Distort backlog below defers for want of
+   camera-profile data), the RAW-native NR/sharpness/detail/moiré sliders, and
+   opting into `CIRAWDecoderVersion9` at runtime via `supportedDecoderVersions`
+   on OS versions that offer it.
 7. Polish: tiled rendering for large images, perf, edge cases
 
 One feature per session. Do not start a later phase while an earlier one has open issues.

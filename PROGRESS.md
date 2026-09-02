@@ -13,8 +13,12 @@ export) is now COMPLETE** — slice 1 (batch export) and slice 2 (Presets,
 below. (The two real issues found live during slice 1's own verification —
 Library thumbnails not reflecting edits, and the Editor-vs-Preview color
 discrepancy — were both fixed in later sessions, see their own sections.)
-Phase 6 (RAW support) is next per the roadmap, not yet started. The
-original six
+**Phase 6 (RAW support) is IN PROGRESS — slice 1 (decode only, via Core
+Image's `CIRAWFilter` rather than the originally-planned LibRaw) shipped and
+reviewer-approved 2026-09-02; see its own section below and CLAUDE.md's
+roadmap item 6.** Slice 2 (RAW-native controls: exposure/boost/lens
+correction/true WB eyedropper/NR/sharpness as `EditState` fields) is not yet
+started. The original six
 roadmap items, five
 backlog tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
@@ -3581,6 +3585,127 @@ already proven not to render red on a macOS Menu/button this session).
   succeeded cleanly with no code change). Not reproducible after that;
   no code fix was needed or made.
 
+### Phase 6 slice 1: RAW file support via Core Image — SHIPPED (complete, not yet live-verified)
+- User explicitly said "phase 6", lifting CLAUDE.md's own "do not start
+  early" gate on this roadmap item.
+- **Deliberately diverges from CLAUDE.md's original Stack line** ("LibRaw
+  via C++ interop for RAW decoding"), with the user's approval after a
+  tradeoff review (`AskUserQuestion`, twice — once broad, once after the
+  user asked to "check tradeoff" specifically, backed by `WebSearch`,
+  `WebFetch`, and reading the actual `CIRAWFilter.h` header + Apple SDK
+  directly rather than trusting search-result summaries alone). Core
+  Image's `CIRAWFilter` (macOS 12+; this project targets 14.0) supplies
+  demosaic and camera profiles for ~784 bodies, updated by the OS, and
+  returns a `CIImage` that drops into `EditPipeline.apply` at the exact
+  seam every existing decode site already used — zero new dependencies,
+  zero C++ interop, zero `project.yml` changes (confirmed: `xcodegen
+  generate && xcodebuild` needed no build-setting edits). LibRaw would
+  have meant this codebase's first C/C++ interop, a vendored binary,
+  hardened-runtime signing work, and hand-written demosaic/profile
+  handling Apple otherwise supplies for free — logged as the fallback if
+  a camera body outside CIRAWFilter's support list is ever needed.
+- **The one real CIRAWFilter risk — an unsupported camera body — was
+  retired empirically before any code was written**, not assumed: the
+  user's actual RAW library is `/Users/praween/Pictures/Bolivia_trip/raw_files`
+  (930 Nikon `.NEF` files, ~52GB, camera identified via the file's own
+  embedded string as NIKON D610). `sips -g pixelWidth …` on
+  `DSC_1017.NEF` already returned `6016×4016`/16-bit/RGB — Apple's RAW
+  pipeline decodes this exact file on this machine today.
+- New `Sources/Rendering/RawDecoder.swift` is the app's first shared
+  file-decode chokepoint. Before this, three call sites decoded files
+  completely independently: `ImageDocumentModel.load(from:)`
+  (`CIImage(contentsOf:).oriented(...)`), `PhotoExporter.export`
+  (hand-duplicated the same shape), and `ThumbnailGenerator` (a separate
+  ImageIO thumbnail API) — sharing only an orientation-lookup helper. All
+  three now route through `RawDecoder.decode`/`isRaw`/`decodeDraft`, with
+  the non-RAW path byte-identical to the prior inline code at every site
+  (reviewer independently confirmed this).
+- `RawDecoder.isRaw` classifies via `UniformTypeIdentifiers`
+  (`UTType(filenameExtension:)?.conforms(to: .rawImage)`) rather than a
+  hardcoded extension list, so RAW coverage tracks whatever formats the
+  running OS actually knows about instead of this app's own list going
+  stale as new cameras ship. `PhotoImporter.supportedExtensions` (the
+  pre-existing non-RAW `Set`) is now paired with a new
+  `isSupportedImage(_:)` that also checks `RawDecoder.isRaw`, used by
+  both the flat (`imageFiles(in:)`) and recursive (`scanNode(at:)`) scan
+  paths — RAW files are now importable both ways. No DB migration: `Photo`
+  has no type/format column and needs none, since RAW is classified from
+  the path extension at decode time, not stored.
+- **Orientation, measured live, not assumed** — this codebase has been
+  bitten by unverified coordinate/orientation assumptions before (the
+  Metal y-flip, the Compare-mode split inversion). `CIRAWFilter.orientation`
+  is a readwrite property; measured against a real NEF with its
+  orientation tag byte-patched from 1 to 6 (a scratch copy, made and
+  deleted during review — the user's real files were never modified):
+  the filter's OWN DEFAULT already matched the independently-read EXIF
+  value (6), and `outputImage`'s extent was already rotated accordingly
+  (4016×6016, swapped from the native 6016×4016). So `RawDecoder.decode`
+  never chains `.oriented(_:)` after a RAW decode (that would
+  double-rotate) — confirmed empirically, not just from the header doc's
+  wording.
+- RAW thumbnails deliberately do NOT use ImageIO's thumbnail API — it
+  would return the camera's own embedded JPEG preview, not Apple's RAW
+  rendering, reintroducing the exact Editor-vs-grid mismatch post-Phase-5
+  follow-up #4 already fixed once for edited-vs-unedited thumbnails.
+  Instead they go through `CIRAWFilter`'s own `isDraftModeEnabled`/
+  `scaleFactor` (exactly what Apple built draft mode for), rendered
+  through `ThumbnailGenerator`'s existing `context`/`outputColorSpace` —
+  the app's `extendedLinearSRGB`/`RGBAh` working space, matching
+  `ImageRenderer`/`PhotoExporter`/`WhiteBalanceSolver`.
+- **Reviewer (Opus 5 — the default model hit the account's monthly spend
+  limit mid-review, same as the Presets session): FIX FIRST → APPROVE**,
+  after independently re-measuring the orientation claim live (not
+  trusting the diff's own reasoning) and catching three real issues,
+  all fixed before commit:
+  1. `filter.orientation` was being unconditionally assigned from a
+     helper that silently falls back to `.up` on any read failure —
+     since the filter's own default is already correct (measured above),
+     this assignment had zero upside and one failure mode: a RAW
+     container ImageIO parses differently than Core Image's RAW decoder
+     (CR3/RAF/vendor-specific — untestable against this session's
+     NEF-only sample) could have a correct non-`.up` default silently
+     overwritten with a wrong guess, shipping a sideways image to
+     Editor, export, and thumbnails simultaneously. Fixed: the read now
+     returns `nil` (not a `.up` guess) on failure, and `filter.orientation`
+     is only ever assigned when a real value was read.
+  2. The RAW edited-thumbnail path defeated its own stated rationale:
+     `CIRAWFilter.outputImage` is extended-range/wide-gamut, but the
+     first draft flattened it to an 8-bit sRGB `CGImage` BEFORE handing
+     it to `EditPipeline`, silently clipping exactly the headroom/gamut
+     RAW provides before the edit math ever saw it — for any edit
+     touching highlight recovery or saturated color, this would make the
+     grid disagree with the Editor, the same defect class as
+     post-Phase-5 follow-up #4. Fixed: the RAW branch now hands
+     `EditPipeline` the raw `CIImage` directly and flattens to 8-bit
+     sRGB exactly once, after the edit math runs.
+  3. `scaleFactor` was unclamped/unguarded against `maxPixelSize <= 0`.
+     Fixed: `min(1, ...)` clamp plus a `maxPixelSize > 0` guard, matching
+     the header's documented `0...1` range and this app's existing
+     never-upscale precedent.
+  Re-review (same reviewer instance, resumed via its own transcript, not
+  a fresh review) confirmed all three fixes independently, plus a trivial
+  stale doc-comment reference caught and fixed in the same pass. Final
+  verdict: APPROVE.
+- **Known limitation, logged not fixed this slice**: `CIRAWFilter.decoderVersion`
+  defaults to "the newest available decoder for the image type" and isn't
+  pinned or serialized into `EditState` — replaying identical params after
+  a future OS update could render a RAW photo slightly differently, a real
+  exception to CLAUDE.md's "replaying the same params must be
+  deterministic" invariant. Coupled to slice 2 (`decoderVersion` should
+  become a serialized field when RAW-native controls ship), not addressed
+  here.
+- 399 tests (9 new: `RawDecoderTests` — fixture-free classification only,
+  since no RAW file ships in the repo for CI — plus 3 new `PhotoImporterTests`
+  cases for RAW-extension acceptance in both scan paths). RAW *decode*
+  itself has no automated test; it was verified empirically during review
+  against the user's real files (see above) and is scheduled for the
+  user's own live pass, not asserted in a unit test. 1 commit.
+- **NOT yet live-verified by the user** — build and full test suite both
+  pass, and the reviewer independently re-measured the orientation/decode
+  behavior against real files during review, but the actual Editor/Library/
+  export UI flow on a real `.NEF` has not yet been driven end-to-end. See
+  "Exact next step" below for the checklist.
+
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
 user-requested follow-ups (folder-mirrored nested collections; the Editor
@@ -3593,10 +3718,27 @@ photos for export), and Presets (2026-09-01/02, see its own section above,
 including the mid-review spend-limit switch to Opus 5, 2 fixes applied
 before commit, and live verification by the user on 2026-09-02, alongside
 an investigated-but-unrelated-and-since-resolved sidecar-save permission
-issue). All reviewer-APPROVED and live-verified. 390 tests passing, app
-fully functional. **Phase 6 (RAW support) is next per the roadmap** — not
-yet started, and CLAUDE.md explicitly says not to start it early without
-the user asking specifically.
+issue). All reviewer-APPROVED and live-verified. Phase 5: 390 tests passing,
+app fully functional.
+
+**Phase 6 slice 1 (RAW support, decode only, via Core Image's `CIRAWFilter`)
+is now SHIPPED and reviewer-APPROVED (2026-09-02) — see its own section
+above.** 399 tests passing. **Not yet live-verified** — the next step is the
+user's own manual pass on their real RAW library
+(`/Users/praween/Pictures/Bolivia_trip/raw_files`, 930 Nikon `.NEF` files):
+open a `.NEF` via Open… and confirm it renders right-side-up; import the
+folder and confirm thumbnails appear with grid rendering matching the
+Editor; judge grid scroll responsiveness across all 930 files (if
+unusable, the documented fallback is ImageIO's embedded-preview thumbnail
+path, accepting the Editor/grid rendering mismatch — not yet needed, just
+the fallback if draft-mode decode turns out too slow at this scale);
+adjust sliders on a RAW photo, switch to Library and back, confirm the
+sidecar persists and the thumbnail reflects the edit; export a RAW to
+JPEG. Once verified, Phase 6 slice 2 (RAW-native controls — exposure/
+boost/lens correction/a true no-search WB eyedropper/NR/sharpness as new
+`EditState` fields) is the next roadmap item, or the user may pick from
+IMPROVEMENTS.md's open items instead (D4 Library keyboard support, D5's
+remaining two parts, D6 accessibility pass, P2/P3/P5/P6 performance).
 
 **Both real issues surfaced live during batch export's own verification
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and
@@ -3691,9 +3833,11 @@ if a differently-normalized-but-equivalent path string (Unicode NFC/NFD,
 symlink resolution) reached it, though every current call site round-trips
 through the same `Photo.path`/`URL(fileURLWithPath:)` pattern so this
 isn't reachable today.
-Lens distortion correction and RAW support (Phase 6, explicitly declined
-for this session per `CLAUDE.md`'s "do not start early") remain explicitly
-OUT of scope unless the user asks for them specifically.
+Lens distortion correction remains out of scope (deferred to Phase 6 slice
+2, since `CIRAWFilter.lensCorrectionEnabled` would finally supply the
+camera-profile data the Transform/Distort backlog lacks it for — see
+CLAUDE.md's roadmap item 6). RAW support itself is no longer out of
+scope — slice 1 shipped 2026-09-02, see its own section above.
 
 **Patterns worth carrying into Phase 3 and beyond:**
 - This project hit "verify the sign/direction/behavior empirically, don't

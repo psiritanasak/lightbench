@@ -3784,6 +3784,101 @@ already proven not to render red on a macOS Menu/button this session).
   verified so far. Next step: relaunch onto the current build and retry
   opening a `.NEF` in the Editor.
 
+### Phase 6 slice 1 follow-up #2: RAW Editor deadlock — FIXED (complete, not yet re-verified live)
+- The user retried the freeze fix above immediately and it **still
+  froze** — same symptom, different cause. This confirmed the per-frame
+  repeat-demosaic bug really was fixed (only ONE `materialize` call
+  showed up in a fresh `sample`), but exposed a second, genuinely
+  different problem: the main thread was `dispatch_sync`-blocked inside
+  CoreImage's `GetSurfaceFromCacheAndFill`, waiting on TWO
+  `RawCamera-Provider-Render-Queue` worker threads that were themselves
+  stuck on an internal semaphore deep inside Apple's private
+  `RawCamera.framework` (opaque, unsymbolicated frames — nothing
+  further diagnosable from this side). This happened specifically
+  while the Library grid was concurrently decoding RAW thumbnails in
+  the background for the same 930-file import. Concurrent RAW decode
+  requests from different parts of the app appear to genuinely
+  stall/deadlock each other inside that closed framework, not just
+  contend for CPU.
+- **Fix, confirmed with the user via `AskUserQuestion` before building**
+  (given the real scope increase beyond the original ask): new
+  `RawDecoder.RenderGate`, a nested `actor` whose single `run` method
+  serializes every heavy RAW CoreImage call app-wide — `materialize`'s
+  render, `ThumbnailGenerator`'s RAW thumbnail path, and
+  `PhotoExporter`'s RAW export writes — so the app can never ask
+  Apple's framework to do two RAW things at once, regardless of which
+  call site. `ImageDocumentModel.load(from:)`/`openImage()` are now
+  `async`; a new `@Published isLoadingImage` drives a
+  `ProgressView("Decoding RAW photo…")` overlay in the Editor so the
+  async gap reads as "working," not as a second freeze. `showLibrary =
+  false` in the Library grid's tap-to-open now happens BEFORE the load
+  `Task`, not after, so that spinner is actually visible instead of the
+  user staring at an unchanged grid. All non-RAW paths are byte-for-byte
+  untouched and pay none of this cost.
+- **Reviewer (Opus 5, two full rounds): FIX FIRST → APPROVE**, catching
+  two real, substantive issues in this fix's own first draft:
+  1. **A genuine non-destructive-editing integrity bug**, not cosmetic:
+     `load(from:)` becoming `async` with no ordering guard meant a
+     SLOWER-finishing RAW load could resume AFTER a FASTER-finishing
+     later load already committed, silently overwriting
+     `currentImage`/`currentURL`/`editState` with stale data —
+     concretely, open RAW A (suspends mid-decode) → open JPEG B
+     (completes immediately) → user edits B → A resumes and stomps
+     everything with A's data, discarding B's edits with no error and
+     no trace. Fixed with a monotonic `loadGeneration` token, captured
+     before the first `await` and re-checked after every subsequent
+     one before touching any `@Published` state; also unconditionally
+     clears `isLoadingImage` at the top of every call (not just RAW
+     ones) so a superseded RAW load's spinner can't get stuck on when
+     the load that supersedes it is non-RAW and never touches the flag.
+  2. `RawDecoder.decode`/`decodeDraft` still ran `CIRAWFilter`
+     construction and a SECOND `CGImageSourceCreateWithURL` open
+     (inside `readExifOrientation`) synchronously, ungated, on the
+     calling actor — the first draft only gated `materialize`'s
+     downstream render, missing that construction itself does real
+     RawCamera/ImageIO work and is exactly the class of concurrent
+     access the gate exists to prevent. Fixed by moving the entire RAW
+     branch of both functions inside `RenderGate`, both now `async`.
+  Round 2 independently re-traced both failure scenarios against the
+  rewritten code (not just re-read it), confirmed no gate-nesting/
+  self-deadlock exists across the four production render paths, and
+  re-measured non-RAW thumbnail parallelism live —
+  `ThumbnailCacheTests.testDecodesRunInParallel`: 0.30 ratio, at/better
+  than the documented 2026-08-28 baseline of 0.32 — confirming the fix
+  didn't quietly re-serialize JPEG/PNG/TIFF/HEIC decoding. Build clean
+  under this project's real Swift 6 strict-concurrency settings, zero
+  warnings.
+- **Known limitations, logged not fixed this pass** (reviewer's
+  framing): (1) the gate queue is unbounded, unprioritized, and
+  uncancellable — under a 930-file library, the Editor's load queues
+  behind every already-waiting thumbnail render, and
+  `ThumbnailCache`'s `Task<CGImage?, Never>` never checks
+  `isCancelled` (a pre-existing, already-documented limitation — see
+  `ThumbnailCache.swift`), so nothing drops out of the queue; a
+  "freeze" becomes a multi-second spinner instead, bounded by however
+  many RAW decodes are ahead of it, not eliminated. A real fix needs
+  cancellation support in `ThumbnailCache`, out of scope for this bug
+  fix. (2) `materialize`'s graceful-degradation fallback (pixel-buffer
+  creation failure, unreachable in practice) escapes the gate entirely
+  and would hand `ImageRenderer.draw(in:)` a still-lazy `CIRAWFilter`
+  graph to evaluate per-frame on the main thread if it ever triggered —
+  degrading back to both bugs at once. Documented in the code, not
+  fixed, since the failure mode it guards is not reachable from a
+  well-formed RAW file.
+- No new tests this pass — the race condition needs a real RAW file or
+  an injectable artificial delay to reproduce deterministically (no
+  fixture ships in this repo, and `RawDecoder` has no seam for
+  dependency-injecting a delay without a larger refactor); reasoned
+  through and reviewer-verified by tracing the exact interleaving twice
+  against the real code, the same category as this project's other
+  live-render-only bugs (y-flip, crop-tiling) that unit tests can't
+  reach. 403 tests unchanged, all still passing. 1 commit.
+- **NOT yet re-verified live** — next step: relaunch onto the current
+  build and retry the exact scenario that deadlocked (open a `.NEF`
+  from the Editor or Library grid immediately after importing the
+  930-file folder, so background thumbnail decoding is genuinely
+  concurrent with the attempt).
+
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
 user-requested follow-ups (folder-mirrored nested collections; the Editor
@@ -3801,10 +3896,11 @@ app fully functional.
 
 **Phase 6 slice 1 (RAW support, decode only, via Core Image's `CIRAWFilter`)
 is SHIPPED and reviewer-APPROVED (2026-09-02) — see its own section
-above.** A severe freeze the user hit during their own first live pass
-(opening a RAW photo froze the app) is now diagnosed and FIXED — see the
-"Phase 6 slice 1 follow-up" section immediately above — but that fix
-itself hasn't been re-verified live yet. 403 tests passing. **Not yet
+above.** TWO severe freezes the user hit back-to-back during their own
+first live pass (opening a RAW photo froze the app; retrying after the
+first fix froze it again, differently) are now diagnosed and FIXED — see
+the two "Phase 6 slice 1 follow-up" sections immediately above — but
+neither fix has been re-verified live yet. 403 tests passing. **Not yet
 live-verified** — the next step is the user's own manual pass on their
 real RAW library (`/Users/praween/Pictures/Bolivia_trip/raw_files`, 930
 Nikon `.NEF` files), starting with re-trying the exact thing that froze:

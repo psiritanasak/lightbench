@@ -18,10 +18,10 @@ enum ThumbnailGenerator {
     /// `maxPixelSize` on its longest side, or `nil` if `url` isn't a
     /// readable image (missing, unreadable, unsupported format). Safe to
     /// call off the main thread — does no UI work.
-    static func thumbnail(for url: URL, maxPixelSize: Int) -> CGImage? {
+    static func thumbnail(for url: URL, maxPixelSize: Int) async -> CGImage? {
         guard !RawDecoder.isRaw(url) else {
-            guard let decoded = rawDecodedThumbnail(for: url, maxPixelSize: maxPixelSize) else { return nil }
-            return context.createCGImage(decoded, from: decoded.extent, format: .RGBA8, colorSpace: outputColorSpace)
+            guard let decoded = await rawDecodedThumbnail(for: url, maxPixelSize: maxPixelSize) else { return nil }
+            return await renderToCGImage(decoded, isRaw: true)
         }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
@@ -48,8 +48,8 @@ enum ThumbnailGenerator {
     /// here unconditionally, then re-imported that flattened `CGImage` for
     /// `EditPipeline` to run on — silently clipping exactly the extra
     /// range/gamut RAW provides before the edit math ever saw it).
-    private static func rawDecodedThumbnail(for url: URL, maxPixelSize: Int) -> CIImage? {
-        RawDecoder.decodeDraft(contentsOf: url, maxPixelSize: maxPixelSize)
+    private static func rawDecodedThumbnail(for url: URL, maxPixelSize: Int) async -> CIImage? {
+        await RawDecoder.decodeDraft(contentsOf: url, maxPixelSize: maxPixelSize)
     }
 
     /// `EditPipeline`'s filter math (WB, exposure, tone, curves, etc.) is
@@ -75,6 +75,24 @@ enum ThumbnailGenerator {
     /// implicit a second time.
     private static let outputColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
+    /// Flattens `image` to the final 8-bit sRGB `CGImage` every thumbnail
+    /// path returns. `isRaw` RAW renders route through
+    /// `RawDecoder.RenderGate` — the same serializing gate `RawDecoder.materialize`
+    /// uses — so a grid full of RAW thumbnails decoding in the background
+    /// can never contend with (and, live-caught, deadlock against) the
+    /// Editor's own RAW materialize call inside Apple's private RawCamera
+    /// framework; see `RenderGate`'s own doc comment. Non-RAW skips the
+    /// gate entirely — it never touches RawCamera, so serializing it too
+    /// would only cost Library-grid scroll throughput for no benefit.
+    private static func renderToCGImage(_ image: CIImage, isRaw: Bool) async -> CGImage? {
+        guard isRaw else {
+            return context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: outputColorSpace)
+        }
+        return await RawDecoder.RenderGate.shared.run {
+            context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: outputColorSpace)
+        }
+    }
+
     /// Same as `thumbnail(for:maxPixelSize:)`, but runs `editState` through
     /// `EditPipeline` first so the Library grid reflects the photo's actual
     /// saved edits instead of always showing the original. `editState ==
@@ -89,18 +107,19 @@ enum ThumbnailGenerator {
     /// absolute resolution. For RAW, runs the pipeline directly on
     /// `RawDecoder.decodeDraft`'s `CIImage` — see `rawDecodedThumbnail`'s
     /// doc comment for why that single-render-pass ordering matters.
-    static func thumbnail(for url: URL, maxPixelSize: Int, editState: EditState) -> CGImage? {
+    static func thumbnail(for url: URL, maxPixelSize: Int, editState: EditState) async -> CGImage? {
         guard editState != .identity else {
-            return thumbnail(for: url, maxPixelSize: maxPixelSize)
+            return await thumbnail(for: url, maxPixelSize: maxPixelSize)
         }
+        let isRaw = RawDecoder.isRaw(url)
         let decoded: CIImage?
-        if RawDecoder.isRaw(url) {
-            decoded = rawDecodedThumbnail(for: url, maxPixelSize: maxPixelSize)
+        if isRaw {
+            decoded = await rawDecodedThumbnail(for: url, maxPixelSize: maxPixelSize)
         } else {
-            decoded = thumbnail(for: url, maxPixelSize: maxPixelSize).map { CIImage(cgImage: $0) }
+            decoded = await thumbnail(for: url, maxPixelSize: maxPixelSize).map { CIImage(cgImage: $0) }
         }
         guard let decoded else { return nil }
         let edited = EditPipeline.apply(editState, to: decoded)
-        return context.createCGImage(edited, from: edited.extent, format: .RGBA8, colorSpace: outputColorSpace)
+        return await renderToCGImage(edited, isRaw: isRaw)
     }
 }

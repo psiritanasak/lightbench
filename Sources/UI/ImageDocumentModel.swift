@@ -7,6 +7,13 @@ import UniformTypeIdentifiers
 @MainActor
 final class ImageDocumentModel: ObservableObject {
     @Published private(set) var currentImage: CIImage?
+    /// True while `load(from:)` is awaiting a RAW photo's one-time
+    /// `RawDecoder.materialize` (see that function's own doc comment) —
+    /// distinct from the pre-existing, private `isLoadingPhoto` below,
+    /// which only guards against a spurious sidecar autosave and was never
+    /// UI-facing. Drives a loading indicator in the Editor so the async
+    /// gap reads as "working," not as a second freeze.
+    @Published private(set) var isLoadingImage = false
     @Published private(set) var currentFileName: String?
     /// The full URL of the currently-open photo. Originally kept purely so a
     /// sidecar path could be derived from it (before sidecar persistence,
@@ -110,21 +117,53 @@ final class ImageDocumentModel: ObservableObject {
     /// of it once the burst settles.
     private var isBurstPending = false
 
-    func openImage() {
+    func openImage() async {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.jpeg, .png, .tiff, .heic, .rawImage]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        load(from: url)
+        await load(from: url)
     }
 
-    func load(from url: URL) {
-        guard let raw = RawDecoder.decode(contentsOf: url) else {
+    /// Bumped at the start of every `load(from:)` call; each call captures
+    /// its own value and re-checks it after every `await` before touching
+    /// any `@Published` state. Reviewer-caught real bug: `load(from:)`
+    /// becoming `async` (see below) means a SLOWER-finishing RAW load and a
+    /// FASTER-finishing later load (rapid Library/filmstrip taps, or
+    /// Cmd-Left/Right pressed again during a RAW photo's materialize) can
+    /// resume out of order — without this guard, the slower one would
+    /// resume AFTER the faster one already committed and silently stomp
+    /// `currentImage`/`currentURL`/`editState` with its own (now stale)
+    /// data. Concretely: open RAW A (suspends mid-decode) → open JPEG B
+    /// (completes immediately, no suspension) → user edits B → A resumes
+    /// and overwrites everything with A's data, discarding B's in-memory
+    /// edits with no error and no trace — a real non-destructive-editing
+    /// integrity bug, not a cosmetic one. Every guard below is a "this
+    /// load has been superseded, abandon it silently" check, not an error
+    /// path.
+    private var loadGeneration = 0
+
+    func load(from url: URL) async {
+        loadGeneration += 1
+        let myGeneration = loadGeneration
+        // Unconditionally cleared for EVERY new load, not just RAW ones —
+        // otherwise a superseded RAW load's `isLoadingImage = true` (below)
+        // could be left stuck on forever if the load that supersedes it is
+        // non-RAW and never touches this flag itself.
+        isLoadingImage = false
+
+        // `await`ed even for non-RAW (which has no internal suspension
+        // point) because Swift requires one signature — see `RawDecoder.decode`'s
+        // own doc comment for why the RAW branch needs to be gated all the
+        // way through construction, not just `materialize`'s render step.
+        guard let raw = await RawDecoder.decode(contentsOf: url) else {
+            guard myGeneration == loadGeneration else { return }
             loadErrorMessage = "Couldn't open \"\(url.lastPathComponent)\". The file may be missing, unreadable, or not a supported image format."
             return
         }
+        guard myGeneration == loadGeneration else { return }
         flushPendingSidecarSave() // save the OUTGOING photo's edits before switching away from it
         // RAW only: `RawDecoder.materialize` renders the RAW demosaic ONCE
         // here rather than leaving `raw` as CIRAWFilter's own lazy graph —
@@ -133,13 +172,33 @@ final class ImageDocumentModel: ObservableObject {
         // this, that meant re-running the ENTIRE full-resolution RAW
         // demosaic from scratch on every single one, synchronously, on the
         // main thread — a real, live-caught freeze on a 24MP NEF. This
-        // still costs one bounded, synchronous pause here at load time
-        // (unlike thumbnails/export, which each render exactly once and
-        // don't need this), but no longer repeats per interaction. Non-RAW
-        // skips this: `CIImage(contentsOf:)`'s own re-decode is already
-        // cheap to re-run, so paying materialize's own cost would be pure
-        // overhead.
-        currentImage = RawDecoder.isRaw(url) ? RawDecoder.materialize(raw) : raw
+        // still costs one bounded, one-time pause here at load time (unlike
+        // thumbnails/export, which each render exactly once and don't need
+        // this), but no longer repeats per interaction. Non-RAW skips this:
+        // `CIImage(contentsOf:)`'s own re-decode is already cheap to
+        // re-run, so paying materialize's own cost would be pure overhead.
+        //
+        // `await`ed rather than run synchronously on the main actor — a
+        // SECOND live-caught freeze (this one an apparent deadlock inside
+        // Apple's private RawCamera framework, not just a slow render — see
+        // `RawDecoder.RenderGate`'s doc comment) happened when this ran
+        // synchronously here WHILE the Library grid was concurrently
+        // decoding RAW thumbnails in the background. `RawDecoder.materialize`
+        // now routes its actual render through `RenderGate`, so this
+        // `await` both gets the heavy work off the main thread AND
+        // guarantees it never overlaps another RAW render anywhere in the
+        // app. `isLoadingImage` covers the visible gap so the UI reads as
+        // "working" instead of unresponsive.
+        let resolvedImage: CIImage
+        if RawDecoder.isRaw(url) {
+            isLoadingImage = true
+            resolvedImage = await RawDecoder.materialize(raw)
+            guard myGeneration == loadGeneration else { return }
+            isLoadingImage = false
+        } else {
+            resolvedImage = raw
+        }
+        currentImage = resolvedImage
         currentFileName = url.lastPathComponent
         currentURL = url
         // Restore saved edits if we can currently reach this photo's

@@ -40,32 +40,35 @@ final class RawDecoderTests: XCTestCase {
         XCTAssertFalse(RawDecoder.isRaw(URL(fileURLWithPath: "/tmp/no-extension")))
     }
 
-    func testDecodeReturnsNilForAMissingFileRegardlessOfExtension() {
-        XCTAssertNil(RawDecoder.decode(contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.nef")))
-        XCTAssertNil(RawDecoder.decode(contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.jpg")))
+    func testDecodeReturnsNilForAMissingFileRegardlessOfExtension() async {
+        let rawResult = await RawDecoder.decode(contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.nef"))
+        XCTAssertNil(rawResult)
+        let nonRawResult = await RawDecoder.decode(contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.jpg"))
+        XCTAssertNil(nonRawResult)
     }
 
-    func testDecodeDraftReturnsNilForAMissingFile() {
-        XCTAssertNil(RawDecoder.decodeDraft(contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.nef"), maxPixelSize: 256))
+    func testDecodeDraftReturnsNilForAMissingFile() async {
+        let result = await RawDecoder.decodeDraft(contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.nef"), maxPixelSize: 256)
+        XCTAssertNil(result)
     }
 
     // MARK: - materialize
 
-    func testMaterializePreservesExtentIncludingNonZeroOrigin() {
+    func testMaterializePreservesExtentIncludingNonZeroOrigin() async {
         let extent = CGRect(x: 10, y: 20, width: 64, height: 48)
         let image = CIImage(color: CIColor(red: 0.6, green: 0.2, blue: 0.8)).cropped(to: extent)
 
-        let materialized = RawDecoder.materialize(image)
+        let materialized = await RawDecoder.materialize(image)
 
         XCTAssertEqual(materialized.extent, extent)
     }
 
-    func testMaterializePreservesPixelColor() {
+    func testMaterializePreservesPixelColor() async {
         let extent = CGRect(x: 0, y: 0, width: 32, height: 32)
         let image = CIImage(color: CIColor(red: 0.6, green: 0.2, blue: 0.8)).cropped(to: extent)
         let center = CGPoint(x: 16, y: 16)
 
-        let materialized = RawDecoder.materialize(image)
+        let materialized = await RawDecoder.materialize(image)
 
         let originalPixel = samplePixel(image, at: center)
         let materializedPixel = samplePixel(materialized, at: center)
@@ -77,7 +80,7 @@ final class RawDecoderTests: XCTestCase {
         }
     }
 
-    func testMaterializePreservesExtendedRangeValuesBeyondSRGBGamut() {
+    func testMaterializePreservesExtendedRangeValuesBeyondSRGBGamut() async {
         // Reviewer-caught gap: `testMaterializePreservesPixelColor` above
         // only used in-gamut [0,1] input, sampled through an 8-bit RGBA8
         // bitmap — a naive 8-bit/sRGB-intermediate reimplementation of
@@ -98,7 +101,7 @@ final class RawDecoderTests: XCTestCase {
         let image = CIImage(color: hdrColor).cropped(to: extent)
         let center = CGPoint(x: 4, y: 4)
 
-        let materialized = RawDecoder.materialize(image)
+        let materialized = await RawDecoder.materialize(image)
 
         let original = sampleExtendedRangePixel(image, at: center)
         let result = sampleExtendedRangePixel(materialized, at: center)
@@ -113,7 +116,7 @@ final class RawDecoderTests: XCTestCase {
         XCTAssertLessThan(result.2, 0.0, "blue should retain a negative/out-of-gamut value")
     }
 
-    func testMaterializeReturnsInputUnchangedForAnInfiniteExtent() {
+    func testMaterializeReturnsInputUnchangedForAnInfiniteExtent() async {
         // `CGRect.infinite`'s width/height are `CGFloat.greatestFiniteMagnitude`
         // — finite by IEEE semantics, NOT `.infinity` — so this deliberately
         // does not assert via `.isFinite`; `CGRect.isInfinite` is the correct
@@ -121,7 +124,7 @@ final class RawDecoderTests: XCTestCase {
         let infinite = CIImage(color: .red) // .extent == .infinite, no crop
         XCTAssertTrue(infinite.extent.isInfinite, "test premise: CIImage(color:) is unbounded until cropped")
 
-        let materialized = RawDecoder.materialize(infinite)
+        let materialized = await RawDecoder.materialize(infinite)
 
         XCTAssertTrue(materialized.extent.isInfinite)
     }

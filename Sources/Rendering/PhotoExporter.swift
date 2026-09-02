@@ -108,9 +108,9 @@ enum PhotoExporter {
         editState: EditState,
         to destinationFolder: URL,
         settings: ExportSettings
-    ) throws -> URL {
+    ) async throws -> URL {
         let sourceURL = URL(fileURLWithPath: photo.path)
-        guard let oriented = RawDecoder.decode(contentsOf: sourceURL) else {
+        guard let oriented = await RawDecoder.decode(contentsOf: sourceURL) else {
             throw PhotoExportError.unreadableSource(photo.path)
         }
         let edited = EditPipeline.apply(editState, to: oriented)
@@ -132,23 +132,41 @@ enum PhotoExporter {
             .appendingPathExtension(settings.format.fileExtension)
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
-        switch settings.format {
-        case .jpeg:
-            try context.writeJPEGRepresentation(
-                of: resized,
-                to: tempURL,
-                colorSpace: outputColorSpace,
-                options: [.init(rawValue: kCGImageDestinationLossyCompressionQuality as String): settings.quality]
-            )
-        case .png:
-            try context.writePNGRepresentation(of: resized, to: tempURL, format: .RGBA8, colorSpace: outputColorSpace)
-        case .tiff:
-            try context.writeTIFFRepresentation(of: resized, to: tempURL, format: .RGBA16, colorSpace: outputColorSpace)
+        // RAW sources route this write through `RawDecoder.RenderGate` —
+        // the same serializing gate `RawDecoder.materialize`/
+        // `ThumbnailGenerator` use — so a RAW batch export can't contend
+        // with (and, live-caught elsewhere, deadlock against) RAW decode
+        // work happening concurrently in the Editor or Library grid; see
+        // `RenderGate`'s own doc comment. Non-RAW is untouched/synchronous
+        // — it never touches Apple's RawCamera framework, so gating it too
+        // would only cost batch-export throughput for no benefit.
+        if RawDecoder.isRaw(sourceURL) {
+            try await RawDecoder.RenderGate.shared.run {
+                try Self.write(resized, format: settings.format, quality: settings.quality, to: tempURL)
+            }
+        } else {
+            try Self.write(resized, format: settings.format, quality: settings.quality, to: tempURL)
         }
 
         let data = try Data(contentsOf: tempURL)
         try data.write(to: outputURL, options: .atomic)
         return outputURL
+    }
+
+    private static func write(_ image: CIImage, format: ExportFormat, quality: CGFloat, to url: URL) throws {
+        switch format {
+        case .jpeg:
+            try context.writeJPEGRepresentation(
+                of: image,
+                to: url,
+                colorSpace: outputColorSpace,
+                options: [.init(rawValue: kCGImageDestinationLossyCompressionQuality as String): quality]
+            )
+        case .png:
+            try context.writePNGRepresentation(of: image, to: url, format: .RGBA8, colorSpace: outputColorSpace)
+        case .tiff:
+            try context.writeTIFFRepresentation(of: image, to: url, format: .RGBA16, colorSpace: outputColorSpace)
+        }
     }
 
     /// Scales `image` down to fit `option`'s max long-edge, preserving

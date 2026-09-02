@@ -93,6 +93,6 @@ struct PhotoAppApp: App {
     /// re-deriving it when clicked.
     private func open(_ photo: Photo?) {
         guard let photo else { return }
-        document.load(from: URL(fileURLWithPath: photo.path))
+        Task { await document.load(from: URL(fileURLWithPath: photo.path)) }
     }
 }

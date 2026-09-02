@@ -490,7 +490,7 @@ struct ContentView: View {
         }
         ToolbarItem(placement: .automatic) {
             Button("Open…") {
-                document.openImage()
+                Task { await document.openImage() }
             }
         }
         ToolbarItem(placement: .automatic) {
@@ -613,8 +613,13 @@ struct ContentView: View {
             CollectionSidebarView(catalog: catalog)
                 .frame(minWidth: 160, idealWidth: 200, maxWidth: 260)
             LibraryGridView(catalog: catalog) { photo in
-                document.load(from: URL(fileURLWithPath: photo.path))
+                // Switch to the Editor pane BEFORE the (possibly async, for
+                // RAW) load completes, not after — so a RAW photo's loading
+                // indicator (`document.isLoadingImage`) is actually visible
+                // instead of the user staring at an unchanged Library grid
+                // during the gap.
                 showLibrary = false
+                Task { await document.load(from: URL(fileURLWithPath: photo.path)) }
             }
         }
     }
@@ -648,7 +653,7 @@ struct ContentView: View {
             editorSplitView
             if isFilmstripVisible {
                 EditorFilmstripView(catalog: catalog, currentURL: document.currentURL) { photo in
-                    document.load(from: URL(fileURLWithPath: photo.path))
+                    Task { await document.load(from: URL(fileURLWithPath: photo.path)) }
                 }
             }
         }
@@ -671,6 +676,16 @@ struct ContentView: View {
                             zoomScale: zoomScale, panOffset: panOffset, zoomEnabled: canZoom,
                             onScrollZoom: { fraction, delta in handleScrollZoom(paneFraction: fraction, delta: delta) }
                         )
+                        // Covers the async gap while a RAW photo's one-time
+                        // `RawDecoder.materialize` is in flight (see
+                        // `ImageDocumentModel.isLoadingImage`'s doc comment)
+                        // — without this, that gap reads as a second freeze
+                        // rather than as "working."
+                        if document.isLoadingImage {
+                            ProgressView("Decoding RAW photo…")
+                                .padding(24)
+                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        }
                         // Fit against the ACTUAL displayed extent (post-
                         // straighten/perspective, crop-zeroed), not the raw
                         // `image.extent`. Every feature before Straighten

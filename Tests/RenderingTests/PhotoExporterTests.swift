@@ -143,38 +143,38 @@ final class PhotoExporterTests: XCTestCase {
 
     // MARK: - export (end-to-end)
 
-    func testExportWritesAReadableJPEGWithIdentityEditState() throws {
+    func testExportWritesAReadableJPEGWithIdentityEditState() async throws {
         let sourceURL = try writeSolidColorJPEG(size: 400)
         let photo = Photo(id: 1, path: sourceURL.path, filename: sourceURL.lastPathComponent, fileSize: nil, importedAt: Date())
         let outputDir = tempDir.appendingPathComponent("out", isDirectory: true)
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
-        let outputURL = try PhotoExporter.export(photo, editState: .identity, to: outputDir, settings: ExportSettings(format: .jpeg))
+        let outputURL = try await PhotoExporter.export(photo, editState: .identity, to: outputDir, settings: ExportSettings(format: .jpeg))
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path))
         XCTAssertNotNil(CIImage(contentsOf: outputURL))
     }
 
-    func testExportWritesPNGAndTIFF() throws {
+    func testExportWritesPNGAndTIFF() async throws {
         let sourceURL = try writeSolidColorJPEG(size: 200)
         let photo = Photo(id: 1, path: sourceURL.path, filename: sourceURL.lastPathComponent, fileSize: nil, importedAt: Date())
         let outputDir = tempDir.appendingPathComponent("out", isDirectory: true)
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
         for format in [ExportFormat.png, .tiff] {
-            let outputURL = try PhotoExporter.export(photo, editState: .identity, to: outputDir, settings: ExportSettings(format: format))
+            let outputURL = try await PhotoExporter.export(photo, editState: .identity, to: outputDir, settings: ExportSettings(format: format))
             XCTAssertEqual(outputURL.pathExtension, format.fileExtension)
             XCTAssertNotNil(CIImage(contentsOf: outputURL))
         }
     }
 
-    func testExportRespectsResizeSetting() throws {
+    func testExportRespectsResizeSetting() async throws {
         let sourceURL = try writeSolidColorJPEG(size: 800)
         let photo = Photo(id: 1, path: sourceURL.path, filename: sourceURL.lastPathComponent, fileSize: nil, importedAt: Date())
         let outputDir = tempDir.appendingPathComponent("out", isDirectory: true)
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
-        let outputURL = try PhotoExporter.export(
+        let outputURL = try await PhotoExporter.export(
             photo,
             editState: .identity,
             to: outputDir,
@@ -185,11 +185,16 @@ final class PhotoExporterTests: XCTestCase {
         XCTAssertLessThanOrEqual(max(size.width, size.height), 200)
     }
 
-    func testExportThrowsForUnreadableSource() throws {
+    func testExportThrowsForUnreadableSource() async throws {
         let photo = Photo(id: 1, path: "/tmp/does-not-exist-\(UUID().uuidString).jpg", filename: "missing.jpg", fileSize: nil, importedAt: Date())
         let outputDir = tempDir.appendingPathComponent("out", isDirectory: true)
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
-        XCTAssertThrowsError(try PhotoExporter.export(photo, editState: .identity, to: outputDir, settings: ExportSettings()))
+        do {
+            _ = try await PhotoExporter.export(photo, editState: .identity, to: outputDir, settings: ExportSettings())
+            XCTFail("expected export to throw for an unreadable source")
+        } catch {
+            // expected
+        }
     }
 }

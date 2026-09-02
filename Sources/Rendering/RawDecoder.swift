@@ -20,6 +20,52 @@ import UniformTypeIdentifiers
 /// sliders) are a genuine `EditState`-level feature deferred to a later
 /// session — see CLAUDE.md/PROGRESS.md.
 enum RawDecoder {
+    /// Serializes every heavy RAW render this app issues —
+    /// `materialize`, `ThumbnailGenerator`'s RAW thumbnail path, and
+    /// `PhotoExporter`'s RAW export writes — through a single actor,
+    /// app-wide.
+    ///
+    /// Live-caught real bug this exists to fix, a SECOND freeze found
+    /// after the per-frame repeat-demosaic bug (`materialize`'s own doc
+    /// comment) was already fixed: opening a RAW photo in the Editor
+    /// still froze, this time while the Library grid was concurrently
+    /// decoding RAW thumbnails in the background for a 930-file import.
+    /// `sample`d again: the main thread was `dispatch_sync`-blocked
+    /// inside CoreImage's `GetSurfaceFromCacheAndFill`, waiting on TWO
+    /// separate `RawCamera-Provider-Render-Queue` worker threads that
+    /// were themselves stuck on an internal semaphore deep inside
+    /// Apple's private `RawCamera.framework` (opaque, unsymbolicated
+    /// frames — nothing further to diagnose from this side). Concurrent
+    /// RAW decode requests from different parts of this app appear to
+    /// genuinely stall/deadlock each other inside that framework, not
+    /// just contend for CPU. The only fix available on this side: never
+    /// issue more than one RAW render at a time, app-wide, regardless of
+    /// which call site it comes from.
+    actor RenderGate {
+        static let shared = RenderGate()
+        private init() {}
+
+        /// Runs `work` with exclusive access to this app's RAW-decode
+        /// machinery. `work` is expected to be a synchronous, CPU/GPU-bound
+        /// CoreImage render call (`CIContext.render`/`createCGImage`/
+        /// `write*Representation`) — this does not make it non-blocking,
+        /// only serial: the calling `Task` suspends here until any other
+        /// RAW render in progress elsewhere in the app finishes, then runs
+        /// `work` to completion before releasing the next waiter.
+        func run<T: Sendable>(_ work: @Sendable () throws -> T) async rethrows -> T {
+            try work()
+        }
+    }
+
+    /// Thin `@unchecked Sendable` wrapper for a value that needs to cross
+    /// `RenderGate`'s actor boundary but isn't (yet) audited `Sendable` by
+    /// its own framework (`CVPixelBuffer`, as of this SDK). Only safe to use
+    /// when the caller genuinely owns exclusive access until the closure
+    /// it's captured into returns — not a general-purpose escape hatch.
+    private struct UncheckedSendableBox<Value>: @unchecked Sendable {
+        let value: Value
+    }
+
     /// True if `url` names a camera RAW file, classified via
     /// UniformTypeIdentifiers rather than a hardcoded extension list — the
     /// UTI graph (`public.camera-raw-image`, `.rawImage`) tracks whatever
@@ -64,19 +110,37 @@ enum RawDecoder {
     }
 
     /// Decodes any file this app can open to a `CIImage`, EXIF orientation
-    /// applied. Non-RAW files keep the exact prior behavior
-    /// (`CIImage(contentsOf:).oriented(...)`) byte-for-byte. RAW files go
-    /// through `CIRAWFilter`, which does NOT need `.oriented(_:)` chained
-    /// afterward — see `readExifOrientation`'s doc comment above.
-    static func decode(contentsOf url: URL) -> CIImage? {
+    /// applied. Non-RAW files run the exact prior work
+    /// (`CIImage(contentsOf:).oriented(...)`) byte-for-byte — `async` only
+    /// because Swift requires one signature for both branches; this branch
+    /// has no internal suspension point of its own, though the caller may
+    /// still observe a hop off its calling actor (the two are called from
+    /// the same signature, not the same cost). RAW files go through
+    /// `CIRAWFilter`, which does NOT need `.oriented(_:)` chained afterward
+    /// — see `readExifOrientation`'s doc comment above.
+    ///
+    /// Reviewer-caught: an earlier draft only gated `materialize`'s own
+    /// render, leaving `CIRAWFilter(imageURL:)`'s construction (which reads
+    /// the file's header/camera-profile via the RawCamera framework — real
+    /// I/O and CPU work, not free) and the second `CGImageSourceCreateWithURL`
+    /// open inside `readExifOrientation` running UNGATED, synchronously, on
+    /// whatever actor called `decode` — for `ImageDocumentModel.load(from:)`
+    /// that was the main actor, and before `isLoadingImage` was even set.
+    /// That's exactly the class of concurrent-RAW-framework-access this
+    /// gate exists to prevent, so the ENTIRE RAW branch — construction,
+    /// orientation, `.outputImage` — is inside `RenderGate` now, not just
+    /// the render step downstream in `materialize`.
+    static func decode(contentsOf url: URL) async -> CIImage? {
         guard isRaw(url) else {
             return CIImage(contentsOf: url)?.oriented(exifOrientation(of: url))
         }
-        guard let filter = CIRAWFilter(imageURL: url) else { return nil }
-        if let orientation = readExifOrientation(of: url) {
-            filter.orientation = orientation
+        return await RenderGate.shared.run {
+            guard let filter = CIRAWFilter(imageURL: url) else { return nil }
+            if let orientation = readExifOrientation(of: url) {
+                filter.orientation = orientation
+            }
+            return filter.outputImage
         }
-        return filter.outputImage
     }
 
     /// A fast, lower-quality RAW decode for thumbnails, via `CIRAWFilter`'s
@@ -85,22 +149,27 @@ enum RawDecoder {
     /// resolution just to downsize it afterward. Only meaningful for RAW
     /// files; callers are expected to have already checked `isRaw(url)`
     /// (mirrors `ThumbnailGenerator`'s own non-RAW path, which never calls
-    /// this).
-    static func decodeDraft(contentsOf url: URL, maxPixelSize: Int) -> CIImage? {
-        guard let filter = CIRAWFilter(imageURL: url) else { return nil }
-        if let orientation = readExifOrientation(of: url) {
-            filter.orientation = orientation
+    /// this). Construction through `.outputImage` all run inside
+    /// `RenderGate`, same reasoning as `decode(contentsOf:)` above —
+    /// `filter.nativeSize` alone forces RawCamera to parse the file's
+    /// header, so even that read isn't free to leave ungated.
+    static func decodeDraft(contentsOf url: URL, maxPixelSize: Int) async -> CIImage? {
+        await RenderGate.shared.run {
+            guard let filter = CIRAWFilter(imageURL: url) else { return nil }
+            if let orientation = readExifOrientation(of: url) {
+                filter.orientation = orientation
+            }
+            filter.isDraftModeEnabled = true
+            let longestSide = max(filter.nativeSize.width, filter.nativeSize.height)
+            if maxPixelSize > 0, longestSide > 0 {
+                // Clamped to 1 — `scaleFactor` only ever downsizes (Apple's
+                // own header documents its valid range as 0...1); a
+                // thumbnail request larger than the native image should
+                // return the native size, not upscale.
+                filter.scaleFactor = min(1, Float(CGFloat(maxPixelSize) / longestSide))
+            }
+            return filter.outputImage
         }
-        filter.isDraftModeEnabled = true
-        let longestSide = max(filter.nativeSize.width, filter.nativeSize.height)
-        if maxPixelSize > 0, longestSide > 0 {
-            // Clamped to 1 — `scaleFactor` only ever downsizes (Apple's own
-            // header documents its valid range as 0...1); a thumbnail
-            // request larger than the native image should return the
-            // native size, not upscale.
-            filter.scaleFactor = min(1, Float(CGFloat(maxPixelSize) / longestSide))
-        }
-        return filter.outputImage
     }
 
     /// Renders `image` once into a realized pixel buffer and re-wraps it as
@@ -136,8 +205,15 @@ enum RawDecoder {
     /// sources; callers are expected to have already checked `isRaw(url)`
     /// before calling this (mirrors `decodeDraft`'s own precondition).
     /// Falls back to returning `image` unchanged if the pixel buffer can't
-    /// be created or rendered, so a failure here degrades back to the
-    /// pre-fix (slow but correct) behavior rather than losing the image.
+    /// be created, so a failure here degrades back to the pre-fix (slow but
+    /// correct) behavior rather than losing the image — reviewer-flagged:
+    /// that fallback path escapes `RenderGate` entirely, since it returns
+    /// before the gated render below ever runs. In practice unreachable
+    /// (the extent/pixel-buffer checks above only fail on a malformed
+    /// source), but worth knowing precisely if it ever does trigger:
+    /// `ImageRenderer.draw(in:)` would then evaluate that still-lazy
+    /// `CIRAWFilter` graph directly, per frame, on the main thread —
+    /// degrading back to BOTH bugs this file exists to fix, not just one.
     ///
     /// Forward hazard for Phase 6 slice 2 (reviewer-flagged): once
     /// `CIRAWFilter`'s own native controls (`baselineExposure`,
@@ -149,7 +225,7 @@ enum RawDecoder {
     /// re-materialize) on every change to that specific field group, unlike
     /// every other `EditState` field, which is cheap to re-run against this
     /// cached buffer via `EditPipeline` as today.
-    static func materialize(_ image: CIImage) -> CIImage {
+    static func materialize(_ image: CIImage) async -> CIImage {
         let extent = image.extent
         // `CGRect.infinite`'s width/height are `CGFloat.greatestFiniteMagnitude`
         // — genuinely FINITE by IEEE semantics, so an `.isFinite` check alone
@@ -176,12 +252,25 @@ enum RawDecoder {
             &pixelBuffer
         )
         guard status == kCVReturnSuccess, let pixelBuffer else { return image }
-        materializeContext.render(image, to: pixelBuffer, bounds: extent, colorSpace: materializeColorSpace)
-        // `materializeContext` is a long-lived static context — without this,
-        // its internal intermediate caches would hold onto this full-res
-        // RAW render's working buffers indefinitely, on top of the
-        // `CVPixelBuffer` this function already returns and callers own.
-        materializeContext.clearCaches()
+        // `CVPixelBuffer` isn't (yet) audited `Sendable` by CoreVideo, even
+        // though crossing this actor boundary with it is safe here — this
+        // function owns the only reference until `run`'s closure returns,
+        // nothing else touches it concurrently.
+        let pixelBufferBox = UncheckedSendableBox(value: pixelBuffer)
+        // Routed through `RenderGate` (see its own doc comment) — this is
+        // exactly the render call that deadlocked against concurrent
+        // Library-grid RAW thumbnail decoding when it ran unserialized.
+        await RenderGate.shared.run {
+            materializeContext.render(
+                image, to: pixelBufferBox.value, bounds: extent, colorSpace: materializeColorSpace
+            )
+            // `materializeContext` is a long-lived static context — without
+            // this, its internal intermediate caches would hold onto this
+            // full-res RAW render's working buffers indefinitely, on top of
+            // the `CVPixelBuffer` this function already returns and callers
+            // own.
+            materializeContext.clearCaches()
+        }
         // A CVPixelBuffer-backed CIImage always has its extent origin at
         // (0, 0); translate back to the source's own origin so callers see
         // the identical extent they passed in (a no-op in the common case —

@@ -34,41 +34,43 @@ final class ThumbnailGeneratorTests: XCTestCase {
         return url
     }
 
-    func testReturnsAThumbnailNoLargerThanRequested() throws {
+    func testReturnsAThumbnailNoLargerThanRequested() async throws {
         let url = try writeSolidColorPNG(size: 800)
 
-        let thumbnail = ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200)
+        let thumbnail = await ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200)
 
         let image = try XCTUnwrap(thumbnail)
         XCTAssertLessThanOrEqual(max(image.width, image.height), 200)
     }
 
-    func testSmallSourceImageIsNotUpscaledBeyondItsOwnSize() throws {
+    func testSmallSourceImageIsNotUpscaledBeyondItsOwnSize() async throws {
         let url = try writeSolidColorPNG(size: 50)
 
-        let thumbnail = ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200)
+        let thumbnail = await ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200)
 
         let image = try XCTUnwrap(thumbnail)
         XCTAssertLessThanOrEqual(max(image.width, image.height), 50)
     }
 
-    func testNonexistentFileReturnsNil() {
+    func testNonexistentFileReturnsNil() async {
         let missing = tempDir.appendingPathComponent("does-not-exist.png")
-        XCTAssertNil(ThumbnailGenerator.thumbnail(for: missing, maxPixelSize: 200))
+        let thumbnail = await ThumbnailGenerator.thumbnail(for: missing, maxPixelSize: 200)
+        XCTAssertNil(thumbnail)
     }
 
-    func testNonImageFileReturnsNil() throws {
+    func testNonImageFileReturnsNil() async throws {
         let url = tempDir.appendingPathComponent("notes.txt")
         try "hello".write(to: url, atomically: true, encoding: .utf8)
-        XCTAssertNil(ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200))
+        let thumbnail = await ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200)
+        XCTAssertNil(thumbnail)
     }
 
     // MARK: - thumbnail(for:maxPixelSize:editState:) — edit-aware thumbnails
 
-    func testIdentityEditStateReturnsAThumbnailOfTheRequestedSize() throws {
+    func testIdentityEditStateReturnsAThumbnailOfTheRequestedSize() async throws {
         let url = try writeSolidColorPNG(size: 800)
 
-        let thumbnail = ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200, editState: .identity)
+        let thumbnail = await ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200, editState: .identity)
 
         let image = try XCTUnwrap(thumbnail)
         XCTAssertLessThanOrEqual(max(image.width, image.height), 200)
@@ -79,12 +81,13 @@ final class ThumbnailGeneratorTests: XCTestCase {
     /// source), the same style of assertion this project's own
     /// `EditPipelineTests` already uses for Black & White, rather than a
     /// fabricated exact pixel value.
-    func testNonIdentityEditStateActuallyAppliesTheAdjustment() throws {
+    func testNonIdentityEditStateActuallyAppliesTheAdjustment() async throws {
         let url = try writeSolidColorPNG(size: 200) // solid red — r != g, r != b
 
         var editState = EditState()
         editState.blackAndWhite = true
-        let thumbnail = try XCTUnwrap(ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200, editState: editState))
+        let result = await ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200, editState: editState)
+        let thumbnail = try XCTUnwrap(result)
 
         let data = try XCTUnwrap(thumbnail.dataProvider?.data)
         let bytes = CFDataGetBytePtr(data)
@@ -100,8 +103,9 @@ final class ThumbnailGeneratorTests: XCTestCase {
         XCTAssertEqual(g, b)
     }
 
-    func testEditAwareThumbnailOfNonexistentFileReturnsNil() {
+    func testEditAwareThumbnailOfNonexistentFileReturnsNil() async {
         let missing = tempDir.appendingPathComponent("does-not-exist.png")
-        XCTAssertNil(ThumbnailGenerator.thumbnail(for: missing, maxPixelSize: 200, editState: .identity))
+        let thumbnail = await ThumbnailGenerator.thumbnail(for: missing, maxPixelSize: 200, editState: .identity)
+        XCTAssertNil(thumbnail)
     }
 }

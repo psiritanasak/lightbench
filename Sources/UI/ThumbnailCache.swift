@@ -102,7 +102,7 @@ actor ThumbnailCache {
         let requestGeneration = generation[path, default: 0]
         let task = Task<CGImage?, Never> {
             let editState = PhotoExporter.loadEditState(for: photo)
-            return ThumbnailGenerator.thumbnail(
+            return await ThumbnailGenerator.thumbnail(
                 for: URL(fileURLWithPath: path), maxPixelSize: Self.maxPixelSize, editState: editState
             )
         }

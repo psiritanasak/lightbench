@@ -3706,6 +3706,84 @@ already proven not to render red on a macOS Menu/button this session).
   export UI flow on a real `.NEF` has not yet been driven end-to-end. See
   "Exact next step" below for the checklist.
 
+### Phase 6 slice 1 follow-up: RAW Editor freeze — FIXED (complete, not yet re-verified live)
+- The user's own live pass (opening a real Nikon D610 NEF from
+  `raw_files` in the Editor, immediately after import) found a real,
+  severe bug within minutes: the app froze completely. Also separately
+  reported: after relaunching onto a fresh build, `.NEF` couldn't be
+  selected in the Open… panel and Import Folder reported "0 files" —
+  traced to a STALE running process (PID launched before the RAW
+  support build finished), not a code bug; fixed by quitting and
+  relaunching onto the current binary (plain process management, not
+  screen-capture/UI-automation, consistent with this project's existing
+  carve-out for app relaunches).
+- **Root-caused with `/usr/bin/sample` on the actually-hung process**
+  (process-level CLI diagnostics, not screen-capture/UI-driving — no
+  permission needed under the standing working agreement) — virtually
+  100% of samples over 3 seconds were inside `ImageRenderer.draw(in:)` →
+  `-[CIContext render:toMTLTexture:commandBuffer:bounds:colorSpace:]`.
+  `MTKView` here has `isPaused = true`/`enableSetNeedsDisplay = true` (no
+  internal render loop, confirmed by reading `ImageRenderer.swift`'s own
+  doc comment), so this wasn't a redraw storm — it was one or more
+  individually catastrophic renders. Cause: a `CIImage` is a lazy
+  RECIPE, not decoded pixels. `ImageRenderer.draw(in:)` runs
+  `EditPipeline.apply` and re-renders `currentImage` on every redraw
+  (every slider tweak); for a plain `CIImage(contentsOf:)` source that's
+  cheap to re-run (already-demosaiced pixels), but for a RAW source
+  `currentImage` was `CIRAWFilter`'s own lazy graph — so every redraw
+  silently re-ran the ENTIRE full-resolution RAW demosaic from scratch,
+  synchronously, on the main thread. Same root cause also hit the
+  debounced histogram recompute and the WB eyedropper's ~52 filter
+  evaluations (each would have been ~52 full demosaics) — caught by the
+  reviewer, not found live, since neither had been exercised yet.
+- **Fix, chosen via `AskUserQuestion`** over the alternative (draft-mode
+  Editor preview, a real quality tradeoff the user would be looking at
+  while editing): new `RawDecoder.materialize(_:)` renders the RAW
+  output ONCE into a realized `CVPixelBuffer`
+  (`kCVPixelFormatType_64RGBAHalf`, extended-range, matching this app's
+  `extendedLinearSRGB`/`RGBAh` working space everywhere else
+  `EditPipeline` runs — deliberately not an 8-bit/sRGB intermediate,
+  which would silently clip exactly the range/gamut RAW provides),
+  re-wrapped as a `CIImage` backed by that buffer. `ImageDocumentModel.load(from:)`
+  calls this only for RAW sources; non-RAW, export, and thumbnails are
+  untouched (each already renders once, so materializing would be pure
+  overhead there). Standalone CLI timing check against the same real
+  NEF confirmed the mechanism: materialize costs ~0.75s once, and
+  re-rendering the materialized result afterward is ~0-24ms — down from
+  whatever the original hang's true cost was (never measured to
+  completion; the process was killed while still stuck).
+- **Reviewer (Opus 5): FIX FIRST → APPROVE**, catching two real issues
+  in this fix's own first draft, both fixed before commit: (1) a
+  genuine RUNTIME CRASH, not just a bad guess — `CGRect.infinite`'s
+  width is `CGFloat.greatestFiniteMagnitude`, which is FINITE by IEEE
+  semantics (not `.infinity`), so an `.isFinite`-only guard never caught
+  it and `Int(extent.width.rounded())` trapped; fixed with `CGRect`'s
+  own `.isInfinite`/`.isNull` plus an explicit `< Int32.max` bound (the
+  reviewer independently confirmed even a PARTIALLY-infinite extent,
+  which `.isInfinite` alone doesn't catch, is caught only by that bound).
+  (2) A genuine test-coverage gap: the pixel round-trip test only used
+  in-gamut `[0,1]` values sampled through an 8-bit bitmap, so it could
+  not detect the exact silent-clipping regression the function's own doc
+  comment claims to prevent — the reviewer proved this by hand-writing
+  an 8-bit-intermediate mutant of `materialize` that passed the old test
+  with zero measured drift; fixed by adding an extended-range test using
+  out-of-`[0,1]` values sampled through a dedicated extended-range
+  context, which the reviewer confirmed the same mutant fails on all
+  five assertions. 403 tests (1 new). 1 commit.
+- **Known limitation, logged not fixed this pass** (reviewer's framing):
+  materialize's ~0.75s cost is now front-loaded onto `load(from:)` (a
+  bounded, one-time pause per RAW photo open, vs. the old unbounded
+  per-interaction cost) — still a real main-thread pause with no
+  progress indicator, and there's no `url != currentURL` early-out, so
+  re-tapping the already-open photo in the filmstrip pays it again.
+  Adding that early-out would change `load(from:)`'s history-reset
+  semantics and belongs in its own scoped change, not bundled into a
+  freeze fix.
+- **NOT yet re-verified live** — the user hit this bug during their
+  original live pass; the fix itself has only been build/test/CLI-timing
+  verified so far. Next step: relaunch onto the current build and retry
+  opening a `.NEF` in the Editor.
+
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
 user-requested follow-ups (folder-mirrored nested collections; the Editor
@@ -3722,20 +3800,25 @@ issue). All reviewer-APPROVED and live-verified. Phase 5: 390 tests passing,
 app fully functional.
 
 **Phase 6 slice 1 (RAW support, decode only, via Core Image's `CIRAWFilter`)
-is now SHIPPED and reviewer-APPROVED (2026-09-02) — see its own section
-above.** 399 tests passing. **Not yet live-verified** — the next step is the
-user's own manual pass on their real RAW library
-(`/Users/praween/Pictures/Bolivia_trip/raw_files`, 930 Nikon `.NEF` files):
-open a `.NEF` via Open… and confirm it renders right-side-up; import the
-folder and confirm thumbnails appear with grid rendering matching the
-Editor; judge grid scroll responsiveness across all 930 files (if
-unusable, the documented fallback is ImageIO's embedded-preview thumbnail
-path, accepting the Editor/grid rendering mismatch — not yet needed, just
-the fallback if draft-mode decode turns out too slow at this scale);
-adjust sliders on a RAW photo, switch to Library and back, confirm the
-sidecar persists and the thumbnail reflects the edit; export a RAW to
-JPEG. Once verified, Phase 6 slice 2 (RAW-native controls — exposure/
-boost/lens correction/a true no-search WB eyedropper/NR/sharpness as new
+is SHIPPED and reviewer-APPROVED (2026-09-02) — see its own section
+above.** A severe freeze the user hit during their own first live pass
+(opening a RAW photo froze the app) is now diagnosed and FIXED — see the
+"Phase 6 slice 1 follow-up" section immediately above — but that fix
+itself hasn't been re-verified live yet. 403 tests passing. **Not yet
+live-verified** — the next step is the user's own manual pass on their
+real RAW library (`/Users/praween/Pictures/Bolivia_trip/raw_files`, 930
+Nikon `.NEF` files), starting with re-trying the exact thing that froze:
+open a `.NEF` via Open… (or tap one in the Library grid) and confirm the
+Editor now opens it without hanging, right-side-up; import the folder and
+confirm thumbnails appear with grid rendering matching the Editor; judge
+grid scroll responsiveness across all 930 files (if unusable, the
+documented fallback is ImageIO's embedded-preview thumbnail path,
+accepting the Editor/grid rendering mismatch — not yet needed, just the
+fallback if draft-mode decode turns out too slow at this scale); adjust
+sliders on a RAW photo, switch to Library and back, confirm the sidecar
+persists and the thumbnail reflects the edit; export a RAW to JPEG. Once
+verified, Phase 6 slice 2 (RAW-native controls — exposure/boost/lens
+correction/a true no-search WB eyedropper/NR/sharpness as new
 `EditState` fields) is the next roadmap item, or the user may pick from
 IMPROVEMENTS.md's open items instead (D4 Library keyboard support, D5's
 remaining two parts, D6 accessibility pass, P2/P3/P5/P6 performance).

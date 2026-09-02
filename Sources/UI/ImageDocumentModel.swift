@@ -126,7 +126,20 @@ final class ImageDocumentModel: ObservableObject {
             return
         }
         flushPendingSidecarSave() // save the OUTGOING photo's edits before switching away from it
-        currentImage = raw
+        // RAW only: `RawDecoder.materialize` renders the RAW demosaic ONCE
+        // here rather than leaving `raw` as CIRAWFilter's own lazy graph —
+        // `ImageRenderer.draw(in:)` re-runs `EditPipeline.apply` on
+        // `currentImage` on every redraw (every slider tweak), and without
+        // this, that meant re-running the ENTIRE full-resolution RAW
+        // demosaic from scratch on every single one, synchronously, on the
+        // main thread — a real, live-caught freeze on a 24MP NEF. This
+        // still costs one bounded, synchronous pause here at load time
+        // (unlike thumbnails/export, which each render exactly once and
+        // don't need this), but no longer repeats per interaction. Non-RAW
+        // skips this: `CIImage(contentsOf:)`'s own re-decode is already
+        // cheap to re-run, so paying materialize's own cost would be pure
+        // overhead.
+        currentImage = RawDecoder.isRaw(url) ? RawDecoder.materialize(raw) : raw
         currentFileName = url.lastPathComponent
         currentURL = url
         // Restore saved edits if we can currently reach this photo's

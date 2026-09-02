@@ -1,4 +1,5 @@
 import CoreImage
+import CoreVideo
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -101,4 +102,104 @@ enum RawDecoder {
         }
         return filter.outputImage
     }
+
+    /// Renders `image` once into a realized pixel buffer and re-wraps it as
+    /// a new `CIImage` backed by that buffer, instead of the original lazy
+    /// filter graph.
+    ///
+    /// Live-caught real bug this exists to fix: a `CIImage` is a lazy
+    /// RECIPE, not decoded pixels — `ImageRenderer.draw(in:)` runs
+    /// `EditPipeline.apply` and re-renders on every redraw (every slider
+    /// tweak), and for a plain `CIImage(contentsOf:)` source that's cheap
+    /// to re-run (already-demosaiced pixels). For a RAW source, `image` is
+    /// `CIRAWFilter`'s own lazy graph, so every one of those redraws
+    /// silently re-ran the ENTIRE full-resolution RAW demosaic from
+    /// scratch, synchronously, on the main thread — confirmed live via a
+    /// hung `PhotoApp` process, `sample`d mid-freeze with virtually 100% of
+    /// samples inside `ImageRenderer.draw(in:)` →
+    /// `-[CIContext render:toMTLTexture:...]`, on a real 24MP Nikon D610
+    /// NEF. This turns that into a ONE-TIME cost paid once when the photo
+    /// loads (still a real, bounded pause — see `ImageDocumentModel.load(from:)`'s
+    /// call site — but no longer repeated on every single interaction).
+    ///
+    /// Renders into `extendedLinearSRGB`/64-bit half-float
+    /// (`kCVPixelFormatType_64RGBAHalf`), matching this app's working color
+    /// space everywhere else that runs `EditPipeline`
+    /// (`ImageRenderer`/`PhotoExporter`/`ThumbnailGenerator`/
+    /// `WhiteBalanceSolver`) — deliberately NOT an 8-bit/sRGB intermediate,
+    /// which would silently clip exactly the extended range/gamut RAW
+    /// provides before any edit math ever saw it (the same defect class the
+    /// reviewer caught in the thumbnail path during this same feature's
+    /// review).
+    ///
+    /// Only meaningful — and only worth its own one-time cost — for RAW
+    /// sources; callers are expected to have already checked `isRaw(url)`
+    /// before calling this (mirrors `decodeDraft`'s own precondition).
+    /// Falls back to returning `image` unchanged if the pixel buffer can't
+    /// be created or rendered, so a failure here degrades back to the
+    /// pre-fix (slow but correct) behavior rather than losing the image.
+    ///
+    /// Forward hazard for Phase 6 slice 2 (reviewer-flagged): once
+    /// `CIRAWFilter`'s own native controls (`baselineExposure`,
+    /// `boostAmount`, `neutralTemperature`, etc.) become `EditState`
+    /// fields, changing them will have NO EFFECT on an already-loaded
+    /// photo — the pipeline input by then is this fixed, already-baked
+    /// buffer, not the live `CIRAWFilter` graph those properties configure.
+    /// Whatever wires those controls up will need to re-decode (not just
+    /// re-materialize) on every change to that specific field group, unlike
+    /// every other `EditState` field, which is cheap to re-run against this
+    /// cached buffer via `EditPipeline` as today.
+    static func materialize(_ image: CIImage) -> CIImage {
+        let extent = image.extent
+        // `CGRect.infinite`'s width/height are `CGFloat.greatestFiniteMagnitude`
+        // — genuinely FINITE by IEEE semantics, so an `.isFinite` check alone
+        // does NOT catch it (a real bug caught by this file's own test: an
+        // earlier version guarded with `.isFinite` only, and converting
+        // `greatestFiniteMagnitude` to `Int` below trapped at runtime rather
+        // than falling back gracefully). `.isInfinite` is `CGRect`'s own
+        // correct check for this; the explicit upper bound additionally
+        // guards any other implausibly large extent from overflowing `Int`.
+        guard !extent.isInfinite, !extent.isNull,
+              extent.width > 0, extent.height > 0,
+              extent.width < CGFloat(Int32.max), extent.height < CGFloat(Int32.max)
+        else {
+            return image
+        }
+        var pixelBuffer: CVPixelBuffer?
+        let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:]]
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            Int(extent.width.rounded()),
+            Int(extent.height.rounded()),
+            kCVPixelFormatType_64RGBAHalf,
+            attributes as CFDictionary,
+            &pixelBuffer
+        )
+        guard status == kCVReturnSuccess, let pixelBuffer else { return image }
+        materializeContext.render(image, to: pixelBuffer, bounds: extent, colorSpace: materializeColorSpace)
+        // `materializeContext` is a long-lived static context — without this,
+        // its internal intermediate caches would hold onto this full-res
+        // RAW render's working buffers indefinitely, on top of the
+        // `CVPixelBuffer` this function already returns and callers own.
+        materializeContext.clearCaches()
+        // A CVPixelBuffer-backed CIImage always has its extent origin at
+        // (0, 0); translate back to the source's own origin so callers see
+        // the identical extent they passed in (a no-op in the common case —
+        // every `CIRAWFilter.outputImage` measured live already had
+        // origin (0, 0) — but correct in general rather than assumed).
+        return CIImage(cvPixelBuffer: pixelBuffer, options: [.colorSpace: materializeColorSpace])
+            .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
+    }
+
+    /// Not `private`: `RawDecoderTests` needs this to construct an
+    /// out-of-`[0,1]`-range test color IN this exact working space, so the
+    /// materialize round-trip test actually exercises extended range rather
+    /// than silently passing on inputs an 8-bit intermediate would also
+    /// preserve (reviewer-caught — see that test's own doc comment).
+    static let materializeColorSpace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)
+        ?? CGColorSpaceCreateDeviceRGB()
+    private static let materializeContext = CIContext(options: [
+        .workingColorSpace: materializeColorSpace,
+        .workingFormat: CIFormat.RGBAh
+    ])
 }

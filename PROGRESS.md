@@ -3457,7 +3457,7 @@ deliberately lighter than the Library grid's.
   no collision against the top-leading selection checkbox, confirmed at
   both slider extremes.
 
-### Presets — save/apply named edit-state "looks" (complete, NOT yet verified live) — Phase 5 slice 2
+### Presets — save/apply named edit-state "looks" (complete, verified live 2026-09-02) — Phase 5 slice 2
 
 The last remaining piece of Phase 5 (batch export shipped earlier). CLAUDE.md
 had stated plainly: "Presets (save/apply named edit-state presets) are NOT
@@ -3550,13 +3550,36 @@ already proven not to render red on a macOS Menu/button this session).
   clears `redEyePoints` while `applyingPreset` preserves the target's own —
   5 `CatalogDatabaseTests` including a full-field round-trip through the
   new JSON column, and 2 `CatalogModelTests`). 1 commit.
-- **NOT yet verified live**: open a photo, dial in several Adjust-tab
-  sliders, expand Presets, Save Preset with a name, confirm it appears;
-  switch to a DIFFERENT photo with its own crop/straighten already set,
-  apply the preset, confirm color/tone matches but that photo's OWN crop/
-  straighten/red-eye points are unchanged; delete the preset, confirm it's
-  gone after quit/relaunch; save under an existing name, confirm it
-  overwrites rather than duplicating.
+- **Verified live 2026-09-02**, manually by the user (not Accessibility-
+  automation-driven — a large amount of automation overhead earlier this
+  session, spent chasing an unrelated sidecar-save permission issue,
+  established a new working agreement: screen-capture/UI-automation now
+  needs the user's explicit per-task go-ahead, code-only work is the
+  default). Confirmed: saving a preset from dialed-in Adjust-tab sliders
+  shows it in the list; applying it to a DIFFERENT photo (one with its own
+  crop/straighten already set) matches color/tone while leaving that
+  photo's own geometry/red-eye points untouched; deleting a preset removes
+  it immediately with no confirmation; it stays deleted after quit and
+  relaunch (the app was relaunched for this step, on request, since a
+  plain process quit/reopen isn't screen-capture/UI-driving); saving under
+  an existing name overwrites in place rather than duplicating.
+  **Phase 5 is now fully shipped AND live-verified.**
+
+  A real, unrelated bug surfaced during this verification pass and was
+  investigated: "Couldn't save edits: the file couldn't be opened" on a
+  photo in `~/Downloads`, reproducible on ANY edit to that photo (not
+  specific to Presets — confirmed before investigating further). Traced to
+  `ImageDocumentModel.swift`'s `requestFolderAccess`/`saveSidecarNow`
+  (pre-existing code, untouched by this session's actual changes) via
+  temporary diagnostic logging (added, used to confirm the failure was in
+  the post-grant `bookmarkData`/write path, then fully reverted — `git
+  diff` against HEAD came back empty, confirming a clean revert with
+  nothing shipped). Root cause: a transient TCC permission-propagation
+  delay for `~/Downloads` specifically (Files and Folders privacy access
+  was confirmed already toggled ON in System Settings, yet the FIRST
+  fresh in-app folder-access grant still failed; a second grant attempt
+  succeeded cleanly with no code change). Not reproducible after that;
+  no code fix was needed or made.
 
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
@@ -3566,12 +3589,14 @@ color-fix; Library thumbnails reflecting edits; Compare mode; zoom and pan;
 Library sort/filter/search) — see their own sections above. Phase 5's two
 slices: batch export (including the entitlement-fix debugging saga and 2
 reviewer-caught bugs) + its immediate follow-up (selecting individual
-photos for export), and Presets (2026-09-01, see its own section above,
-including the mid-review spend-limit switch to Opus 5 and 2 fixes applied
-before commit). All reviewer-APPROVED. 390 tests passing, app fully
-functional. **Phase 6 (RAW support) is next per the roadmap** — not yet
-started, and CLAUDE.md explicitly says not to start it early without the
-user asking specifically.
+photos for export), and Presets (2026-09-01/02, see its own section above,
+including the mid-review spend-limit switch to Opus 5, 2 fixes applied
+before commit, and live verification by the user on 2026-09-02, alongside
+an investigated-but-unrelated-and-since-resolved sidecar-save permission
+issue). All reviewer-APPROVED and live-verified. 390 tests passing, app
+fully functional. **Phase 6 (RAW support) is next per the roadmap** — not
+yet started, and CLAUDE.md explicitly says not to start it early without
+the user asking specifically.
 
 **Both real issues surfaced live during batch export's own verification
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and
@@ -3593,14 +3618,25 @@ missing-file detection — each still its own session), D6 (accessibility
 pass), and P2/P3/P5/P6 (performance — measure before implementing, per
 IMPROVEMENTS.md's own working agreements).
 
-**The user's own stated sequence ("2 then 3 and 1") is now fully done**: D5,
-D2+D3, and finally "1" (Phase 5 slice 2, Presets) all shipped. With the
-roadmap's own next item (Phase 6, RAW) explicitly out of scope until asked
-for, remaining options are back to IMPROVEMENTS.md's open items — D4
-(Library keyboard support), D5's other two parts (rename/delete
-collections, missing-file detection), D6 (accessibility pass), and
-P2/P3/P5/P6 (performance, measure first) — or Presets' own still-open live
-verification (see its section above), whichever the user picks next.
+**The user's own stated sequence ("2 then 3 and 1") is now fully done AND
+live-verified**: D5, D2+D3, and finally "1" (Phase 5 slice 2, Presets) all
+shipped and confirmed working live. With the roadmap's own next item
+(Phase 6, RAW) explicitly out of scope until asked for, remaining options
+are back to IMPROVEMENTS.md's open items — D4 (Library keyboard support),
+D5's other two parts (rename/delete collections, missing-file detection),
+D6 (accessibility pass), and P2/P3/P5/P6 (performance, measure first) —
+whichever the user picks next.
+
+**New working agreement, 2026-09-02**: screen-capture/UI-automation
+(screenshots, cliclick, AppleScript UI-driving) now needs the user's
+explicit per-task go-ahead — default mode of work is code-only. Came out
+of an unrelated sidecar-save investigation where automation overhead (window
+positioning, System Settings navigation, repeated screenshots) burned a lot
+of turns for comparatively little diagnostic value; the fix that actually
+worked was adding temporary debug logging to the code itself and asking the
+user to reproduce and report back, not driving the UI. Saved to memory —
+see `feedback_screen_automation_permission` — so this carries into future
+sessions automatically.
 
 **All three shipped items (D7, D1(a), and now D1(b)) got their live pass on
 2026-08-28** — see their own

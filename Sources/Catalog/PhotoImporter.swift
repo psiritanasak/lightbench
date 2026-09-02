@@ -15,10 +15,20 @@ struct FolderScanNode: Sendable {
 /// `CatalogDatabase` so the "which files count as photos" logic can be
 /// unit-tested without touching SQLite (`Tests/CatalogTests/PhotoImporterTests.swift`).
 enum PhotoImporter {
-    /// The extensions this app can already open, mirrored from
+    /// The non-RAW extensions this app can already open, mirrored from
     /// `ImageDocumentModel.openImage()`'s `allowedContentTypes`
-    /// (`.jpeg, .png, .tiff, .heic`), plus the common `jpg` alias.
+    /// (`.jpeg, .png, .tiff, .heic`), plus the common `jpg` alias. RAW files
+    /// are a second, separate rule — see `isSupportedImage(_:)` — classified
+    /// via `RawDecoder.isRaw`'s UTType check rather than added to this
+    /// literal set, so RAW coverage tracks whatever formats the OS knows
+    /// about instead of needing this list hand-maintained per camera brand.
     static let supportedExtensions: Set<String> = ["jpg", "jpeg", "png", "tiff", "tif", "heic"]
+
+    /// True if `url` is an image file this app can import: either one of
+    /// `supportedExtensions`, or a camera RAW file per `RawDecoder.isRaw`.
+    static func isSupportedImage(_ url: URL) -> Bool {
+        supportedExtensions.contains(url.pathExtension.lowercased()) || RawDecoder.isRaw(url)
+    }
 
     /// Shallow scan of `folder` for image files, matched case-insensitively
     /// on extension. Excludes this app's own sidecar files
@@ -34,7 +44,7 @@ enum PhotoImporter {
         ) else {
             return []
         }
-        return entries.filter { supportedExtensions.contains($0.pathExtension.lowercased()) }
+        return entries.filter { isSupportedImage($0) }
     }
 
     // MARK: - Folder-mirrored nested collections
@@ -69,7 +79,7 @@ enum PhotoImporter {
                 if !child.imageFiles.isEmpty || !child.children.isEmpty {
                     children.append(child)
                 }
-            } else if supportedExtensions.contains(entry.pathExtension.lowercased()) {
+            } else if isSupportedImage(entry) {
                 imageFiles.append(entry)
             }
         }

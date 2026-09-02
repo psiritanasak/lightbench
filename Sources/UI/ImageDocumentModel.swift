@@ -112,7 +112,7 @@ final class ImageDocumentModel: ObservableObject {
 
     func openImage() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.jpeg, .png, .tiff, .heic]
+        panel.allowedContentTypes = [.jpeg, .png, .tiff, .heic, .rawImage]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
 
@@ -121,12 +121,12 @@ final class ImageDocumentModel: ObservableObject {
     }
 
     func load(from url: URL) {
-        guard let raw = CIImage(contentsOf: url) else {
+        guard let raw = RawDecoder.decode(contentsOf: url) else {
             loadErrorMessage = "Couldn't open \"\(url.lastPathComponent)\". The file may be missing, unreadable, or not a supported image format."
             return
         }
         flushPendingSidecarSave() // save the OUTGOING photo's edits before switching away from it
-        currentImage = raw.oriented(Self.exifOrientation(of: url))
+        currentImage = raw
         currentFileName = url.lastPathComponent
         currentURL = url
         // Restore saved edits if we can currently reach this photo's
@@ -140,22 +140,6 @@ final class ImageDocumentModel: ObservableObject {
         resetHistory() // undo history is per-photo too — can't undo into the previous photo
     }
 
-    /// `nonisolated` (not `private`) since `Sources/Rendering/PhotoExporter.swift`
-    /// (Phase 5 batch export) needs to reproduce `load(from:)`'s own
-    /// orientation handling from off-main code — same treatment already
-    /// given to `sidecarURL(for:)` above, for the same reason (a pure,
-    /// non-actor-isolated helper another type needs to call). No behavior
-    /// change to this method itself or to `load(from:)`'s existing use of it.
-    nonisolated static func exifOrientation(of url: URL) -> CGImagePropertyOrientation {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
-              let raw = properties[kCGImagePropertyOrientation as String] as? UInt32,
-              let orientation = CGImagePropertyOrientation(rawValue: raw)
-        else {
-            return .up
-        }
-        return orientation
-    }
 
     // MARK: - Histogram
 

@@ -110,10 +110,9 @@ enum PhotoExporter {
         settings: ExportSettings
     ) throws -> URL {
         let sourceURL = URL(fileURLWithPath: photo.path)
-        guard let raw = CIImage(contentsOf: sourceURL) else {
+        guard let oriented = RawDecoder.decode(contentsOf: sourceURL) else {
             throw PhotoExportError.unreadableSource(photo.path)
         }
-        let oriented = raw.oriented(ImageDocumentModel.exifOrientation(of: sourceURL))
         let edited = EditPipeline.apply(editState, to: oriented)
         let resized = Self.resized(edited, option: settings.resize)
         let outputURL = Self.uniqueDestinationURL(for: photo, in: destinationFolder, format: settings.format)

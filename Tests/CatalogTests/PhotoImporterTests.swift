@@ -49,6 +49,26 @@ final class PhotoImporterTests: XCTestCase {
         XCTAssertEqual(found, ["IMG_0001.jpg"])
     }
 
+    func testIncludesCameraRawFiles() throws {
+        try touch("DSC_1017.NEF")
+        try touch("photo.jpg")
+        try touch("readme.txt")
+
+        let found = Set(PhotoImporter.imageFiles(in: tempDir).map(\.lastPathComponent))
+
+        XCTAssertEqual(found, ["DSC_1017.NEF", "photo.jpg"])
+    }
+
+    func testMatchesRawExtensionsCaseInsensitively() throws {
+        try touch("IMG_0001.cr2")
+        try touch("IMG_0002.CR2")
+        try touch("IMG_0003.dng")
+
+        let found = Set(PhotoImporter.imageFiles(in: tempDir).map(\.lastPathComponent))
+
+        XCTAssertEqual(found, ["IMG_0001.cr2", "IMG_0002.CR2", "IMG_0003.dng"])
+    }
+
     func testEmptyFolderReturnsEmptyArray() {
         XCTAssertEqual(PhotoImporter.imageFiles(in: tempDir), [])
     }
@@ -111,6 +131,15 @@ final class PhotoImporterTests: XCTestCase {
         _ = try makeDir("empty-root/AlsoEmpty")
 
         XCTAssertNil(PhotoImporter.scanFolderTree(at: root))
+    }
+
+    func testScanFolderTreeIncludesRawFiles() throws {
+        let root = try makeDir("raw-root")
+        touch("DSC_1017.NEF", in: root)
+
+        let node = try XCTUnwrap(PhotoImporter.scanFolderTree(at: root))
+
+        XCTAssertEqual(node.imageFiles.map(\.lastPathComponent), ["DSC_1017.NEF"])
     }
 
     func testScanFolderTreeReturnsNilWhenRootHasOnlyNonImageFiles() throws {

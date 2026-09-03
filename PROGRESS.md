@@ -1396,6 +1396,17 @@ restructure. 1 commit.
   itself partially superseded by this correction), and this revert commit
   (lightly re-reviewed given it's a well-evidenced, purely subtractive,
   user-confirmed-live change).
+- **Re-confirmed present, 2026-09-03**: user asked to re-verify this
+  exact bug (thought it might have been fixed since — it was not; this
+  session's work was all Phase 6/RAW, nothing touched the sidebar
+  `ScrollView`). Live-authorized reproduction (screenshots, not code
+  changes): expand Selective Color, scroll the sidebar — the WHOLE
+  window shifts right by ~15-20px on the first scroll, not just sidebar
+  content, confirmed from screenshot pixel comparison (traffic-light
+  buttons and title text both move right; a sliver of desktop/another
+  window becomes visible at the window's left edge, only possible if
+  the window itself moved). No fix attempted this session — the
+  "Lesson recorded" note above still applies; still deferred.
 
 ### Revert to Original button (complete, verified live) — last remaining small Phase 3 item
 - User picked this over Edit-menu `CommandGroup` integration (the other

@@ -66,6 +66,8 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.cropInsetBottom = 0.1
         s.cropInsetLeft = 0.2
         s.cropInsetRight = 0.15
+        // RAW-native
+        s.boostAmount = 0.3
         return s
     }
 
@@ -133,5 +135,16 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         let editedExtent = EditPipeline.apply(edited, to: image).extent
         let originalExtent = EditPipeline.apply(original, to: image).extent
         XCTAssertEqual(editedExtent, originalExtent)
+    }
+
+    /// `boostAmount` is preserved like geometry, NOT reset like every
+    /// color/tone field — deliberately, because `EditPipeline` never reads
+    /// it (see the field's own doc comment), so `comparisonOriginal()`
+    /// has no way to actually apply a reset here regardless of what value
+    /// it sets.
+    func testBoostAmountIsPreservedNotReset() {
+        let edited = fullyEditedState()
+        XCTAssertEqual(edited.comparisonOriginal().boostAmount, edited.boostAmount)
+        XCTAssertNotEqual(edited.boostAmount, EditState.identity.boostAmount, "test fixture should start non-default")
     }
 }

@@ -14,11 +14,17 @@ import UniformTypeIdentifiers
 /// (Catalog) calling into this type doesn't transitively reach into UI,
 /// matching CLAUDE.md's "Keep modules separated" principle.
 ///
-/// Phase 6 slice 1 scope: decode only. `CIRAWFilter`'s own RAW-native
-/// controls (`baselineExposure`, `boostAmount`, `neutralTemperature`/
-/// `neutralLocation`, `lensCorrectionEnabled`, its NR/sharpness/detail/moiré
-/// sliders) are a genuine `EditState`-level feature deferred to a later
-/// session — see CLAUDE.md/PROGRESS.md.
+/// Phase 6 slice 1 scope: decode only. Phase 6 slice 2 added `boostAmount`
+/// (Core Image's own RAW tone-curve strength) as the first RAW-native
+/// `EditState` field — see `EditState.boostAmount`'s own doc comment and
+/// `ImageDocumentModel.redecodeForRawNativeChange()` for how changing it
+/// re-decodes rather than re-running `EditPipeline`. `CIRAWFilter`'s
+/// remaining RAW-native controls (`baselineExposure`, `neutralTemperature`/
+/// `neutralLocation`) are deferred to a later slice; `lensCorrectionEnabled`
+/// specifically was MEASURED unsupported on the user's own camera
+/// (`isLensCorrectionSupported == false` on three sampled Nikon D610 NEFs)
+/// before slice 2 was scoped, so it's deferred deliberately, not an
+/// oversight — see CLAUDE.md/PROGRESS.md.
 enum RawDecoder {
     /// Serializes every heavy RAW render this app issues —
     /// `materialize`, `ThumbnailGenerator`'s RAW thumbnail path, and
@@ -130,7 +136,11 @@ enum RawDecoder {
     /// gate exists to prevent, so the ENTIRE RAW branch — construction,
     /// orientation, `.outputImage` — is inside `RenderGate` now, not just
     /// the render step downstream in `materialize`.
-    static func decode(contentsOf url: URL) async -> CIImage? {
+    ///
+    /// `boostAmount` (Phase 6 slice 2) configures the `CIRAWFilter` instance
+    /// itself, so it only applies on the RAW branch — ignored outright for
+    /// non-RAW files, matching every other RAW-only parameter here.
+    static func decode(contentsOf url: URL, boostAmount: Double) async -> CIImage? {
         guard isRaw(url) else {
             return CIImage(contentsOf: url)?.oriented(exifOrientation(of: url))
         }
@@ -139,6 +149,7 @@ enum RawDecoder {
             if let orientation = readExifOrientation(of: url) {
                 filter.orientation = orientation
             }
+            applyBoostAmount(boostAmount, to: filter)
             return filter.outputImage
         }
     }
@@ -153,7 +164,10 @@ enum RawDecoder {
     /// `RenderGate`, same reasoning as `decode(contentsOf:)` above —
     /// `filter.nativeSize` alone forces RawCamera to parse the file's
     /// header, so even that read isn't free to leave ungated.
-    static func decodeDraft(contentsOf url: URL, maxPixelSize: Int) async -> CIImage? {
+    /// `boostAmount` (Phase 6 slice 2): so a RAW thumbnail matches the
+    /// Editor's own rendering after an edit, same reasoning as every other
+    /// `editState`-driven thumbnail parameter — see `ThumbnailGenerator`.
+    static func decodeDraft(contentsOf url: URL, maxPixelSize: Int, boostAmount: Double) async -> CIImage? {
         await RenderGate.shared.run {
             guard let filter = CIRAWFilter(imageURL: url) else { return nil }
             if let orientation = readExifOrientation(of: url) {
@@ -168,8 +182,21 @@ enum RawDecoder {
                 // return the native size, not upscale.
                 filter.scaleFactor = min(1, Float(CGFloat(maxPixelSize) / longestSide))
             }
+            applyBoostAmount(boostAmount, to: filter)
             return filter.outputImage
         }
+    }
+
+    /// Applies `boostAmount` to `filter`, clamped to `CIRAWFilter`'s own
+    /// documented `0...1` range — defensively, even though the only writer
+    /// (the Adjust-tab slider) already constrains it via its own declared
+    /// range, matching `decodeDraft`'s existing `scaleFactor` clamp
+    /// precedent above. No capability gate needed here, unlike a future
+    /// `lensCorrectionEnabled`: `boostAmount` is a general RAW rendering
+    /// parameter, not tied to a per-camera-profile database, so it applies
+    /// unconditionally to any RAW file.
+    private static func applyBoostAmount(_ boostAmount: Double, to filter: CIRAWFilter) {
+        filter.boostAmount = Float(min(1, max(0, boostAmount)))
     }
 
     /// Renders `image` once into a realized pixel buffer and re-wraps it as
@@ -215,16 +242,18 @@ enum RawDecoder {
     /// `CIRAWFilter` graph directly, per frame, on the main thread —
     /// degrading back to BOTH bugs this file exists to fix, not just one.
     ///
-    /// Forward hazard for Phase 6 slice 2 (reviewer-flagged): once
-    /// `CIRAWFilter`'s own native controls (`baselineExposure`,
-    /// `boostAmount`, `neutralTemperature`, etc.) become `EditState`
-    /// fields, changing them will have NO EFFECT on an already-loaded
-    /// photo — the pipeline input by then is this fixed, already-baked
-    /// buffer, not the live `CIRAWFilter` graph those properties configure.
-    /// Whatever wires those controls up will need to re-decode (not just
-    /// re-materialize) on every change to that specific field group, unlike
-    /// every other `EditState` field, which is cheap to re-run against this
-    /// cached buffer via `EditPipeline` as today.
+    /// Forward hazard for Phase 6 slice 2, PREDICTED here and CONFIRMED true
+    /// when `boostAmount` shipped: once `CIRAWFilter`'s own native controls
+    /// become `EditState` fields, changing them has NO EFFECT on an
+    /// already-loaded photo — the pipeline input by then is this fixed,
+    /// already-baked buffer, not the live `CIRAWFilter` graph those
+    /// properties configure. Resolution shipped in
+    /// `ImageDocumentModel.redecodeForRawNativeChange()` (debounced via
+    /// `scheduleRawRedecode()`), triggered from `editState`'s own `didSet`
+    /// via `EditState.requiresRawRedecode(comparedTo:)` — that re-decodes
+    /// (not just re-materializes) on every change to a RAW-native field,
+    /// unlike every other `EditState` field, which is cheap to re-run
+    /// against this cached buffer via `EditPipeline` as today.
     static func materialize(_ image: CIImage) async -> CIImage {
         let extent = image.extent
         // `CGRect.infinite`'s width/height are `CGFloat.greatestFiniteMagnitude`

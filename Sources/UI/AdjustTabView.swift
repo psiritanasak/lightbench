@@ -39,6 +39,10 @@ struct AdjustPanelState {
     /// reasoning as the six section bools above — must survive a Crop tab
     /// round-trip.
     var isPresetsSectionExpanded = false
+
+    /// Phase 6 slice 2: whether the RAW section is expanded. Same
+    /// reasoning as every other section bool above.
+    var isRawSectionExpanded = false
 }
 
 /// The Editor's Adjust tab: the six collapsible Light/Color/Selective Color/
@@ -147,6 +151,7 @@ struct AdjustTabView: View {
             ) {
                 redEyeSection
             }
+            rawSectionContainer
             Divider()
             AdjustSectionContainer(icon: "list.star", title: "Presets", isExpanded: $panel.isPresetsSectionExpanded) {
                 presetsSection
@@ -347,6 +352,51 @@ struct AdjustTabView: View {
         }
     }
 
+    /// Phase 6 slice 2: true if the currently-open photo is a RAW file.
+    /// `document.currentURL` is `@Published`, so this tracks Library-grid/
+    /// filmstrip/⌘←⌘→ navigation on its own without any extra wiring.
+    /// `RawDecoder.isRaw` is a cheap synchronous UTType check, safe to call
+    /// from a view body.
+    private var isCurrentPhotoRaw: Bool {
+        guard let url = document.currentURL else { return false }
+        return RawDecoder.isRaw(url)
+    }
+
+    /// The Adjust panel's first RAW-conditional section — hidden entirely
+    /// for non-RAW photos rather than shown-and-disabled, because
+    /// `CIRAWFilter`'s RAW-native controls structurally cannot apply to a
+    /// JPEG and a greyed-out row would imply otherwise. Bundled with its
+    /// own `Divider` into ONE `@ViewBuilder` property so `body`'s `VStack`
+    /// gains exactly one child either way — this file has a documented
+    /// type-checker blow-up from over-packed `@ViewBuilder` closures (see
+    /// `presetsSection`'s own comment); don't repeat that.
+    @ViewBuilder private var rawSectionContainer: some View {
+        if isCurrentPhotoRaw {
+            Divider()
+            AdjustSectionContainer(icon: "camera.aperture", title: "RAW", isExpanded: $panel.isRawSectionExpanded) {
+                rawSection
+            }
+        }
+    }
+
+    /// One control this slice, deliberately — `boostAmount` (Core Image's
+    /// own RAW tone-curve strength) is the first RAW-native `EditState`
+    /// field; `lensCorrectionEnabled` (the original slice-2 candidate) was
+    /// measured unsupported on this app's own test camera before any code
+    /// was written, and the rest of `CIRAWFilter`'s controls are deferred
+    /// to a future slice — see CLAUDE.md/PROGRESS.md. Disabled while a
+    /// decode is in flight: unlike every other row in this panel, releasing
+    /// this slider costs a full RAW re-decode (see
+    /// `ImageDocumentModel.redecodeForRawNativeChange`), so it must not be
+    /// draggable again mid-decode.
+    private var rawSection: some View {
+        EditSliderRow(
+            label: "Boost Amount", value: $document.editState.boostAmount,
+            range: 0...1, identity: 1.0
+        ) { String(format: "%.0f%%", $0 * 100) }
+            .disabled(document.isLoadingImage)
+    }
+
     /// Phase 5 slice 2: save the current photo's color/tone adjustments as
     /// a named, reusable preset, or apply/delete an already-saved one.
     /// Deliberately no nested `Menu` here (unlike the Library grid's
@@ -396,6 +446,16 @@ struct AdjustTabView: View {
     /// (a separate, more destructive action with its own dedicated
     /// "Clear All Red-Eye Corrections" button above) — this only resets
     /// continuous adjustment VALUES.
+    /// Reviewer-flagged, deliberate, documented gap: this deliberately
+    /// mirrors `comparisonOriginal()`'s field list, which does NOT include
+    /// `boostAmount` (see that method's own doc comment — `EditPipeline`
+    /// can't express the field, so resetting it here would trigger an
+    /// unwanted full RAW re-decode from what should be an instant, free
+    /// action). Consequence: a RAW photo with every OTHER field at
+    /// identity but a non-default Boost Amount shows this button
+    /// (correctly) disabled, even though the RAW section's own slider is
+    /// visibly non-identity — `revertToOriginal()`'s literal `EditState()`
+    /// commit is the control that resets `boostAmount`, not this one.
     private var isAdjustTabAtIdentity: Bool {
         let state = document.editState
         return state.exposureEV == 0

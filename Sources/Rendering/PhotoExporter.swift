@@ -110,7 +110,7 @@ enum PhotoExporter {
         settings: ExportSettings
     ) async throws -> URL {
         let sourceURL = URL(fileURLWithPath: photo.path)
-        guard let oriented = await RawDecoder.decode(contentsOf: sourceURL) else {
+        guard let oriented = await RawDecoder.decode(contentsOf: sourceURL, boostAmount: editState.boostAmount) else {
             throw PhotoExportError.unreadableSource(photo.path)
         }
         let edited = EditPipeline.apply(editState, to: oriented)

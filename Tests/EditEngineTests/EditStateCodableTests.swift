@@ -38,6 +38,14 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.levelsWhitePoint, 1)
         XCTAssertEqual(state.vignetteRadius, 0.5)
         XCTAssertEqual(state.redEyeStrength, 0.7)
+        XCTAssertEqual(state.boostAmount, 1.0)
+    }
+
+    func testBoostAmountDecodesWhenPresent() throws {
+        let state = try decode("""
+        { "boostAmount": 0.4 }
+        """)
+        XCTAssertEqual(state.boostAmount, 0.4)
     }
 
     func testEmptyObjectDecodesToExactIdentity() throws {

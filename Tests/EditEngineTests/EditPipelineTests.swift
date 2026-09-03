@@ -2536,11 +2536,48 @@ final class EditPipelineTests: XCTestCase {
             vignetteRadius: 0.3,
             definition: 0.55,
             noiseReduction: 0.45,
-            sharpness: 0.6
+            sharpness: 0.6,
+            boostAmount: 0.35
         )
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(EditState.self, from: data)
 
         XCTAssertEqual(original, decoded)
+    }
+
+    /// Pins the architecture Phase 6 slice 2 depends on: `boostAmount`
+    /// configures `CIRAWFilter` itself, upstream of `EditPipeline` — it is
+    /// NOT one of this function's stages and must have zero effect on its
+    /// output. Fails loudly if a future session tries to "wire the missing
+    /// field into the pipeline" by mistake (there's nothing there to wire
+    /// it into; it only takes effect via `RawDecoder`/`ImageDocumentModel.redecodeForRawNativeChange`).
+    func testBoostAmountHasNoEffectOnTheEditPipeline() {
+        let image = CIImage(color: CIColor(red: 0.4, green: 0.5, blue: 0.6)).cropped(to: CGRect(x: 0, y: 0, width: 16, height: 16))
+        // Reviewer-caught: comparing two otherwise-IDENTITY states only
+        // proves `boostAmount` doesn't matter when nothing else is
+        // active — strictly stronger to also confirm it doesn't
+        // interact with OTHER active fields (exposure, contrast, B&W,
+        // vignette all touch pixel values in ways a stray `boostAmount`
+        // read could plausibly compound with).
+        var low = EditState()
+        low.exposureEV = 0.8
+        low.contrast = 0.3
+        low.blackAndWhite = true
+        low.vignetteStrength = 0.4
+        low.boostAmount = 0
+        var high = low
+        high.boostAmount = 1
+
+        let lowOutput = EditPipeline.apply(low, to: image)
+        let highOutput = EditPipeline.apply(high, to: image)
+
+        let context = CIContext()
+        var lowPixel = [UInt8](repeating: 0, count: 4)
+        var highPixel = [UInt8](repeating: 0, count: 4)
+        let bounds = CGRect(x: 8, y: 8, width: 1, height: 1)
+        context.render(lowOutput, toBitmap: &lowPixel, rowBytes: 4, bounds: bounds, format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        context.render(highOutput, toBitmap: &highPixel, rowBytes: 4, bounds: bounds, format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+
+        XCTAssertEqual(lowPixel, highPixel)
     }
 }

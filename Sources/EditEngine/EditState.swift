@@ -515,6 +515,44 @@ struct EditState: Equatable, Codable {
     /// pattern as Vignette's Softness and Black & White's tone/grain.
     var sharpness: Double = 0
 
+    // MARK: - RAW (CIRAWFilter-native)
+
+    /// Core Image's own RAW tone-curve strength — configures `CIRAWFilter`
+    /// itself (`boostAmount`, 0...1, default 1: linear/no-curve at 0, full
+    /// curve at 1), upstream of `EditPipeline`, not a pipeline stage.
+    ///
+    /// STRUCTURALLY UNLIKE EVERY OTHER FIELD ABOVE: `EditPipeline` never
+    /// reads this. Changing it can only take effect by RE-DECODING the
+    /// file — re-running `EditPipeline` against the already-materialized
+    /// buffer does nothing (see `RawDecoder.materialize`'s "forward
+    /// hazard for slice 2" note, which predicted exactly this).
+    /// `ImageDocumentModel.editState`'s `didSet` is what re-decodes;
+    /// `requiresRawRedecode(comparedTo:)` below is the one place that
+    /// knows which fields behave this way.
+    ///
+    /// Ignored outright for non-RAW files. Default `1.0` measured LIVE
+    /// against `CIRAWFilter`'s own default on a real Nikon D610 NEF
+    /// (matches the SDK header's own documented default) — not assumed
+    /// — so an untouched photo decodes byte-for-byte as it did before
+    /// this field existed. `lensCorrectionEnabled` was the original
+    /// slice-2 candidate but was measured DEAD on this camera+lens
+    /// combination (`CIRAWFilter.isLensCorrectionSupported == false` on
+    /// all three sampled files) before any code was written — deferred
+    /// to a future slice, not shipped as a no-op toggle.
+    var boostAmount: Double = 1.0
+
+    /// True if `other` differs from `self` in any field that can ONLY
+    /// take effect by re-running `RawDecoder.decode` — i.e. that
+    /// configures `CIRAWFilter` itself rather than being an
+    /// `EditPipeline` stage. Exactly one such field exists today
+    /// (`boostAmount`); future RAW-native fields
+    /// (`baselineExposure`/`neutralTemperature`/`lensCorrectionEnabled`/…)
+    /// belong here too when they land. `ImageDocumentModel`'s `editState`
+    /// `didSet` is the only caller.
+    func requiresRawRedecode(comparedTo other: EditState) -> Bool {
+        boostAmount != other.boostAmount
+    }
+
     /// The no-op edit state: every adjustment at its default (identity) value.
     static let identity = EditState()
 
@@ -578,6 +616,11 @@ struct EditState: Equatable, Codable {
         // geometry (cropInset*, straightenAngle, verticalPerspective,
         // horizontalPerspective, flipHorizontal, flipVertical) is left
         // untouched — inherited from `self` via `var s = self` above.
+        // `boostAmount` is ALSO left untouched, for a different reason:
+        // `EditPipeline` never reads it at all (see its own doc comment),
+        // so resetting it here couldn't be honored by either side of the
+        // Compare render anyway — inherit it rather than set a value this
+        // method has no way to actually apply.
         return s
     }
 
@@ -635,6 +678,14 @@ struct EditState: Equatable, Codable {
         // horizontalPerspective, flipHorizontal, flipVertical) and
         // redEyePoints are NOT copied — they stay `target`'s own via
         // `var result = target` above.
+        // `boostAmount` is ALSO not copied, for a different reason:
+        // carrying it would make applying ANY preset kick off a
+        // multi-second RAW re-decode (no other preset field does that),
+        // and would silently set a RAW-decode parameter on a JPEG
+        // target — dead weight that also defeats
+        // `ThumbnailGenerator`'s `editState != .identity` fast path for
+        // an otherwise-unedited thumbnail. Presets are cross-photo
+        // looks; this is a per-decode technical setting, not a look.
         return result
     }
 }
@@ -689,6 +740,7 @@ extension EditState {
         case definition
         case noiseReduction
         case sharpness
+        case boostAmount
     }
 
     init(from decoder: Decoder) throws {
@@ -751,5 +803,6 @@ extension EditState {
         definition = try container.decodeIfPresent(Double.self, forKey: .definition) ?? 0
         noiseReduction = try container.decodeIfPresent(Double.self, forKey: .noiseReduction) ?? 0
         sharpness = try container.decodeIfPresent(Double.self, forKey: .sharpness) ?? 0
+        boostAmount = try container.decodeIfPresent(Double.self, forKey: .boostAmount) ?? 1.0
     }
 }

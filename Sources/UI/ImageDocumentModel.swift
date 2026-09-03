@@ -56,6 +56,20 @@ final class ImageDocumentModel: ObservableObject {
             // those represent real, intentional state changes and should
             // still get saved.
             if !isLoadingPhoto { scheduleSidecarSave() }
+            // Phase 6 slice 2: RAW-native fields configure `CIRAWFilter`
+            // itself, not `EditPipeline`, so they only take effect by
+            // re-decoding the file — see `EditState.requiresRawRedecode`'s
+            // doc comment. `isLoadingPhoto` excludes `load(from:)`'s own
+            // restore-from-sidecar write, which is ALREADY decoded with
+            // the correct value (see `load(from:)` above) and would
+            // otherwise fire a redundant second decode whenever the
+            // incoming photo's `boostAmount` differs from the outgoing
+            // one's. Undo/redo/revert/preset writes are NOT excluded —
+            // those are real changes and must re-decode, same reasoning
+            // as `scheduleSidecarSave` just above.
+            if !isLoadingPhoto, editState.requiresRawRedecode(comparedTo: oldValue) {
+                scheduleRawRedecode()
+            }
         }
     }
 
@@ -145,26 +159,80 @@ final class ImageDocumentModel: ObservableObject {
     /// path.
     private var loadGeneration = 0
 
+    /// True from the top of `load(from:)` until the load that still owns
+    /// `loadGeneration` finishes. Distinct from `isLoadingImage` (UI-facing,
+    /// only covers the RAW materialize step) and `isLoadingPhoto` (only
+    /// brackets one `editState` assignment). Exists so a debounced
+    /// RAW-native re-decode (Phase 6 slice 2 — see
+    /// `redecodeForRawNativeChange`) can't fire mid-photo-switch: the
+    /// Adjust sidebar stays interactive while a photo loads (only the
+    /// image pane shows the spinner), so the user CAN drag the Boost
+    /// Amount slider while a different photo is still loading. Without
+    /// this guard, the debounced re-decode would fire against the
+    /// OUTGOING photo's now-stale `currentURL` and, worse, bump
+    /// `loadGeneration` out from under the still-in-flight `load(from:)`
+    /// — which then silently abandons itself via its own generation
+    /// guard, so the tapped photo would simply never open.
+    private var isLoadInFlight = false
+
     func load(from url: URL) async {
         loadGeneration += 1
         let myGeneration = loadGeneration
+        isLoadInFlight = true
+        defer {
+            // Only the load that still OWNS the generation token clears
+            // this — a superseded load must not clear it out from under
+            // the newer one that superseded it.
+            if myGeneration == loadGeneration { isLoadInFlight = false }
+        }
         // Unconditionally cleared for EVERY new load, not just RAW ones —
         // otherwise a superseded RAW load's `isLoadingImage = true` (below)
         // could be left stuck on forever if the load that supersedes it is
         // non-RAW and never touches this flag itself.
         isLoadingImage = false
+        // A pending RAW-native re-decode (Phase 6 slice 2) is now aimed at
+        // whatever photo ends up open after THIS load — cancel it rather
+        // than let it fire against the wrong file, or redundantly, once
+        // `editState` below is restored from the incoming photo's own
+        // sidecar.
+        rawRedecodeWorkItem?.cancel()
+
+        // Phase 6 slice 2: both of these MOVED above the decode, and must
+        // stay in this order relative to each other.
+        // - The flush runs FIRST, so re-opening the CURRENTLY-OPEN photo
+        //   (a filmstrip tap on itself, or a ⌘←/⌘→ round-trip) reads back
+        //   its own just-written edits rather than a sidecar still ~1s
+        //   stale — reading the sidecar before the flush would silently
+        //   discard that pending edit.
+        // - The sidecar read runs SECOND, because `RawDecoder.decode`
+        //   below now needs the INCOMING photo's own `boostAmount` to
+        //   configure `CIRAWFilter` (a RAW-native field only takes effect
+        //   at decode time — see `EditState.boostAmount`'s own doc
+        //   comment). Reading it at the OLD position (after the decode,
+        //   near the bottom of this function) would decode every newly-
+        //   opened RAW photo with the OUTGOING photo's `boostAmount` — a
+        //   real bug, not hypothetical: nothing downstream would ever
+        //   correct it, so the panel and the pixels would silently
+        //   disagree until the user manually nudged the slider.
+        // Moving the flush earlier is safe on its own terms: it only ever
+        // saves the OUTGOING photo (`currentURL` is untouched until
+        // below), it's a no-op unless a save is actually pending, and it
+        // now also runs when the decode subsequently fails — strictly
+        // better than dropping the outgoing photo's pending edits on a
+        // bad file.
+        flushPendingSidecarSave()
+        let restoredState = loadSidecarIfReachable(for: url) ?? EditState()
 
         // `await`ed even for non-RAW (which has no internal suspension
         // point) because Swift requires one signature — see `RawDecoder.decode`'s
         // own doc comment for why the RAW branch needs to be gated all the
         // way through construction, not just `materialize`'s render step.
-        guard let raw = await RawDecoder.decode(contentsOf: url) else {
+        guard let raw = await RawDecoder.decode(contentsOf: url, boostAmount: restoredState.boostAmount) else {
             guard myGeneration == loadGeneration else { return }
             loadErrorMessage = "Couldn't open \"\(url.lastPathComponent)\". The file may be missing, unreadable, or not a supported image format."
             return
         }
         guard myGeneration == loadGeneration else { return }
-        flushPendingSidecarSave() // save the OUTGOING photo's edits before switching away from it
         // RAW only: `RawDecoder.materialize` renders the RAW demosaic ONCE
         // here rather than leaving `raw` as CIRAWFilter's own lazy graph —
         // `ImageRenderer.draw(in:)` re-runs `EditPipeline.apply` on
@@ -198,18 +266,119 @@ final class ImageDocumentModel: ObservableObject {
         } else {
             resolvedImage = raw
         }
+        // Reviewer-caught: the early flush above only covers edits made
+        // BEFORE this function's first `await`. The Adjust sidebar stays
+        // interactive for the OUTGOING photo throughout both awaits above
+        // (only `currentImage == nil` disables it — see `ContentView`'s
+        // `editControls`), so a slider drag DURING either await would
+        // otherwise be silently discarded the moment `editState` below
+        // overwrites it with the incoming photo's `restoredState` — with
+        // no further `await` between this flush and that overwrite, this
+        // one closes that gap completely. (Residual, deliberately not
+        // engineered around: reopening the SAME already-open photo mid-
+        // drag can still commit a `restoredState` snapshot older than a
+        // drag captured between the two flushes — narrow enough, and this
+        // flush still saves it correctly to disk, so only the in-memory
+        // `editState` would transiently lag, not the sidecar.)
+        flushPendingSidecarSave()
         currentImage = resolvedImage
         currentFileName = url.lastPathComponent
         currentURL = url
-        // Restore saved edits if we can currently reach this photo's
-        // sidecar (needs a resolvable folder bookmark, same as saving —
-        // see `// MARK: - Sidecar Persistence`). No bookmark yet, or no
-        // sidecar at that path, both fall back to identity exactly like
-        // before this feature existed — neither is an error.
         isLoadingPhoto = true
-        editState = loadSidecarIfReachable(for: url) ?? EditState()
+        editState = restoredState
         isLoadingPhoto = false
+        // A RAW-native re-decode debounced during either await above is
+        // now stale — `editState` was just overwritten with the INCOMING
+        // photo's own already-correct `restoredState`, so firing it would
+        // be a guaranteed-no-op full re-decode of the photo just opened.
+        rawRedecodeWorkItem?.cancel()
         resetHistory() // undo history is per-photo too — can't undo into the previous photo
+    }
+
+    // MARK: - RAW-native re-decode (Phase 6 slice 2)
+
+    /// How long a pause in a RAW-native field's changes (today, just
+    /// `boostAmount`) must last before a re-decode actually fires. A
+    /// dragged slider writes `editState` many times per second; without
+    /// this, every intermediate value would trigger its own full RAW
+    /// demosaic — exactly the per-frame-decode freeze `RawDecoder.materialize`
+    /// exists to prevent, one level up. Slightly longer than
+    /// `historyCoalesceInterval` since the cost being coalesced here is far
+    /// higher (a full re-decode, not an undo-step commit) — tuned by feel,
+    /// not measured, same honesty precedent as that constant's own comment.
+    private static let rawRedecodeCoalesceInterval: TimeInterval = 0.4
+
+    private var rawRedecodeWorkItem: DispatchWorkItem?
+
+    private func scheduleRawRedecode() {
+        rawRedecodeWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in self?.redecodeForRawNativeChange() }
+        rawRedecodeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.rawRedecodeCoalesceInterval, execute: workItem)
+    }
+
+    /// Re-decodes the current photo because a RAW-native `EditState` field
+    /// changed (debounced via `scheduleRawRedecode` above). Unlike every
+    /// other adjustment, this can't be applied by re-running `EditPipeline`
+    /// against `currentImage`: `currentImage` is the already-baked buffer
+    /// `RawDecoder.materialize` produced, and `boostAmount` lives on the
+    /// `CIRAWFilter` that produced it. So this redoes exactly what
+    /// `load(from:)` does for the IMAGE (decode + materialize) and nothing
+    /// else — no sidecar read, no history reset, no `currentURL` change;
+    /// `editState` is already correct, this only catches the pixels up to it.
+    ///
+    /// Shares `loadGeneration` with `load(from:)` DELIBERATELY, not
+    /// accidentally: both write `currentImage`/`isLoadingImage`, so they
+    /// must be able to supersede each other — toggling/dragging this
+    /// slider then immediately switching photos must leave the new
+    /// photo's pixels on screen, not a late re-decode of the old one, the
+    /// exact stomp `loadGeneration` exists to prevent (see its own doc
+    /// comment).
+    ///
+    /// `isLoadInFlight` guards a real bug, not a theoretical one: the
+    /// Adjust sidebar stays interactive during a photo load (only the
+    /// image pane shows the spinner), so the user CAN drag this slider
+    /// while a different photo is still loading. At that moment
+    /// `currentURL` still names the OUTGOING photo — without this guard
+    /// we'd re-decode the wrong file and bump `loadGeneration` out from
+    /// under the in-flight load, which would then silently abandon itself.
+    private func redecodeForRawNativeChange() {
+        guard !isLoadInFlight else { return }
+        // Defense in depth: with `boostAmount` excluded from
+        // `applyingPreset`, the RAW-only UI is the sole writer, so this
+        // shouldn't be reachable for a non-RAW photo.
+        guard let url = currentURL, RawDecoder.isRaw(url) else { return }
+
+        let boostAmount = editState.boostAmount
+        loadGeneration += 1
+        let myGeneration = loadGeneration
+        isLoadingImage = true
+        Task { [weak self] in
+            guard let decoded = await RawDecoder.decode(contentsOf: url, boostAmount: boostAmount) else {
+                guard let self, myGeneration == self.loadGeneration else { return }
+                self.isLoadingImage = false
+                self.loadErrorMessage = "Couldn't re-read \"\(url.lastPathComponent)\" to apply that RAW setting. The photo on screen is unchanged."
+                return
+            }
+            // Reviewer-caught: without this check, a superseded re-decode
+            // (the user switched photos while this one was still in
+            // flight) would still run a full-res `materialize` — a real
+            // cost inside the app-wide serialized `RenderGate` — only to
+            // throw the result away at the guard below. Bailing here
+            // means it never enters the gate at all, so it can't delay
+            // whatever DID supersede it (a photo switch, or a newer drag).
+            guard let self, myGeneration == self.loadGeneration else { return }
+            let materialized = await RawDecoder.materialize(decoded)
+            guard myGeneration == self.loadGeneration else { return }
+            self.currentImage = materialized
+            self.isLoadingImage = false
+            // `load(from:)` gets its post-decode histogram refresh for
+            // free from the `editState` assignment that follows it;
+            // there's no such assignment here (the state is what STARTED
+            // this), so it has to be asked for explicitly or the
+            // histogram would keep describing the pre-re-decode pixels.
+            self.scheduleHistogramUpdate()
+        }
     }
 
 

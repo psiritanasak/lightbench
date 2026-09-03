@@ -657,33 +657,47 @@ against Lightroom Desktop's own Edit panel
 (https://helpx.adobe.com/lightroom/desktop/edit-photos/edit-photos.html and its
 Masking/Remove-tool/Denoise sub-pages — Lightroom's Light/Color/Effects/Detail/
 Optics/Geometry panel structure) for tools this app still doesn't have at all.
-Research only — nothing below is implemented, scheduled, or Plan-Mode-ready yet;
-each is a separate future one-feature-per-session candidate, same as every other
-backlog item. Split into two tiers by how big a lift each actually is:
+Nothing below is implemented yet; each is still a separate future
+one-feature-per-session candidate, same as every other backlog item — but the
+items marked **WANTED** have been explicitly confirmed by the user (2026-09-03)
+as things to actually build, not just researched gaps, so pick from those first
+when this section comes up. Split into two tiers by how big a lift each actually is:
 
 **Tier 1 — fits the existing global-adjustment architecture** (a new `EditState`
 field(s) + `EditPipeline` stage(s) + `AdjustTabView` section, the same shape every
 shipped slider already follows):
-- **Texture** — Lightroom splits this out from Clarity/Dehaze as its own
-  midtone-detail slider; this app's `definition` is a single composite standing in
-  for all three. Candidate: split `definition` into `texture`/`clarity`/`dehaze`,
-  or leave as-is and treat this as a known, accepted simplification (revisit only
-  if the composite is ever found visually insufficient).
-- **Dehaze** — distinct atmospheric-haze-removal tool, not present in any form.
-- **Grain** — film-grain effect, not present.
-- **Color Grading** — 3-way shadows/midtones/highlights color wheels (Lightroom's
-  successor to the older Split Toning panel). Not present; no existing field
-  covers this.
-- **Point Color** — Lightroom's newer per-color eyedropper refinement (pick an
-  exact color, then adjust ITS OWN Hue/Sat/Lum), distinct from this app's existing
-  Selective Color (8 FIXED hue bands). A genuinely different targeting model, not
-  a duplicate of Selective Color.
-- **Chromatic Aberration removal** — a single checkbox in Lightroom's Optics
-  panel, separate from lens distortion correction (which this backlog already
-  tracks above under Transform/Distort as blocked on camera-profile data).
-- **Manual Transform Scale/Aspect** — Lightroom's Geometry panel has Scale/Aspect
-  sliders alongside Vertical/Horizontal perspective; this app has the perspective
-  sliders but not the follow-up Scale/Aspect fine-tuning.
+- **Texture / Dehaze — WANTED, decided:** split `definition` into three separate
+  fields — `texture`, `clarity`, `dehaze` — matching Lightroom's model exactly,
+  not a bolted-on extra `dehaze` field alongside the existing composite. This is
+  a **breaking change to an already-shipped field**: `definition` is a real
+  `EditState` field today (schema-tolerant `Codable`, included in
+  `comparisonOriginal()`/`applyingPreset(onto:)`/`isAdjustTabAtIdentity`/
+  `resetAdjustmentsButton`, an existing `AdjustTabView` slider, an existing
+  `EditPipeline.applyDefinition` stage) — splitting it needs a real migration
+  plan for old sidecars/presets (e.g. decode `definition` into `clarity` for
+  backward compatibility, or keep `definition` as a deprecated-but-still-decoded
+  key), not just adding two new fields. Needs its own Plan Mode session.
+- **Grain — WANTED.** Film-grain effect, not present in any form. Straightforward
+  new `EditState` field + a new perceptual-domain `EditPipeline` stage (likely
+  Core Image's own grain-simulation building blocks, or a small custom kernel if
+  none fit) — no migration concern, purely additive.
+- **Color Grading — WANTED.** 3-way shadows/midtones/highlights color wheels
+  (Lightroom's successor to Split Toning). Not present; no existing field covers
+  this. Bigger UI lift than a slider (needs a color-wheel control, not an
+  `EditSliderRow`) but purely additive to `EditState` — no migration concern.
+- **Point Color — WANTED.** Lightroom's newer per-color eyedropper refinement
+  (pick an exact color, then adjust ITS OWN Hue/Sat/Lum), distinct from this
+  app's existing Selective Color (8 FIXED hue bands). A genuinely different
+  targeting model, not a duplicate — likely needs a variable-length collection
+  field (like `redEyePoints`, this app's only existing precedent for that shape)
+  since the user picks arbitrary colors, not fixed bands.
+- **Chromatic Aberration removal — WANTED.** A single checkbox in Lightroom's
+  Optics panel, separate from lens distortion correction (already tracked above
+  under Transform/Distort, blocked on camera-profile data). Purely additive.
+- **Manual Transform Scale/Aspect — WANTED.** Lightroom's Geometry panel has
+  Scale/Aspect sliders alongside Vertical/Horizontal perspective; this app has
+  the perspective sliders but not the follow-up Scale/Aspect fine-tuning. Purely
+  additive, same Transform/Distort pipeline stage group already exists.
 - **RAW-native AI Denoise** — overlaps directly with this app's own already-
   deferred Phase 6 slice 3 (`CIRAWFilter.luminanceNoiseReductionAmount`/
   `colorNoiseReductionAmount`, RAW-only) — not a new item, just a cross-reference
@@ -709,10 +723,24 @@ global pipeline):
   (Lightroom's successor to manual Spot Removal/Healing Brush). Needs inpainting,
   not achievable with this app's current Core Image filter-chain approach without
   a new model/algorithm. Not present in any form.
-- **Auto Tone / Auto Settings** — one-click AI-driven starting-point adjustment.
-  Would need either a heuristic (histogram-driven) or ML approach; not present.
-- **Enhance / Super Resolution** — AI upscaling; unrelated to this app's current
-  edit-parameter model entirely, would be a new rendering/export capability.
+- **Auto Tone / Auto Settings — WANTED.** One-click starting-point adjustment.
+  This app already has ONE precedent for exactly this shape — "Fix Color Cast"
+  (`ImageDocumentModel.fixColorCast()`, whole-image gray-world statistical
+  analysis feeding existing WB fields, no ML) — a full Auto Tone likely follows
+  the same "compute stats off the already-decoded image, write several existing
+  `EditState` fields at once, one button" pattern rather than needing genuine ML,
+  at least for a v1 (histogram-driven heuristics for exposure/contrast/black-
+  white points). Worth scoping a heuristic-only v1 before assuming ML is required.
+- **Enhance / Super Resolution — WANTED.** AI upscaling; unrelated to this app's
+  current edit-parameter model entirely — this is a new RENDER/EXPORT capability
+  (an upscaled output image), not an `EditState` field, so it doesn't fit the
+  Adjust-tab pattern at all. Needs its own design: where does the upscale run
+  (on-demand at export time only, given the cost, almost certainly NOT live in
+  the Editor preview), what model/API (Core ML, an Apple system API if one
+  exists, or a third-party model bundled with the app), and how large a download/
+  bundle-size cost that implies. Most speculative WANTED item — needs real
+  research into what's actually available on macOS before it can be scoped at
+  all, let alone Plan-Mode-ready.
 - **History panel** — a full, browsable/scrubbable list of every edit step, not
   just linear Undo/Redo. This app's `EditHistory` already has the underlying
   data (a list of committed `EditState` snapshots per photo); a UI to browse and

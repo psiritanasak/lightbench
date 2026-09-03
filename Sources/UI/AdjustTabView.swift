@@ -379,22 +379,44 @@ struct AdjustTabView: View {
         }
     }
 
-    /// One control this slice, deliberately — `boostAmount` (Core Image's
-    /// own RAW tone-curve strength) is the first RAW-native `EditState`
-    /// field; `lensCorrectionEnabled` (the original slice-2 candidate) was
-    /// measured unsupported on this app's own test camera before any code
-    /// was written, and the rest of `CIRAWFilter`'s controls are deferred
-    /// to a future slice — see CLAUDE.md/PROGRESS.md. Disabled while a
-    /// decode is in flight: unlike every other row in this panel, releasing
-    /// this slider costs a full RAW re-decode (see
-    /// `ImageDocumentModel.redecodeForRawNativeChange`), so it must not be
-    /// draggable again mid-decode.
+    /// Three controls now (slice 2 shipped `boostAmount`; slice 3 added
+    /// the other two). `lensCorrectionEnabled` (the original slice-2
+    /// candidate) was measured unsupported on this app's own test camera
+    /// before any code was written, and the rest of `CIRAWFilter`'s
+    /// controls are deferred to a future slice — see
+    /// CLAUDE.md/PROGRESS.md. RAW Exposure is an ABSOLUTE decoder-level EV
+    /// (`0` is the SDK's own fixed default, independent of camera
+    /// profile). Shadow Boost is RELATIVE to the file's own native
+    /// decoder value, not absolute — see `EditState.shadowBoostScale`'s
+    /// doc comment for why (measured per-file camera-profile default, not
+    /// the API's declared default) — so `100%` genuinely means
+    /// "untouched," matching `EditSliderRow`'s identity/reset convention
+    /// despite the slider's true on-camera baseline differing per file.
+    /// Shadow Boost is additionally disabled whenever Boost Amount is `0`
+    /// — the SDK header states it "has no effect if the boostAmount is
+    /// 0," so it would otherwise be a dead control with no visible
+    /// feedback, the exact trap `lensCorrectionEnabled` was deferred to
+    /// avoid. Disabled while a decode is in flight: unlike every other
+    /// row in this panel, releasing any of these sliders costs a full RAW
+    /// re-decode (see `ImageDocumentModel.redecodeForRawNativeChange`),
+    /// so none may be draggable again mid-decode.
     private var rawSection: some View {
-        EditSliderRow(
-            label: "Boost Amount", value: $document.editState.boostAmount,
-            range: 0...1, identity: 1.0
-        ) { String(format: "%.0f%%", $0 * 100) }
-            .disabled(document.isLoadingImage)
+        VStack(alignment: .leading, spacing: 12) {
+            EditSliderRow(
+                label: "Boost Amount", value: $document.editState.boostAmount,
+                range: 0...1, identity: 1.0
+            ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "RAW Exposure", value: $document.editState.rawExposureEV,
+                range: -2...2, identity: 0
+            ) { String(format: "%+.2f EV", $0) }
+            EditSliderRow(
+                label: "Shadow Boost", value: $document.editState.shadowBoostScale,
+                range: 0...1, identity: 1.0
+            ) { String(format: "%.0f%%", $0 * 100) }
+                .disabled(document.editState.boostAmount == 0)
+        }
+        .disabled(document.isLoadingImage)
     }
 
     /// Phase 5 slice 2: save the current photo's color/tone adjustments as
@@ -448,14 +470,16 @@ struct AdjustTabView: View {
     /// continuous adjustment VALUES.
     /// Reviewer-flagged, deliberate, documented gap: this deliberately
     /// mirrors `comparisonOriginal()`'s field list, which does NOT include
-    /// `boostAmount` (see that method's own doc comment — `EditPipeline`
-    /// can't express the field, so resetting it here would trigger an
-    /// unwanted full RAW re-decode from what should be an instant, free
-    /// action). Consequence: a RAW photo with every OTHER field at
-    /// identity but a non-default Boost Amount shows this button
-    /// (correctly) disabled, even though the RAW section's own slider is
-    /// visibly non-identity — `revertToOriginal()`'s literal `EditState()`
-    /// commit is the control that resets `boostAmount`, not this one.
+    /// any of the three RAW-native fields (`boostAmount`,
+    /// `rawExposureEV`, `shadowBoostScale` — see that method's
+    /// own doc comment: `EditPipeline` can't express any of them, so
+    /// resetting them here would trigger an unwanted full RAW re-decode
+    /// from what should be an instant, free action). Consequence: a RAW
+    /// photo with every OTHER field at identity but a non-default RAW
+    /// section slider shows this button (correctly) disabled, even
+    /// though the RAW section's own sliders are visibly non-identity —
+    /// `revertToOriginal()`'s literal `EditState()` commit is the control
+    /// that resets all three, not this one.
     private var isAdjustTabAtIdentity: Bool {
         let state = document.editState
         return state.exposureEV == 0

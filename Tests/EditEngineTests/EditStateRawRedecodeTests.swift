@@ -1,14 +1,16 @@
 import XCTest
 @testable import PhotoApp
 
-/// Verifies `EditState.requiresRawRedecode(comparedTo:)` — Phase 6 slice 2's
-/// single source of truth for "does this field change require a full RAW
+/// Verifies `EditState.requiresRawRedecode(comparedTo:)` — the single
+/// source of truth for "does this field change require a full RAW
 /// re-decode, not just an `EditPipeline` re-run." `ImageDocumentModel`'s
 /// `editState` `didSet` is the only caller; a false negative here would mean
 /// a RAW-native field change silently has no visible effect (the exact bug
 /// `RawDecoder.materialize`'s "forward hazard" note predicted), and a false
 /// positive would mean an unrelated slider edit pays a needless multi-second
-/// re-decode.
+/// re-decode. Phase 6 slice 3 added `rawExposureEV`/
+/// `shadowBoostScale` to `boostAmount`; each field gets its own true case so
+/// a missing `||` clause for any one of them can't hide behind another.
 final class EditStateRawRedecodeTests: XCTestCase {
     func testTrueWhenBoostAmountDiffers() {
         var a = EditState.identity
@@ -18,11 +20,31 @@ final class EditStateRawRedecodeTests: XCTestCase {
         XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
     }
 
-    func testFalseWhenBoostAmountIsTheSame() {
+    func testTrueWhenRawExposureEVDiffers() {
+        var a = EditState.identity
+        var b = EditState.identity
+        a.rawExposureEV = -1
+        b.rawExposureEV = 1
+        XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
+    }
+
+    func testTrueWhenShadowBoostScaleDiffers() {
+        var a = EditState.identity
+        var b = EditState.identity
+        a.shadowBoostScale = 0.2
+        b.shadowBoostScale = 0.8
+        XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
+    }
+
+    func testFalseWhenAllRawNativeFieldsAreTheSame() {
         var a = EditState.identity
         var b = EditState.identity
         a.boostAmount = 0.5
         b.boostAmount = 0.5
+        a.rawExposureEV = 0.75
+        b.rawExposureEV = 0.75
+        a.shadowBoostScale = 0.3
+        b.shadowBoostScale = 0.3
         XCTAssertFalse(a.requiresRawRedecode(comparedTo: b))
     }
 
@@ -38,6 +60,8 @@ final class EditStateRawRedecodeTests: XCTestCase {
     func testFalseComparedToItself() {
         var a = EditState.identity
         a.boostAmount = 0.6
+        a.rawExposureEV = -0.4
+        a.shadowBoostScale = 0.9
         XCTAssertFalse(a.requiresRawRedecode(comparedTo: a))
     }
 }

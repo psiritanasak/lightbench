@@ -20,11 +20,11 @@ enum ThumbnailGenerator {
     /// call off the main thread — does no UI work.
     static func thumbnail(for url: URL, maxPixelSize: Int) async -> CGImage? {
         guard !RawDecoder.isRaw(url) else {
-            // `EditState.identity.boostAmount` — this overload IS the
-            // unedited thumbnail, so it uses the identity value rather
-            // than duplicating that literal.
+            // `.identity` — this overload IS the unedited thumbnail, so it
+            // decodes with every RAW-native field at its own identity
+            // value rather than duplicating those literals.
             guard let decoded = await rawDecodedThumbnail(
-                for: url, maxPixelSize: maxPixelSize, boostAmount: EditState.identity.boostAmount
+                for: url, maxPixelSize: maxPixelSize, editState: .identity
             ) else { return nil }
             return await renderToCGImage(decoded, isRaw: true)
         }
@@ -53,8 +53,8 @@ enum ThumbnailGenerator {
     /// here unconditionally, then re-imported that flattened `CGImage` for
     /// `EditPipeline` to run on — silently clipping exactly the extra
     /// range/gamut RAW provides before the edit math ever saw it).
-    private static func rawDecodedThumbnail(for url: URL, maxPixelSize: Int, boostAmount: Double) async -> CIImage? {
-        await RawDecoder.decodeDraft(contentsOf: url, maxPixelSize: maxPixelSize, boostAmount: boostAmount)
+    private static func rawDecodedThumbnail(for url: URL, maxPixelSize: Int, editState: EditState) async -> CIImage? {
+        await RawDecoder.decodeDraft(contentsOf: url, maxPixelSize: maxPixelSize, editState: editState)
     }
 
     /// `EditPipeline`'s filter math (WB, exposure, tone, curves, etc.) is
@@ -119,7 +119,7 @@ enum ThumbnailGenerator {
         let isRaw = RawDecoder.isRaw(url)
         let decoded: CIImage?
         if isRaw {
-            decoded = await rawDecodedThumbnail(for: url, maxPixelSize: maxPixelSize, boostAmount: editState.boostAmount)
+            decoded = await rawDecodedThumbnail(for: url, maxPixelSize: maxPixelSize, editState: editState)
         } else {
             decoded = await thumbnail(for: url, maxPixelSize: maxPixelSize).map { CIImage(cgImage: $0) }
         }

@@ -68,6 +68,8 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.cropInsetRight = 0.15
         // RAW-native
         s.boostAmount = 0.3
+        s.rawExposureEV = 0.6
+        s.shadowBoostScale = 0.2
         return s
     }
 
@@ -137,14 +139,26 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         XCTAssertEqual(editedExtent, originalExtent)
     }
 
-    /// `boostAmount` is preserved like geometry, NOT reset like every
-    /// color/tone field — deliberately, because `EditPipeline` never reads
-    /// it (see the field's own doc comment), so `comparisonOriginal()`
-    /// has no way to actually apply a reset here regardless of what value
-    /// it sets.
+    /// Every RAW-native field is preserved like geometry, NOT reset like
+    /// every color/tone field — deliberately, because `EditPipeline`
+    /// never reads any of them (see each field's own doc comment), so
+    /// `comparisonOriginal()` has no way to actually apply a reset here
+    /// regardless of what value it sets.
     func testBoostAmountIsPreservedNotReset() {
         let edited = fullyEditedState()
         XCTAssertEqual(edited.comparisonOriginal().boostAmount, edited.boostAmount)
         XCTAssertNotEqual(edited.boostAmount, EditState.identity.boostAmount, "test fixture should start non-default")
+    }
+
+    func testRawExposureEVIsPreservedNotReset() {
+        let edited = fullyEditedState()
+        XCTAssertEqual(edited.comparisonOriginal().rawExposureEV, edited.rawExposureEV)
+        XCTAssertNotEqual(edited.rawExposureEV, EditState.identity.rawExposureEV, "test fixture should start non-default")
+    }
+
+    func testShadowBoostScaleIsPreservedNotReset() {
+        let edited = fullyEditedState()
+        XCTAssertEqual(edited.comparisonOriginal().shadowBoostScale, edited.shadowBoostScale)
+        XCTAssertNotEqual(edited.shadowBoostScale, EditState.identity.shadowBoostScale, "test fixture should start non-default")
     }
 }

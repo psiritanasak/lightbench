@@ -41,26 +41,28 @@ final class RawDecoderTests: XCTestCase {
     }
 
     func testDecodeReturnsNilForAMissingFileRegardlessOfExtension() async {
-        let rawResult = await RawDecoder.decode(contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.nef"), boostAmount: 1.0)
+        let rawResult = await RawDecoder.decode(contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.nef"), editState: .identity)
         XCTAssertNil(rawResult)
-        let nonRawResult = await RawDecoder.decode(contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.jpg"), boostAmount: 1.0)
+        let nonRawResult = await RawDecoder.decode(contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.jpg"), editState: .identity)
         XCTAssertNil(nonRawResult)
     }
 
     func testDecodeDraftReturnsNilForAMissingFile() async {
         let result = await RawDecoder.decodeDraft(
-            contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.nef"), maxPixelSize: 256, boostAmount: 1.0
+            contentsOf: URL(fileURLWithPath: "/tmp/does-not-exist.nef"), maxPixelSize: 256, editState: .identity
         )
         XCTAssertNil(result)
     }
 
-    // MARK: - boostAmount, non-RAW behavior
+    // MARK: - RAW-native fields, non-RAW behavior
 
-    /// `boostAmount` configures `CIRAWFilter` itself, so it must have ZERO
-    /// effect on the non-RAW `decode` branch (`CIImage(contentsOf:)`,
-    /// which never touches `CIRAWFilter` at all). Writes a real temp PNG,
-    /// same fixture-writing pattern `ThumbnailGeneratorTests` already uses.
-    func testDecodeIgnoresBoostAmountForNonRawFiles() async throws {
+    /// The RAW-native `EditState` fields (`boostAmount`,
+    /// `rawExposureEV`, `shadowBoostScale`) configure
+    /// `CIRAWFilter` itself, so they must have ZERO effect on the non-RAW
+    /// `decode` branch (`CIImage(contentsOf:)`, which never touches
+    /// `CIRAWFilter` at all). Writes a real temp PNG, same
+    /// fixture-writing pattern `ThumbnailGeneratorTests` already uses.
+    func testDecodeIgnoresRawNativeFieldsForNonRawFiles() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("RawDecoderTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -69,13 +71,22 @@ final class RawDecoderTests: XCTestCase {
         let image = CIImage(color: .red).cropped(to: CGRect(x: 0, y: 0, width: 32, height: 32))
         try CIContext().writePNGRepresentation(of: image, to: url, format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
 
-        let lowResult = await RawDecoder.decode(contentsOf: url, boostAmount: 0)
-        let highResult = await RawDecoder.decode(contentsOf: url, boostAmount: 1)
-        let low = try XCTUnwrap(lowResult)
-        let high = try XCTUnwrap(highResult)
+        var low = EditState.identity
+        low.boostAmount = 0
+        low.rawExposureEV = -2
+        low.shadowBoostScale = 0
+        var high = EditState.identity
+        high.boostAmount = 1
+        high.rawExposureEV = 2
+        high.shadowBoostScale = 1
 
-        let lowPixel = samplePixel(low, at: CGPoint(x: 16, y: 16))
-        let highPixel = samplePixel(high, at: CGPoint(x: 16, y: 16))
+        let lowResult = await RawDecoder.decode(contentsOf: url, editState: low)
+        let highResult = await RawDecoder.decode(contentsOf: url, editState: high)
+        let lowImage = try XCTUnwrap(lowResult)
+        let highImage = try XCTUnwrap(highResult)
+
+        let lowPixel = samplePixel(lowImage, at: CGPoint(x: 16, y: 16))
+        let highPixel = samplePixel(highImage, at: CGPoint(x: 16, y: 16))
         XCTAssertEqual(lowPixel, highPixel)
     }
 

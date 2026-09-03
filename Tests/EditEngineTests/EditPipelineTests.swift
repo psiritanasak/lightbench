@@ -2537,7 +2537,9 @@ final class EditPipelineTests: XCTestCase {
             definition: 0.55,
             noiseReduction: 0.45,
             sharpness: 0.6,
-            boostAmount: 0.35
+            boostAmount: 0.35,
+            rawExposureEV: 0.75,
+            shadowBoostScale: 0.4
         )
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(EditState.self, from: data)
@@ -2545,28 +2547,33 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(original, decoded)
     }
 
-    /// Pins the architecture Phase 6 slice 2 depends on: `boostAmount`
-    /// configures `CIRAWFilter` itself, upstream of `EditPipeline` — it is
-    /// NOT one of this function's stages and must have zero effect on its
+    /// Pins the architecture Phase 6 slices 2-3 depend on: the RAW-native
+    /// fields (`boostAmount`, `rawExposureEV`, `shadowBoostScale`)
+    /// configure `CIRAWFilter` itself, upstream of `EditPipeline` — none is
+    /// one of this function's stages and all must have zero effect on its
     /// output. Fails loudly if a future session tries to "wire the missing
-    /// field into the pipeline" by mistake (there's nothing there to wire
-    /// it into; it only takes effect via `RawDecoder`/`ImageDocumentModel.redecodeForRawNativeChange`).
-    func testBoostAmountHasNoEffectOnTheEditPipeline() {
+    /// fields into the pipeline" by mistake (there's nothing there to wire
+    /// them into; they only take effect via `RawDecoder`/`ImageDocumentModel.redecodeForRawNativeChange`).
+    func testRawNativeFieldsHaveNoEffectOnTheEditPipeline() {
         let image = CIImage(color: CIColor(red: 0.4, green: 0.5, blue: 0.6)).cropped(to: CGRect(x: 0, y: 0, width: 16, height: 16))
-        // Reviewer-caught: comparing two otherwise-IDENTITY states only
-        // proves `boostAmount` doesn't matter when nothing else is
-        // active — strictly stronger to also confirm it doesn't
+        // Reviewer-caught (slice 2): comparing two otherwise-IDENTITY
+        // states only proves these fields don't matter when nothing else
+        // is active — strictly stronger to also confirm they don't
         // interact with OTHER active fields (exposure, contrast, B&W,
-        // vignette all touch pixel values in ways a stray `boostAmount`
-        // read could plausibly compound with).
+        // vignette all touch pixel values in ways a stray RAW-native
+        // field read could plausibly compound with).
         var low = EditState()
         low.exposureEV = 0.8
         low.contrast = 0.3
         low.blackAndWhite = true
         low.vignetteStrength = 0.4
         low.boostAmount = 0
+        low.rawExposureEV = -2
+        low.shadowBoostScale = 0
         var high = low
         high.boostAmount = 1
+        high.rawExposureEV = 2
+        high.shadowBoostScale = 1
 
         let lowOutput = EditPipeline.apply(low, to: image)
         let highOutput = EditPipeline.apply(high, to: image)

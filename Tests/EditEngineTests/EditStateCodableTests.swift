@@ -39,6 +39,8 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.vignetteRadius, 0.5)
         XCTAssertEqual(state.redEyeStrength, 0.7)
         XCTAssertEqual(state.boostAmount, 1.0)
+        XCTAssertEqual(state.rawExposureEV, 0)
+        XCTAssertEqual(state.shadowBoostScale, 1.0)
     }
 
     func testBoostAmountDecodesWhenPresent() throws {
@@ -46,6 +48,20 @@ final class EditStateCodableTests: XCTestCase {
         { "boostAmount": 0.4 }
         """)
         XCTAssertEqual(state.boostAmount, 0.4)
+    }
+
+    func testRawExposureEVDecodesWhenPresent() throws {
+        let state = try decode("""
+        { "rawExposureEV": 1.25 }
+        """)
+        XCTAssertEqual(state.rawExposureEV, 1.25)
+    }
+
+    func testShadowBoostScaleDecodesWhenPresent() throws {
+        let state = try decode("""
+        { "shadowBoostScale": 0.6 }
+        """)
+        XCTAssertEqual(state.shadowBoostScale, 0.6)
     }
 
     func testEmptyObjectDecodesToExactIdentity() throws {

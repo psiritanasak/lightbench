@@ -541,16 +541,77 @@ struct EditState: Equatable, Codable {
     /// to a future slice, not shipped as a no-op toggle.
     var boostAmount: Double = 1.0
 
+    /// Additive EV offset applied via `CIRAWFilter.exposure` — a
+    /// DIFFERENT property from `baselineExposure` (the camera-profile
+    /// exposure the decoder bakes in per-file). `exposure`'s own SDK
+    /// header declares a fixed default of `0`, independent of any camera
+    /// profile — confirmed live: `0.0` on three real Nikon D610 NEFs
+    /// whose `baselineExposure` all read `0.3`. So this field IS absolute,
+    /// unlike `shadowBoostScale` below — no read-modify-write, no
+    /// per-file base to reason about, and no exception to this file's
+    /// determinism invariant (replaying the same params always renders
+    /// the same pixels, independent of camera profile or decoder
+    /// version). An earlier draft of this field mutated `baselineExposure`
+    /// with `+=` instead — reviewer-caught: measured live that `exposure`
+    /// and `baselineExposure` combine additively inside `CIRAWFilter`
+    /// (`filter.exposure = 2.0` and `filter.baselineExposure += 2.0`
+    /// produced BYTE-IDENTICAL pixels on the same file), so `exposure`
+    /// gives the identical rendered result with none of the
+    /// read-modify-write hazard.
+    ///
+    /// Distinct from `exposureEV`, which is post-decode `CIExposureAdjust`
+    /// gain — NOT a duplicate control. Measured at +2 EV on the same
+    /// file: this clips nothing (max channel 0.9907, zero of 1600 sampled
+    /// points above 1.0) because the decoder folds it into its own tone
+    /// curve, while `exposureEV` at +2 pushes 99 of 1600 sampled points
+    /// past 1.0 (max 1.9506). Decoder-level exposure buys highlight
+    /// headroom that post-decode gain cannot.
+    ///
+    /// Same structural caveat as `boostAmount`: `EditPipeline` never
+    /// reads this; it only takes effect by re-decoding.
+    var rawExposureEV: Double = 0
+
+    /// Multiplicative scale on the file's OWN `boostShadowAmount` (the
+    /// decoder's built-in shadow lift). `1` = untouched, `0` = lift fully
+    /// off. Relative, unlike `rawExposureEV` above, because
+    /// `boostShadowAmount` genuinely IS per-file: measured `0.9` on four
+    /// real D610 NEFs, against the SDK header's own declared default of
+    /// `1` (not `0` — an earlier draft of this comment mis-cited the
+    /// header; the anomaly is real but smaller than first stated: 0.9 vs.
+    /// a declared 1, not vs. 0). An absolute field with a fixed default
+    /// would still silently override each file's own camera profile on
+    /// every load, same reasoning as `boostAmount`'s own doc comment.
+    ///
+    /// Deliberately a 0...1 SCALE rather than an absolute 0...2 slider
+    /// matching `CIRAWFilter`'s own declared range, because the upward
+    /// half of that range was measured inert: mean linear luma over the
+    /// darkest quartile moved -31% going native→0, but only +3.5% going
+    /// native→2.0, with 1.4 and 2.0 rendering identically. Exposing
+    /// travel that does nothing would repeat the exact mistake
+    /// `lensCorrectionEnabled` avoided by being measured unsupported
+    /// before shipping.
+    ///
+    /// Reviewer-caught: the SDK header states this control "has no
+    /// effect if the boostAmount is 0" — so it is a genuinely dead
+    /// control whenever `boostAmount == 0`. `AdjustTabView`'s Shadow
+    /// Boost row disables itself in that case rather than silently doing
+    /// nothing.
+    ///
+    /// Same structural caveat as `boostAmount`: `EditPipeline` never
+    /// reads this; it only takes effect by re-decoding.
+    var shadowBoostScale: Double = 1.0
+
     /// True if `other` differs from `self` in any field that can ONLY
     /// take effect by re-running `RawDecoder.decode` — i.e. that
     /// configures `CIRAWFilter` itself rather than being an
-    /// `EditPipeline` stage. Exactly one such field exists today
-    /// (`boostAmount`); future RAW-native fields
-    /// (`baselineExposure`/`neutralTemperature`/`lensCorrectionEnabled`/…)
-    /// belong here too when they land. `ImageDocumentModel`'s `editState`
-    /// `didSet` is the only caller.
+    /// `EditPipeline` stage. `ImageDocumentModel`'s `editState` `didSet`
+    /// is the only caller. `RawDecoder.applyRawNativeSettings` is the
+    /// other place this exact field set is enumerated — keep both in
+    /// sync.
     func requiresRawRedecode(comparedTo other: EditState) -> Bool {
         boostAmount != other.boostAmount
+            || rawExposureEV != other.rawExposureEV
+            || shadowBoostScale != other.shadowBoostScale
     }
 
     /// The no-op edit state: every adjustment at its default (identity) value.
@@ -616,11 +677,12 @@ struct EditState: Equatable, Codable {
         // geometry (cropInset*, straightenAngle, verticalPerspective,
         // horizontalPerspective, flipHorizontal, flipVertical) is left
         // untouched — inherited from `self` via `var s = self` above.
-        // `boostAmount` is ALSO left untouched, for a different reason:
-        // `EditPipeline` never reads it at all (see its own doc comment),
-        // so resetting it here couldn't be honored by either side of the
-        // Compare render anyway — inherit it rather than set a value this
-        // method has no way to actually apply.
+        // `boostAmount`/`rawExposureEV`/`shadowBoostScale` are
+        // ALSO left untouched, for a different reason: `EditPipeline`
+        // never reads any of them at all (see their own doc comments),
+        // so resetting them here couldn't be honored by either side of
+        // the Compare render anyway — inherit them rather than set a
+        // value this method has no way to actually apply.
         return s
     }
 
@@ -678,14 +740,15 @@ struct EditState: Equatable, Codable {
         // horizontalPerspective, flipHorizontal, flipVertical) and
         // redEyePoints are NOT copied — they stay `target`'s own via
         // `var result = target` above.
-        // `boostAmount` is ALSO not copied, for a different reason:
-        // carrying it would make applying ANY preset kick off a
-        // multi-second RAW re-decode (no other preset field does that),
-        // and would silently set a RAW-decode parameter on a JPEG
-        // target — dead weight that also defeats
-        // `ThumbnailGenerator`'s `editState != .identity` fast path for
-        // an otherwise-unedited thumbnail. Presets are cross-photo
-        // looks; this is a per-decode technical setting, not a look.
+        // `boostAmount`/`rawExposureEV`/`shadowBoostScale` are
+        // ALSO not copied, for a different reason: carrying them would
+        // make applying ANY preset kick off a multi-second RAW re-decode
+        // (no other preset field does that), and would silently set
+        // RAW-decode parameters on a JPEG target — dead weight that also
+        // defeats `ThumbnailGenerator`'s `editState != .identity` fast
+        // path for an otherwise-unedited thumbnail. Presets are
+        // cross-photo looks; these are per-decode technical settings,
+        // not a look.
         return result
     }
 }
@@ -741,6 +804,7 @@ extension EditState {
         case noiseReduction
         case sharpness
         case boostAmount
+        case rawExposureEV, shadowBoostScale
     }
 
     init(from decoder: Decoder) throws {
@@ -804,5 +868,7 @@ extension EditState {
         noiseReduction = try container.decodeIfPresent(Double.self, forKey: .noiseReduction) ?? 0
         sharpness = try container.decodeIfPresent(Double.self, forKey: .sharpness) ?? 0
         boostAmount = try container.decodeIfPresent(Double.self, forKey: .boostAmount) ?? 1.0
+        rawExposureEV = try container.decodeIfPresent(Double.self, forKey: .rawExposureEV) ?? 0
+        shadowBoostScale = try container.decodeIfPresent(Double.self, forKey: .shadowBoostScale) ?? 1.0
     }
 }

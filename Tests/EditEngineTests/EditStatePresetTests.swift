@@ -64,6 +64,8 @@ final class EditStatePresetTests: XCTestCase {
         s.cropInsetRight = 0.15
         // RAW-native
         s.boostAmount = 0.3
+        s.rawExposureEV = 0.6
+        s.shadowBoostScale = 0.2
         return s
     }
 
@@ -137,13 +139,14 @@ final class EditStatePresetTests: XCTestCase {
         )
     }
 
-    /// `boostAmount` survives a preset apply as the TARGET's own value,
-    /// like geometry — never copied from the preset. Carrying it would
-    /// make applying ANY preset trigger a multi-second RAW re-decode (no
-    /// other preset field does that) and would silently set a RAW-decode
-    /// parameter on a non-RAW target. Checked in both directions: the
-    /// preset's own (non-default) value must NOT leak through, and the
-    /// target's own (different, non-default) value must survive exactly.
+    /// Every RAW-native field survives a preset apply as the TARGET's own
+    /// value, like geometry — never copied from the preset. Carrying them
+    /// would make applying ANY preset trigger a multi-second RAW
+    /// re-decode (no other preset field does that) and would silently
+    /// set RAW-decode parameters on a non-RAW target. Checked in both
+    /// directions: the preset's own (non-default) value must NOT leak
+    /// through, and the target's own (different, non-default) value must
+    /// survive exactly.
     func testTargetsBoostAmountSurvivesAPreset() {
         let preset = fullyEditedState() // boostAmount = 0.3
         var target = EditState.identity
@@ -153,6 +156,28 @@ final class EditStatePresetTests: XCTestCase {
 
         XCTAssertEqual(result.boostAmount, target.boostAmount)
         XCTAssertNotEqual(result.boostAmount, preset.boostAmount)
+    }
+
+    func testTargetsRawExposureEVSurvivesAPreset() {
+        let preset = fullyEditedState() // rawExposureEV = 0.6
+        var target = EditState.identity
+        target.rawExposureEV = -0.9
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.rawExposureEV, target.rawExposureEV)
+        XCTAssertNotEqual(result.rawExposureEV, preset.rawExposureEV)
+    }
+
+    func testTargetsShadowBoostScaleSurvivesAPreset() {
+        let preset = fullyEditedState() // shadowBoostScale = 0.2
+        var target = EditState.identity
+        target.shadowBoostScale = 0.75
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.shadowBoostScale, target.shadowBoostScale)
+        XCTAssertNotEqual(result.shadowBoostScale, preset.shadowBoostScale)
     }
 
     /// `applyingPreset(onto:)` and `comparisonOriginal()` draw the color/

@@ -4133,17 +4133,15 @@ already proven not to render red on a macOS Menu/button this session).
   field, `comparisonOriginal`/`applyingPreset` preserve-not-reset tests
   for both, `RawDecoderTests`' non-RAW-ignores-RAW-native-fields test
   extended to all three. 2 commits (feature+tests, then this doc entry).
-- **NOT yet live-verified** — next: the user's own pass on the real
-  D610 library, specifically including the identity case (0 EV / 100%
-  must render indistinguishably from the pre-slice-3 build, not just
-  that the sliders visibly move pixels) alongside each new slider's
-  visible effect and Shadow Boost's disabled state when Boost Amount is
-  dragged to 0. Reviewer's own non-blocking note: any `.photoapp.json`
-  sidecar written next to the real D610 NEFs during THIS slice's design
-  measurements carries the old `baselineExposureAdjust` key and will
-  silently decode it away via the schema-tolerant path — harmless
-  (nothing shipped with that name), but don't treat those specific files
-  as known-state fixtures during the live pass.
+- **LIVE-VERIFIED (2026-09-03).** User confirmed all of: RAW Exposure at
+  +2 EV visibly retains highlight detail the regular Exposure slider
+  blows out at the same +2; Shadow Boost visibly darkens shadows when
+  pulled toward 0%; Shadow Boost's row visibly disables when Boost
+  Amount is dragged to 0%; both sliders return to an identity-matching
+  render at their defaults; and both race conditions automated tests
+  can't reach (dragging a RAW slider then immediately switching photos;
+  switching photos then dragging a RAW slider while the new one is still
+  loading) behaved correctly. **Phase 6 slice 3 is now fully complete.**
 
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
@@ -4182,14 +4180,9 @@ shipped, Post-Phase-5 follow-up #7) already solves this; the DEFAULT sort
 compatibility, and the sort `Picker` in the grid's filter bar is easy to
 miss alongside Rating/Flag/Search. No code change made or needed.
 
-**Phase 6 slice 2 (`boostAmount`) is SHIPPED, reviewer-APPROVED, and fully
-LIVE-VERIFIED (2026-09-03) — see its own section above.** **Phase 6 slice 3
-(`rawExposureEV` + `shadowBoostScale`) is SHIPPED and reviewer-APPROVED
-(2026-09-03) — see its own section above.** 420 tests passing. **Not yet
-live-verified** — next: the user's own pass dragging both new sliders on
-the real D610 library, per the checklist at the end of slice 3's own
-section above (including the identity case and Shadow Boost's disabled
-state at Boost Amount = 0). After that, Phase 6 slice 4
+**Phase 6 slices 1-3 are all SHIPPED, reviewer-APPROVED, and fully
+LIVE-VERIFIED (2026-09-03) — see their own sections above.** 420 tests
+passing. Next: Phase 6 slice 4
 (`lensCorrectionEnabled` — deferred, measured unsupported on this camera,
 would need a different camera to revisit — `neutralTemperature`/a true
 no-search WB eyedropper/RAW-native NR/sharpness) is the next roadmap item,

@@ -605,12 +605,14 @@ Edits are stored as parameter sets and rendered live on the GPU.
      `requiresRawRedecode`.
    Reviewer (Opus 5, after the default model hit the account's monthly
    spend limit — same pattern as slices 1 and 2): FIX FIRST → APPROVE.
-   420 tests (8 new). **Not yet live-verified** — next: the user's own
-   pass on the real D610 library, specifically including the identity
-   case (0 EV / 100% must render indistinguishably from the pre-slice-3
-   build, not just that the sliders visibly move pixels) alongside the
-   two new sliders' visible effect and Shadow Boost's disabled state when
-   Boost Amount is dragged to 0.
+   420 tests (8 new). **Fully LIVE-VERIFIED (2026-09-03)**: user confirmed
+   RAW Exposure preserves highlight headroom the regular Exposure slider
+   clips at the same EV, Shadow Boost visibly darkens shadows and
+   disables itself when Boost Amount is 0, both sliders return to an
+   identity-matching render at their defaults, and both race conditions
+   automated tests can't reach (drag-then-switch-photos;
+   switch-then-drag-during-load) behaved correctly. **Phase 6 slice 3 is
+   now fully complete.**
    **Deferred to slice 4** (a separate session): `CIRAWFilter`'s remaining
    RAW-native controls — `neutralTemperature`/`neutralTint`/
    `neutralLocation` (a true no-search white-balance eyedropper vs.

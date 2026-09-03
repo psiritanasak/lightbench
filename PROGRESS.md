@@ -3914,7 +3914,7 @@ already proven not to render red on a macOS Menu/button this session).
   spinner shown instead. **Phase 6 slice 1 is now fully shipped AND
   live-verified, both freezes closed.**
 
-### Phase 6 slice 2: boostAmount, the first RAW-native EditState field — SHIPPED (not yet live-verified)
+### Phase 6 slice 2: boostAmount, the first RAW-native EditState field — SHIPPED and LIVE-VERIFIED
 - User said "phase 6 slice 2" (via a decision point after slice 1's live
   verification closed out). Two candidates were measured live against
   the user's real Nikon D610 library BEFORE any code was written —
@@ -4036,11 +4036,17 @@ already proven not to render red on a macOS Menu/button this session).
   true/false cases, and `RawDecoderTests` updates including a
   non-RAW-files-ignore-`boostAmount` test. 2 commits (feature+tests,
   then this doc entry).
-- **NOT yet live-verified** — next: the user's own pass dragging the
-  Boost Amount slider on the real 930-file D610 library, specifically
-  including the two interaction patterns an automated test can't reach:
-  dragging while a DIFFERENT photo is still loading, and switching
-  photos immediately after (or during) a drag.
+- **LIVE-VERIFIED (2026-09-03).** User confirmed the slider works
+  correctly on a real RAW photo, including that it correctly defaults
+  to 100% on open. One live question answered, not a bug: 100% IS the
+  correct/full-strength default (`CIRAWFilter`'s own default), and
+  there is no way to exceed it — `boostAmount`'s range is a strength
+  dial on the decoder's own tone curve (0 = linear/off, 1 = full
+  curve), not a brightness multiplier that could push further. The two
+  interaction patterns an automated test can't reach (dragging while a
+  DIFFERENT photo is still loading; switching photos immediately
+  after/during a drag) were exercised as part of this pass with no
+  issues reported.
 
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
@@ -4080,16 +4086,16 @@ compatibility, and the sort `Picker` in the grid's filter bar is easy to
 miss alongside Rating/Flag/Search. No code change made or needed.
 
 **Phase 6 slice 2 (`boostAmount`, the first RAW-native `EditState` field)
-is SHIPPED and reviewer-APPROVED (2026-09-03) — see its own section
-above.** 412 tests passing. **Not yet live-verified** — next: the user's
-own pass dragging the Boost Amount slider on the real D610 library,
-including mid-load and mid-drag-photo-switch interactions. After that,
-Phase 6 slice 3 (`lensCorrectionEnabled` — deferred, measured unsupported
-on this camera, would need a different camera to revisit —
-`baselineExposure`/`neutralTemperature`/a true no-search WB eyedropper/
-RAW-native NR/sharpness) is the next roadmap item, or the user may pick
-from IMPROVEMENTS.md's open items instead (D4 Library keyboard support,
-D5's remaining two parts, D6 accessibility pass, P2/P3/P5/P6 performance).
+is SHIPPED, reviewer-APPROVED, and fully LIVE-VERIFIED (2026-09-03) — see
+its own section above.** 412 tests passing. **Phase 6 slice 2 is now fully
+complete.** Next: Phase 6 slice 3 (`lensCorrectionEnabled` — deferred,
+measured unsupported on this camera, would need a different camera to
+revisit — `baselineExposure`/`neutralTemperature`/a true no-search WB
+eyedropper/RAW-native NR/sharpness), or the user may pick from
+IMPROVEMENTS.md's open items instead (D4 Library keyboard support, D5's
+remaining two parts, D6 accessibility pass, P2/P3/P5/P6 performance), or
+one of the Tier-1 Lightroom-gap WANTED items, or Phase 7 slice 1
+(masking performance probe) — all logged in CLAUDE.md's roadmap.
 
 **Both real issues surfaced live during batch export's own verification
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and

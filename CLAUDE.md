@@ -523,10 +523,15 @@ Edits are stored as parameter sets and rendered live on the GPU.
    own await could be silently dropped; a stale debounced re-decode that
    could survive a photo switch and fire a guaranteed-no-op re-decode
    right after opening the next photo — all fixed and independently
-   re-traced by round 2 against the rewritten code. 412 tests (9 new). Not
-   yet live-verified — next: the user's own pass dragging the Boost
-   Amount slider, including mid-load and mid-drag-photo-switch
-   interactions, on the real D610 library.
+   re-traced by round 2 against the rewritten code. 412 tests (9 new).
+   **Fully LIVE-VERIFIED (2026-09-03)**: user confirmed the slider works
+   correctly, including that 100% is genuinely the correct/full-strength
+   default (`boostAmount` is a strength dial on the decoder's own tone
+   curve, 0...1, not a brightness multiplier — there is no way to exceed
+   it), and exercised both interaction patterns automated tests can't
+   reach (dragging mid-load of a different photo; switching photos
+   immediately after/during a drag) with no issues. **Phase 6 slice 2 is
+   now fully complete.**
    **Deferred to slice 3** (a separate session): `CIRAWFilter`'s remaining
    RAW-native controls — `baselineExposure`, `boostShadowAmount`,
    `neutralTemperature`/`neutralTint`/`neutralLocation` (a true no-search

@@ -480,16 +480,63 @@ Edits are stored as parameter sets and rendered live on the GPU.
    freezes closed, 403 tests passing. 3 commits total for the two
    follow-up fixes (feature code + PROGRESS.md doc entries kept separate
    per this file's own convention).
-   **Explicitly deferred to slice 2** (a separate session): `CIRAWFilter`'s own
-   RAW-native controls as `EditState` fields — `baselineExposure`,
-   `boostAmount`/`boostShadowAmount`, `neutralTemperature`/`neutralTint`/
-   `neutralLocation` (a true no-search white-balance eyedropper vs.
-   `WhiteBalanceSolver`'s current ~52-evaluation numerical search),
-   `lensCorrectionEnabled` (would finally deliver the lens-distortion
-   correction the Transform/Distort backlog below defers for want of
-   camera-profile data), the RAW-native NR/sharpness/detail/moiré sliders, and
-   opting into `CIRAWDecoderVersion9` at runtime via `supportedDecoderVersions`
-   on OS versions that offer it.
+   **Slice 2 (`boostAmount`, the first RAW-native `EditState` field) ✅
+   COMPLETE** (2026-09-03). Two candidates were measured live against the
+   user's real Nikon D610 library BEFORE any code was written, not chosen
+   by assumption: `lensCorrectionEnabled` (the original candidate) was
+   found DEAD — `CIRAWFilter.isLensCorrectionSupported == false` on all
+   three sampled `.NEF` files, meaning the toggle would visibly do nothing
+   on any photo the user actually has — so it's deferred to slice 3, not
+   shipped as a no-op; `boostAmount` (Core Image's own RAW tone-curve
+   strength, 0...1, default 1) was measured viable — matching default,
+   genuinely different rendered pixel at 0 vs 1. Architecturally distinct
+   from every other `EditState` field: it configures `CIRAWFilter` itself,
+   upstream of `EditPipeline` (which is a pure `CIImage → CIImage`
+   function with no file/URL access and structurally cannot express it),
+   so changing it only takes effect via a full re-decode, not a pipeline
+   re-run against `RawDecoder.materialize`'s cached buffer — exactly the
+   "forward hazard" that function's own doc comment predicted in slice 1.
+   New `EditState.requiresRawRedecode(comparedTo:)` is the single source
+   of truth for which fields behave this way;
+   `ImageDocumentModel.editState`'s `didSet` triggers a debounced
+   (~0.4s) async re-decode (`scheduleRawRedecode`/
+   `redecodeForRawNativeChange`), sharing `loadGeneration`/`RenderGate`
+   with `load(from:)` so it can't race a photo switch or contend with
+   concurrent RAW work elsewhere in the app. Along the way, confirmed and
+   fixed a real ordering bug: `load(from:)` restored the incoming photo's
+   `EditState` only AFTER decoding, so a newly-opened RAW photo would
+   decode with the OUTGOING photo's `boostAmount` with nothing downstream
+   ever correcting it — fixed by hoisting the sidecar read (and the flush
+   that must move with it) above the decode. `boostAmount` is deliberately
+   excluded from BOTH `comparisonOriginal()` and `applyingPreset(onto:)`
+   (inherited like geometry, not reset/copied like color/tone) — the real
+   reason, reviewer-corrected: `EditPipeline` never reads the field at
+   all, so neither method has any way to actually apply a value to it
+   regardless of what it's set to. `revertToOriginal()`'s literal
+   `EditState()` IS the control that resets it. Reviewer (Opus 5, two
+   full rounds, both after the default model hit the account's monthly
+   spend limit — same pattern as slice 1): FIX FIRST → APPROVE. Round 1
+   caught three real bugs in the re-decode/reorder machinery — a missing
+   generation check letting a superseded re-decode still pay a full
+   `materialize` inside `RenderGate` before discarding the result; a
+   narrowed-but-still-open window where a slider drag during `load(from:)`'s
+   own await could be silently dropped; a stale debounced re-decode that
+   could survive a photo switch and fire a guaranteed-no-op re-decode
+   right after opening the next photo — all fixed and independently
+   re-traced by round 2 against the rewritten code. 412 tests (9 new). Not
+   yet live-verified — next: the user's own pass dragging the Boost
+   Amount slider, including mid-load and mid-drag-photo-switch
+   interactions, on the real D610 library.
+   **Deferred to slice 3** (a separate session): `CIRAWFilter`'s remaining
+   RAW-native controls — `baselineExposure`, `boostShadowAmount`,
+   `neutralTemperature`/`neutralTint`/`neutralLocation` (a true no-search
+   white-balance eyedropper vs. `WhiteBalanceSolver`'s current
+   ~52-evaluation numerical search), `lensCorrectionEnabled` (measured
+   UNSUPPORTED on this app's own test camera — do not "fix" this omission
+   without re-measuring against whatever camera prompts revisiting it),
+   the RAW-native NR/sharpness/detail/moiré sliders, and opting into
+   `CIRAWDecoderVersion9` at runtime via `supportedDecoderVersions` on OS
+   versions that offer it.
 7. Polish: tiled rendering for large images, perf, edge cases
 
 One feature per session. Do not start a later phase while an earlier one has open issues.

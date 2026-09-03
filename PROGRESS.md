@@ -3888,6 +3888,134 @@ already proven not to render red on a macOS Menu/button this session).
   spinner shown instead. **Phase 6 slice 1 is now fully shipped AND
   live-verified, both freezes closed.**
 
+### Phase 6 slice 2: boostAmount, the first RAW-native EditState field — SHIPPED (not yet live-verified)
+- User said "phase 6 slice 2" (via a decision point after slice 1's live
+  verification closed out). Two candidates were measured live against
+  the user's real Nikon D610 library BEFORE any code was written —
+  matching this whole phase's established discipline of retiring risk
+  empirically rather than by assumption.
+- **`lensCorrectionEnabled`** (the original candidate, per CLAUDE.md's
+  roadmap item 6) was MEASURED DEAD: a throwaway CLI probe against three
+  real `.NEF` files
+  (`/Users/praween/Pictures/Bolivia_trip/raw_files`) showed
+  `CIRAWFilter.isLensCorrectionSupported == false` on all three — Apple's
+  RAW lens-correction database apparently has no profile for this
+  camera+lens combination, so the toggle would visibly do nothing on any
+  photo the user actually has. Re-scoped (`AskUserQuestion`) to
+  **`boostAmount`** (Core Image's own RAW tone-curve strength, `0...1`,
+  default `1`) instead — also measured live first: real default `1.0`
+  (matches the SDK header), and a genuinely different rendered pixel at
+  `boostAmount = 0` vs `1` on the same real file (`[37,44,59]` vs
+  `[36,41,52]`) — confirmed visible, not another no-op.
+- **Architecturally distinct from every other `EditState` field**:
+  `boostAmount` configures `CIRAWFilter` itself, upstream of
+  `EditPipeline` — `EditPipeline.apply` is a pure `CIImage → CIImage`
+  function with no file/URL access, and its own doc comment says "decode
+  already happened before this point." So changing `boostAmount` can
+  only take effect by re-decoding the file, not by re-running the
+  pipeline against `RawDecoder.materialize`'s cached, already-baked
+  buffer from slice 1 — exactly the "forward hazard for Phase 6 slice 2"
+  that function's own doc comment predicted back then, now confirmed
+  true. New `EditState.requiresRawRedecode(comparedTo:)` is the single
+  source of truth for which fields behave this way (one today; slice 3's
+  remaining RAW-native fields belong there too).
+  `ImageDocumentModel.editState`'s `didSet` triggers a debounced
+  (~0.4s — long enough to coalesce a slider drag into one re-decode, not
+  N) async re-decode (`scheduleRawRedecode`/`redecodeForRawNativeChange`),
+  sharing `loadGeneration`/`RawDecoder.RenderGate` with `load(from:)` so
+  it can't race a photo switch or contend with concurrent RAW work
+  elsewhere in the app — reusing, not duplicating, the exact machinery
+  the two slice-1 freeze fixes built and got reviewed for. A new
+  `isLoadInFlight` flag (distinct from `isLoadingImage`/`isLoadingPhoto`)
+  refuses to fire a re-decode while a DIFFERENT photo is still loading —
+  the Adjust sidebar stays interactive during a load (only the image
+  pane shows the spinner), so the user really can drag the new slider
+  mid-load.
+- **A real ordering bug, confirmed by tracing the actual code, fixed
+  along the way** (not `boostAmount`-specific — implied by adding ANY
+  field that configures the decode itself): `load(from:)` restored the
+  incoming photo's `EditState` only AFTER decoding, so the FIRST decode
+  of any newly-opened RAW photo applied the OUTGOING photo's
+  `boostAmount` (or `1.0` on first launch), with nothing downstream ever
+  correcting it — the panel and the pixels would silently disagree until
+  the user manually nudged the slider. Fixed by hoisting the sidecar
+  read above the decode. That hoist had its own hazard, also fixed:
+  `flushPendingSidecarSave()` had to move together with it (flush
+  first), or re-opening the CURRENTLY-OPEN photo (a filmstrip tap on
+  itself, or a ⌘←/⌘→ round-trip) while an edit was still inside its ~1s
+  save debounce would read the stale on-disk sidecar and silently
+  discard that pending edit.
+- **`boostAmount` is deliberately excluded from BOTH
+  `comparisonOriginal()` and `applyingPreset(onto:)`** — inherited like
+  the 9 geometry fields, not reset/copied like every color/tone field.
+  Reviewer-corrected reasoning (the first draft's comment overstated it
+  as "a lying before/after" in the Compare feature; the real reason is
+  simpler and more fundamental): `EditPipeline` never reads the field at
+  all, so neither method has any way to actually apply a value to it
+  regardless of what it's set to — inheriting it is the only coherent
+  choice, not a judgment call about "looks vs. geometry." Consequence,
+  confirmed correct: `revertToOriginal()`'s literal `EditState()` commit
+  IS the control that resets `boostAmount` (and re-decodes); "Reset
+  Adjustments" deliberately does not, and now says so explicitly in
+  `isAdjustTabAtIdentity`'s own doc comment, including the resulting
+  asymmetry (a RAW photo with a non-default Boost Amount but everything
+  else at identity shows Reset Adjustments correctly disabled, since
+  that button's whole field list mirrors `comparisonOriginal()`'s).
+- **Reviewer (Opus 5, two full rounds — the default model hit the
+  account's monthly spend limit mid-review on round 1, same pattern as
+  both slice-1 fixes): FIX FIRST → APPROVE.** Round 1 caught three real
+  bugs, all in the re-decode/reorder machinery specifically (nothing in
+  the mechanical `RawDecoder`/`PhotoExporter`/`ThumbnailGenerator`
+  threading, which the reviewer confirmed correct on the first pass):
+  1. `redecodeForRawNativeChange()` had no generation check between the
+     decode and the `materialize` call — a superseded re-decode (user
+     switched photos mid-re-decode) still paid a full-res `materialize`
+     inside the app-wide serialized `RenderGate` before discarding the
+     result, needlessly delaying whatever actually superseded it. Fixed
+     with a guard immediately after the decode succeeds.
+  2. The `load(from:)` reorder narrowed but didn't close a window where
+     a slider drag DURING the function's own decode/materialize awaits
+     (the sidebar stays live for the outgoing photo throughout) would be
+     silently discarded the moment `editState` was overwritten with the
+     incoming photo's restored state. Fixed with a second
+     `flushPendingSidecarSave()` immediately before the commit point,
+     with no further `await` after it — verified this closes the gap
+     completely. One narrow, accepted residual documented in code rather
+     than engineered around: reopening the SAME already-open photo
+     mid-drag can leave in-memory `editState` transiently behind what's
+     already correctly saved to disk.
+  3. A debounced re-decode scheduled during either await could survive
+     the load it was scheduled during, then fire ~0.4s later as a
+     guaranteed-no-op full re-decode of the photo just opened (which
+     already decoded with the correct value). Fixed by cancelling the
+     pending work item right after the incoming photo's `editState` is
+     restored.
+  Round 2 independently re-traced all three fixes against the rewritten
+  code (not the summary) and confirmed no self-deadlock/reentrancy
+  issue, plus two non-blocking observations logged for awareness (a
+  pre-existing-shaped cold-bookmark `NSOpenPanel` reentrancy window,
+  unchanged from before this slice; confirmation that dropping rather
+  than deferring a blocked re-decode is always correct here, not just
+  usually).
+- 412 tests (9 new): `EditState` schema round-trip
+  (`EditStateCodableTests`), the fully-populated memberwise test in
+  `EditPipelineTests` gained the field, a new pinning test
+  `testBoostAmountHasNoEffectOnTheEditPipeline` (varies `boostAmount` on
+  top of ALREADY-active exposure/contrast/B&W/vignette, not just the
+  identity case — reviewer-strengthened from an initial near-identity
+  version, to also rule out interaction with live pipeline stages, not
+  only prove it's inert alone), `comparisonOriginal`/`applyingPreset`
+  preserve-not-reset tests in both directions, a new
+  `EditStateRawRedecodeTests.swift` for `requiresRawRedecode`'s
+  true/false cases, and `RawDecoderTests` updates including a
+  non-RAW-files-ignore-`boostAmount` test. 2 commits (feature+tests,
+  then this doc entry).
+- **NOT yet live-verified** — next: the user's own pass dragging the
+  Boost Amount slider on the real 930-file D610 library, specifically
+  including the two interaction patterns an automated test can't reach:
+  dragging while a DIFFERENT photo is still loading, and switching
+  photos immediately after (or during) a drag.
+
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
 user-requested follow-ups (folder-mirrored nested collections; the Editor
@@ -3925,11 +4053,17 @@ shipped, Post-Phase-5 follow-up #7) already solves this; the DEFAULT sort
 compatibility, and the sort `Picker` in the grid's filter bar is easy to
 miss alongside Rating/Flag/Search. No code change made or needed.
 
-**Next**: Phase 6 slice 2 (RAW-native controls — exposure/boost/lens
-correction/a true no-search WB eyedropper/NR/sharpness as new
-`EditState` fields) is the next roadmap item, or the user may pick from
-IMPROVEMENTS.md's open items instead (D4 Library keyboard support, D5's
-remaining two parts, D6 accessibility pass, P2/P3/P5/P6 performance).
+**Phase 6 slice 2 (`boostAmount`, the first RAW-native `EditState` field)
+is SHIPPED and reviewer-APPROVED (2026-09-03) — see its own section
+above.** 412 tests passing. **Not yet live-verified** — next: the user's
+own pass dragging the Boost Amount slider on the real D610 library,
+including mid-load and mid-drag-photo-switch interactions. After that,
+Phase 6 slice 3 (`lensCorrectionEnabled` — deferred, measured unsupported
+on this camera, would need a different camera to revisit —
+`baselineExposure`/`neutralTemperature`/a true no-search WB eyedropper/
+RAW-native NR/sharpness) is the next roadmap item, or the user may pick
+from IMPROVEMENTS.md's open items instead (D4 Library keyboard support,
+D5's remaining two parts, D6 accessibility pass, P2/P3/P5/P6 performance).
 
 **Both real issues surfaced live during batch export's own verification
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and

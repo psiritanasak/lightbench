@@ -1407,6 +1407,21 @@ restructure. 1 commit.
   window becomes visible at the window's left edge, only possible if
   the window itself moved). No fix attempted this session — the
   "Lesson recorded" note above still applies; still deferred.
+- **Unrelated follow-up, same conversation**: the user separately asked
+  for a thinner sidebar scrollbar. Given this exact `ScrollView`'s
+  history above, went with the deliberately safest option —
+  `.scrollIndicators(.hidden)` (`ContentView.swift`'s `editControls`),
+  pure SwiftUI, zero `NSScrollView`/`NSScroller` access, so it can't
+  reproduce the `StableScrollInsets` class of regression — confirmed by
+  the reviewer as a plain visibility toggle with no gesture/hit-testing
+  side effects. Also confirmed: hiding indicators was already one of the
+  five things tried against the content-shift bug itself (see above) and
+  did NOT fix it — this change is unrelated/purely cosmetic, that bug
+  remains open. Scrolling itself (trackpad/mouse wheel/keyboard)
+  unaffected; only the visible track/thumb (and direct-drag) is gone.
+  Reviewer (Opus 5): APPROVE, no live pass required given the mechanism
+  can't reach the prior regression — unlike every other RAW/concurrency
+  change this session. 412 tests unchanged (pure visual/no logic).
 
 ### Revert to Original button (complete, verified live) — last remaining small Phase 3 item
 - User picked this over Edit-menu `CommandGroup` integration (the other

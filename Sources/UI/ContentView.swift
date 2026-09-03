@@ -847,6 +847,26 @@ struct ContentView: View {
         // position to the top explicitly, overriding whatever implicit
         // macOS focus-driven auto-scroll was otherwise moving it.
         .defaultScrollAnchor(.top)
+        // User asked for a thinner sidebar scrollbar (this ScrollView wraps
+        // ALL sidebar tabs — Adjust/Crop/Filters/Clean Up — not just
+        // Adjust). Deliberately hidden entirely rather than shrunk — pure
+        // SwiftUI, zero AppKit interop. This exact `ScrollView` has a
+        // documented, hard-won history: a prior fix reaching into
+        // `NSScrollView`/`NSScroller` internals to solve a DIFFERENT bug
+        // (sidebar content-shift-on-scroll) went through two reviewer
+        // passes (FIX FIRST, then APPROVE) and passed all tests, then broke
+        // ALL slider click/drag interaction live and had to be reverted
+        // (see "Sidebar content-shift-on-scroll bug" in PROGRESS.md).
+        // Reviewer-confirmed: `.scrollIndicators` is a pure visibility
+        // toggle with no gesture/hit-testing side effects, so it can't
+        // reproduce that regression. Note: hiding indicators was ALSO one
+        // of five things already tried against the content-shift bug
+        // itself (PROGRESS.md) and did NOT fix it — that bug is unrelated
+        // and remains open; this change is purely cosmetic. Scrolling
+        // itself (trackpad/mouse wheel/keyboard) is unaffected — only the
+        // visible track/thumb (and the ability to drag it directly) is
+        // gone.
+        .scrollIndicators(.hidden)
         .disabled(document.currentImage == nil)
         .background(Color(white: 0.11))
     }

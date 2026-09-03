@@ -13,12 +13,14 @@ export) is now COMPLETE** — slice 1 (batch export) and slice 2 (Presets,
 below. (The two real issues found live during slice 1's own verification —
 Library thumbnails not reflecting edits, and the Editor-vs-Preview color
 discrepancy — were both fixed in later sessions, see their own sections.)
-**Phase 6 (RAW support) is IN PROGRESS — slice 1 (decode only, via Core
-Image's `CIRAWFilter` rather than the originally-planned LibRaw) shipped and
-reviewer-approved 2026-09-02; see its own section below and CLAUDE.md's
-roadmap item 6.** Slice 2 (RAW-native controls: exposure/boost/lens
-correction/true WB eyedropper/NR/sharpness as `EditState` fields) is not yet
-started. The original six
+**Phase 6 (RAW support) slice 1 (decode only, via Core Image's `CIRAWFilter`
+rather than the originally-planned LibRaw) is COMPLETE and fully live-verified
+2026-09-03** — shipped and reviewer-approved 2026-09-02, then two severe
+freezes surfaced during the user's own live pass (see the two "Phase 6 slice
+1 follow-up" sections below), both diagnosed, fixed, reviewer-approved, and
+re-verified live; see CLAUDE.md's roadmap item 6. Slice 2 (RAW-native
+controls: exposure/boost/lens correction/true WB eyedropper/NR/sharpness as
+`EditState` fields) is not yet started. The original six
 roadmap items, five
 backlog tone/color additions (Brightness, Black Point, Brilliance, Vibrance,
 Vignette), Crop v2's drag-handle rectangle + aspect-ratio presets, Flip,
@@ -3700,13 +3702,21 @@ already proven not to render red on a macOS Menu/button this session).
   itself has no automated test; it was verified empirically during review
   against the user's real files (see above) and is scheduled for the
   user's own live pass, not asserted in a unit test. 1 commit.
-- **NOT yet live-verified by the user** — build and full test suite both
-  pass, and the reviewer independently re-measured the orientation/decode
-  behavior against real files during review, but the actual Editor/Library/
-  export UI flow on a real `.NEF` has not yet been driven end-to-end. See
-  "Exact next step" below for the checklist.
+- **VERIFIED LIVE 2026-09-03**, manually by the user on their real RAW
+  library (`/Users/praween/Pictures/Bolivia_trip/raw_files`, 930 Nikon
+  `.NEF` files). Two severe freezes surfaced during this pass — see the
+  two follow-up sections immediately below — both diagnosed, fixed,
+  reviewer-approved, and re-verified live. With those fixed, the full
+  checklist passed: Open… renders a `.NEF` right-side-up; imported
+  thumbnails match the Editor's own rendering; grid scroll across all
+  930 files was judged acceptable (the documented ImageIO-fallback for
+  slow draft-mode decode was NOT needed); slider edits on a RAW photo
+  persist through a Library round-trip AND a full quit/relaunch
+  (sidecar save confirmed surviving a real process restart); RAW→JPEG
+  export confirmed working. **Phase 6 slice 1 is now fully shipped AND
+  live-verified.**
 
-### Phase 6 slice 1 follow-up: RAW Editor freeze — FIXED (complete, not yet re-verified live)
+### Phase 6 slice 1 follow-up: RAW Editor freeze — FIXED (complete, verified live 2026-09-03)
 - The user's own live pass (opening a real Nikon D610 NEF from
   `raw_files` in the Editor, immediately after import) found a real,
   severe bug within minutes: the app froze completely. Also separately
@@ -3779,12 +3789,10 @@ already proven not to render red on a macOS Menu/button this session).
   Adding that early-out would change `load(from:)`'s history-reset
   semantics and belongs in its own scoped change, not bundled into a
   freeze fix.
-- **NOT yet re-verified live** — the user hit this bug during their
-  original live pass; the fix itself has only been build/test/CLI-timing
-  verified so far. Next step: relaunch onto the current build and retry
-  opening a `.NEF` in the Editor.
+- **VERIFIED LIVE 2026-09-03** — re-opened a `.NEF` on the relaunched
+  build; no freeze.
 
-### Phase 6 slice 1 follow-up #2: RAW Editor deadlock — FIXED (complete, not yet re-verified live)
+### Phase 6 slice 1 follow-up #2: RAW Editor deadlock — FIXED (complete, verified live 2026-09-03)
 - The user retried the freeze fix above immediately and it **still
   froze** — same symptom, different cause. This confirmed the per-frame
   repeat-demosaic bug really was fixed (only ONE `materialize` call
@@ -3873,11 +3881,12 @@ already proven not to render red on a macOS Menu/button this session).
   against the real code, the same category as this project's other
   live-render-only bugs (y-flip, crop-tiling) that unit tests can't
   reach. 403 tests unchanged, all still passing. 1 commit.
-- **NOT yet re-verified live** — next step: relaunch onto the current
-  build and retry the exact scenario that deadlocked (open a `.NEF`
-  from the Editor or Library grid immediately after importing the
-  930-file folder, so background thumbnail decoding is genuinely
-  concurrent with the attempt).
+- **VERIFIED LIVE 2026-09-03** — retried the exact scenario that
+  deadlocked (opening a `.NEF` from the Library grid immediately after
+  importing the 930-file folder, background thumbnail decoding
+  genuinely concurrent) with no freeze; brief "Decoding RAW photo…"
+  spinner shown instead. **Phase 6 slice 1 is now fully shipped AND
+  live-verified, both freezes closed.**
 
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
@@ -3895,25 +3904,28 @@ issue). All reviewer-APPROVED and live-verified. Phase 5: 390 tests passing,
 app fully functional.
 
 **Phase 6 slice 1 (RAW support, decode only, via Core Image's `CIRAWFilter`)
-is SHIPPED and reviewer-APPROVED (2026-09-02) — see its own section
-above.** TWO severe freezes the user hit back-to-back during their own
+is SHIPPED, reviewer-APPROVED, and fully LIVE-VERIFIED (2026-09-02/03) —
+see its own section above.** TWO severe freezes surfaced during the user's
 first live pass (opening a RAW photo froze the app; retrying after the
-first fix froze it again, differently) are now diagnosed and FIXED — see
-the two "Phase 6 slice 1 follow-up" sections immediately above — but
-neither fix has been re-verified live yet. 403 tests passing. **Not yet
-live-verified** — the next step is the user's own manual pass on their
-real RAW library (`/Users/praween/Pictures/Bolivia_trip/raw_files`, 930
-Nikon `.NEF` files), starting with re-trying the exact thing that froze:
-open a `.NEF` via Open… (or tap one in the Library grid) and confirm the
-Editor now opens it without hanging, right-side-up; import the folder and
-confirm thumbnails appear with grid rendering matching the Editor; judge
-grid scroll responsiveness across all 930 files (if unusable, the
-documented fallback is ImageIO's embedded-preview thumbnail path,
-accepting the Editor/grid rendering mismatch — not yet needed, just the
-fallback if draft-mode decode turns out too slow at this scale); adjust
-sliders on a RAW photo, switch to Library and back, confirm the sidecar
-persists and the thumbnail reflects the edit; export a RAW to JPEG. Once
-verified, Phase 6 slice 2 (RAW-native controls — exposure/boost/lens
+first fix froze it again, differently) — both diagnosed, fixed,
+reviewer-approved (two full rounds each), and re-verified live on
+2026-09-03 with no recurrence; see the two "Phase 6 slice 1 follow-up"
+sections immediately above. Full checklist passed on the user's real
+930-file Nikon D610 `.NEF` library
+(`/Users/praween/Pictures/Bolivia_trip/raw_files`): Open… and Library-grid
+opening both render right-side-up with no hang; RAW thumbnails match the
+Editor's own rendering; grid scroll across all 930 files was acceptable
+(the documented ImageIO-embedded-preview fallback was NOT needed); slider
+edits persist through both a Library round-trip and a full quit/relaunch;
+RAW→JPEG export works. 403 tests passing. **A separate, unrelated
+observation from this pass**: imported photos appeared in "random" order
+— not a bug, `LibraryFilterSort`'s "Name (A–Z)" sort option (already
+shipped, Post-Phase-5 follow-up #7) already solves this; the DEFAULT sort
+("Oldest First") just preserves raw filesystem scan order for backward
+compatibility, and the sort `Picker` in the grid's filter bar is easy to
+miss alongside Rating/Flag/Search. No code change made or needed.
+
+**Next**: Phase 6 slice 2 (RAW-native controls — exposure/boost/lens
 correction/a true no-search WB eyedropper/NR/sharpness as new
 `EditState` fields) is the next roadmap item, or the user may pick from
 IMPROVEMENTS.md's open items instead (D4 Library keyboard support, D5's

@@ -456,6 +456,30 @@ Edits are stored as parameter sets and rendered live on the GPU.
    principle above. Not addressed here since it's coupled to slice 2 (below);
    `decoderVersion` should become a serialized `EditState` field when RAW
    controls ship.
+   **Two severe freezes surfaced during the user's own live pass**
+   (2026-09-03), both diagnosed via `sample` on the actually-hung process,
+   fixed, reviewer-approved (Opus 5, two full rounds each), and
+   re-verified live with no recurrence — full detail in PROGRESS.md's two
+   "Phase 6 slice 1 follow-up" sections. (1) `ImageRenderer.draw(in:)`
+   re-ran the ENTIRE full-resolution RAW demosaic on every redraw (every
+   slider tweak), since a `CIImage` is a lazy recipe, not decoded pixels —
+   fixed with `RawDecoder.materialize(_:)`, rendering once into a cached
+   extended-range `CVPixelBuffer` at photo-load time instead of per-frame.
+   (2) Retrying immediately re-froze the app, differently — concurrent RAW
+   decode requests (the Editor opening one photo while the Library grid
+   decoded thumbnails for others in the background) deadlocked each other
+   inside Apple's own closed `RawCamera.framework`, not just contending for
+   CPU — fixed with `RawDecoder.RenderGate`, an actor serializing every
+   heavy RAW CoreImage call app-wide (materialize, thumbnails, export) so
+   the app never asks the framework to do two RAW things at once. That fix
+   itself needed a follow-up round (reviewer-caught): overlapping
+   `load(from:)` calls had no ordering guard, so a slower RAW load
+   resuming after a faster load already committed could silently discard
+   the second photo's edits — fixed with a monotonic generation token.
+   **Phase 6 slice 1 is now fully shipped AND live-verified**, both
+   freezes closed, 403 tests passing. 3 commits total for the two
+   follow-up fixes (feature code + PROGRESS.md doc entries kept separate
+   per this file's own convention).
    **Explicitly deferred to slice 2** (a separate session): `CIRAWFilter`'s own
    RAW-native controls as `EditState` fields — `baselineExposure`,
    `boostAmount`/`boostShadowAmount`, `neutralTemperature`/`neutralTint`/

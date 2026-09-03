@@ -401,6 +401,34 @@ Edits are stored as parameter sets and rendered live on the GPU.
    bumping `ThumbnailCache` from 64MB (~270 thumbnails) to 256MB (~1165)
    and adding a small loading spinner to the placeholder. Reviewer
    APPROVE on first pass. 350 tests (13 new).
+
+   **Post-Phase-5 follow-up #8 (shipped, 2026-09-03): click-to-type
+   numeric entry on every Adjust/Crop slider.** `EditSliderRow`'s live
+   readout (`Sources/UI/EditControlRows.swift`) was plain, non-interactive
+   `Text` — the only way to set a value was dragging `ThinSlider`, which
+   can't reliably hit a precise target. Tapping the readout now swaps in
+   a `TextField`, typed in the SAME units already on screen (a new
+   `displayMultiplier` param, default `1`, threaded through the ~29
+   percent-formatted rows across `AdjustTabView`/`CropTabView` via a
+   scripted multi-line substitution, reviewer-verified 36/36 call sites
+   correct with zero misses) rather than parsing the formatted string
+   (fragile: `%`/`EV`/`K`/`°` suffixes, locale-dependent decimals).
+   Reviewer FIX FIRST → APPROVE: caught three real bugs pre-commit —
+   Escape wasn't a reliable cancel (depended on unverified SwiftUI
+   focus-teardown ordering between `onExitCommand` and the focus-loss
+   `onChange`); a plain tap-then-click-away with no typing wrote a lossy
+   `"%g"`-rounded value back regardless, firing a phantom undo-history
+   entry and sidecar save for an interaction where nothing changed; and
+   `"nan"`/`"inf"` input silently slammed the slider to its range
+   minimum instead of no-opping. Fixed with a captured `seedText`
+   comparison (only writes `value` when the typed text actually differs
+   from what editing was seeded with) and a `typed.isFinite` guard. No
+   new automated tests — `EditSliderRow` is a SwiftUI `View` body with no
+   existing unit-test precedent in this codebase (only pure extracted
+   geometry, like `ThinSliderGeometry`, gets tested) — verified live
+   instead: type-to-edit on both a percent and a non-percent row,
+   Escape-discards, tap-then-click-away-is-a-no-op, and garbage input,
+   all confirmed working by the user. 420 tests unchanged.
 6. RAW support: LibRaw bridge, demosaic, camera profiles — **slice 1 (decode
    only) ✅ COMPLETE** (2026-09-02), shipped on Core Image's `CIRAWFilter`
    instead of LibRaw — see the Stack section above for why. New

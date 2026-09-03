@@ -4048,7 +4048,7 @@ already proven not to render red on a macOS Menu/button this session).
   after/during a drag) were exercised as part of this pass with no
   issues reported.
 
-### Phase 6 slice 3: rawExposureEV + shadowBoostScale — SHIPPED, not yet live-verified
+### Phase 6 slice 3: rawExposureEV + shadowBoostScale — SHIPPED and LIVE-VERIFIED
 - User chose this scope (via `AskUserQuestion`) over the true no-search
   WB eyedropper and RAW-native NR/sharpness specifically because it
   reuses slice 2's already-twice-reviewed re-decode/debounce/
@@ -4143,6 +4143,59 @@ already proven not to render red on a macOS Menu/button this session).
   switching photos then dragging a RAW slider while the new one is still
   loading) behaved correctly. **Phase 6 slice 3 is now fully complete.**
 
+### Post-Phase-5 follow-up #8: click-to-type numeric entry on every Adjust/Crop slider — SHIPPED and LIVE-VERIFIED
+- User request: every slider shows a live formatted readout ("100%",
+  "+2.00 EV") but it was plain non-interactive `Text` — dragging
+  `ThinSlider` alone can't reliably hit an exact number.
+  `EditSliderRow` (`Sources/UI/EditControlRows.swift`) now swaps the
+  readout for a `TextField` on tap, typed in the SAME units already
+  shown (a new `displayMultiplier: Double = 1` param — `100` for the 29
+  percent-formatted rows across `AdjustTabView`/`CropTabView`, default
+  `1` correct unchanged for the 7 EV/Kelvin/degree/plain-decimal rows)
+  rather than trying to parse the formatted string's suffix.
+  `displayMultiplier: 100` was added to all 29 percent rows via one
+  scripted multi-line `perl` substitution, not hand-edited — reviewer
+  independently re-parsed all 36 `EditSliderRow(` call sites
+  programmatically and confirmed 0 misses, 0 spurious additions.
+- Reviewer: FIX FIRST → APPROVE, two rounds. Round 1 caught three real
+  bugs: (1) Escape wasn't a reliable cancel — `onExitCommand` only
+  flipped `isEditingText`, leaving whether the edit actually discarded
+  dependent on unverified ordering between that and the focus-loss
+  `onChange`; fixed by explicitly clearing `editingText` back to the
+  seed and resigning focus in the same closure, order-independent
+  either way. (2) A plain tap-then-click-away with NO typing still
+  wrote `value` from a lossy `"%g"`-formatted round-trip (e.g. `1/3`
+  reformats to `0.333333`), firing a phantom undo-history entry and
+  sidecar save for an interaction where nothing changed; fixed with a
+  new `seedText` captured at edit-start, compared against the final
+  text before committing — a true no-op when nothing was typed. (3)
+  `"nan"`/`"inf"` parsed successfully and silently slammed the slider
+  to its range minimum instead of no-opping; fixed with a
+  `typed.isFinite` guard alongside the existing clamp. Round 2
+  independently re-verified all three fixes close the hole (not just
+  move it) and re-confirmed the mechanical 36-site check hadn't
+  drifted while fixing. Two non-blocking nits also landed:
+  `.contentShape(Rectangle())` on the readout (bigger tap target) and
+  `.accessibilityLabel` on the new `TextField`.
+- No new automated tests — `EditSliderRow` is a SwiftUI `View` body
+  with no existing unit-test precedent in this codebase (only pure
+  extracted geometry, like `ThinSliderGeometry`/`CropAspectMath`, gets
+  tested, not the `View`s that use it) — verified live instead. 420
+  tests unchanged. 2 commits (feature, then this doc entry).
+- **LIVE-VERIFIED (2026-09-03).** User confirmed all 7 checklist items:
+  click-to-edit works on a percent row (Contrast → 50%) and a
+  non-percent row (Exposure → +2.50 EV); tap-then-click-away with no
+  typing leaves the value and Reset-button state unchanged; Escape
+  after typing discards the edit; garbage input (`"abc"`) reverts
+  cleanly with no crash; and dragging `ThinSlider` itself is unaffected.
+  Reviewer's two remaining non-blocking observations (Enter's
+  focus-resignation relies on the same "SwiftUI removes the view, so
+  `@FocusState` resets" assumption fix #1 deliberately stopped relying
+  on for Escape; Enter fires `commitEditingText()` twice, harmlessly,
+  since the second pass re-parses the identical already-committed
+  string) are noted here, not fixed — low-risk, and the reviewer's own
+  call was "worth doing only if touching the file again."
+
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
 user-requested follow-ups (folder-mirrored nested collections; the Editor
@@ -4181,8 +4234,12 @@ compatibility, and the sort `Picker` in the grid's filter bar is easy to
 miss alongside Rating/Flag/Search. No code change made or needed.
 
 **Phase 6 slices 1-3 are all SHIPPED, reviewer-APPROVED, and fully
-LIVE-VERIFIED (2026-09-03) — see their own sections above.** 420 tests
-passing. Next: Phase 6 slice 4
+LIVE-VERIFIED (2026-09-03) — see their own sections above.** Post-Phase-5
+follow-up #8 (click-to-type numeric entry on every Adjust/Crop slider) is
+ALSO SHIPPED, reviewer-APPROVED, and fully LIVE-VERIFIED (2026-09-03) —
+see its own section above. 420 tests passing (unchanged — follow-up #8
+added no new test surface, see its own section for why). Next: Phase 6
+slice 4
 (`lensCorrectionEnabled` — deferred, measured unsupported on this camera,
 would need a different camera to revisit — `neutralTemperature`/a true
 no-search WB eyedropper/RAW-native NR/sharpness) is the next roadmap item,

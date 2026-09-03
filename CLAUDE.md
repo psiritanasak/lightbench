@@ -537,7 +537,107 @@ Edits are stored as parameter sets and rendered live on the GPU.
    the RAW-native NR/sharpness/detail/moiré sliders, and opting into
    `CIRAWDecoderVersion9` at runtime via `supportedDecoderVersions` on OS
    versions that offer it.
-7. Polish: tiled rendering for large images, perf, edge cases
+7. Local Adjustments (Masking) — **not started.** The single biggest capability
+   gap versus Lightroom (see the Lightroom gap-analysis subsection above, which
+   this phase supersedes/formalizes for this one item). Every adjustment in this
+   app today is global — `EditState` is one flat struct, `EditPipeline.apply` is
+   one pure whole-image function, zero concept of a spatial mask. Scoped
+   2026-09-03 from a dedicated architecture research pass (not guessed) — see
+   the two real hazards below before touching this.
+
+   **Hazard 1 — several existing pipeline stages read the FULL image extent for
+   their own geometry**, not just the masked region: Vignette centers on
+   `extent.midX/midY`; Definition/Sharpen radii scale off
+   `min(extent.width, extent.height)`; Red-Eye centers map against `extent`.
+   Running a masked adjustment by CROPPING to the mask's bounding box first and
+   running `EditPipeline.apply` on the crop would silently compute WRONG
+   absolute radii/centers for any of these stages if the masked subset ever
+   includes them. The correct approach (confirmed architecturally sound):
+   run the adjustment subset against the FULL, untouched image extent — same
+   as the main pipeline always has — then confine the RESULT to the mask
+   region via a composite, exactly like `EditPipeline.applyRedEye` already does
+   (`CIRadialGradient` → mask → `CIBlendWithMask`, `EditPipeline.swift:843-891`)
+   — that stage is the closest existing precedent for "compute a spatial mask,
+   apply one effect, composite by mask" and should be studied directly before
+   designing the general case.
+
+   **Hazard 2 — zero per-frame caching exists anywhere in the render path
+   today**, worse than assumed before this research pass: `EditPipeline.apply`
+   reruns its entire ~12-stage filter graph from scratch on EVERY `draw(in:)`
+   frame (every slider tweak), synchronously on the main thread, with no
+   memoization even for non-RAW images (`RawDecoder.materialize`/`RenderGate`
+   solve a DIFFERENT problem — RAW decode cost — not this). Compare mode
+   already proves N-way compositing works architecturally (it runs
+   `EditPipeline.apply` TWICE per frame today, composited via the same lazy
+   `CIImage` graph, `ImageRenderer.swift:114`+`:165`), so masking's rendering
+   model is not new — but N masks means N additional full pipeline passes with
+   NOTHING throttling per-frame cost, unlike literally everything else RAW-
+   related this app has needed to build (`RenderGate`, debounced re-decode,
+   the histogram debounce). This is a genuine performance-viability question,
+   not just an engineering detail — **slice 1 below exists specifically to
+   answer it with a measurement, before any UI gets built on top of an answer
+   that might be "no."**
+
+   **Slicing** (each its own Plan Mode session; stop and reassess after slice 1
+   if the numbers are bad):
+   1. **Performance probe, not a shipped feature.** One hardcoded radial mask
+      (fixed center/radius, no UI, no persisted `EditState` field), ONE
+      adjustable parameter routed through it, applied via the Red-Eye-style
+      mask-then-composite approach above. Measure real per-frame cost on a
+      large JPEG AND a materialized RAW buffer on real hardware. This is the
+      direct analog of Phase 6 slice 2's `isLensCorrectionSupported` probe —
+      retire the biggest unknown empirically before committing further design.
+      If the numbers are bad, the next steps are architectural (e.g. caching
+      unchanged masked layers between frames, downscaling live preview,
+      throttling to a lower live-preview quality with full-quality only at
+      export) — decide then, don't pre-solve a problem not yet confirmed real.
+   2. **Mask data model + Radial mask only, no combining.** A new `Mask` type
+      — NOT the full 59-field `EditState`; a small curated subset matching
+      Lightroom's own per-mask panel (roughly Exposure/Contrast/Highlights/
+      Shadows/Whites-or-equivalent/Clarity/Saturation/Temp/Tint — pick the
+      actual set deliberately, don't default to "all of them"). Schema-
+      tolerant `Codable` following `EditState`'s own established
+      `decodeIfPresent ?? default` pattern. `EditState` gains `masks: [Mask]`
+      — a second variable-length field alongside the existing precedent,
+      `redEyePoints` (`EditState.swift:336`), but a bigger step up: each mask
+      needs its OWN full parameter set, unlike `redEyePoints`' "N points
+      sharing ONE shared param pair" shape. One mask at a time, Radial
+      geometry only (ellipse: center/radii/rotation/feather) — reuse Crop's
+      8-handle resize-drag precedent (`CropOverlayView.swift`) as the closest
+      existing interaction-code shape for a resizable geometric handle set;
+      it's the only existing precedent for a resizable (not just
+      placed-and-done) shape. New list UI for "Mask 1, Mask 2…" reusing
+      Presets' `ForEach(catalog.presets)` add/delete precedent
+      (`AdjustTabView.swift:407-436`) — the only existing dynamic-list UI
+      precedent in this codebase; note neither it nor `CollectionSidebarView`
+      has any drag-to-reorder precedent, so v1 shouldn't promise reordering.
+   3. **Linear (Graduated) mask** — second geometry type, reuses most of
+      slice 2's plumbing; new interaction code is a draggable line + two
+      parallel falloff guides (genuinely new — no existing precedent covers
+      a rotatable line-with-parallel-guides gesture).
+   4. **Brush mask** — freehand painting; the hardest UI slice, since none of
+      this app's three existing overlay patterns (WB eyedropper's one-shot
+      tap, Red-Eye's persistent point list, Crop's fixed-handle drag) cover a
+      continuous multi-point stroke gesture. Needs size/hardness/feather
+      controls matching Lightroom's own.
+   5. **Color Range / Luminance Range masks** — computed from image
+      statistics (pick a color/tone, auto-generate a mask from similarity),
+      not manually drawn at all — closer in spirit to the existing "Fix Color
+      Cast" auto-analysis button (`ImageDocumentModel.fixColorCast()`,
+      whole-image gray-world stats) than to slices 2-4's shape-drawing.
+   6. **Combining masks** (intersect/subtract, multiple simultaneous masks
+      per photo) — deliberately LAST, since slices 2-5 all assume "one mask
+      at a time" to keep each slice's own risk contained; only take this on
+      once the single-mask performance/UX story (slice 1's whole reason for
+      existing) is proven acceptable across several real masks.
+
+   **Explicitly out of scope, needs its own separate research spike before
+   even being scoped** (not part of this phase's slicing above): AI Subject/
+   Sky/Background/Object select masks (needs an on-device ML segmentation
+   model — check what Apple's own Vision framework actually offers before
+   assuming a model needs to be bundled) and Depth Range masks (needs depth
+   data most JPEGs/RAWs don't carry at all).
+8. Polish: tiled rendering for large images, perf, edge cases
 
 One feature per session. Do not start a later phase while an earlier one has open issues.
 
@@ -716,9 +816,10 @@ global pipeline):
   subtract, each carrying its OWN copy of most Light/Color/Effects sliders. This
   app has zero general local-adjustment capability today — only Red-Eye (point-
   placed, single fixed effect, not a general mask) and Crop (geometric, not
-  tonal/color). Any of this needs a new mask data model, hit-testing/editing UI,
-  and an `EditPipeline` compositing stage — almost certainly its own new roadmap
-  Phase, not a Phase 2 backlog line item.
+  tonal/color). **Promoted to its own formal roadmap Phase 7 (2026-09-03), with a
+  real architecture-research-grounded slicing plan — see that section above for
+  the full plan, the two concrete rendering hazards found, and why this is not a
+  simple backlog line item.**
 - **Remove tool** — AI-powered content-aware object/spot/blemish removal
   (Lightroom's successor to manual Spot Removal/Healing Brush). Needs inpainting,
   not achievable with this app's current Core Image filter-chain approach without

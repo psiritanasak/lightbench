@@ -22,11 +22,11 @@ struct CropTabView: View {
             ) { String(format: "%+.1f°", $0) }
             EditSliderRow(
                 label: "Vertical", value: $document.editState.verticalPerspective,
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Horizontal", value: $document.editState.horizontalPerspective,
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditToggleRow(label: "Flip Horizontal", value: $document.editState.flipHorizontal)
             EditToggleRow(label: "Flip Vertical", value: $document.editState.flipVertical)
@@ -37,19 +37,19 @@ struct CropTabView: View {
 
             EditSliderRow(
                 label: "Crop Top", value: $document.editState.cropInsetTop,
-                range: 0...0.45, identity: 0
+                range: 0...0.45, identity: 0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Crop Bottom", value: $document.editState.cropInsetBottom,
-                range: 0...0.45, identity: 0
+                range: 0...0.45, identity: 0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Crop Left", value: $document.editState.cropInsetLeft,
-                range: 0...0.45, identity: 0
+                range: 0...0.45, identity: 0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Crop Right", value: $document.editState.cropInsetRight,
-                range: 0...0.45, identity: 0
+                range: 0...0.45, identity: 0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
 
             Button("Reset") { onReset() }

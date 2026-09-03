@@ -189,27 +189,27 @@ struct AdjustTabView: View {
             ) { String(format: "%+.2f EV", $0) }
             EditSliderRow(
                 label: "Brightness", value: $document.editState.brightness,
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Brilliance", value: $document.editState.brilliance,
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Contrast", value: $document.editState.contrast,
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Highlights", value: $document.editState.curvesHighlights,
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Shadows", value: $document.editState.curvesShadows,
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Black Point", value: $document.editState.blackPoint,
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             Text("Levels").font(.caption).foregroundStyle(.secondary)
             Picker("", selection: $panel.histogramDisplayMode) {
@@ -222,11 +222,11 @@ struct AdjustTabView: View {
             HistogramView(data: document.histogramData, showChannels: panel.histogramDisplayMode == .rgb)
             EditSliderRow(
                 label: "Levels Black", value: $document.editState.levelsBlackPoint,
-                range: 0...1, identity: 0
+                range: 0...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Levels White", value: $document.editState.levelsWhitePoint,
-                range: 0...1, identity: 1
+                range: 0...1, identity: 1, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Levels Gamma", value: $document.editState.levelsGamma,
@@ -273,11 +273,11 @@ struct AdjustTabView: View {
             ) { String(format: "%+.0f°", $0) }
             EditSliderRow(
                 label: "Vibrance", value: $document.editState.vibrance,
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Saturation", value: $document.editState.hslSaturation,
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
         }
     }
@@ -297,23 +297,23 @@ struct AdjustTabView: View {
         Group {
             EditSliderRow(
                 label: "Vignette", value: $document.editState.vignetteStrength,
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Vignette Radius", value: $document.editState.vignetteRadius,
-                range: 0...1, identity: 0.5
+                range: 0...1, identity: 0.5, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Definition", value: $document.editState.definition,
-                range: 0...1, identity: 0
+                range: 0...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Sharpen", value: $document.editState.sharpness,
-                range: 0...1, identity: 0
+                range: 0...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Noise Reduction", value: $document.editState.noiseReduction,
-                range: 0...1, identity: 0
+                range: 0...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
         }
     }
@@ -339,11 +339,11 @@ struct AdjustTabView: View {
             .tint(isPlacingRedEyeCorrections ? .yellow : nil)
             EditSliderRow(
                 label: "Red-Eye Size", value: $document.editState.redEyeSize,
-                range: 0...1, identity: 0.5
+                range: 0...1, identity: 0.5, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Red-Eye Strength", value: $document.editState.redEyeStrength,
-                range: 0...1, identity: 0.7
+                range: 0...1, identity: 0.7, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             Button("Clear All Red-Eye Corrections") {
                 document.editState.redEyePoints.removeAll()
@@ -404,7 +404,7 @@ struct AdjustTabView: View {
         VStack(alignment: .leading, spacing: 12) {
             EditSliderRow(
                 label: "Boost Amount", value: $document.editState.boostAmount,
-                range: 0...1, identity: 1.0
+                range: 0...1, identity: 1.0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "RAW Exposure", value: $document.editState.rawExposureEV,
@@ -412,7 +412,7 @@ struct AdjustTabView: View {
             ) { String(format: "%+.2f EV", $0) }
             EditSliderRow(
                 label: "Shadow Boost", value: $document.editState.shadowBoostScale,
-                range: 0...1, identity: 1.0
+                range: 0...1, identity: 1.0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
                 .disabled(document.editState.boostAmount == 0)
         }
@@ -589,22 +589,22 @@ struct AdjustTabView: View {
             .frame(maxWidth: .infinity, alignment: .center)
             EditSliderRow(
                 label: "Range", value: $document.editState.selectiveColorRange,
-                range: 0...1, identity: 0.5
+                range: 0...1, identity: 0.5, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "\(panel.selectedSelectiveColorBand.label) Hue",
                 value: selectiveColorHueBinding(for: panel.selectedSelectiveColorBand),
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "\(panel.selectedSelectiveColorBand.label) Saturation",
                 value: selectiveColorSaturationBinding(for: panel.selectedSelectiveColorBand),
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "\(panel.selectedSelectiveColorBand.label) Luminance",
                 value: selectiveColorLuminanceBinding(for: panel.selectedSelectiveColorBand),
-                range: -1...1, identity: 0
+                range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
         }
     }

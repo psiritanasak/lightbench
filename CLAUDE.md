@@ -651,6 +651,83 @@ each gets its own Plan Mode session per the workflow rules below.
   corner). Straighten/Vertical/Horizontal live under Transform/Distort above, not
   duplicated here, even though Photos surfaces them in the same Crop panel.
 
+### Gaps vs. Adobe Lightroom Desktop (2026-09-03, not yet scheduled)
+The backlog above was built against Apple Photos. The user asked to cross-check
+against Lightroom Desktop's own Edit panel
+(https://helpx.adobe.com/lightroom/desktop/edit-photos/edit-photos.html and its
+Masking/Remove-tool/Denoise sub-pages — Lightroom's Light/Color/Effects/Detail/
+Optics/Geometry panel structure) for tools this app still doesn't have at all.
+Research only — nothing below is implemented, scheduled, or Plan-Mode-ready yet;
+each is a separate future one-feature-per-session candidate, same as every other
+backlog item. Split into two tiers by how big a lift each actually is:
+
+**Tier 1 — fits the existing global-adjustment architecture** (a new `EditState`
+field(s) + `EditPipeline` stage(s) + `AdjustTabView` section, the same shape every
+shipped slider already follows):
+- **Texture** — Lightroom splits this out from Clarity/Dehaze as its own
+  midtone-detail slider; this app's `definition` is a single composite standing in
+  for all three. Candidate: split `definition` into `texture`/`clarity`/`dehaze`,
+  or leave as-is and treat this as a known, accepted simplification (revisit only
+  if the composite is ever found visually insufficient).
+- **Dehaze** — distinct atmospheric-haze-removal tool, not present in any form.
+- **Grain** — film-grain effect, not present.
+- **Color Grading** — 3-way shadows/midtones/highlights color wheels (Lightroom's
+  successor to the older Split Toning panel). Not present; no existing field
+  covers this.
+- **Point Color** — Lightroom's newer per-color eyedropper refinement (pick an
+  exact color, then adjust ITS OWN Hue/Sat/Lum), distinct from this app's existing
+  Selective Color (8 FIXED hue bands). A genuinely different targeting model, not
+  a duplicate of Selective Color.
+- **Chromatic Aberration removal** — a single checkbox in Lightroom's Optics
+  panel, separate from lens distortion correction (which this backlog already
+  tracks above under Transform/Distort as blocked on camera-profile data).
+- **Manual Transform Scale/Aspect** — Lightroom's Geometry panel has Scale/Aspect
+  sliders alongside Vertical/Horizontal perspective; this app has the perspective
+  sliders but not the follow-up Scale/Aspect fine-tuning.
+- **RAW-native AI Denoise** — overlaps directly with this app's own already-
+  deferred Phase 6 slice 3 (`CIRAWFilter.luminanceNoiseReductionAmount`/
+  `colorNoiseReductionAmount`, RAW-only) — not a new item, just a cross-reference
+  confirming Lightroom treats this as a first-class, separate-from-manual-NR tool
+  worth eventually distinguishing from the existing global `noiseReduction` slider.
+
+**Tier 2 — genuinely new architecture, don't underscope these** (this app's
+`EditState` is one flat, whole-image parameter set per photo; every one of these
+requires a fundamentally different data model — spatial masks with their own
+per-mask parameter sets, rendered and composited before/alongside the existing
+global pipeline):
+- **Masking / local adjustments** — the single biggest capability gap found.
+  Lightroom's whole modern editing paradigm centers on this: AI Subject/Sky/
+  Background/Object select, Brush, Linear (Graduated) and Radial gradients, Color
+  Range mask, Luminance Range mask, Depth Range mask, combinable via intersect/
+  subtract, each carrying its OWN copy of most Light/Color/Effects sliders. This
+  app has zero general local-adjustment capability today — only Red-Eye (point-
+  placed, single fixed effect, not a general mask) and Crop (geometric, not
+  tonal/color). Any of this needs a new mask data model, hit-testing/editing UI,
+  and an `EditPipeline` compositing stage — almost certainly its own new roadmap
+  Phase, not a Phase 2 backlog line item.
+- **Remove tool** — AI-powered content-aware object/spot/blemish removal
+  (Lightroom's successor to manual Spot Removal/Healing Brush). Needs inpainting,
+  not achievable with this app's current Core Image filter-chain approach without
+  a new model/algorithm. Not present in any form.
+- **Auto Tone / Auto Settings** — one-click AI-driven starting-point adjustment.
+  Would need either a heuristic (histogram-driven) or ML approach; not present.
+- **Enhance / Super Resolution** — AI upscaling; unrelated to this app's current
+  edit-parameter model entirely, would be a new rendering/export capability.
+- **History panel** — a full, browsable/scrubbable list of every edit step, not
+  just linear Undo/Redo. This app's `EditHistory` already has the underlying
+  data (a list of committed `EditState` snapshots per photo); a UI to browse and
+  jump to any past state would be a smaller lift than the other Tier 2 items,
+  but still a new UI surface, not a slider addition.
+- **Copy/Paste and Sync edit settings across selected photos** — distinct from
+  this app's existing Presets (a named, manually-saved reusable look): Lightroom's
+  version copies one photo's EXACT current settings and applies them to N selected
+  photos in one action, no naming/saving step. Partially served today by saving a
+  throwaway preset and applying it repeatedly, but not the same one-step workflow.
+
+**Confirmed NOT a gap** (already shipped, just noting the cross-reference):
+Before/After comparison — this app's Compare mode (Side by Side / Split,
+post-Phase-5 follow-up #5) already covers Lightroom's Before/After views.
+
 ## Workflow rules (important)
 - Model is `opusplan`: ALWAYS enter Plan Mode before starting a new feature so the
   plan is produced by the stronger model. Keep plans scoped to ONE feature.

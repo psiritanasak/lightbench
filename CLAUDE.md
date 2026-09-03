@@ -532,16 +532,94 @@ Edits are stored as parameter sets and rendered live on the GPU.
    reach (dragging mid-load of a different photo; switching photos
    immediately after/during a drag) with no issues. **Phase 6 slice 2 is
    now fully complete.**
-   **Deferred to slice 3** (a separate session): `CIRAWFilter`'s remaining
-   RAW-native controls — `baselineExposure`, `boostShadowAmount`,
-   `neutralTemperature`/`neutralTint`/`neutralLocation` (a true no-search
-   white-balance eyedropper vs. `WhiteBalanceSolver`'s current
-   ~52-evaluation numerical search), `lensCorrectionEnabled` (measured
-   UNSUPPORTED on this app's own test camera — do not "fix" this omission
-   without re-measuring against whatever camera prompts revisiting it),
-   the RAW-native NR/sharpness/detail/moiré sliders, and opting into
-   `CIRAWDecoderVersion9` at runtime via `supportedDecoderVersions` on OS
-   versions that offer it.
+   **Slice 3 (`rawExposureEV` + `shadowBoostScale`) ✅ COMPLETE**
+   (2026-09-03). Chosen over the true no-search WB eyedropper and
+   RAW-native NR/sharpness specifically because it reuses slice 2's
+   already-twice-reviewed re-decode/debounce/`RenderGate` machinery
+   rather than touching an already-shipped feature (WB) or opening a
+   precedence question against an existing pipeline stage (NR/sharpness).
+   Both candidates were measured live against the user's real Nikon D610
+   library before design, same discipline as slice 2 — and the
+   measurements changed the plan mid-flight, twice:
+   - `CIRAWFilter` pre-populates `baselineExposure`/`boostShadowAmount`
+     from the file's own embedded camera profile AT CONSTRUCTION TIME —
+     measured `0.3`/`0.9` on real NEFs, not the `0`/`0` originally assumed
+     (see below for the corrected citations). An `EditState` field with a
+     fixed default would have silently overridden each file's own camera
+     profile on every load — the exact regression class `boostAmount`'s
+     own universal-default design avoided by coincidence, not by the same
+     reasoning. This is why `shadowBoostScale` is a 0...1 SCALE of the
+     file's own native value, not an absolute slider — the only precedent
+     in this codebase for a relative (not absolute) `EditState` field.
+   - `boostShadowAmount`'s upward half (native→2.0) was measured
+     INERT — mean linear luma over the darkest quartile moved +3.5% at
+     max vs. -31% at zero — so the slider only covers the `0...1` half
+     that actually does anything, the same "measure before exposing dead
+     travel" discipline that deferred `lensCorrectionEnabled` in slice 2.
+   - The exposure field went through a REVIEWER-CAUGHT design change
+     mid-review: an earlier draft mutated `baselineExposure` with `+=`
+     (matching `shadowBoostScale`'s relative shape) to work around the
+     same per-file-default problem. The reviewer found, from the actual
+     SDK header, that `CIRAWFilter.exposure` is a SEPARATE property with
+     a genuinely fixed, camera-profile-independent default of `0` — and
+     live measurement confirmed `exposure = 2.0` and
+     `baselineExposure += 2.0` render BYTE-IDENTICAL pixels on the same
+     file. Switched to `filter.exposure`: same rendered result, but a
+     plain absolute assignment instead of a read-modify-write, so
+     `rawExposureEV` stays fully deterministic on replay — no exception
+     to this file's "replaying the same params must be deterministic"
+     principle, unlike the design it replaced. Distinct from the
+     already-shipped `exposureEV` (post-decode `CIExposureAdjust`
+     gain) — measured, not assumed, to preserve highlight headroom the
+     post-decode control cannot: at +2 EV, decoder-level exposure clipped
+     zero of 1600 sampled points above 1.0 (max 0.9907), while
+     `exposureEV` at +2 pushed 99 of 1600 past 1.0 (max 1.9506).
+   - The reviewer also caught two citation errors in the first draft's
+     doc comments (both fixed): the SDK header declares `boostShadowAmount`'s
+     own default as `1`, not `0` (the measured `0.9` anomaly is real but
+     smaller than first stated); and the header states
+     `boostShadowAmount` "has no effect if the boostAmount is 0" — so the
+     Shadow Boost row now disables itself whenever Boost Amount is `0`,
+     rather than being a silently dead control (the same trap
+     `lensCorrectionEnabled` was deferred to avoid in slice 2).
+   - Both remaining mutating properties (`exposure`, `boostShadowAmount`)
+     are now guarded to only touch `filter` when the value is non-identity
+     — a STRUCTURAL guarantee that an untouched photo never has either
+     property written at all, rather than relying on `x += 0`/`x *= 1`
+     being a semantic no-op on an ObjC-bridged filter property (reviewer
+     flagged this as unverified — a setter can plausibly flip an internal
+     "user overrode this" flag regardless of the value written). Also
+     closed a related ordering inconsistency the reviewer caught: `decode`
+     and `decodeDraft` applied these fields at different relative
+     positions (before vs. after draft-mode/orientation setup) — now
+     identical in both, immediately after construction, removing the need
+     to measure whether that setup perturbs the profile-seeded values.
+   - `RawDecoder.decode`/`decodeDraft` were widened from a single
+     `boostAmount: Double` parameter to the whole `editState: EditState`
+     — adding a third scalar the slice-2 way would have made the
+     parameter list unwieldy and, worse, created a SECOND place enumerating
+     which fields are RAW-native (alongside `requiresRawRedecode`) that
+     could silently drift out of sync. `applyRawNativeSettings` is now the
+     one place all three fields are read; a future slice-4 field needs
+     zero signature changes anywhere, only that function and
+     `requiresRawRedecode`.
+   Reviewer (Opus 5, after the default model hit the account's monthly
+   spend limit — same pattern as slices 1 and 2): FIX FIRST → APPROVE.
+   420 tests (8 new). **Not yet live-verified** — next: the user's own
+   pass on the real D610 library, specifically including the identity
+   case (0 EV / 100% must render indistinguishably from the pre-slice-3
+   build, not just that the sliders visibly move pixels) alongside the
+   two new sliders' visible effect and Shadow Boost's disabled state when
+   Boost Amount is dragged to 0.
+   **Deferred to slice 4** (a separate session): `CIRAWFilter`'s remaining
+   RAW-native controls — `neutralTemperature`/`neutralTint`/
+   `neutralLocation` (a true no-search white-balance eyedropper vs.
+   `WhiteBalanceSolver`'s current ~52-evaluation numerical search),
+   `lensCorrectionEnabled` (measured UNSUPPORTED on this app's own test
+   camera — do not "fix" this omission without re-measuring against
+   whatever camera prompts revisiting it), the RAW-native NR/sharpness/
+   detail/moiré sliders, and opting into `CIRAWDecoderVersion9` at
+   runtime via `supportedDecoderVersions` on OS versions that offer it.
 7. Local Adjustments (Masking) — **not started.** The single biggest capability
    gap versus Lightroom (see the Lightroom gap-analysis subsection above, which
    this phase supersedes/formalizes for this one item). Every adjustment in this

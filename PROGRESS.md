@@ -4048,6 +4048,103 @@ already proven not to render red on a macOS Menu/button this session).
   after/during a drag) were exercised as part of this pass with no
   issues reported.
 
+### Phase 6 slice 3: rawExposureEV + shadowBoostScale — SHIPPED, not yet live-verified
+- User chose this scope (via `AskUserQuestion`) over the true no-search
+  WB eyedropper and RAW-native NR/sharpness specifically because it
+  reuses slice 2's already-twice-reviewed re-decode/debounce/
+  `RenderGate` machinery instead of touching an already-shipped feature
+  or opening a precedence question against an existing pipeline stage.
+- Live-measured against the real Nikon D610 library before any code was
+  written, same discipline as slice 2 — and the measurements reshaped
+  the design twice, not once:
+  1. `CIRAWFilter` pre-populates `baselineExposure`/`boostShadowAmount`
+     from the file's own embedded camera profile AT CONSTRUCTION TIME —
+     measured `0.3`/`0.9` on real NEFs. First draft wrongly cited the
+     SDK's declared defaults for both as `0`/`0` (reviewer-caught from
+     the actual header: `baselineExposure`'s declared default is
+     "can vary based on the image," and `boostShadowAmount`'s is `1`,
+     not `0` — the anomaly is real, just smaller than first stated). An
+     `EditState` field with a fixed default would have silently
+     overridden each file's own camera profile on every load, so
+     `shadowBoostScale` ships as a 0...1 SCALE of the file's own native
+     value — the only relative (non-absolute) `EditState` field in this
+     codebase.
+  2. `boostShadowAmount`'s upward half was measured INERT: mean linear
+     luma over the darkest quartile moved +3.5% at max (native→2.0) vs.
+     -31% at zero (native→0), with 1.4 and 2.0 rendering identically —
+     so the slider only exposes the half that does anything, same
+     "measure before shipping dead travel" discipline that deferred
+     `lensCorrectionEnabled` in slice 2.
+- **Real reviewer-caught design change, not just a fix**: the exposure
+  field's first draft mutated `baselineExposure` with `+=` (mirroring
+  `shadowBoostScale`'s relative shape) to route around the per-file
+  default problem above. Reviewer found, from the real SDK header, that
+  `CIRAWFilter.exposure` is a SEPARATE property with a genuinely fixed,
+  camera-profile-independent default of `0` — and live measurement
+  confirmed `exposure = 2.0` and `baselineExposure += 2.0` render
+  BYTE-IDENTICAL pixels on the same file. Switched to `filter.exposure`:
+  identical rendered result, but a plain absolute assignment instead of
+  a read-modify-write, so `rawExposureEV` (renamed from
+  `baselineExposureAdjust` once the mechanism changed) stays fully
+  deterministic on replay — closing what would otherwise have been this
+  app's first exception to its own "replaying the same params must be
+  deterministic" principle. Still measured distinct from the
+  already-shipped `exposureEV` (post-decode `CIExposureAdjust`): at +2
+  EV, decoder-level exposure clipped zero of 1600 sampled points above
+  1.0 (max 0.9907) vs. `exposureEV`'s 99 of 1600 (max 1.9506) — the
+  headroom advantage survived the mechanism swap intact, as expected
+  since the two mechanisms were shown to render identically.
+- Two more reviewer-caught, pre-commit fixes: (1) both remaining
+  mutating properties (`exposure`, `boostShadowAmount`) are now guarded
+  to only touch `filter` when non-identity — a STRUCTURAL guarantee
+  rather than relying on `x += 0`/`x *= 1` being a semantic no-op on an
+  ObjC-bridged property, which isn't guaranteed (a setter can plausibly
+  flip an internal "user overrode this" flag regardless of the value
+  written); (2) `decode` and `decodeDraft` applied these fields at
+  different relative positions (before vs. after draft-mode/orientation
+  setup) — now identical in both, immediately after construction,
+  removing the need to measure whether that setup perturbs the
+  profile-seeded values, the same defect class that already cost this
+  app a thumbnail/Editor mismatch once (post-Phase-5 follow-up #4).
+- `RawDecoder.decode`/`decodeDraft` widened from a single
+  `boostAmount: Double` parameter to the whole `editState: EditState` —
+  a third scalar the slice-2 way would have made the parameter list
+  unwieldy and created a second place enumerating RAW-native fields that
+  could drift from `requiresRawRedecode`. `applyRawNativeSettings` is
+  now the one place all three fields are read; a slice-4 field needs no
+  signature changes anywhere else.
+- Shadow Boost row in `AdjustTabView` additionally disables itself
+  whenever Boost Amount is `0` (reviewer-caught: the SDK header states
+  `boostShadowAmount` "has no effect if the boostAmount is 0," so
+  without this it would be a silently dead control — the same trap
+  `lensCorrectionEnabled` was deferred to avoid).
+- Reviewer (Opus 5, after the default model hit the account's monthly
+  spend limit — same pattern as slices 1 and 2): FIX FIRST → APPROVE.
+  Round 1 caught the 7 items above (the `exposure`-vs-`baselineExposure`
+  mechanism switch, both citation errors, the dead-control coupling, the
+  ordering inconsistency, and the structural no-op guards); a follow-up
+  pass renamed 4 test function names that still referenced the dead
+  `baselineExposureAdjust` field (bodies were already correct). 420
+  tests (8 new): `EditState` schema round-trip for both new fields, the
+  fully-populated memberwise test gained both, `EditPipelineTests`'
+  no-effect-on-pipeline pinning test extended to vary all three
+  RAW-native fields together (not just `boostAmount` alone),
+  `EditStateRawRedecodeTests` gained independent true-cases for each
+  field, `comparisonOriginal`/`applyingPreset` preserve-not-reset tests
+  for both, `RawDecoderTests`' non-RAW-ignores-RAW-native-fields test
+  extended to all three. 2 commits (feature+tests, then this doc entry).
+- **NOT yet live-verified** — next: the user's own pass on the real
+  D610 library, specifically including the identity case (0 EV / 100%
+  must render indistinguishably from the pre-slice-3 build, not just
+  that the sliders visibly move pixels) alongside each new slider's
+  visible effect and Shadow Boost's disabled state when Boost Amount is
+  dragged to 0. Reviewer's own non-blocking note: any `.photoapp.json`
+  sidecar written next to the real D610 NEFs during THIS slice's design
+  measurements carries the old `baselineExposureAdjust` key and will
+  silently decode it away via the schema-tolerant path — harmless
+  (nothing shipped with that name), but don't treat those specific files
+  as known-state fixtures during the live pass.
+
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
 user-requested follow-ups (folder-mirrored nested collections; the Editor
@@ -4085,17 +4182,22 @@ shipped, Post-Phase-5 follow-up #7) already solves this; the DEFAULT sort
 compatibility, and the sort `Picker` in the grid's filter bar is easy to
 miss alongside Rating/Flag/Search. No code change made or needed.
 
-**Phase 6 slice 2 (`boostAmount`, the first RAW-native `EditState` field)
-is SHIPPED, reviewer-APPROVED, and fully LIVE-VERIFIED (2026-09-03) — see
-its own section above.** 412 tests passing. **Phase 6 slice 2 is now fully
-complete.** Next: Phase 6 slice 3 (`lensCorrectionEnabled` — deferred,
-measured unsupported on this camera, would need a different camera to
-revisit — `baselineExposure`/`neutralTemperature`/a true no-search WB
-eyedropper/RAW-native NR/sharpness), or the user may pick from
-IMPROVEMENTS.md's open items instead (D4 Library keyboard support, D5's
-remaining two parts, D6 accessibility pass, P2/P3/P5/P6 performance), or
-one of the Tier-1 Lightroom-gap WANTED items, or Phase 7 slice 1
-(masking performance probe) — all logged in CLAUDE.md's roadmap.
+**Phase 6 slice 2 (`boostAmount`) is SHIPPED, reviewer-APPROVED, and fully
+LIVE-VERIFIED (2026-09-03) — see its own section above.** **Phase 6 slice 3
+(`rawExposureEV` + `shadowBoostScale`) is SHIPPED and reviewer-APPROVED
+(2026-09-03) — see its own section above.** 420 tests passing. **Not yet
+live-verified** — next: the user's own pass dragging both new sliders on
+the real D610 library, per the checklist at the end of slice 3's own
+section above (including the identity case and Shadow Boost's disabled
+state at Boost Amount = 0). After that, Phase 6 slice 4
+(`lensCorrectionEnabled` — deferred, measured unsupported on this camera,
+would need a different camera to revisit — `neutralTemperature`/a true
+no-search WB eyedropper/RAW-native NR/sharpness) is the next roadmap item,
+or the user may pick from IMPROVEMENTS.md's open items instead (D4
+Library keyboard support, D5's remaining two parts, D6 accessibility
+pass, P2/P3/P5/P6 performance), or one of the Tier-1 Lightroom-gap WANTED
+items, or Phase 7 slice 1 (masking performance probe) — all logged in
+CLAUDE.md's roadmap.
 
 **Both real issues surfaced live during batch export's own verification
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and

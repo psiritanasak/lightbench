@@ -819,14 +819,19 @@ Edits are stored as parameter sets and rendered live on the GPU.
    design (a body with a genuinely non-zero native default would have
    real use for it), not a UI call about this camera's own range the
    way the moiré cap was.
-   459 tests (12 new). **Not yet live-verified** — next: the user's own
-   pass, specifically confirming RAW Contrast and RAW Detail are clearly
-   visible (both had large measured deltas), while RAW Moiré Reduction
-   may look subtle-to-invisible unless the source photo has actual
-   moiré artifacts (fine repeating patterns — fabric weave, screens,
-   distant architectural detail) — flagged UP FRONT this time, learning
-   from slice 5's live pass where the user hit noise-reduction's
-   content-adaptive visibility as a surprise rather than an expectation.
+   459 tests (12 new). **Fully LIVE-VERIFIED (2026-09-04)**: user
+   confirmed the new RAW sliders work on the real D610 library. Along the
+   way, user asked whether RAW Contrast should differ from the app's
+   EXISTING global `CIColorControls`-based Contrast slider — answered
+   from Apple's own SDK documentation (not independently re-verified
+   live): `CIRAWFilter.contrastAmount` is explicitly LOCAL/edge-aware
+   contrast ("applied to the edges of the image"), architecturally
+   closer to this app's existing Definition/Clarity slider than to its
+   global Contrast slider, despite the "RAW Contrast" label suggesting
+   a direct parallel — flagged as a candidate rename (e.g. "RAW Local
+   Contrast") if it reads as confusing with more use, not changed this
+   pass since it wasn't requested. The RAW Moiré Reduction visibility
+   caveat, flagged proactively this time, did not come up as an issue.
    **Deferred to slice 7** (a separate session): `lensCorrectionEnabled`
    (measured UNSUPPORTED on this app's own test camera — do not "fix"
    this omission without re-measuring against whatever camera prompts

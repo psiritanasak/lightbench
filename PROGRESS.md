@@ -4400,7 +4400,7 @@ already proven not to render red on a macOS Menu/button this session).
   **Phase 6 slice 5 is now considered complete for this session's
   purposes.**
 
-### Phase 6 slice 6: RAW-native Contrast, Detail, Moiré Reduction — SHIPPED, not yet live-verified
+### Phase 6 slice 6: RAW-native Contrast, Detail, Moiré Reduction — SHIPPED and LIVE-VERIFIED
 - Live-measured BEFORE writing any code, applying slice 5's own lesson
   proactively instead of re-discovering it: all three underlying
   `CIRAWFilter` properties (`contrastAmount`, `detailAmount`,
@@ -4470,20 +4470,23 @@ already proven not to render red on a macOS Menu/button this session).
   values respecting its OWN field's correct range (not copy-pasted
   values that would violate a narrower field's bounds). 2 commits
   (feature+tests, then this doc entry).
-- **NOT yet live-verified** — next: the user's own pass on the real
-  D610 library. RAW Contrast and RAW Detail should both be clearly
-  visible (largest measured deltas of any RAW-native field so far). RAW
-  Moiré Reduction may look subtle-to-invisible unless the source photo
-  has actual moiré artifacts (fine repeating patterns — fabric weave,
-  screens, distant architectural detail) — flagging this UP FRONT this
-  time, having learned from slice 5's live pass where noise reduction's
-  content-adaptive visibility caught the user by surprise rather than
-  being anticipated; dragging any of the three mid-load of a different
-  photo, and switching photos mid-drag, both behave; Library thumbnail/
-  export vs. Editor divergence is EXPECTED for these three (same
-  category as slice 5's measured NR/Sharpness draft-mode gap — assumed
-  to hold by the same reasoning, not independently re-measured
-  per-field this slice).
+- **LIVE-VERIFIED (2026-09-04).** User confirmed the new RAW sliders
+  work as expected on the real D610 library. Along the way, user asked
+  a genuinely useful architecture question — whether RAW Contrast
+  should look different from the app's EXISTING (post-decode, global,
+  `CIColorControls`-based) Contrast slider. Answered from Apple's own
+  SDK documentation (not independently re-verified live this session):
+  `CIRAWFilter.contrastAmount`'s header explicitly describes it as
+  **local, edge-aware contrast** — "applied to the edges of the
+  image" — architecturally closer to this app's existing Definition/
+  Clarity slider (`CIUnsharpMask`-based local contrast) than to its
+  global Contrast slider, despite the "RAW Contrast" label's naming
+  suggesting a direct parallel to the latter. Worth a future rename
+  (e.g. "RAW Local Contrast") if this reads as confusing once used more —
+  not changed this pass since it wasn't requested. RAW Moiré Reduction's
+  expected subtle-to-invisible-without-real-moiré-content caveat, flagged
+  proactively this time (learning from slice 5's noise-reduction
+  surprise), did not come up as an issue.
 
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
@@ -4533,10 +4536,9 @@ section above.** **Phase 6 slice 5 (RAW-native Noise Reduction +
 Sharpness) is SHIPPED, reviewer-APPROVED, and LIVE-VERIFIED (2026-09-04,
 including a real live finding root-caused as content-adaptive
 visibility, not a bug — see its own section above).** **Phase 6 slice 6
-(RAW-native Contrast/Detail/Moiré Reduction) is SHIPPED and
-reviewer-APPROVED on the FIRST pass — 2026-09-04, see its own section
-above.** 459 tests passing. **Not yet live-verified** — next: the
-user's own pass per slice 6's own checklist. After that, Phase 6 slice 7
+(RAW-native Contrast/Detail/Moiré Reduction) is SHIPPED,
+reviewer-APPROVED on the FIRST pass, and LIVE-VERIFIED — 2026-09-04,
+see its own section above.** 459 tests passing. Next: Phase 6 slice 7
 (`lensCorrectionEnabled` — deferred, measured unsupported on this camera,
 would need a different camera to revisit — or `CIRAWDecoderVersion9`
 opt-in, the last two items on `CIRAWFilter`'s RAW-native deferred list —

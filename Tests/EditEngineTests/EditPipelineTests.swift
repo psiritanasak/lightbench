@@ -1664,6 +1664,56 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(buffer[0], 0.4, accuracy: accuracy)
     }
 
+    func testGeometryStagesScaleProportionallyOnADownscaledSource() {
+        // The entire premise IMPROVEMENTS.md P2's interactive-drag preview
+        // proxy (ProxyScale/ProxyBuilder) rests on: every extent-dependent
+        // stage derives its geometry as a FRACTION of the current extent,
+        // so running the pipeline on a proportionally-downscaled source
+        // produces a proportionally-scaled OUTPUT EXTENT — the same
+        // argument ThumbnailGenerator's edited-thumbnail overload already
+        // documents and ships. This test pins exactly that: the extent, for
+        // the three stages that mutate it together (straighten grows it,
+        // perspective preserves it, crop shrinks it). It does NOT cover the
+        // resolution-DEPENDENT divergence `ProxyScale`'s own doc comment
+        // already enumerates (vignette/red-eye/Definition/Sharpen radii,
+        // none of which change extent; Noise Reduction, measured
+        // resolution-independent) — those are accepted, documented preview
+        // tradeoffs, not regressions this test is meant to catch.
+        //
+        // Tolerance is 1.5px absolute, not a relative percentage: measured
+        // directly for this exact state (400/200px, scale 0.5), the real
+        // deviation from perfect proportionality is a single pixel of
+        // integer rounding (~0.25%) — `testStraightenIncreasesExtent`'s own
+        // doc comment records Core Image padding a rotated extent by a few
+        // pixels beyond the pure geometric prediction, but that padding
+        // measures as EXACTLY proportional at these two sizes, not a
+        // fixed-pixel offset. A loose relative tolerance (e.g. 2%) would
+        // admit several pixels of real regression; 1.5px absolute is tight
+        // enough to fail on that while still covering the genuine rounding.
+        let scale = 0.5
+        let fullSize = 400
+        let full = quadrantImage(width: fullSize, height: fullSize)
+        let half = quadrantImage(width: Int(Double(fullSize) * scale), height: Int(Double(fullSize) * scale))
+
+        let state = EditState(
+            straightenAngle: 10,
+            verticalPerspective: 0.2,
+            horizontalPerspective: -0.15,
+            cropInsetTop: 0.1,
+            cropInsetBottom: 0.05,
+            cropInsetLeft: 0.1,
+            cropInsetRight: 0.05
+        )
+
+        let fullOutput = EditPipeline.apply(state, to: full)
+        let halfOutput = EditPipeline.apply(state, to: half)
+
+        let expectedWidth = fullOutput.extent.width * scale
+        let expectedHeight = fullOutput.extent.height * scale
+        XCTAssertEqual(halfOutput.extent.width, expectedWidth, accuracy: 1.5)
+        XCTAssertEqual(halfOutput.extent.height, expectedHeight, accuracy: 1.5)
+    }
+
     // MARK: - Red-Eye Removal math
     //
     // Localized "suppress red + darken" correction (CIRadialGradient mask +

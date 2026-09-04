@@ -102,9 +102,19 @@ stages (Sharpen's radius scales with min dimension by design); that is an
 accepted preview tradeoff but MUST be documented in the code and mentioned to
 the user.
 
-**Measure first:** instrument `draw(in:)` (os_signpost) with a large photo and
-Sharpen+NR+Definition active. If frame time is already <16ms at full res on
-real photos, skip this item entirely — it adds real complexity.
+**Measured (2026-09-04) — justified, proceeding.** Temporary
+`CFAbsoluteTimeGetCurrent()` instrumentation (same tool as P3's own
+measurement, no `os_signpost` exists in this codebase) timed the FULL
+`draw(in:)` call end-to-end during an ACTUAL slider drag (Sharpen dragged
+continuously) on a large photo with Sharpen+NR+Definition all active — a
+different scenario from P3's static-redraw measurement, since P3's cache
+does not help here (`editState` changes every frame during a drag, so
+it's a cache miss every time). Result: frequently well above the 16ms/
+60fps threshold (22.9ms, 40.2ms, 41.6ms, 19.3ms, 20.7ms, 40.7ms, 29.4ms,
+...), with two severe outliers at **184.7ms and 279.0ms** — real,
+observed stutters during interaction, not a theoretical concern. Proceeds
+to its own Plan Mode session (per this file's own "one item per session"
+rule) for the downscaled-proxy design below.
 
 ### ~~P3. `draw(in:)` rebuilds the pipeline graph on renders where nothing changed~~ — SHIPPED 2026-09-04
 

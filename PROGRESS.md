@@ -4694,10 +4694,18 @@ already proven not to render red on a macOS Menu/button this session).
   artifacts, and a real slider edit still shows up immediately (cache-miss
   path confirmed working, not just the cache-hit path). **IMPROVEMENTS.md
   P3 is now fully shipped, reviewed, and live-verified.**
-- **P2 is next**, per IMPROVEMENTS.md's own gating rule — its own fresh
-  measurement (per-frame cost during an ACTIVE slider drag, not a
-  static-content redraw) is required before any implementation, since
-  P3's fix does not address P2's scenario at all.
+- **P2's own required measurement is DONE and justifies proceeding
+  (2026-09-04).** Same temporary `CFAbsoluteTimeGetCurrent()` instrumentation
+  approach as P3's, timing the FULL `draw(in:)` end-to-end during an ACTUAL
+  slider drag (Sharpen dragged continuously, same photo/heavy-stages setup
+  as P3's measurement) — a genuinely different scenario from P3's
+  static-redraw test, since P3's cache is a guaranteed miss on every frame
+  of a real drag (`editState` changes every frame). Result: frequently well
+  above IMPROVEMENTS.md's own 16ms/60fps threshold (22.9, 40.2, 41.6, 19.3,
+  20.7, 40.7, 29.4ms, ...), with two severe outliers at **184.7ms and
+  279.0ms** — real observed stutters, not theoretical. Instrumentation
+  fully reverted (confirmed via clean `git diff`). Proceeding to a Plan
+  Mode session for the downscaled-proxy design next.
 
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight

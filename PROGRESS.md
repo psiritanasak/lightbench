@@ -4688,14 +4688,12 @@ already proven not to render red on a macOS Menu/button this session).
   cache-hit-returns-identical-instance argument (true by construction) and
   live visual verification. 465 tests unchanged, build clean. 1 commit
   (feature only — no test files touched).
-- **NOT yet live-verified for visual correctness** (only the timing
-  measurement itself was done live) — still needs: Compare mode OFF,
-  drag-resize + zoom/pan, confirm pixel-identical rendering throughout, no
-  flicker/stale-frame artifacts; Compare mode ON (Side by Side AND Split),
-  repeat, paying extra attention to the divider drag (this app's own
-  history has one real coordinate bug there already, per CLAUDE.md); then
-  a REAL edit (slider nudge) to confirm the cache-miss path still shows
-  the change immediately.
+- **LIVE-VERIFIED for visual correctness (2026-09-04)**: user confirmed
+  Compare-off resize/zoom/pan and Compare-on (Side by Side + Split)
+  resize/zoom/pan/divider-drag all render correctly with no stale-frame
+  artifacts, and a real slider edit still shows up immediately (cache-miss
+  path confirmed working, not just the cache-hit path). **IMPROVEMENTS.md
+  P3 is now fully shipped, reviewed, and live-verified.**
 - **P2 is next**, per IMPROVEMENTS.md's own gating rule — its own fresh
   measurement (per-frame cost during an ACTIVE slider drag, not a
   static-content redraw) is required before any implementation, since

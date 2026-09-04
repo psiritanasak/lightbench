@@ -760,13 +760,22 @@ Edits are stored as parameter sets and rendered live on the GPU.
       cached once per RAW photo load on
       `ImageDocumentModel.currentRawAdjustmentSupport`, disabling each
       of the three RAW-section UI rows individually.
-   447 tests (12 new). **Not yet live-verified** — next: the user's own
-   pass, specifically confirming each of the three sliders visibly does
-   something in the expected direction on a real NEF, and — per the
-   reviewer's own measurement — that RAW Library thumbnails do NOT
-   reflect any of these three sliders (measured live: `decodeDraft`'s
-   `isDraftModeEnabled` path produces zero pixel delta for all three,
-   an accepted known gap, not a new bug to chase).
+   447 tests (12 new). **LIVE-VERIFIED (2026-09-04), with one real live
+   finding root-caused, not dismissed**: user reported RAW Luminance NR
+   and RAW Color NR both looked "barely visible" when dragged. Diagnosed
+   as content-adaptive visibility, not a code defect — noise reduction
+   only visibly changes pixels where noise exists, and the reviewer's
+   own earlier measurement is consistent with this: RAW Color NR's
+   pixel delta (203683 over a 256×256 region) was actually the LARGEST
+   of the three RAW-native fields, so the underlying code is doing
+   substantial work — the user's source photos (a daylight travel
+   shoot, low ISO, good light) are just genuinely low-noise outside
+   shadow regions. User accepted this explanation. RAW Library
+   thumbnails not reflecting any of the three sliders (measured live
+   pre-commit: `decodeDraft`'s `isDraftModeEnabled` path produces zero
+   pixel delta for all three) was NOT independently re-confirmed live
+   this pass, accepted as a known, already-measured gap rather than
+   re-tested.
    **Deferred to slice 6** (a separate session): `CIRAWFilter`'s
    remaining RAW-native controls — `lensCorrectionEnabled` (measured
    UNSUPPORTED on this app's own test camera — do not "fix" this

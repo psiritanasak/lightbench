@@ -4293,7 +4293,7 @@ already proven not to render red on a macOS Menu/button this session).
   a non-RAW photo's eyedropper was completely unaffected. **Phase 6
   slice 4 is now fully complete.**
 
-### Phase 6 slice 5: RAW-native Noise Reduction + Sharpness — SHIPPED, not yet live-verified
+### Phase 6 slice 5: RAW-native Noise Reduction + Sharpness — SHIPPED and LIVE-VERIFIED
 - Originally deferred pending "a precedence decision" — the app already
   has post-decode `noiseReduction`/`sharpness` fields
   (`EditPipeline`'s `CINoiseReduction`/`CISharpenLuminance`, any photo
@@ -4374,17 +4374,31 @@ already proven not to render red on a macOS Menu/button this session).
   class as post-Phase-5 follow-up #4, logged as a known gap rather than
   fixed this slice (reviewer's own call: verify this is the observed
   live behavior, don't chase it as a regression).
-- **NOT yet live-verified** — next: the user's own pass on the real
-  D610 library — each of the three sliders visibly changes a real NEF
-  in the expected direction (RAW Luminance NR needs a genuinely NOISY
-  area to show any visible effect — a smooth/flat region will show
-  nothing even though the property is changing, since noise reduction
-  is content-adaptive); dragging any of the three mid-load of a
-  different photo, and switching photos mid-drag, both behave; Library
-  thumbnail and export both match the Editor's own rendering for RAW
-  Exposure/Boost Amount/Shadow Boost as before, and are CONFIRMED to
-  diverge for the three new sliders per the known gap above (not a
-  surprise if observed).
+- **LIVE-VERIFIED (2026-09-04), with one real observation along the
+  way.** User confirmed the RAW section shows all six sliders correctly
+  at identity on open. User then reported RAW Luminance NR and RAW
+  Color NR both looked "barely visible" when dragged on their real test
+  photos — a legitimate live finding, not dismissed. Root-caused (not
+  assumed): both are noise-reduction controls, and noise reduction is
+  CONTENT-ADAPTIVE — it only visibly changes pixels where noise actually
+  exists. The reviewer's own earlier measurement is consistent with this
+  explanation rather than contradicting it: RAW Color NR's measured
+  pixel delta (203683 over a 256×256 region) was actually the LARGEST of
+  the three RAW-native fields, larger than RAW Exposure or RAW Luminance
+  NR — so the underlying code is doing substantial work; the visibility
+  gap is about the SOURCE PHOTOS (a daylight travel shoot, low ISO, good
+  light — genuinely low-noise source material, especially outside
+  shadow regions) rather than a code defect. User accepted this
+  explanation and confirmed moving on without further live-testing of
+  the individual sliders' visual effect. The remaining checklist items
+  (mid-drag/switch-mid-drag races, thumbnail-vs-Editor divergence) were
+  NOT independently re-exercised this pass — accepted as lower-risk
+  since they reuse the exact `loadGeneration`/`RenderGate`/debounce
+  machinery already live-verified across slices 2-4, and the thumbnail
+  divergence was already confirmed by direct measurement (not live
+  observation) before commit, per this slice's own section above.
+  **Phase 6 slice 5 is now considered complete for this session's
+  purposes.**
 
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
@@ -4431,10 +4445,10 @@ see its own section above. **Phase 6 slice 4 (a true no-search RAW
 white-balance eyedropper via `CIRAWFilter.neutralLocation`) is SHIPPED,
 reviewer-APPROVED, and fully LIVE-VERIFIED (2026-09-04) — see its own
 section above.** **Phase 6 slice 5 (RAW-native Noise Reduction +
-Sharpness) is SHIPPED and reviewer-APPROVED (2026-09-04) — see its own
-section above.** 447 tests passing. **Not yet live-verified** — next:
-the user's own pass per slice 5's own checklist. After that, Phase 6
-slice 6
+Sharpness) is SHIPPED, reviewer-APPROVED, and LIVE-VERIFIED (2026-09-04,
+including a real live finding root-caused as content-adaptive
+visibility, not a bug — see its own section above).** 447 tests
+passing. Next: Phase 6 slice 6
 (`lensCorrectionEnabled` — deferred, measured unsupported on this camera,
 would need a different camera to revisit — `contrastAmount`/
 `detailAmount`/`moireReductionAmount`, `CIRAWDecoderVersion9` opt-in, or

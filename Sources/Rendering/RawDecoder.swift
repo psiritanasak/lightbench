@@ -111,8 +111,11 @@ enum RawDecoder {
     /// `RenderGate`'s actor boundary but isn't (yet) audited `Sendable` by
     /// its own framework (`CVPixelBuffer`, as of this SDK). Only safe to use
     /// when the caller genuinely owns exclusive access until the closure
-    /// it's captured into returns — not a general-purpose escape hatch.
-    private struct UncheckedSendableBox<Value>: @unchecked Sendable {
+    /// it's captured into returns — not a general-purpose escape hatch. Not
+    /// `private`: `ProxyBuilder` (IMPROVEMENTS.md P2) needs the identical
+    /// crossing for its own `CVPixelBuffer` render into `RenderGate`, and
+    /// duplicating this wrapper would just be a second copy to keep in sync.
+    struct UncheckedSendableBox<Value>: @unchecked Sendable {
         let value: Value
     }
 

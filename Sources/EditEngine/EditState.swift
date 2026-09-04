@@ -10,6 +10,17 @@ struct RedEyePoint: Equatable, Codable {
     var y: Double
 }
 
+/// A single normalized (0...1) point in the RAW's OWN native, un-rotated
+/// pixel grid — seeds `CIRAWFilter.neutralLocation`, Core Image's true
+/// (no-search) white-balance neutralization. `x`/`y` follow the same
+/// bottom-left-origin, y-UP convention `ImageDocumentModel.pickWhiteBalance`'s
+/// existing sampling-point math already uses. See
+/// `EditState.rawWhiteBalanceNeutralPoints`'s own doc comment.
+struct RawNeutralPoint: Equatable, Codable {
+    var x: Double
+    var y: Double
+}
+
 /// The full set of non-destructive edit adjustments applied to a photo.
 ///
 /// This is pure data — no image or rendering logic lives here. It is
@@ -601,6 +612,81 @@ struct EditState: Equatable, Codable {
     /// reads this; it only takes effect by re-decoding.
     var shadowBoostScale: Double = 1.0
 
+    /// At most ONE element: `[]` means "no RAW-native neutral point set"
+    /// (the identity/default state, matching `redEyePoints`' own
+    /// empty-means-off convention even though — unlike that field's
+    /// genuine multi-point accumulation — this one's real invariant is
+    /// 0-or-1, never more; a new tap always REPLACES the entry, never
+    /// appends).
+    ///
+    /// ONLY ever written by `ImageDocumentModel.pickWhiteBalance`, and
+    /// only when ALL of: the photo is RAW; `isGeometryAtIdentity` (below)
+    /// is true; and the file's own EXIF orientation was CONFIRMED `.up`
+    /// at load time (`ImageDocumentModel.currentRawOrientationIsUp` — an
+    /// UNREADABLE orientation does NOT qualify, deliberately: it could
+    /// just as easily be non-`.up`, and defaulting it to `.up` would
+    /// reopen exactly the ordering hazard below) — the one combination
+    /// where a screen tap maps onto this coordinate space with NO
+    /// inverse-geometry or
+    /// inverse-orientation transform needed. Measured live: setting
+    /// `CIRAWFilter.neutralLocation` to identical coordinates produced a
+    /// DIFFERENT (implausible) result when `orientation` was already
+    /// non-`.up` at that moment vs. left at its default — rather than
+    /// work out that interaction in general, the eligibility check
+    /// avoids it entirely by only firing in the one regime where "RAW
+    /// native pixel space" and "what's on screen" are the same thing by
+    /// construction (confirmed live: `nativeSize` and
+    /// `outputImage.extent` matched exactly when orientation is `.up`).
+    /// Falls back to the existing `WhiteBalanceSolver` search otherwise,
+    /// unchanged.
+    ///
+    /// Deliberately NOT a thin translation of the app's own
+    /// `whiteBalanceTemperature`/`whiteBalanceTint` fields: measured live
+    /// that `CIRAWFilter`'s computed `neutralTemperature`/`neutralTint`
+    /// for a tapped point do NOT neutralize the same pixel when fed
+    /// directly into those fields (they're applied via a completely
+    /// different filter, `CITemperatureAndTint`, in a different
+    /// convention — see `EditPipeline.applyWhiteBalance`'s own doc
+    /// comment). This field configures `CIRAWFilter` itself instead, the
+    /// same architecture as the other three RAW-native fields below.
+    ///
+    /// Composes safely with `WhiteBalanceSolver`'s search without any
+    /// extra invalidation logic: that search always samples whatever
+    /// `currentImage` actually IS at tap time — including an
+    /// already-neutralized-by-this-field image — so a LATER slow-path
+    /// tap (e.g. after the user adds a crop) just measures and corrects
+    /// the residual, converging toward identity rather than
+    /// double-correcting. Once set, this point stays anchored to the
+    /// RAW's own native grid regardless of geometry added afterward
+    /// (crop/straighten run post-decode, so they never invalidate it) —
+    /// only a new tap or Revert (`EditState()`'s literal default) clears
+    /// it.
+    ///
+    /// Same structural caveat as the other three RAW-native fields:
+    /// `EditPipeline` never reads this; it only takes effect by
+    /// re-decoding.
+    var rawWhiteBalanceNeutralPoints: [RawNeutralPoint] = []
+
+    /// True when every geometric transform (straighten/perspective/crop/
+    /// flip) is at its identity value — the exact field GROUP already
+    /// named together in `comparisonOriginal()`/`applyingPreset()`'s own
+    /// comments. Pure and independently testable without a RAW fixture,
+    /// unlike most of this feature — used by
+    /// `ImageDocumentModel.pickWhiteBalance` to decide whether a screen
+    /// tap maps 1:1 onto RAW-native pixel coordinates (see
+    /// `rawWhiteBalanceNeutralPoints`'s own doc comment).
+    var isGeometryAtIdentity: Bool {
+        straightenAngle == 0
+            && verticalPerspective == 0
+            && horizontalPerspective == 0
+            && !flipHorizontal
+            && !flipVertical
+            && cropInsetTop == 0
+            && cropInsetBottom == 0
+            && cropInsetLeft == 0
+            && cropInsetRight == 0
+    }
+
     /// True if `other` differs from `self` in any field that can ONLY
     /// take effect by re-running `RawDecoder.decode` — i.e. that
     /// configures `CIRAWFilter` itself rather than being an
@@ -612,6 +698,7 @@ struct EditState: Equatable, Codable {
         boostAmount != other.boostAmount
             || rawExposureEV != other.rawExposureEV
             || shadowBoostScale != other.shadowBoostScale
+            || rawWhiteBalanceNeutralPoints != other.rawWhiteBalanceNeutralPoints
     }
 
     /// The no-op edit state: every adjustment at its default (identity) value.
@@ -677,11 +764,12 @@ struct EditState: Equatable, Codable {
         // geometry (cropInset*, straightenAngle, verticalPerspective,
         // horizontalPerspective, flipHorizontal, flipVertical) is left
         // untouched — inherited from `self` via `var s = self` above.
-        // `boostAmount`/`rawExposureEV`/`shadowBoostScale` are
-        // ALSO left untouched, for a different reason: `EditPipeline`
-        // never reads any of them at all (see their own doc comments),
-        // so resetting them here couldn't be honored by either side of
-        // the Compare render anyway — inherit them rather than set a
+        // `boostAmount`/`rawExposureEV`/`shadowBoostScale`/
+        // `rawWhiteBalanceNeutralPoints` are ALSO left untouched, for a
+        // different reason: `EditPipeline` never reads any of them at
+        // all (see their own doc comments), so resetting them here
+        // couldn't be honored by either side of the Compare render
+        // anyway — inherit them rather than set a
         // value this method has no way to actually apply.
         return s
     }
@@ -740,11 +828,12 @@ struct EditState: Equatable, Codable {
         // horizontalPerspective, flipHorizontal, flipVertical) and
         // redEyePoints are NOT copied — they stay `target`'s own via
         // `var result = target` above.
-        // `boostAmount`/`rawExposureEV`/`shadowBoostScale` are
-        // ALSO not copied, for a different reason: carrying them would
-        // make applying ANY preset kick off a multi-second RAW re-decode
-        // (no other preset field does that), and would silently set
-        // RAW-decode parameters on a JPEG target — dead weight that also
+        // `boostAmount`/`rawExposureEV`/`shadowBoostScale`/
+        // `rawWhiteBalanceNeutralPoints` are ALSO not copied, for a
+        // different reason: carrying them would make applying ANY preset
+        // kick off a multi-second RAW re-decode (no other preset field
+        // does that), and would silently set RAW-decode parameters on a
+        // JPEG target — dead weight that also
         // defeats `ThumbnailGenerator`'s `editState != .identity` fast
         // path for an otherwise-unedited thumbnail. Presets are
         // cross-photo looks; these are per-decode technical settings,
@@ -804,7 +893,7 @@ extension EditState {
         case noiseReduction
         case sharpness
         case boostAmount
-        case rawExposureEV, shadowBoostScale
+        case rawExposureEV, shadowBoostScale, rawWhiteBalanceNeutralPoints
     }
 
     init(from decoder: Decoder) throws {
@@ -870,5 +959,6 @@ extension EditState {
         boostAmount = try container.decodeIfPresent(Double.self, forKey: .boostAmount) ?? 1.0
         rawExposureEV = try container.decodeIfPresent(Double.self, forKey: .rawExposureEV) ?? 0
         shadowBoostScale = try container.decodeIfPresent(Double.self, forKey: .shadowBoostScale) ?? 1.0
+        rawWhiteBalanceNeutralPoints = try container.decodeIfPresent([RawNeutralPoint].self, forKey: .rawWhiteBalanceNeutralPoints) ?? []
     }
 }

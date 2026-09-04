@@ -21,17 +21,21 @@ import UniformTypeIdentifiers
 /// individually through every call site was already unwieldy at three,
 /// let alone the deferred fields still to come — switched `decode`/
 /// `decodeDraft` to take the whole `EditState` rather than growing their
-/// parameter list per field. `applyRawNativeSettings` below is now the
-/// ONE place all of them are read (mirrored by
-/// `EditState.requiresRawRedecode`, the one place they're compared) — see
-/// each field's own `EditState` doc comment for what it does and how its
-/// design was shaped by live measurement against the user's real camera.
-/// `CIRAWFilter`'s remaining RAW-native controls (`neutralTemperature`/
-/// `neutralLocation`, RAW-native NR/sharpness) are deferred to a later
-/// slice; `lensCorrectionEnabled` specifically was MEASURED unsupported
-/// on the user's own camera (`isLensCorrectionSupported == false` on
-/// three sampled Nikon D610 NEFs) before slice 2 was scoped, so it's
-/// deferred deliberately, not an oversight — see CLAUDE.md/PROGRESS.md.
+/// parameter list per field. Phase 6 slice 4 added
+/// `rawWhiteBalanceNeutralPoints`, seeding `CIRAWFilter.neutralLocation`
+/// for a true no-search white-balance eyedropper (RAW-only, geometry-
+/// identity-only — see that field's own `EditState` doc comment).
+/// `applyRawNativeSettings` below is now the ONE place all of them are
+/// read (mirrored by `EditState.requiresRawRedecode`, the one place
+/// they're compared) — see each field's own `EditState` doc comment for
+/// what it does and how its design was shaped by live measurement
+/// against the user's real camera. `CIRAWFilter`'s remaining RAW-native
+/// controls (RAW-native NR/sharpness/detail/moiré,
+/// `CIRAWDecoderVersion9` opt-in) are deferred to a later slice;
+/// `lensCorrectionEnabled` specifically was MEASURED unsupported on the
+/// user's own camera (`isLensCorrectionSupported == false` on three
+/// sampled Nikon D610 NEFs) before slice 2 was scoped, so it's deferred
+/// deliberately, not an oversight — see CLAUDE.md/PROGRESS.md.
 enum RawDecoder {
     /// Serializes every heavy RAW render this app issues —
     /// `materialize`, `ThumbnailGenerator`'s RAW thumbnail path, and
@@ -100,6 +104,33 @@ enum RawDecoder {
         readExifOrientation(of: url) ?? .up
     }
 
+    /// `readExifOrientation`, but gated through `RenderGate` and exposed
+    /// publicly, `async`, for `ImageDocumentModel` to call directly.
+    ///
+    /// Deliberately returns the real `nil` on a read failure — UNLIKE
+    /// `exifOrientation(of:)` above, which defaults to `.up` — because
+    /// this function's one caller (the RAW-native WB-eyedropper
+    /// eligibility gate in `ImageDocumentModel.load(from:)`) needs to
+    /// tell "confirmed `.up`" apart from "unknown": that gate only opens
+    /// on a genuinely-read `.up`, never on a read failure, since
+    /// `neutralLocation` was measured to depend on `orientation`'s value
+    /// (see `applyRawNativeSettings`'s own doc comment) and an unreadable
+    /// orientation could just as easily be non-`.up` as `.up`.
+    ///
+    /// Gated through `RenderGate` for the same reason every other RAW-
+    /// adjacent file touch in this type is: `readExifOrientation` itself
+    /// only touches ImageIO, not `CIRAWFilter`/`RawCamera.framework`, but
+    /// `decode(contentsOf:)`'s own doc comment already records a
+    /// reviewer-caught defect from leaving this SAME function's call
+    /// ungated on the main actor once before — this keeps a single "any
+    /// RAW-file-adjacent read goes through the gate" discipline rather
+    /// than re-litigating which specific APIs are safe to call directly.
+    static func confirmedOrientation(of url: URL) async -> CGImagePropertyOrientation? {
+        await RenderGate.shared.run {
+            readExifOrientation(of: url)
+        }
+    }
+
     /// Same lookup, but `nil` — not `.up` — when nothing could be read.
     /// Used only by the RAW paths below, where silently substituting `.up`
     /// on a read failure would be actively harmful rather than merely
@@ -144,7 +175,7 @@ enum RawDecoder {
     /// orientation, `.outputImage` — is inside `RenderGate` now, not just
     /// the render step downstream in `materialize`.
     ///
-    /// The RAW-native fields in `editState` (Phase 6 slices 2-3) configure
+    /// The RAW-native fields in `editState` (Phase 6 slices 2-4) configure
     /// the `CIRAWFilter` instance itself, so they only apply on the RAW
     /// branch — ignored outright for non-RAW files, matching every other
     /// RAW-only parameter here.
@@ -177,10 +208,20 @@ enum RawDecoder {
     /// `RenderGate`, same reasoning as `decode(contentsOf:)` above —
     /// `filter.nativeSize` alone forces RawCamera to parse the file's
     /// header, so even that read isn't free to leave ungated.
-    /// RAW-native `EditState` fields (Phase 6 slices 2-3): so a RAW
+    /// RAW-native `EditState` fields (Phase 6 slices 2-4): so a RAW
     /// thumbnail matches the Editor's own rendering after an edit, same
     /// reasoning as every other `editState`-driven thumbnail parameter —
-    /// see `ThumbnailGenerator`.
+    /// see `ThumbnailGenerator`. `rawWhiteBalanceNeutralPoints` specifically
+    /// measured live to be safe here despite draft mode/`scaleFactor`
+    /// running AFTER it in this function (a different relative order than
+    /// `decode` above, which has nothing after it to reorder against):
+    /// `neutralLocation` set via `nativeSize`-relative coordinates, then
+    /// draft mode + a 0.25 `scaleFactor` applied, produced the SAME
+    /// `neutralTemperature`/`neutralTint` and the SAME neutralized pixel
+    /// (sampled at the correspondingly-scaled position) as a full decode
+    /// with no draft mode at all — `neutralLocation`'s coordinate space is
+    /// relative to `nativeSize`, not the (possibly scaled) output extent,
+    /// so draft mode doesn't perturb it.
     static func decodeDraft(contentsOf url: URL, maxPixelSize: Int, editState: EditState) async -> CIImage? {
         await RenderGate.shared.run {
             guard let filter = CIRAWFilter(imageURL: url) else { return nil }
@@ -244,10 +285,30 @@ enum RawDecoder {
     /// that could plausibly flip an internal "user overrode this" flag on
     /// any write, regardless of the value written.
     ///
-    /// All three clamped defensively — matching `decodeDraft`'s existing
+    /// `rawWhiteBalanceNeutralPoints` seeds `filter.neutralLocation`
+    /// directly, converting its stored normalized (0...1) fraction to
+    /// absolute pixel coordinates via `filter.nativeSize` (available
+    /// before `.outputImage` is ever accessed — no extra decode cost).
+    /// UNLIKE the other three fields, this one's correctness is NOT
+    /// position-independent in general: measured live that
+    /// `neutralLocation` produces a different result depending on
+    /// whether `orientation` was already set to a non-`.up` value at the
+    /// moment it's assigned. Safe to keep at this same "immediately after
+    /// construction" position ONLY because
+    /// `EditState.rawWhiteBalanceNeutralPoints`'s own doc comment
+    /// guarantees this field is non-empty ONLY when the file's EXIF
+    /// orientation was CONFIRMED `.up` at load time — so `orientation`
+    /// below is always assigned the SAME value it already held (measured
+    /// identical either order in that specific regime), not left
+    /// genuinely untouched. Do not add another RAW-native POINT field
+    /// without re-measuring this — it does not follow from the other
+    /// three fields' own "position doesn't matter" precedent.
+    ///
+    /// All four clamped defensively — matching `decodeDraft`'s existing
     /// `scaleFactor` clamp precedent — even though the Adjust-tab sliders
-    /// already constrain them by declared range. No capability gate
-    /// needed for any of the three, unlike a future `lensCorrectionEnabled`:
+    /// (or, for the neutral point, `ImageDocumentModel.pickWhiteBalance`'s
+    /// own eligibility gate) already constrain them. No capability gate
+    /// needed for any of the four, unlike a future `lensCorrectionEnabled`:
     /// all are general RAW rendering parameters, not tied to a
     /// per-camera-profile capability database, so they apply
     /// unconditionally to any RAW file. `boostShadowAmount`'s result needs
@@ -262,6 +323,18 @@ enum RawDecoder {
         let shadowScale = min(1, max(0, editState.shadowBoostScale))
         if shadowScale != 1 {
             filter.boostShadowAmount *= Float(shadowScale)
+        }
+        if let point = editState.rawWhiteBalanceNeutralPoints.first,
+           filter.nativeSize.width > 0, filter.nativeSize.height > 0 {
+            let x = min(1, max(0, point.x))
+            let y = min(1, max(0, point.y))
+            // Clamped to `nativeSize - 1`, not `nativeSize` — a fraction
+            // of exactly `1` would land one pixel PAST the last valid
+            // column/row.
+            filter.neutralLocation = CGPoint(
+                x: x * (filter.nativeSize.width - 1),
+                y: y * (filter.nativeSize.height - 1)
+            )
         }
     }
 

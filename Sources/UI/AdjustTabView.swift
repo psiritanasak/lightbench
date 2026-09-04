@@ -470,16 +470,27 @@ struct AdjustTabView: View {
     /// continuous adjustment VALUES.
     /// Reviewer-flagged, deliberate, documented gap: this deliberately
     /// mirrors `comparisonOriginal()`'s field list, which does NOT include
-    /// any of the three RAW-native fields (`boostAmount`,
-    /// `rawExposureEV`, `shadowBoostScale` — see that method's
-    /// own doc comment: `EditPipeline` can't express any of them, so
-    /// resetting them here would trigger an unwanted full RAW re-decode
-    /// from what should be an instant, free action). Consequence: a RAW
-    /// photo with every OTHER field at identity but a non-default RAW
-    /// section slider shows this button (correctly) disabled, even
-    /// though the RAW section's own sliders are visibly non-identity —
-    /// `revertToOriginal()`'s literal `EditState()` commit is the control
-    /// that resets all three, not this one.
+    /// any of the four RAW-native fields (`boostAmount`, `rawExposureEV`,
+    /// `shadowBoostScale`, `rawWhiteBalanceNeutralPoints` — see that
+    /// method's own doc comment: `EditPipeline` can't express any of
+    /// them, so resetting them here would trigger an unwanted full RAW
+    /// re-decode from what should be an instant, free action).
+    /// Consequence: a RAW photo with every OTHER field at identity but a
+    /// non-default RAW section slider shows this button (correctly)
+    /// disabled, even though the RAW section's own sliders are visibly
+    /// non-identity — `revertToOriginal()`'s literal `EditState()` commit
+    /// is the control that resets all four, not this one.
+    ///
+    /// `rawWhiteBalanceNeutralPoints` specifically is WORSE than the
+    /// other three here — reviewer-caught: it has no slider or any other
+    /// visible representation in this section AT ALL, so a RAW-native WB
+    /// eyedropper tap is genuinely invisible state once set: neither this
+    /// button, nor the RAW section's own sliders, show anything changed.
+    /// Only Undo or Revert to Original clears it. Accepted as a known gap
+    /// for this slice (see PROGRESS.md) rather than adding a dedicated
+    /// affordance — flag if a future session's UI work in this file
+    /// touches the RAW section, since a "neutral point set (tap to
+    /// clear)" indicator would be the natural fix.
     private var isAdjustTabAtIdentity: Bool {
         let state = document.editState
         return state.exposureEV == 0

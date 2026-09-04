@@ -2539,7 +2539,8 @@ final class EditPipelineTests: XCTestCase {
             sharpness: 0.6,
             boostAmount: 0.35,
             rawExposureEV: 0.75,
-            shadowBoostScale: 0.4
+            shadowBoostScale: 0.4,
+            rawWhiteBalanceNeutralPoints: [RawNeutralPoint(x: 0.3, y: 0.7)]
         )
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(EditState.self, from: data)
@@ -2547,13 +2548,14 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(original, decoded)
     }
 
-    /// Pins the architecture Phase 6 slices 2-3 depend on: the RAW-native
-    /// fields (`boostAmount`, `rawExposureEV`, `shadowBoostScale`)
-    /// configure `CIRAWFilter` itself, upstream of `EditPipeline` — none is
-    /// one of this function's stages and all must have zero effect on its
-    /// output. Fails loudly if a future session tries to "wire the missing
-    /// fields into the pipeline" by mistake (there's nothing there to wire
-    /// them into; they only take effect via `RawDecoder`/`ImageDocumentModel.redecodeForRawNativeChange`).
+    /// Pins the architecture Phase 6 slices 2-4 depend on: the RAW-native
+    /// fields (`boostAmount`, `rawExposureEV`, `shadowBoostScale`,
+    /// `rawWhiteBalanceNeutralPoints`) configure `CIRAWFilter` itself,
+    /// upstream of `EditPipeline` — none is one of this function's stages
+    /// and all must have zero effect on its output. Fails loudly if a
+    /// future session tries to "wire the missing fields into the
+    /// pipeline" by mistake (there's nothing there to wire them into;
+    /// they only take effect via `RawDecoder`/`ImageDocumentModel.redecodeForRawNativeChange`).
     func testRawNativeFieldsHaveNoEffectOnTheEditPipeline() {
         let image = CIImage(color: CIColor(red: 0.4, green: 0.5, blue: 0.6)).cropped(to: CGRect(x: 0, y: 0, width: 16, height: 16))
         // Reviewer-caught (slice 2): comparing two otherwise-IDENTITY
@@ -2574,6 +2576,7 @@ final class EditPipelineTests: XCTestCase {
         high.boostAmount = 1
         high.rawExposureEV = 2
         high.shadowBoostScale = 1
+        high.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.25, y: 0.75)]
 
         let lowOutput = EditPipeline.apply(low, to: image)
         let highOutput = EditPipeline.apply(high, to: image)

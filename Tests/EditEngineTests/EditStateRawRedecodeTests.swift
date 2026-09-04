@@ -8,9 +8,10 @@ import XCTest
 /// a RAW-native field change silently has no visible effect (the exact bug
 /// `RawDecoder.materialize`'s "forward hazard" note predicted), and a false
 /// positive would mean an unrelated slider edit pays a needless multi-second
-/// re-decode. Phase 6 slice 3 added `rawExposureEV`/
-/// `shadowBoostScale` to `boostAmount`; each field gets its own true case so
-/// a missing `||` clause for any one of them can't hide behind another.
+/// re-decode. Phase 6 slice 3 added `rawExposureEV`/`shadowBoostScale` to
+/// `boostAmount`; slice 4 added `rawWhiteBalanceNeutralPoints`. Each field
+/// gets its own true case so a missing `||` clause for any one of them
+/// can't hide behind another.
 final class EditStateRawRedecodeTests: XCTestCase {
     func testTrueWhenBoostAmountDiffers() {
         var a = EditState.identity
@@ -36,6 +37,14 @@ final class EditStateRawRedecodeTests: XCTestCase {
         XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
     }
 
+    func testTrueWhenRawWhiteBalanceNeutralPointsDiffers() {
+        var a = EditState.identity
+        var b = EditState.identity
+        a.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.3, y: 0.4)]
+        b.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.6, y: 0.7)]
+        XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
+    }
+
     func testFalseWhenAllRawNativeFieldsAreTheSame() {
         var a = EditState.identity
         var b = EditState.identity
@@ -45,6 +54,8 @@ final class EditStateRawRedecodeTests: XCTestCase {
         b.rawExposureEV = 0.75
         a.shadowBoostScale = 0.3
         b.shadowBoostScale = 0.3
+        a.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.1, y: 0.9)]
+        b.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.1, y: 0.9)]
         XCTAssertFalse(a.requiresRawRedecode(comparedTo: b))
     }
 

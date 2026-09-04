@@ -66,6 +66,7 @@ final class EditStatePresetTests: XCTestCase {
         s.boostAmount = 0.3
         s.rawExposureEV = 0.6
         s.shadowBoostScale = 0.2
+        s.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.35, y: 0.65)]
         return s
     }
 
@@ -178,6 +179,17 @@ final class EditStatePresetTests: XCTestCase {
 
         XCTAssertEqual(result.shadowBoostScale, target.shadowBoostScale)
         XCTAssertNotEqual(result.shadowBoostScale, preset.shadowBoostScale)
+    }
+
+    func testTargetsRawWhiteBalanceNeutralPointsSurvivesAPreset() {
+        let preset = fullyEditedState() // rawWhiteBalanceNeutralPoints = [(0.35, 0.65)]
+        var target = EditState.identity
+        target.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.1, y: 0.9)]
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.rawWhiteBalanceNeutralPoints, target.rawWhiteBalanceNeutralPoints)
+        XCTAssertNotEqual(result.rawWhiteBalanceNeutralPoints, preset.rawWhiteBalanceNeutralPoints)
     }
 
     /// `applyingPreset(onto:)` and `comparisonOriginal()` draw the color/

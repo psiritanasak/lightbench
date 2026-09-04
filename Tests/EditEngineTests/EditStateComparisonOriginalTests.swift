@@ -70,6 +70,7 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.boostAmount = 0.3
         s.rawExposureEV = 0.6
         s.shadowBoostScale = 0.2
+        s.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.35, y: 0.65)]
         return s
     }
 
@@ -160,5 +161,11 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         let edited = fullyEditedState()
         XCTAssertEqual(edited.comparisonOriginal().shadowBoostScale, edited.shadowBoostScale)
         XCTAssertNotEqual(edited.shadowBoostScale, EditState.identity.shadowBoostScale, "test fixture should start non-default")
+    }
+
+    func testRawWhiteBalanceNeutralPointsIsPreservedNotReset() {
+        let edited = fullyEditedState()
+        XCTAssertEqual(edited.comparisonOriginal().rawWhiteBalanceNeutralPoints, edited.rawWhiteBalanceNeutralPoints)
+        XCTAssertNotEqual(edited.rawWhiteBalanceNeutralPoints, EditState.identity.rawWhiteBalanceNeutralPoints, "test fixture should start non-default")
     }
 }

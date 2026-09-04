@@ -24,6 +24,20 @@ final class ImageDocumentModel: ObservableObject {
     /// to track it — the same reason `canUndo`/`canRedo` are published for the
     /// Edit menu. Writes stay internal; `load(from:)` is the only one.
     @Published private(set) var currentURL: URL?
+    /// Whether `currentURL`'s file EXIF orientation was CONFIRMED `.up` at
+    /// load time (`RawDecoder.confirmedOrientation`) — always `false` for
+    /// non-RAW photos and for a RAW photo whose orientation is non-`.up`
+    /// OR unreadable (deliberately NOT defaulting an unreadable read to
+    /// `true` — see `RawDecoder.confirmedOrientation`'s own doc comment).
+    /// Cached here, rather than re-read at tap time, so
+    /// `pickWhiteBalance`'s RAW-native fast-path eligibility check is a
+    /// free synchronous read with no redundant main-actor file I/O —
+    /// reviewer-caught: an earlier draft re-opened the file synchronously
+    /// at tap time, reintroducing a defect class (`decode(contentsOf:)`'s
+    /// own doc comment records this exact function being caught ungated
+    /// on the main actor once before) this cache avoids entirely. Not
+    /// `@Published` — nothing in the UI displays it.
+    private(set) var currentRawOrientationIsUp = false
     @Published var loadErrorMessage: String?
     /// User-facing feedback when saving a sidecar fails (folder-bookmark
     /// resolution or the write itself) — mirrors `whiteBalanceSampleMessage`'s
@@ -258,13 +272,21 @@ final class ImageDocumentModel: ObservableObject {
         // app. `isLoadingImage` covers the visible gap so the UI reads as
         // "working" instead of unresponsive.
         let resolvedImage: CIImage
+        let isRawOrientationUp: Bool
         if RawDecoder.isRaw(url) {
             isLoadingImage = true
             resolvedImage = await RawDecoder.materialize(raw)
             guard myGeneration == loadGeneration else { return }
+            // Cached once here, at load time, rather than re-read at
+            // WB-eyedropper tap time — see `currentRawOrientationIsUp`'s
+            // own doc comment.
+            let orientation = await RawDecoder.confirmedOrientation(of: url)
+            guard myGeneration == loadGeneration else { return }
+            isRawOrientationUp = orientation == .up
             isLoadingImage = false
         } else {
             resolvedImage = raw
+            isRawOrientationUp = false
         }
         // Reviewer-caught: the early flush above only covers edits made
         // BEFORE this function's first `await`. The Adjust sidebar stays
@@ -284,6 +306,7 @@ final class ImageDocumentModel: ObservableObject {
         currentImage = resolvedImage
         currentFileName = url.lastPathComponent
         currentURL = url
+        currentRawOrientationIsUp = isRawOrientationUp
         isLoadingPhoto = true
         editState = restoredState
         isLoadingPhoto = false
@@ -454,8 +477,53 @@ final class ImageDocumentModel: ObservableObject {
     /// extent, this render still shares `currentFitRect`'s exact coordinate
     /// space, so no geometric-transform inversion is needed to map a tap
     /// back to a pixel.
+    /// Phase 6 slice 4: for RAW photos with no geometry edits applied yet
+    /// AND a CONFIRMED (not merely unreadable — see `currentRawOrientationIsUp`'s
+    /// own doc comment) EXIF orientation of `.up`, a tap maps 1:1 onto
+    /// `CIRAWFilter`'s own native pixel grid with no inverse-geometry or
+    /// inverse-orientation transform needed — so this writes
+    /// `rawWhiteBalanceNeutralPoints` directly (plus resetting
+    /// `whiteBalanceTemperature`/`whiteBalanceTint` to identity, matching
+    /// the slow path's own always-overwrite behavior below — otherwise a
+    /// stale non-identity value left over from a manual nudge, a preset,
+    /// or an earlier slow-path tap would still apply on top, post-decode)
+    /// and lets the existing RAW-native re-decode machinery (`editState`'s
+    /// `didSet` → `EditState.requiresRawRedecode` → `scheduleRawRedecode`)
+    /// take it from there, entirely bypassing `WhiteBalanceSolver`'s
+    /// search — see `EditState.rawWhiteBalanceNeutralPoints`'s own doc
+    /// comment for the two live-measured reasons this exact gate exists.
+    /// Every other case (non-RAW, any geometry edit, a non-`.up` or
+    /// unreadable orientation) falls through unchanged to the existing
+    /// search-based path below.
     func pickWhiteBalance(normalizedX u: Double, normalizedY v: Double) {
         guard let currentImage else { return }
+
+        if let url = currentURL,
+           RawDecoder.isRaw(url),
+           editState.isGeometryAtIdentity,
+           currentRawOrientationIsUp {
+            editState.rawWhiteBalanceNeutralPoints = [
+                RawNeutralPoint(x: min(1, max(0, u)), y: min(1, max(0, 1 - v)))
+            ]
+            // Reviewer-caught: the slow path ALWAYS overwrites both these
+            // fields (see below), fully determining the WB result on its
+            // own. The fast path must do the same — otherwise a stale
+            // non-identity `whiteBalanceTemperature`/`whiteBalanceTint`
+            // (left over from a manual slider nudge, "Fix Color Cast", a
+            // preset, or an earlier slow-path tap before a crop was
+            // removed) would still apply ON TOP of the RAW-native
+            // neutralization post-decode, silently leaving the tapped
+            // pixel non-neutral with no message explaining why.
+            editState.whiteBalanceTemperature = 6500
+            editState.whiteBalanceTint = 0
+            // Clear any stale message from a PRIOR slow-path attempt on
+            // this same photo — the fast path always succeeds
+            // deterministically (no dark-sample rejection, no
+            // partial-solve case), so a leftover message here would
+            // misleadingly imply this attempt had a problem too.
+            whiteBalanceSampleMessage = nil
+            return
+        }
 
         var samplingState = EditState()
         samplingState.straightenAngle = editState.straightenAngle

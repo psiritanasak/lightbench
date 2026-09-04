@@ -776,21 +776,68 @@ Edits are stored as parameter sets and rendered live on the GPU.
    pixel delta for all three) was NOT independently re-confirmed live
    this pass, accepted as a known, already-measured gap rather than
    re-tested.
-   **Deferred to slice 6** (a separate session): `CIRAWFilter`'s
-   remaining RAW-native controls — `lensCorrectionEnabled` (measured
-   UNSUPPORTED on this app's own test camera — do not "fix" this
-   omission without re-measuring against whatever camera prompts
-   revisiting it), `contrastAmount`/`detailAmount`/`moireReductionAmount`
-   (also supported, also per-file-defaulted, deferred only because they
-   weren't part of what was asked for in slice 5 — re-measure their
-   native defaults before assuming a multiplicative-scale shape is safe,
-   same lesson slice 5 just learned), and opting into
-   `CIRAWDecoderVersion9` at runtime via `supportedDecoderVersions` on OS
-   versions that offer it. A genuine inverse-geometry transform for the
-   WB eyedropper's fast path (so it works regardless of crop/straighten/
-   perspective/flip, not just at identity) is a separate,
-   explicitly-deferred stretch goal from slice 4 — see that slice's own
-   write-up above for why it was scoped out, not forgotten.
+   **Slice 6 (`rawContrastAdjust` + `rawDetailAdjust` +
+   `rawMoireReductionAdjust`, RAW-native Contrast/Detail/Moiré Reduction)
+   ✅ COMPLETE** (2026-09-04). Live-measured BEFORE writing any code,
+   applying slice 5's own lesson proactively rather than re-discovering
+   it: all three underlying `CIRAWFilter` properties (`contrastAmount`,
+   `detailAmount`, `moireReductionAmount`) have a native default of
+   `0.0` on this camera — the exact degenerate case that made
+   `rawLuminanceNoiseReductionAdjust`'s original multiplicative-scale
+   design dead-on-arrival in slice 5 — so all three shipped as ADDITIVE
+   offsets from the start, not a repeat of that mistake. Confirmed
+   supported (`isContrastSupported`/`isDetailSupported`/
+   `isMoireReductionSupported` all `true`) and confirmed substantial
+   real effect via absolute assignment (256×256 region, total abs
+   delta): `contrastAmount` at `1.0` → `290565` (the LARGEST single-field
+   pixel effect measured anywhere in this app's RAW-native work so far),
+   `detailAmount` at `3.0` → `180787`.
+   Also found and worked around a real SDK documentation bug:
+   `moireReductionAmount`'s own header comment says "3 indicates
+   maximum" but declares its range as `0...1` — almost certainly a
+   copy-paste artifact from the adjacent `detailAmount` comment (which
+   genuinely has range `0...3`). Measured, not trusted: the property
+   genuinely accepts and retains `0...3` with no clamping, but the
+   effect saturates hard above `1.0` (delta grew only ~3% across the
+   entire `1.0→3.0` span) — so `rawMoireReductionAdjust`'s UI-facing
+   range is deliberately capped at the measured-useful `-1...1`, while
+   the applied RESULT still clamps to the property's true `0...3` range
+   — the same "don't expose measured-dead travel" principle already
+   established for `boostShadowAmount` in slice 3.
+   Reviewer (Opus 5, after the default model hit the account's monthly
+   spend limit — same pattern as every prior slice): APPROVE on the
+   first pass — correctly built additive from the outset this time, no
+   FIX FIRST round needed. The shared `RawAdjustmentSupport` capability-
+   gate struct (from slice 5) was extended to all six NR/Sharpness/
+   Contrast/Detail/Moiré fields without regressing the three existing
+   ones. Two non-blocking notes fixed before commit: a stale doc
+   comment on `ImageDocumentModel.currentRawAdjustmentSupport`
+   enumerating only "NR/Sharpness" instead of all six gated fields; and
+   an explicit doc-comment acknowledgment that the NEGATIVE half of the
+   three new sliders is inert on THIS specific camera (native `0.0` is
+   the property's own floor) — kept symmetric anyway as camera-generic
+   design (a body with a genuinely non-zero native default would have
+   real use for it), not a UI call about this camera's own range the
+   way the moiré cap was.
+   459 tests (12 new). **Not yet live-verified** — next: the user's own
+   pass, specifically confirming RAW Contrast and RAW Detail are clearly
+   visible (both had large measured deltas), while RAW Moiré Reduction
+   may look subtle-to-invisible unless the source photo has actual
+   moiré artifacts (fine repeating patterns — fabric weave, screens,
+   distant architectural detail) — flagged UP FRONT this time, learning
+   from slice 5's live pass where the user hit noise-reduction's
+   content-adaptive visibility as a surprise rather than an expectation.
+   **Deferred to slice 7** (a separate session): `lensCorrectionEnabled`
+   (measured UNSUPPORTED on this app's own test camera — do not "fix"
+   this omission without re-measuring against whatever camera prompts
+   revisiting it), and opting into `CIRAWDecoderVersion9` at runtime via
+   `supportedDecoderVersions` on OS versions that offer it — the last
+   two items on `CIRAWFilter`'s RAW-native deferred list, everything
+   else measured-viable has now shipped. A genuine inverse-geometry
+   transform for the WB eyedropper's fast path (so it works regardless
+   of crop/straighten/perspective/flip, not just at identity) is a
+   separate, explicitly-deferred stretch goal from slice 4 — see that
+   slice's own write-up above for why it was scoped out, not forgotten.
 7. Local Adjustments (Masking) — **not started.** The single biggest capability
    gap versus Lightroom (see the Lightroom gap-analysis subsection above, which
    this phase supersedes/formalizes for this one item). Every adjustment in this

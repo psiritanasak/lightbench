@@ -4400,6 +4400,91 @@ already proven not to render red on a macOS Menu/button this session).
   **Phase 6 slice 5 is now considered complete for this session's
   purposes.**
 
+### Phase 6 slice 6: RAW-native Contrast, Detail, Moiré Reduction — SHIPPED, not yet live-verified
+- Live-measured BEFORE writing any code, applying slice 5's own lesson
+  proactively instead of re-discovering it: all three underlying
+  `CIRAWFilter` properties (`contrastAmount`, `detailAmount`,
+  `moireReductionAmount`) have a native default of `0.0` on this camera
+  — the exact degenerate case that made
+  `rawLuminanceNoiseReductionAdjust`'s ORIGINAL multiplicative-scale
+  design dead-on-arrival in slice 5. All three shipped as ADDITIVE
+  offsets from the start this time, not a repeat of that mistake.
+  Confirmed supported (`isContrastSupported`/`isDetailSupported`/
+  `isMoireReductionSupported` all `true` on three sampled D610 NEFs —
+  viable, not another `lensCorrectionEnabled`-class dead end) and
+  confirmed substantial real effect via absolute assignment (256×256
+  region, total abs delta vs. identity): `contrastAmount` at `1.0` →
+  `290565` (the LARGEST single-field pixel effect measured anywhere in
+  this app's RAW-native work so far, bigger than any field from slices
+  2-5), `detailAmount` at `3.0` → `180787`.
+- **A real SDK documentation bug, found and worked around, not just
+  trusted.** `moireReductionAmount`'s own header comment says "A value
+  of 3 indicates maximum moire reduction" but the very next line
+  declares "The value should be the range of 0...1" — an internal
+  contradiction, almost certainly a copy-paste artifact from the
+  adjacent `detailAmount` comment (which genuinely has range `0...3`).
+  Measured, not trusted either half of the contradictory text: the
+  property genuinely accepts and RETAINS values up to `3.0` with no
+  clamping (readback confirmed `1.0→1.0`, `2.0→2.0`, `3.0→3.0`) — so the
+  true valid range is `0...3` like `detailAmount`. BUT the measured
+  EFFECT saturates hard near `1.0`: delta grew only `48097 → 48730 →
+  49564` across the entire `1.0 → 2.0 → 3.0` span (~3% total change
+  over 2 full extra units of range) — the same "inert long tail" pattern
+  `boostShadowAmount` showed above its own native value in slice 3.
+  `rawMoireReductionAdjust`'s `EditState` field is therefore capped at
+  the measured-useful `-1...1` in the UI, even though `CIRAWFilter`
+  itself would accept a wider range — the applied RESULT still clamps
+  to the property's true `0...3` range internally, only the exposed UI
+  travel is narrowed.
+- Reviewer (Opus 5, after the default model hit the account's monthly
+  spend limit — same pattern as every prior slice): **APPROVE on the
+  FIRST pass — no FIX FIRST round needed**, the first slice in this
+  RAW-native sequence to clear review without a caught bug, because
+  slice 5's lesson (measure native defaults before choosing scale vs.
+  offset) was applied proactively instead of being re-learned the hard
+  way. Verified: all three fields use the additive shape throughout (no
+  `*=` anywhere); each field's clamp range matches its own measured
+  valid range correctly (Contrast `0...1`, Detail `0...3`, Moiré's
+  input narrowed to `-1...1` while its result still clamps to the full
+  `0...3`); the shared `RawAdjustmentSupport` capability-gate struct
+  (built in slice 5) was extended to all six NR/Sharpness/Contrast/
+  Detail/Moiré fields without regressing the three existing ones, and
+  `ImageDocumentModel`'s existing caching needed zero changes since it
+  stores the struct whole.
+  Two non-blocking notes fixed before commit: a stale doc comment on
+  `ImageDocumentModel.currentRawAdjustmentSupport` still said
+  "NR/Sharpness" instead of naming all six now-gated fields; and an
+  explicit doc-comment acknowledgment added that the NEGATIVE half of
+  all three new sliders is inert on THIS specific camera (native `0.0`
+  is the property's own floor, so `max(0, 0 + negative) == 0`) — kept
+  symmetric anyway as camera-generic design (a body with a genuinely
+  non-zero native default, which the SDK's own "varies per image"
+  wording implies exists, would have real use for the negative half),
+  not a UI call about this camera's own inert range the way the moiré
+  cap was.
+- 459 tests (12 new): the established RAW-native-field test set
+  (`EditStateCodableTests`, `EditPipelineTests`,
+  `EditStateRawRedecodeTests`, `EditStateComparisonOriginalTests`,
+  `EditStatePresetTests`, `RawDecoderTests`) extended for all three new
+  fields, mirroring slice 5's own additions exactly — each test uses
+  values respecting its OWN field's correct range (not copy-pasted
+  values that would violate a narrower field's bounds). 2 commits
+  (feature+tests, then this doc entry).
+- **NOT yet live-verified** — next: the user's own pass on the real
+  D610 library. RAW Contrast and RAW Detail should both be clearly
+  visible (largest measured deltas of any RAW-native field so far). RAW
+  Moiré Reduction may look subtle-to-invisible unless the source photo
+  has actual moiré artifacts (fine repeating patterns — fabric weave,
+  screens, distant architectural detail) — flagging this UP FRONT this
+  time, having learned from slice 5's live pass where noise reduction's
+  content-adaptive visibility caught the user by surprise rather than
+  being anticipated; dragging any of the three mid-load of a different
+  photo, and switching photos mid-drag, both behave; Library thumbnail/
+  export vs. Editor divergence is EXPECTED for these three (same
+  category as slice 5's measured NR/Sharpness draft-mode gap — assumed
+  to hold by the same reasoning, not independently re-measured
+  per-field this slice).
+
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
 user-requested follow-ups (folder-mirrored nested collections; the Editor
@@ -4447,12 +4532,15 @@ reviewer-APPROVED, and fully LIVE-VERIFIED (2026-09-04) — see its own
 section above.** **Phase 6 slice 5 (RAW-native Noise Reduction +
 Sharpness) is SHIPPED, reviewer-APPROVED, and LIVE-VERIFIED (2026-09-04,
 including a real live finding root-caused as content-adaptive
-visibility, not a bug — see its own section above).** 447 tests
-passing. Next: Phase 6 slice 6
+visibility, not a bug — see its own section above).** **Phase 6 slice 6
+(RAW-native Contrast/Detail/Moiré Reduction) is SHIPPED and
+reviewer-APPROVED on the FIRST pass — 2026-09-04, see its own section
+above.** 459 tests passing. **Not yet live-verified** — next: the
+user's own pass per slice 6's own checklist. After that, Phase 6 slice 7
 (`lensCorrectionEnabled` — deferred, measured unsupported on this camera,
-would need a different camera to revisit — `contrastAmount`/
-`detailAmount`/`moireReductionAmount`, `CIRAWDecoderVersion9` opt-in, or
-a genuine inverse-geometry transform so the WB eyedropper's fast path
+would need a different camera to revisit — or `CIRAWDecoderVersion9`
+opt-in, the last two items on `CIRAWFilter`'s RAW-native deferred list —
+or a genuine inverse-geometry transform so the WB eyedropper's fast path
 works beyond identity geometry) is the next roadmap item, or the user
 may pick from IMPROVEMENTS.md's open items
 instead (D4

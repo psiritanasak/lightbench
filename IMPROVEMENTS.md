@@ -106,20 +106,50 @@ the user.
 Sharpen+NR+Definition active. If frame time is already <16ms at full res on
 real photos, skip this item entirely — it adds real complexity.
 
-### P3. `draw(in:)` rebuilds the pipeline graph on renders where nothing changed
+### ~~P3. `draw(in:)` rebuilds the pipeline graph on renders where nothing changed~~ — SHIPPED 2026-09-04
 
-**Where:** same `draw(in:)`. Redraws triggered by resize/zoom/pan/Compare
-divider drags rebuild `EditPipeline.apply(editState, to: image)` (and in
-Compare mode a SECOND full apply for the original) even though neither
-`image` nor `editState` changed — only the fit transform did.
+**Measured first, then fixed, matching P4's own precedent.** Before: a
+resize/zoom/pan sequence on a large photo with Sharpen+Noise-Reduction+
+Definition all active (the three stages that force full-resolution work)
+showed per-frame `EditPipeline.apply` cost mostly in the 0.07-4.7ms range,
+with real spikes up to **38.6ms and 458.9ms** — not a theoretical concern,
+an actually-observed near-half-second stall on a redraw where nothing but
+the fit transform changed. Temporary `CFAbsoluteTimeGetCurrent()` print
+instrumentation (added, used, then fully reverted — confirmed via a clean
+`git diff`) captured both the before and after numbers.
 
-**Fix:** cache the post-pipeline `CIImage` (`edited`, and Compare's
-`original`) on the renderer, invalidated when `image` (identity compare) or
-`editState` (value compare) changes — `MetalImageView.updateNSView` already
-computes exactly this equality; reuse its result rather than duplicating the
-check. Reusing one `CIImage` graph object across draws also lets `CIContext`'s
-internal caching work better. Low risk, small-but-real win for zoom/pan/
-divider interactivity; combines well with P2.
+**Shipped**: a self-invalidating cache directly on `ImageRenderer`
+(`cachedSourceImage`/`cachedEditState`/`cachedEdited`/`cachedOriginalState`/
+`cachedOriginal`), re-checked at the top of every `draw(in:)` call, keyed
+on `image` identity (`!==`) plus each output's own `EditState` value —
+`EditPipeline.apply` is a pure `(EditState, CIImage) -> CIImage`, so that
+pair is a complete, correct key. **Deliberately did NOT reuse
+`MetalImageView.updateNSView`'s existing equality guard**, as originally
+suggested here — investigation found two real problems with that approach:
+it's one fused `||` across all five of ITS fields (doesn't distinguish
+cache-invalidating changes from cache-preserving ones, and `compare` would
+need decomposing into `originalState` vs. `mode`), and more importantly a
+resize redraw (`ResizingMTKView.setFrameSize`) calls `setNeedsDisplay`
+directly and reaches `draw(in:)` WITHOUT ever going through `updateNSView`
+— a cache dependent on that method having run first would be stale on
+every resize. The cache is fully self-contained inside `draw(in:)` instead.
+
+After: the same resize/zoom/pan exercise measured ~0.002-0.008ms per
+frame — just the cache-key comparison — with both large spikes completely
+gone. A cache hit returns the EXACT SAME `CIImage` instance a miss would
+freshly compute (not an approximation), so there is no possible visual
+difference, only fewer redundant rebuilds — reviewer confirmed this
+reasoning holds and traced the identity-key premise (`currentImage` is
+only ever reassigned wholesale, never mutated in place) against the actual
+write sites in `ImageDocumentModel.swift`, not just the doc comment's
+claim. Reviewer APPROVE on the first pass, two non-blocking notes (a
+retained-but-harmless stale `cachedOriginal` after Compare is toggled off;
+a reminder that the cache key's correctness depends on `EditPipeline.apply`'s
+signature staying exactly `(EditState, CIImage) -> CIImage`, already
+documented at the cache's own declaration). No new automated tests —
+`ImageRenderer`/`draw(in:)` has zero existing test precedent in this
+codebase (Metal-coupled rendering glue); the existing 465 tests pass
+unchanged. Full write-up in PROGRESS.md.
 
 ### ~~P4. `CatalogModel.refresh()` refetches the whole library on every rating/flag/membership tap~~ — SHIPPED 2026-08-28
 
@@ -331,12 +361,16 @@ behavior change at this panel's scale).
 2. For every performance item: MEASURE before and after (os_signpost or
    simple timing), on a real large photo / real library, and record numbers
    in PROGRESS.md. No speculative optimization lands without a number.
-3. P1 is retired (disproved), P4 has shipped, D7 and D1 (both halves) have
-   shipped. Of what remains, D2/D3 are the cheapest next design sessions;
-   D4/D5/D6 need their own Plan Mode scoping. P2 is the biggest potential
-   win but the most complex — do it only after P3, and only if
-   measurement justifies it. Note P4 is the one item so far whose
-   measurement DID justify it; P1's did not. Measure, don't assume.
+3. P1 is retired (disproved), P4 has shipped, D7, D1 (both halves), D2, D3,
+   D5 part 1, and now P3 have all shipped. Of what remains, D4/D5(remaining
+   2 parts)/D6 need their own Plan Mode scoping. P2 is the biggest
+   potential win but the most complex — its own measurement (a genuinely
+   different scenario: cost during an ACTIVE slider drag, not a
+   static-content redraw like P3's) is the required next step before any
+   P2 code, since P3's cache does NOT help P2's scenario (editState
+   changes every frame during a drag, so it's a cache miss every time).
+   Note P4 and P3 are the two items so far whose measurement DID justify
+   the fix; P1's did not. Measure, don't assume.
 4. D7 (split ContentView) and D1 (⌘←/⌘→ + the filmstrip) were the best
    first sessions and are now both done — see their own struck-through
    entries above for what shipped.

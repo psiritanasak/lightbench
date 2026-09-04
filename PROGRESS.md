@@ -4605,6 +4605,102 @@ already proven not to render red on a macOS Menu/button this session).
   investigation (mirroring the existing carried-forward note near line
   3600 for the earlier variant of this same class of flake).
 
+### IMPROVEMENTS.md P3 — cache `EditPipeline.apply` output in `ImageRenderer` — SHIPPED and reviewer-APPROVED (first pass) 2026-09-04
+- The user asked for P2 and P3 together; per IMPROVEMENTS.md's own working
+  agreement, P2 (full-res pipeline re-render during an active slider drag)
+  should only be attempted after P3 (cheap, low-risk) ships and gets its
+  OWN separate measurement — P3's cache doesn't help P2's scenario, since
+  `editState` genuinely changes every frame during a drag, so it's a cache
+  miss every time regardless. This entry covers P3 only; P2 is queued next.
+- **Explore agent research first** (this session's Plan Mode workflow):
+  read `ImageRenderer.swift`, `MetalImageView.swift`, `EditPipeline.apply`,
+  and the existing debounce idioms before designing. Two findings changed
+  the plan from IMPROVEMENTS.md's original suggestion: (1) `EditPipeline.apply`
+  is a pure `(EditState, CIImage) -> CIImage` with no side effects, so a
+  cache key is trivially `(image identity, EditState value)`; (2)
+  IMPROVEMENTS.md's own suggested approach — "reuse `MetalImageView.updateNSView`'s
+  existing equality check" — turned out NOT sufficient: a resize redraw
+  (`ResizingMTKView.setFrameSize`) calls `setNeedsDisplay` directly and
+  reaches `draw(in:)` WITHOUT ever going through `updateNSView` at all, so
+  a cache dependent on that method having run first would be stale on
+  every resize. Redesigned as a fully self-contained cache inside
+  `ImageRenderer`, re-checked at the top of every `draw(in:)` call instead.
+- **Measured BEFORE writing the fix, not just after** (this session's own
+  established discipline, matching P4/every RAW-native slice): temporary
+  `CFAbsoluteTimeGetCurrent()` print instrumentation (no `os_signpost` or
+  `OSLog` exists anywhere in this codebase — confirmed via grep — so this
+  used the same tool as the one existing timing precedent,
+  `ThumbnailCacheTests.swift`), added, exercised live by the user, then
+  fully reverted before commit (confirmed via a clean `git diff`/`git status`).
+  **BEFORE**: opened a large photo, dialed in non-trivial Sharpen + Noise
+  Reduction + Definition (the three stages IMPROVEMENTS.md flags as
+  forcing full-resolution work), then resized the window and zoomed/panned
+  repeatedly with NO slider touched. Per-frame `EditPipeline.apply` cost
+  was mostly 0.07-4.7ms but included real spikes: **38.6ms and 458.9ms** —
+  a genuinely observed near-half-second stall on a redraw where nothing
+  but the fit transform changed, not a theoretical concern.
+- **Shipped**: five new private stored properties on `ImageRenderer`
+  (`cachedSourceImage`/`cachedEditState`/`cachedEdited`/
+  `cachedOriginalState`/`cachedOriginal`), re-validated at the top of
+  every `draw(in:)`. `image !== cachedSourceImage` (identity, matching
+  `updateNSView`'s own existing comparison) invalidates BOTH cached
+  outputs on any true photo change; `edited` is separately keyed on
+  `editState` value, `original` (Compare mode) separately on
+  `compare.originalState` value — two different `EditState`s against the
+  same source image, so two independent cache slots, not one shared key.
+  A cache hit returns the EXACT SAME `CIImage` instance a miss would
+  freshly compute — not an approximation — so there is no possible visual
+  difference from this change, only a difference in how often the graph
+  gets rebuilt.
+- **AFTER** (identical exercise, same photo, same slider settings, fresh
+  process launch): per-frame cost dropped to **~0.002-0.008ms** — just the
+  cache-key comparison — with both large spikes completely gone. Recorded
+  honestly per this project's "measured, not assumed" convention: most
+  frames were ALREADY sub-millisecond even before the fix, so the
+  steady-state improvement is modest in absolute terms; the real win is
+  eliminating the rare-but-real 38-459ms stalls.
+- Reviewer (Opus 5): **APPROVE on the first pass** — traced the
+  identity-key premise ("`currentImage` is only ever reassigned wholesale,
+  never mutated in place") against the actual write sites in
+  `ImageDocumentModel.swift` (exactly two: the load path and the RAW
+  re-decode path, both fresh `CIImage` construction, confirmed `CIImage`
+  is immutable and `RawDecoder.materialize` never pools/reuses buffers)
+  rather than trusting the doc comment's claim; confirmed no
+  cross-contamination between the `edited`/`original` cache slots;
+  confirmed every `draw(in:)` entry path (normal edit, resize, zoom/pan,
+  divider drag, Compare toggle on/off/on) is handled correctly since the
+  cache is self-validated inside `draw(in:)` itself, not dependent on
+  `updateNSView`; confirmed `@MainActor`-safety (same isolation domain as
+  the pre-existing `image`/`editState`/`compare` properties, no new
+  concurrency surface); confirmed via grep that no debug print/timing
+  leftovers remain anywhere in the diff. Two non-blocking notes, neither
+  requiring action: `cachedOriginal` stays retained (harmlessly — a lazy
+  recipe, not decoded pixels) after Compare is toggled off, until the next
+  real photo change; and the cache's correctness depends on
+  `EditPipeline.apply`'s signature staying exactly `(EditState, CIImage)
+  -> CIImage`, already documented at the cache's own declaration as a
+  flag for if Phase 7 masking ever adds a renderer-level input that isn't
+  an `EditState` field.
+- No new automated tests — `ImageRenderer`/`draw(in:)` has zero existing
+  test precedent in this codebase (Metal-coupled rendering glue, same
+  category as the y-flip/Compare-split/zoom-crop-bleed bugs that were
+  live-caught, not unit-test-caught); judged instead by the
+  cache-hit-returns-identical-instance argument (true by construction) and
+  live visual verification. 465 tests unchanged, build clean. 1 commit
+  (feature only — no test files touched).
+- **NOT yet live-verified for visual correctness** (only the timing
+  measurement itself was done live) — still needs: Compare mode OFF,
+  drag-resize + zoom/pan, confirm pixel-identical rendering throughout, no
+  flicker/stale-frame artifacts; Compare mode ON (Side by Side AND Split),
+  repeat, paying extra attention to the divider drag (this app's own
+  history has one real coordinate bug there already, per CLAUDE.md); then
+  a REAL edit (slider nudge) to confirm the cache-miss path still shows
+  the change immediately.
+- **P2 is next**, per IMPROVEMENTS.md's own gating rule — its own fresh
+  measurement (per-frame cost during an ACTIVE slider drag, not a
+  static-content redraw) is required before any implementation, since
+  P3's fix does not address P2's scenario at all.
+
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
 user-requested follow-ups (folder-mirrored nested collections; the Editor
@@ -4671,12 +4767,20 @@ remaining items on `CIRAWFilter`'s deferred list are `lensCorrectionEnabled`
 (measured unsupported on this camera, needs a different camera body to
 revisit) and a genuine inverse-geometry transform so the WB eyedropper's
 fast path works beyond identity geometry — both smaller/more speculative
-than slice 7 was, and neither is blocking. Otherwise the user may pick
-from IMPROVEMENTS.md's open items instead (D4
-Library keyboard support, D5's remaining two parts, D6 accessibility
-pass, P2/P3/P5/P6 performance), or one of the Tier-1 Lightroom-gap WANTED
-items, or Phase 7 slice 1 (masking performance probe) — all logged in
-CLAUDE.md's roadmap.
+than slice 7 was, and neither is blocking. **IMPROVEMENTS.md P3 (cache
+`EditPipeline.apply` output in `ImageRenderer`) is now SHIPPED and
+reviewer-APPROVED (first pass) — see its own section above for the
+measured 458.9ms-spike-to-~0.005ms result — but NOT yet live-verified for
+visual correctness** (only the timing measurement itself was done live);
+that's the immediate next step (resize/zoom/pan + Compare mode Side by
+Side and Split + a real edit, per that section's checklist). **P2 is
+queued right after**, gated on its own fresh measurement (active
+slider-drag frame time, a different scenario than P3's) per
+IMPROVEMENTS.md's own rule. Otherwise the user may pick from
+IMPROVEMENTS.md's other open items instead (D4 Library keyboard support,
+D5's remaining two parts, D6 accessibility pass, P5/P6 performance), or
+one of the Tier-1 Lightroom-gap WANTED items, or Phase 7 slice 1 (masking
+performance probe) — all logged in CLAUDE.md's roadmap.
 
 **Both real issues surfaced live during batch export's own verification
 are now FIXED** — the Editor-vs-Preview color/brightness discrepancy and

@@ -715,18 +715,73 @@ Edits are stored as parameter sets and rendered live on the GPU.
    the existing search; a fast-path correction survived a LATER crop
    being added; and a non-RAW photo's eyedropper was unaffected. **Phase
    6 slice 4 is now fully complete.**
-   **Deferred to slice 5** (a separate session): `CIRAWFilter`'s
+   **Slice 5 (`rawLuminanceNoiseReductionAdjust` + `rawColorNoiseReductionScale`
+   + `rawSharpnessScale`, RAW-native Noise Reduction and Sharpness) ✅
+   COMPLETE** (2026-09-04). This slice was originally deferred pending "a
+   precedence decision" — the app already has post-decode `noiseReduction`/
+   `sharpness` fields (`EditPipeline`'s `CINoiseReduction`/
+   `CISharpenLuminance`, any photo type) — resolved by measurement, not
+   argument: these three RAW-native fields configure `CIRAWFilter` itself
+   at DECODE time, entirely upstream of and independent from those
+   post-decode stages, so the two compose additively (no replacement, no
+   mutual exclusion), the same relationship `rawExposureEV` already has
+   with `exposureEV`. Measured, unlike `lensCorrectionEnabled`, that all
+   three ARE supported on this camera
+   (`isLuminanceNoiseReductionSupported`/`isColorNoiseReductionSupported`/
+   `isSharpnessSupported` all `true`) — viable, not another dead end.
+   Their native per-file defaults (`0.0`/`0.5`/`0.9`) match
+   `shadowBoostScale`'s own per-file-camera-profile-seeded pattern, not
+   `boostAmount`'s universal-default pattern.
+   Reviewer (Opus 5, after the default model hit the account's monthly
+   spend limit — same pattern as every prior slice): FIX FIRST →
+   APPROVE. Caught two real bugs:
+   1. `rawLuminanceNoiseReductionAdjust` was originally shipped as the
+      SAME multiplicative `*=` scale shape as `shadowBoostScale` — but
+      this camera's own native `luminanceNoiseReductionAmount` measures
+      exactly `0.0`, making `native * anything` always `0`: a provably
+      dead control across its ENTIRE range, not a narrow inert band like
+      `boostShadowAmount`'s upper half. Fixed by switching to an
+      ADDITIVE offset (`native + adjust`, clamped to the property's own
+      `0...1` range) — re-verified live to reproduce the reviewer's own
+      measured 256×256-region pixel delta (80914) exactly, confirming
+      the fix reaches the genuinely useful range above `0.0` a scale
+      never could. `rawColorNoiseReductionScale`/`rawSharpnessScale`
+      stayed multiplicative scales, since their native defaults
+      (`0.5`/`0.9`) are meaningfully non-zero and measured effective as
+      scales — flagged in their own doc comments that a future camera
+      with a near-zero native default here would hit the identical trap.
+   2. All three fields' doc comments claimed "no capability gate
+      needed" — false: `isLuminanceNoiseReductionSupported`/
+      `isColorNoiseReductionSupported`/`isSharpnessSupported` are
+      structurally identical to `isLensCorrectionSupported`, the exact
+      flag that killed `lensCorrectionEnabled` in slice 2. Fixed with
+      new `RawDecoder.confirmedAdjustmentSupport(of:)` (`RenderGate`-
+      gated, mirrors `confirmedOrientation`'s own slice-4 pattern),
+      cached once per RAW photo load on
+      `ImageDocumentModel.currentRawAdjustmentSupport`, disabling each
+      of the three RAW-section UI rows individually.
+   447 tests (12 new). **Not yet live-verified** — next: the user's own
+   pass, specifically confirming each of the three sliders visibly does
+   something in the expected direction on a real NEF, and — per the
+   reviewer's own measurement — that RAW Library thumbnails do NOT
+   reflect any of these three sliders (measured live: `decodeDraft`'s
+   `isDraftModeEnabled` path produces zero pixel delta for all three,
+   an accepted known gap, not a new bug to chase).
+   **Deferred to slice 6** (a separate session): `CIRAWFilter`'s
    remaining RAW-native controls — `lensCorrectionEnabled` (measured
    UNSUPPORTED on this app's own test camera — do not "fix" this
    omission without re-measuring against whatever camera prompts
-   revisiting it), the RAW-native NR/sharpness/detail/moiré sliders, and
-   opting into `CIRAWDecoderVersion9` at runtime via
-   `supportedDecoderVersions` on OS versions that offer it. A genuine
-   inverse-geometry transform for the WB eyedropper's fast path (so it
-   works regardless of crop/straighten/perspective/flip, not just at
-   identity) is a separate, explicitly-deferred stretch goal from this
-   slice — see this slice's own write-up above for why it was scoped
-   out, not forgotten.
+   revisiting it), `contrastAmount`/`detailAmount`/`moireReductionAmount`
+   (also supported, also per-file-defaulted, deferred only because they
+   weren't part of what was asked for in slice 5 — re-measure their
+   native defaults before assuming a multiplicative-scale shape is safe,
+   same lesson slice 5 just learned), and opting into
+   `CIRAWDecoderVersion9` at runtime via `supportedDecoderVersions` on OS
+   versions that offer it. A genuine inverse-geometry transform for the
+   WB eyedropper's fast path (so it works regardless of crop/straighten/
+   perspective/flip, not just at identity) is a separate,
+   explicitly-deferred stretch goal from slice 4 — see that slice's own
+   write-up above for why it was scoped out, not forgotten.
 7. Local Adjustments (Masking) — **not started.** The single biggest capability
    gap versus Lightroom (see the Lightroom gap-analysis subsection above, which
    this phase supersedes/formalizes for this one item). Every adjustment in this

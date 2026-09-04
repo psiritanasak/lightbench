@@ -4293,6 +4293,99 @@ already proven not to render red on a macOS Menu/button this session).
   a non-RAW photo's eyedropper was completely unaffected. **Phase 6
   slice 4 is now fully complete.**
 
+### Phase 6 slice 5: RAW-native Noise Reduction + Sharpness — SHIPPED, not yet live-verified
+- Originally deferred pending "a precedence decision" — the app already
+  has post-decode `noiseReduction`/`sharpness` fields
+  (`EditPipeline`'s `CINoiseReduction`/`CISharpenLuminance`, any photo
+  type). Resolved by measurement: the three new RAW-native fields
+  (`rawLuminanceNoiseReductionAdjust`, `rawColorNoiseReductionScale`,
+  `rawSharpnessScale`) configure `CIRAWFilter` itself at DECODE time,
+  entirely upstream of and independent from those post-decode stages —
+  they compose additively, same relationship `rawExposureEV` already has
+  with `exposureEV`. No replacement, no mutual exclusion, no UI
+  conflict.
+- Measured live before design, same discipline as every RAW slice:
+  unlike `lensCorrectionEnabled`, all three ARE supported on this camera
+  (`isLuminanceNoiseReductionSupported`/`isColorNoiseReductionSupported`/
+  `isSharpnessSupported` all `true` on three sampled D610 NEFs) — viable,
+  not another dead end. Native per-file defaults measured `0.0`/`0.5`/
+  `0.9` — matches `shadowBoostScale`'s own per-file-camera-profile-seeded
+  pattern (SDK header: "the default value will vary per image" for all
+  three), not `boostAmount`'s universal-default pattern. No
+  absolute-with-fixed-default sibling exists for any of the three (no
+  `exposure`-to-`baselineExposure` equivalent), so — like
+  `shadowBoostScale` — each was designed as a relative field reading
+  `filter`'s own current value first.
+- **Reviewer (Opus 5, after the default model hit the account's monthly
+  spend limit — same pattern as every prior slice): FIX FIRST →
+  APPROVE.** Caught two real bugs, both found by re-measuring rather
+  than trusting the first draft's own stated reasoning:
+  1. `rawLuminanceNoiseReductionAdjust` was originally shipped with the
+     SAME multiplicative `*=` scale shape `shadowBoostScale` uses — but
+     this camera's own native `luminanceNoiseReductionAmount` measures
+     EXACTLY `0.0`, so `native * anything` is always `0`: a provably
+     dead control across its ENTIRE range (not a narrow inert band like
+     `boostShadowAmount`'s upper half — the whole slider). This is
+     precisely the trap `lensCorrectionEnabled` was deferred to avoid in
+     slice 2, just discovered a slice later instead of before shipping.
+     Fixed by switching to an ADDITIVE offset
+     (`filter.luminanceNoiseReductionAmount = min(1, max(0, native +
+     adjust))`, guarded `!= 0`, range `-1...1`, identity `0`) — the
+     reviewer's own methodology (256×256 region, total abs delta) gave
+     `80914` for the shipped absolute-assignment control case;
+     re-verified live that the additive fix's `+1.0` path reproduces
+     that EXACT number, confirming it reaches the genuinely useful range
+     above `0.0` a scale never could.
+     `rawColorNoiseReductionScale`/`rawSharpnessScale` stayed
+     multiplicative (native `0.5`/`0.9`, meaningfully non-zero, measured
+     effective as scales) — their doc comments now flag that a future
+     camera with a near-zero native default here would hit the same
+     trap; re-measure before assuming the shape holds.
+  2. All three fields' doc comments claimed "no capability gate
+     needed" — FALSE: `isLuminanceNoiseReductionSupported`/
+     `isColorNoiseReductionSupported`/`isSharpnessSupported` are
+     structurally identical to `isLensCorrectionSupported`, the exact
+     flag that killed `lensCorrectionEnabled`. Measured `true` on this
+     camera (so shipping is still correct), but the code ignored the
+     flag entirely — on a camera where any one measures `false`, that
+     row would be a silent dead slider still paying a full re-decode.
+     Fixed with new `RawDecoder.confirmedAdjustmentSupport(of:)`
+     (`RenderGate`-gated, mirrors `confirmedOrientation`'s own slice-4
+     caching pattern exactly), read ONCE per RAW photo load and cached
+     on `ImageDocumentModel.currentRawAdjustmentSupport`
+     (`@Published`, unlike the orientation cache — `AdjustTabView`
+     reads it directly to disable each of the three rows individually).
+  Also fixed pre-commit: 4 dangling doc/test-name references left by the
+  `rawLuminanceNoiseReductionScale` → `...Adjust` rename (caught in the
+  reviewer's own final pass); renamed `RawAdjustmentSupport.none` →
+  `.unsupported` (non-blocking — `.none` on a custom type is a known
+  Swift footgun, collides with `Optional.none` at any future optional
+  use site).
+- 447 tests (12 new): the established RAW-native-field test set
+  (`EditStateCodableTests`, `EditPipelineTests`,
+  `EditStateRawRedecodeTests`, `EditStateComparisonOriginalTests`,
+  `EditStatePresetTests`, `RawDecoderTests`) extended for all three new
+  fields, mirroring slice 3's own additions. 2 commits (feature+tests,
+  then this doc entry).
+- **Non-blocking, confirmed by live measurement, not a new bug**:
+  `decodeDraft`'s `isDraftModeEnabled` path produces ZERO pixel delta
+  for all three new fields — RAW Library thumbnails will never reflect
+  any of these three sliders while the Editor does. Same divergence
+  class as post-Phase-5 follow-up #4, logged as a known gap rather than
+  fixed this slice (reviewer's own call: verify this is the observed
+  live behavior, don't chase it as a regression).
+- **NOT yet live-verified** — next: the user's own pass on the real
+  D610 library — each of the three sliders visibly changes a real NEF
+  in the expected direction (RAW Luminance NR needs a genuinely NOISY
+  area to show any visible effect — a smooth/flat region will show
+  nothing even though the property is changing, since noise reduction
+  is content-adaptive); dragging any of the three mid-load of a
+  different photo, and switching photos mid-drag, both behave; Library
+  thumbnail and export both match the Editor's own rendering for RAW
+  Exposure/Boost Amount/Shadow Boost as before, and are CONFIRMED to
+  diverge for the three new sliders per the known gap above (not a
+  surprise if observed).
+
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
 user-requested follow-ups (folder-mirrored nested collections; the Editor
@@ -4337,12 +4430,17 @@ ALSO SHIPPED, reviewer-APPROVED, and fully LIVE-VERIFIED (2026-09-03) —
 see its own section above. **Phase 6 slice 4 (a true no-search RAW
 white-balance eyedropper via `CIRAWFilter.neutralLocation`) is SHIPPED,
 reviewer-APPROVED, and fully LIVE-VERIFIED (2026-09-04) — see its own
-section above.** 435 tests passing. Next: Phase 6 slice 5
+section above.** **Phase 6 slice 5 (RAW-native Noise Reduction +
+Sharpness) is SHIPPED and reviewer-APPROVED (2026-09-04) — see its own
+section above.** 447 tests passing. **Not yet live-verified** — next:
+the user's own pass per slice 5's own checklist. After that, Phase 6
+slice 6
 (`lensCorrectionEnabled` — deferred, measured unsupported on this camera,
-would need a different camera to revisit — RAW-native NR/sharpness,
-`CIRAWDecoderVersion9` opt-in, or a genuine inverse-geometry transform so
-the WB eyedropper's fast path works beyond identity geometry) is the next
-roadmap item, or the user may pick from IMPROVEMENTS.md's open items
+would need a different camera to revisit — `contrastAmount`/
+`detailAmount`/`moireReductionAmount`, `CIRAWDecoderVersion9` opt-in, or
+a genuine inverse-geometry transform so the WB eyedropper's fast path
+works beyond identity geometry) is the next roadmap item, or the user
+may pick from IMPROVEMENTS.md's open items
 instead (D4
 Library keyboard support, D5's remaining two parts, D6 accessibility
 pass, P2/P3/P5/P6 performance), or one of the Tier-1 Lightroom-gap WANTED

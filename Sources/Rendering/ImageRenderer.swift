@@ -54,6 +54,28 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     /// to this renderer's y-UP space).
     var panOffset: CGSize = .zero
 
+    // MARK: - P3 pipeline-output cache (IMPROVEMENTS.md)
+    //
+    // `edited`/`original` are pure functions of (source `image`, some
+    // `EditState`) — see `EditPipeline.apply`'s own signature. Caching them
+    // here means a redraw triggered ONLY by resize/zoom/pan/Compare-divider-
+    // drag (none of which touch `image` or any `EditState`) reuses the
+    // existing `CIImage` graphs instead of rebuilding the whole ~12-stage
+    // pipeline every frame. Self-invalidating and self-contained inside
+    // `draw(in:)` — does NOT depend on `MetalImageView.updateNSView` having
+    // run first, because a resize redraw (`ResizingMTKView.setFrameSize`)
+    // reaches `draw(in:)` directly without going through `updateNSView` at
+    // all. Measured live (IMPROVEMENTS.md P3): most frames were already
+    // sub-millisecond, but real spikes up to ~459ms appeared during a
+    // resize/zoom/pan sequence with Sharpen+NR+Definition active and
+    // nothing else changing — this cache eliminates exactly that redundant
+    // rebuild.
+    private var cachedSourceImage: CIImage?
+    private var cachedEditState: EditState?
+    private var cachedEdited: CIImage?
+    private var cachedOriginalState: EditState?
+    private var cachedOriginal: CIImage?
+
     init(device: MTLDevice) {
         guard let queue = device.makeCommandQueue() else {
             fatalError("Metal device failed to create a command queue")
@@ -111,7 +133,28 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
         else { return }
 
         // MARK: - Edit pipeline
-        let edited = EditPipeline.apply(editState, to: image)
+        // Any true source-image change (a new photo loaded, or RAW
+        // re-decode swapping `currentImage`) invalidates BOTH cached
+        // outputs — they were built from the OLD image. `!==` matches
+        // `MetalImageView.updateNSView`'s own identity comparison;
+        // `currentImage` is only ever reassigned wholesale, never mutated
+        // in place.
+        if image !== cachedSourceImage {
+            cachedSourceImage = image
+            cachedEditState = nil
+            cachedEdited = nil
+            cachedOriginalState = nil
+            cachedOriginal = nil
+        }
+
+        let edited: CIImage
+        if let cachedEditState, cachedEditState == editState, let hit = cachedEdited {
+            edited = hit
+        } else {
+            edited = EditPipeline.apply(editState, to: image)
+            cachedEditState = editState
+            cachedEdited = edited
+        }
 
         // Fit/transform against `edited.extent`, not `image.extent`: exposure
         // doesn't change extent so this is a no-op today, but the future crop
@@ -162,7 +205,14 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
             // only resets color/tone fields — so `original.extent ==
             // edited.extent` always holds, and both sides can share ONE
             // `fitRect`/`AspectFit` computation below.
-            let original = EditPipeline.apply(compare.originalState, to: image)
+            let original: CIImage
+            if let cachedOriginalState, cachedOriginalState == compare.originalState, let hit = cachedOriginal {
+                original = hit
+            } else {
+                original = EditPipeline.apply(compare.originalState, to: image)
+                cachedOriginalState = compare.originalState
+                cachedOriginal = original
+            }
             switch compare.mode {
             case .sideBySide:
                 let (leftRect, rightRect) = CompareLayout.sideBySideFitRects(

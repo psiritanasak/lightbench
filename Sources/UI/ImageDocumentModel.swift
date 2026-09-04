@@ -38,11 +38,12 @@ final class ImageDocumentModel: ObservableObject {
     /// on the main actor once before) this cache avoids entirely. Not
     /// `@Published` — nothing in the UI displays it.
     private(set) var currentRawOrientationIsUp = false
-    /// Which RAW-native NR/Sharpness adjustments `CIRAWFilter` actually
-    /// supports for `currentURL` (see `RawDecoder.confirmedAdjustmentSupport`'s
-    /// own doc comment) — `.unsupported` for non-RAW photos. `@Published`,
-    /// unlike `currentRawOrientationIsUp` above: `AdjustTabView` reads
-    /// this directly to disable each RAW NR/Sharpness row individually,
+    /// Which RAW-native NR/Sharpness/Contrast/Detail/Moiré-Reduction
+    /// adjustments `CIRAWFilter` actually supports for `currentURL` (see
+    /// `RawDecoder.confirmedAdjustmentSupport`'s own doc comment) —
+    /// `.unsupported` for non-RAW photos. `@Published`, unlike
+    /// `currentRawOrientationIsUp` above: `AdjustTabView` reads this
+    /// directly to disable each of the six gated RAW rows individually,
     /// so SwiftUI needs to observe it. Cached at load time for the same
     /// reason as `currentRawOrientationIsUp` — constructing a
     /// `CIRAWFilter` to read these flags must go through `RenderGate`,

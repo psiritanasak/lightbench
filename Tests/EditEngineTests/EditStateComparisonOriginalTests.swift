@@ -74,6 +74,9 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.rawLuminanceNoiseReductionAdjust = 0.15
         s.rawColorNoiseReductionScale = 0.45
         s.rawSharpnessScale = 0.75
+        s.rawContrastAdjust = 0.25
+        s.rawDetailAdjust = 1.1
+        s.rawMoireReductionAdjust = 0.35
         return s
     }
 
@@ -188,5 +191,23 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         let edited = fullyEditedState()
         XCTAssertEqual(edited.comparisonOriginal().rawSharpnessScale, edited.rawSharpnessScale)
         XCTAssertNotEqual(edited.rawSharpnessScale, EditState.identity.rawSharpnessScale, "test fixture should start non-default")
+    }
+
+    func testRawContrastAdjustIsPreservedNotReset() {
+        let edited = fullyEditedState()
+        XCTAssertEqual(edited.comparisonOriginal().rawContrastAdjust, edited.rawContrastAdjust)
+        XCTAssertNotEqual(edited.rawContrastAdjust, EditState.identity.rawContrastAdjust, "test fixture should start non-default")
+    }
+
+    func testRawDetailAdjustIsPreservedNotReset() {
+        let edited = fullyEditedState()
+        XCTAssertEqual(edited.comparisonOriginal().rawDetailAdjust, edited.rawDetailAdjust)
+        XCTAssertNotEqual(edited.rawDetailAdjust, EditState.identity.rawDetailAdjust, "test fixture should start non-default")
+    }
+
+    func testRawMoireReductionAdjustIsPreservedNotReset() {
+        let edited = fullyEditedState()
+        XCTAssertEqual(edited.comparisonOriginal().rawMoireReductionAdjust, edited.rawMoireReductionAdjust)
+        XCTAssertNotEqual(edited.rawMoireReductionAdjust, EditState.identity.rawMoireReductionAdjust, "test fixture should start non-default")
     }
 }

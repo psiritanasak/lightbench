@@ -732,6 +732,68 @@ struct EditState: Equatable, Codable {
     /// decode-time vs. post-decode, additive not conflicting.
     var rawSharpnessScale: Double = 1.0
 
+    /// Additive offset on the file's OWN `contrastAmount` (CIRAWFilter's
+    /// pre-demosaic local/edge contrast). `0` = untouched. ADDITIVE, not
+    /// a multiplicative scale like `shadowBoostScale`/
+    /// `rawColorNoiseReductionScale` — this camera's own native
+    /// `contrastAmount` measures `0.0` (same per-file-camera-profile
+    /// pattern as every other RAW-native field; SDK header documents
+    /// this varies per image), so a scale would be dead across its
+    /// entire range, the exact trap `rawLuminanceNoiseReductionAdjust`
+    /// hit in slice 5. Confirmed live: absolute `1.0` moves substantial
+    /// real pixels (the largest single-field delta measured in this
+    /// app's RAW-native work). Clamped so `native + adjust` stays within
+    /// the property's own declared `0...1` range.
+    ///
+    /// Reviewer-noted asymmetry, accepted not fixed: since this camera's
+    /// own native value is `0.0` (the property's own floor), the NEGATIVE
+    /// half of this field's `-1...1` range is inert HERE (`max(0, 0 +
+    /// negative) == 0`) — the same shape of measured-dead travel that
+    /// motivated `rawMoireReductionAdjust`'s narrower UI range below.
+    /// Kept symmetric anyway, unlike that field, because a camera with a
+    /// genuinely non-zero native default (as the SDK header's own "varies
+    /// per image" wording implies exists) would have real use for the
+    /// negative half — this is camera-generic design, not a UI/UX call
+    /// about THIS camera's own inert range the way the moiré cap was.
+    ///
+    /// Same structural caveat as the other RAW-native fields:
+    /// `EditPipeline` never reads this; it only takes effect by
+    /// re-decoding.
+    var rawContrastAdjust: Double = 0
+
+    /// Additive offset on the file's OWN `detailAmount` (CIRAWFilter's
+    /// pre-demosaic edge/detail enhancement). Same shape and reasoning
+    /// as `rawContrastAdjust` above — measured native `0.0` on this
+    /// camera, confirmed live that absolute `3.0` (this property's own
+    /// declared max) moves substantial real pixels. Clamped so
+    /// `native + adjust` stays within the property's own declared
+    /// `0...3` range — wider than most RAW-native fields, matching the
+    /// SDK's own declared span for this one.
+    var rawDetailAdjust: Double = 0
+
+    /// Additive offset on the file's OWN `moireReductionAmount`
+    /// (CIRAWFilter's pre-demosaic moiré-artifact reduction). Same
+    /// per-file-default reasoning as the other two. UNLIKE them, the
+    /// UI-facing range is DELIBERATELY narrower than the property's own
+    /// true valid range: the SDK header declares `0...1` but that's
+    /// contradicted by its own comment text ("3 indicates maximum") and
+    /// by measurement — the property genuinely accepts and retains
+    /// values up to `3.0` (confirmed live, no clamping on readback). But
+    /// the measured EFFECT saturates hard near `1.0` (delta grew only
+    /// ~3% across the entire `1.0...3.0` span) — the same inert-long-
+    /// tail pattern `boostShadowAmount` showed in slice 3. Exposing that
+    /// dead travel would repeat the exact mistake this project has
+    /// already caught and fixed twice (`boostShadowAmount`'s upper half
+    /// in slice 3, `rawLuminanceNoiseReductionAdjust`'s multiplicative
+    /// shape in slice 5) — so the clamp here is `-1...1` even though
+    /// `CIRAWFilter` itself would accept a wider range without
+    /// complaint.
+    ///
+    /// Same structural caveat as the other RAW-native fields:
+    /// `EditPipeline` never reads this; it only takes effect by
+    /// re-decoding.
+    var rawMoireReductionAdjust: Double = 0
+
     /// True when every geometric transform (straighten/perspective/crop/
     /// flip) is at its identity value — the exact field GROUP already
     /// named together in `comparisonOriginal()`/`applyingPreset()`'s own
@@ -767,6 +829,9 @@ struct EditState: Equatable, Codable {
             || rawLuminanceNoiseReductionAdjust != other.rawLuminanceNoiseReductionAdjust
             || rawColorNoiseReductionScale != other.rawColorNoiseReductionScale
             || rawSharpnessScale != other.rawSharpnessScale
+            || rawContrastAdjust != other.rawContrastAdjust
+            || rawDetailAdjust != other.rawDetailAdjust
+            || rawMoireReductionAdjust != other.rawMoireReductionAdjust
     }
 
     /// The no-op edit state: every adjustment at its default (identity) value.
@@ -834,9 +899,10 @@ struct EditState: Equatable, Codable {
         // untouched — inherited from `self` via `var s = self` above.
         // `boostAmount`/`rawExposureEV`/`shadowBoostScale`/
         // `rawWhiteBalanceNeutralPoints`/`rawLuminanceNoiseReductionAdjust`/
-        // `rawColorNoiseReductionScale`/`rawSharpnessScale` are ALSO left
-        // untouched, for a different reason: `EditPipeline` never reads
-        // any of them at all (see their own doc comments), so resetting them here
+        // `rawColorNoiseReductionScale`/`rawSharpnessScale`/
+        // `rawContrastAdjust`/`rawDetailAdjust`/`rawMoireReductionAdjust`
+        // are ALSO left untouched, for a different reason: `EditPipeline`
+        // never reads any of them at all (see their own doc comments), so resetting them here
         // couldn't be honored by either side of the Compare render
         // anyway — inherit them rather than set a
         // value this method has no way to actually apply.
@@ -899,8 +965,9 @@ struct EditState: Equatable, Codable {
         // `var result = target` above.
         // `boostAmount`/`rawExposureEV`/`shadowBoostScale`/
         // `rawWhiteBalanceNeutralPoints`/`rawLuminanceNoiseReductionAdjust`/
-        // `rawColorNoiseReductionScale`/`rawSharpnessScale` are ALSO not
-        // copied, for a different reason: carrying them would make applying ANY preset
+        // `rawColorNoiseReductionScale`/`rawSharpnessScale`/
+        // `rawContrastAdjust`/`rawDetailAdjust`/`rawMoireReductionAdjust`
+        // are ALSO not copied, for a different reason: carrying them would make applying ANY preset
         // kick off a multi-second RAW re-decode (no other preset field
         // does that), and would silently set RAW-decode parameters on a
         // JPEG target — dead weight that also
@@ -965,6 +1032,7 @@ extension EditState {
         case boostAmount
         case rawExposureEV, shadowBoostScale, rawWhiteBalanceNeutralPoints
         case rawLuminanceNoiseReductionAdjust, rawColorNoiseReductionScale, rawSharpnessScale
+        case rawContrastAdjust, rawDetailAdjust, rawMoireReductionAdjust
     }
 
     init(from decoder: Decoder) throws {
@@ -1034,5 +1102,8 @@ extension EditState {
         rawLuminanceNoiseReductionAdjust = try container.decodeIfPresent(Double.self, forKey: .rawLuminanceNoiseReductionAdjust) ?? 0
         rawColorNoiseReductionScale = try container.decodeIfPresent(Double.self, forKey: .rawColorNoiseReductionScale) ?? 1.0
         rawSharpnessScale = try container.decodeIfPresent(Double.self, forKey: .rawSharpnessScale) ?? 1.0
+        rawContrastAdjust = try container.decodeIfPresent(Double.self, forKey: .rawContrastAdjust) ?? 0
+        rawDetailAdjust = try container.decodeIfPresent(Double.self, forKey: .rawDetailAdjust) ?? 0
+        rawMoireReductionAdjust = try container.decodeIfPresent(Double.self, forKey: .rawMoireReductionAdjust) ?? 0
     }
 }

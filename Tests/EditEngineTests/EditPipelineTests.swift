@@ -2543,7 +2543,10 @@ final class EditPipelineTests: XCTestCase {
             rawWhiteBalanceNeutralPoints: [RawNeutralPoint(x: 0.3, y: 0.7)],
             rawLuminanceNoiseReductionAdjust: 0.2,
             rawColorNoiseReductionScale: 0.8,
-            rawSharpnessScale: 0.15
+            rawSharpnessScale: 0.15,
+            rawContrastAdjust: 0.45,
+            rawDetailAdjust: 1.75,
+            rawMoireReductionAdjust: 0.6
         )
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(EditState.self, from: data)
@@ -2551,13 +2554,14 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(original, decoded)
     }
 
-    /// Pins the architecture Phase 6 slices 2-5 depend on: the RAW-native
+    /// Pins the architecture Phase 6 slices 2-6 depend on: the RAW-native
     /// fields (`boostAmount`, `rawExposureEV`, `shadowBoostScale`,
     /// `rawWhiteBalanceNeutralPoints`, `rawLuminanceNoiseReductionAdjust`,
-    /// `rawColorNoiseReductionScale`, `rawSharpnessScale`) configure
-    /// `CIRAWFilter` itself, upstream of `EditPipeline` — none is one of
-    /// this function's stages and all must have zero effect on its
-    /// output. Fails loudly if a future session tries to "wire the
+    /// `rawColorNoiseReductionScale`, `rawSharpnessScale`,
+    /// `rawContrastAdjust`, `rawDetailAdjust`, `rawMoireReductionAdjust`)
+    /// configure `CIRAWFilter` itself, upstream of `EditPipeline` — none
+    /// is one of this function's stages and all must have zero effect on
+    /// its output. Fails loudly if a future session tries to "wire the
     /// missing fields into the pipeline" by mistake (there's nothing
     /// there to wire them into; they only take effect via
     /// `RawDecoder`/`ImageDocumentModel.redecodeForRawNativeChange`).
@@ -2580,6 +2584,9 @@ final class EditPipelineTests: XCTestCase {
         low.rawLuminanceNoiseReductionAdjust = 0
         low.rawColorNoiseReductionScale = 0
         low.rawSharpnessScale = 0
+        low.rawContrastAdjust = -1
+        low.rawDetailAdjust = -3
+        low.rawMoireReductionAdjust = -1
         var high = low
         high.boostAmount = 1
         high.rawExposureEV = 2
@@ -2588,6 +2595,9 @@ final class EditPipelineTests: XCTestCase {
         high.rawLuminanceNoiseReductionAdjust = 1
         high.rawColorNoiseReductionScale = 1
         high.rawSharpnessScale = 1
+        high.rawContrastAdjust = 1
+        high.rawDetailAdjust = 3
+        high.rawMoireReductionAdjust = 1
 
         let lowOutput = EditPipeline.apply(low, to: image)
         let highOutput = EditPipeline.apply(high, to: image)

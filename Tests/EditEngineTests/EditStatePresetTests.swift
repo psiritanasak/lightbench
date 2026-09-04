@@ -70,6 +70,9 @@ final class EditStatePresetTests: XCTestCase {
         s.rawLuminanceNoiseReductionAdjust = 0.15
         s.rawColorNoiseReductionScale = 0.45
         s.rawSharpnessScale = 0.75
+        s.rawContrastAdjust = 0.25
+        s.rawDetailAdjust = 1.1
+        s.rawMoireReductionAdjust = 0.35
         return s
     }
 
@@ -226,6 +229,39 @@ final class EditStatePresetTests: XCTestCase {
 
         XCTAssertEqual(result.rawSharpnessScale, target.rawSharpnessScale)
         XCTAssertNotEqual(result.rawSharpnessScale, preset.rawSharpnessScale)
+    }
+
+    func testTargetsRawContrastAdjustSurvivesAPreset() {
+        let preset = fullyEditedState() // rawContrastAdjust = 0.25
+        var target = EditState.identity
+        target.rawContrastAdjust = -0.4
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.rawContrastAdjust, target.rawContrastAdjust)
+        XCTAssertNotEqual(result.rawContrastAdjust, preset.rawContrastAdjust)
+    }
+
+    func testTargetsRawDetailAdjustSurvivesAPreset() {
+        let preset = fullyEditedState() // rawDetailAdjust = 1.1
+        var target = EditState.identity
+        target.rawDetailAdjust = -2.0
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.rawDetailAdjust, target.rawDetailAdjust)
+        XCTAssertNotEqual(result.rawDetailAdjust, preset.rawDetailAdjust)
+    }
+
+    func testTargetsRawMoireReductionAdjustSurvivesAPreset() {
+        let preset = fullyEditedState() // rawMoireReductionAdjust = 0.35
+        var target = EditState.identity
+        target.rawMoireReductionAdjust = -0.6
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.rawMoireReductionAdjust, target.rawMoireReductionAdjust)
+        XCTAssertNotEqual(result.rawMoireReductionAdjust, preset.rawMoireReductionAdjust)
     }
 
     /// `applyingPreset(onto:)` and `comparisonOriginal()` draw the color/

@@ -59,8 +59,9 @@ final class RawDecoderTests: XCTestCase {
     /// The RAW-native `EditState` fields (`boostAmount`, `rawExposureEV`,
     /// `shadowBoostScale`, `rawWhiteBalanceNeutralPoints`,
     /// `rawLuminanceNoiseReductionAdjust`, `rawColorNoiseReductionScale`,
-    /// `rawSharpnessScale`) configure `CIRAWFilter` itself, so they must
-    /// have ZERO effect on the non-RAW `decode` branch
+    /// `rawSharpnessScale`, `rawContrastAdjust`, `rawDetailAdjust`,
+    /// `rawMoireReductionAdjust`) configure `CIRAWFilter` itself, so they
+    /// must have ZERO effect on the non-RAW `decode` branch
     /// (`CIImage(contentsOf:)`, which never touches `CIRAWFilter` at
     /// all). Writes a real temp PNG, same fixture-writing pattern
     /// `ThumbnailGeneratorTests` already uses.
@@ -81,6 +82,9 @@ final class RawDecoderTests: XCTestCase {
         low.rawLuminanceNoiseReductionAdjust = 0
         low.rawColorNoiseReductionScale = 0
         low.rawSharpnessScale = 0
+        low.rawContrastAdjust = -1
+        low.rawDetailAdjust = -3
+        low.rawMoireReductionAdjust = -1
         var high = EditState.identity
         high.boostAmount = 1
         high.rawExposureEV = 2
@@ -89,6 +93,9 @@ final class RawDecoderTests: XCTestCase {
         high.rawLuminanceNoiseReductionAdjust = 1
         high.rawColorNoiseReductionScale = 1
         high.rawSharpnessScale = 1
+        high.rawContrastAdjust = 1
+        high.rawDetailAdjust = 3
+        high.rawMoireReductionAdjust = 1
 
         let lowResult = await RawDecoder.decode(contentsOf: url, editState: low)
         let highResult = await RawDecoder.decode(contentsOf: url, editState: high)

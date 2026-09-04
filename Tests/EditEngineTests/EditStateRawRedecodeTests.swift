@@ -11,8 +11,10 @@ import XCTest
 /// re-decode. Phase 6 slice 3 added `rawExposureEV`/`shadowBoostScale` to
 /// `boostAmount`; slice 4 added `rawWhiteBalanceNeutralPoints`; slice 5
 /// added `rawLuminanceNoiseReductionAdjust`/`rawColorNoiseReductionScale`/
-/// `rawSharpnessScale`. Each field gets its own true case so a missing
-/// `||` clause for any one of them can't hide behind another.
+/// `rawSharpnessScale`; slice 6 added `rawContrastAdjust`/
+/// `rawDetailAdjust`/`rawMoireReductionAdjust`. Each field gets its own
+/// true case so a missing `||` clause for any one of them can't hide
+/// behind another.
 final class EditStateRawRedecodeTests: XCTestCase {
     func testTrueWhenBoostAmountDiffers() {
         var a = EditState.identity
@@ -70,6 +72,30 @@ final class EditStateRawRedecodeTests: XCTestCase {
         XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
     }
 
+    func testTrueWhenRawContrastAdjustDiffers() {
+        var a = EditState.identity
+        var b = EditState.identity
+        a.rawContrastAdjust = 0.2
+        b.rawContrastAdjust = 0.8
+        XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
+    }
+
+    func testTrueWhenRawDetailAdjustDiffers() {
+        var a = EditState.identity
+        var b = EditState.identity
+        a.rawDetailAdjust = 0.2
+        b.rawDetailAdjust = 0.8
+        XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
+    }
+
+    func testTrueWhenRawMoireReductionAdjustDiffers() {
+        var a = EditState.identity
+        var b = EditState.identity
+        a.rawMoireReductionAdjust = 0.2
+        b.rawMoireReductionAdjust = 0.8
+        XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
+    }
+
     func testFalseWhenAllRawNativeFieldsAreTheSame() {
         var a = EditState.identity
         var b = EditState.identity
@@ -87,6 +113,12 @@ final class EditStateRawRedecodeTests: XCTestCase {
         b.rawColorNoiseReductionScale = 0.6
         a.rawSharpnessScale = 0.7
         b.rawSharpnessScale = 0.7
+        a.rawContrastAdjust = 0.25
+        b.rawContrastAdjust = 0.25
+        a.rawDetailAdjust = 1.1
+        b.rawDetailAdjust = 1.1
+        a.rawMoireReductionAdjust = 0.35
+        b.rawMoireReductionAdjust = 0.35
         XCTAssertFalse(a.requiresRawRedecode(comparedTo: b))
     }
 

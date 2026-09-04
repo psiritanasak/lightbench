@@ -379,10 +379,11 @@ struct AdjustTabView: View {
         }
     }
 
-    /// Six controls now (slice 2 shipped `boostAmount`; slice 3 added RAW
-    /// Exposure/Shadow Boost; slice 5 added the three RAW NR/Sharpness
-    /// rows below — the WB eyedropper's own `rawWhiteBalanceNeutralPoints`,
-    /// added in slice 4, deliberately has NO row here at all, see below).
+    /// Nine controls now (slice 2 shipped `boostAmount`; slice 3 added RAW
+    /// Exposure/Shadow Boost; slice 5 added the RAW NR/Sharpness rows;
+    /// slice 6 added RAW Contrast/Detail/Moiré Reduction below — the WB
+    /// eyedropper's own `rawWhiteBalanceNeutralPoints`, added in slice 4,
+    /// deliberately has NO row here at all, see below).
     /// `lensCorrectionEnabled` (the original slice-2 candidate) was
     /// measured unsupported on this app's own test camera before any code
     /// was written, and the rest of `CIRAWFilter`'s controls are deferred
@@ -393,26 +394,30 @@ struct AdjustTabView: View {
     /// native decoder value, not absolute — see
     /// `EditState.shadowBoostScale`'s doc comment for why (measured
     /// per-file camera-profile default, not the API's declared default)
-    /// — so `100%` genuinely means "untouched." RAW Luminance NR is
-    /// DIFFERENT — an ADDITIVE offset (`+0%` is untouched, not `100%`) —
-    /// reviewer-caught: this camera's own native
-    /// `luminanceNoiseReductionAmount` measures `0.0`, so a multiplicative
-    /// scale would have been a provably dead control across its entire
-    /// range (`0 * anything == 0`); see
-    /// `EditState.rawLuminanceNoiseReductionAdjust`'s own doc comment.
-    /// Shadow Boost is additionally disabled whenever Boost Amount is `0`
-    /// — the SDK header states it "has no effect if the boostAmount is
-    /// 0," so it would otherwise be a dead control with no visible
-    /// feedback, the exact trap `lensCorrectionEnabled` was deferred to
-    /// avoid. The three NR/Sharpness rows are EACH disabled individually
-    /// via `document.currentRawAdjustmentSupport` — reviewer-caught: an
-    /// earlier draft claimed these had "no capability gate," but
-    /// `isLuminanceNoiseReductionSupported`/`isColorNoiseReductionSupported`/
-    /// `isSharpnessSupported` are the same class of per-camera-profile
-    /// flag as `isLensCorrectionSupported` (measured `true` on this app's
-    /// test camera, but not guaranteed on every camera). Disabled while a
-    /// decode is in flight: unlike every other row in this panel,
-    /// releasing any of these sliders costs a full RAW re-decode (see
+    /// — so `100%` genuinely means "untouched." RAW Luminance NR, RAW
+    /// Contrast, RAW Detail, and RAW Moiré Reduction are DIFFERENT — all
+    /// ADDITIVE offsets (`+0%` is untouched, not `100%`) — reviewer-caught
+    /// in slice 5, then applied proactively in slice 6: this camera's own
+    /// native value for ALL FOUR underlying properties measures `0.0`, so
+    /// a multiplicative scale would have been a provably dead control
+    /// across its entire range (`0 * anything == 0`) for every one of
+    /// them; see each field's own `EditState` doc comment. RAW Moiré
+    /// Reduction's range is additionally capped narrower (`-1...1`) than
+    /// what `CIRAWFilter` itself accepts, since the measured effect
+    /// saturates hard above that — see
+    /// `EditState.rawMoireReductionAdjust`'s own doc comment. Shadow
+    /// Boost is additionally disabled whenever Boost Amount is `0` — the
+    /// SDK header states it "has no effect if the boostAmount is 0," so
+    /// it would otherwise be a dead control with no visible feedback, the
+    /// exact trap `lensCorrectionEnabled` was deferred to avoid. All six
+    /// NR/Sharpness/Contrast/Detail/Moiré rows are EACH disabled
+    /// individually via `document.currentRawAdjustmentSupport` — every
+    /// one of the underlying `isXSupported` flags is the same class of
+    /// per-camera-profile capability flag as `isLensCorrectionSupported`
+    /// (measured `true` on this app's test camera for all six, but not
+    /// guaranteed on every camera). Disabled while a decode is in flight:
+    /// unlike every other row in this panel, releasing any of these
+    /// sliders costs a full RAW re-decode (see
     /// `ImageDocumentModel.redecodeForRawNativeChange`), so none may be
     /// draggable again mid-decode.
     ///
@@ -452,6 +457,21 @@ struct AdjustTabView: View {
                 range: 0...1, identity: 1.0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
                 .disabled(!document.currentRawAdjustmentSupport.sharpness)
+            EditSliderRow(
+                label: "RAW Contrast", value: $document.editState.rawContrastAdjust,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+                .disabled(!document.currentRawAdjustmentSupport.contrast)
+            EditSliderRow(
+                label: "RAW Detail", value: $document.editState.rawDetailAdjust,
+                range: -3...3, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+                .disabled(!document.currentRawAdjustmentSupport.detail)
+            EditSliderRow(
+                label: "RAW Moiré Reduction", value: $document.editState.rawMoireReductionAdjust,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+                .disabled(!document.currentRawAdjustmentSupport.moireReduction)
         }
         .disabled(document.isLoadingImage)
     }
@@ -507,10 +527,11 @@ struct AdjustTabView: View {
     /// continuous adjustment VALUES.
     /// Reviewer-flagged, deliberate, documented gap: this deliberately
     /// mirrors `comparisonOriginal()`'s field list, which does NOT include
-    /// any of the seven RAW-native fields (`boostAmount`, `rawExposureEV`,
+    /// any of the ten RAW-native fields (`boostAmount`, `rawExposureEV`,
     /// `shadowBoostScale`, `rawWhiteBalanceNeutralPoints`,
     /// `rawLuminanceNoiseReductionAdjust`, `rawColorNoiseReductionScale`,
-    /// `rawSharpnessScale` — see that method's own doc comment:
+    /// `rawSharpnessScale`, `rawContrastAdjust`, `rawDetailAdjust`,
+    /// `rawMoireReductionAdjust` — see that method's own doc comment:
     /// `EditPipeline` can't express any of them, so resetting them here
     /// would trigger an unwanted full RAW re-decode from what should be
     /// an instant, free action). Consequence: a RAW photo with every
@@ -518,10 +539,10 @@ struct AdjustTabView: View {
     /// this button (correctly) disabled, even though the RAW section's
     /// own sliders are visibly non-identity — `revertToOriginal()`'s
     /// literal `EditState()` commit is the control that resets all
-    /// seven, not this one.
+    /// ten, not this one.
     ///
     /// `rawWhiteBalanceNeutralPoints` specifically is WORSE than the
-    /// other six here — reviewer-caught: it has no slider or any other
+    /// other nine here — reviewer-caught: it has no slider or any other
     /// visible representation in this section AT ALL, so a RAW-native WB
     /// eyedropper tap is genuinely invisible state once set: neither this
     /// button, nor the RAW section's own sliders, show anything changed.

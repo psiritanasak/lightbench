@@ -45,6 +45,9 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.rawLuminanceNoiseReductionAdjust, 0)
         XCTAssertEqual(state.rawColorNoiseReductionScale, 1.0)
         XCTAssertEqual(state.rawSharpnessScale, 1.0)
+        XCTAssertEqual(state.rawContrastAdjust, 0)
+        XCTAssertEqual(state.rawDetailAdjust, 0)
+        XCTAssertEqual(state.rawMoireReductionAdjust, 0)
     }
 
     func testBoostAmountDecodesWhenPresent() throws {
@@ -94,6 +97,27 @@ final class EditStateCodableTests: XCTestCase {
         { "rawSharpnessScale": 0.55 }
         """)
         XCTAssertEqual(state.rawSharpnessScale, 0.55)
+    }
+
+    func testRawContrastAdjustDecodesWhenPresent() throws {
+        let state = try decode("""
+        { "rawContrastAdjust": 0.35 }
+        """)
+        XCTAssertEqual(state.rawContrastAdjust, 0.35)
+    }
+
+    func testRawDetailAdjustDecodesWhenPresent() throws {
+        let state = try decode("""
+        { "rawDetailAdjust": 1.5 }
+        """)
+        XCTAssertEqual(state.rawDetailAdjust, 1.5)
+    }
+
+    func testRawMoireReductionAdjustDecodesWhenPresent() throws {
+        let state = try decode("""
+        { "rawMoireReductionAdjust": 0.65 }
+        """)
+        XCTAssertEqual(state.rawMoireReductionAdjust, 0.65)
     }
 
     func testEmptyObjectDecodesToExactIdentity() throws {

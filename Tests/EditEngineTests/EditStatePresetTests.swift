@@ -67,6 +67,9 @@ final class EditStatePresetTests: XCTestCase {
         s.rawExposureEV = 0.6
         s.shadowBoostScale = 0.2
         s.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.35, y: 0.65)]
+        s.rawLuminanceNoiseReductionAdjust = 0.15
+        s.rawColorNoiseReductionScale = 0.45
+        s.rawSharpnessScale = 0.75
         return s
     }
 
@@ -190,6 +193,39 @@ final class EditStatePresetTests: XCTestCase {
 
         XCTAssertEqual(result.rawWhiteBalanceNeutralPoints, target.rawWhiteBalanceNeutralPoints)
         XCTAssertNotEqual(result.rawWhiteBalanceNeutralPoints, preset.rawWhiteBalanceNeutralPoints)
+    }
+
+    func testTargetsRawLuminanceNoiseReductionAdjustSurvivesAPreset() {
+        let preset = fullyEditedState() // rawLuminanceNoiseReductionAdjust = 0.15
+        var target = EditState.identity
+        target.rawLuminanceNoiseReductionAdjust = 0.65
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.rawLuminanceNoiseReductionAdjust, target.rawLuminanceNoiseReductionAdjust)
+        XCTAssertNotEqual(result.rawLuminanceNoiseReductionAdjust, preset.rawLuminanceNoiseReductionAdjust)
+    }
+
+    func testTargetsRawColorNoiseReductionScaleSurvivesAPreset() {
+        let preset = fullyEditedState() // rawColorNoiseReductionScale = 0.45
+        var target = EditState.identity
+        target.rawColorNoiseReductionScale = 0.85
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.rawColorNoiseReductionScale, target.rawColorNoiseReductionScale)
+        XCTAssertNotEqual(result.rawColorNoiseReductionScale, preset.rawColorNoiseReductionScale)
+    }
+
+    func testTargetsRawSharpnessScaleSurvivesAPreset() {
+        let preset = fullyEditedState() // rawSharpnessScale = 0.75
+        var target = EditState.identity
+        target.rawSharpnessScale = 0.05
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.rawSharpnessScale, target.rawSharpnessScale)
+        XCTAssertNotEqual(result.rawSharpnessScale, preset.rawSharpnessScale)
     }
 
     /// `applyingPreset(onto:)` and `comparisonOriginal()` draw the color/

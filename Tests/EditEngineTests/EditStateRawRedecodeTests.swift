@@ -9,9 +9,10 @@ import XCTest
 /// `RawDecoder.materialize`'s "forward hazard" note predicted), and a false
 /// positive would mean an unrelated slider edit pays a needless multi-second
 /// re-decode. Phase 6 slice 3 added `rawExposureEV`/`shadowBoostScale` to
-/// `boostAmount`; slice 4 added `rawWhiteBalanceNeutralPoints`. Each field
-/// gets its own true case so a missing `||` clause for any one of them
-/// can't hide behind another.
+/// `boostAmount`; slice 4 added `rawWhiteBalanceNeutralPoints`; slice 5
+/// added `rawLuminanceNoiseReductionAdjust`/`rawColorNoiseReductionScale`/
+/// `rawSharpnessScale`. Each field gets its own true case so a missing
+/// `||` clause for any one of them can't hide behind another.
 final class EditStateRawRedecodeTests: XCTestCase {
     func testTrueWhenBoostAmountDiffers() {
         var a = EditState.identity
@@ -45,6 +46,30 @@ final class EditStateRawRedecodeTests: XCTestCase {
         XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
     }
 
+    func testTrueWhenRawLuminanceNoiseReductionAdjustDiffers() {
+        var a = EditState.identity
+        var b = EditState.identity
+        a.rawLuminanceNoiseReductionAdjust = 0.2
+        b.rawLuminanceNoiseReductionAdjust = 0.8
+        XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
+    }
+
+    func testTrueWhenRawColorNoiseReductionScaleDiffers() {
+        var a = EditState.identity
+        var b = EditState.identity
+        a.rawColorNoiseReductionScale = 0.2
+        b.rawColorNoiseReductionScale = 0.8
+        XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
+    }
+
+    func testTrueWhenRawSharpnessScaleDiffers() {
+        var a = EditState.identity
+        var b = EditState.identity
+        a.rawSharpnessScale = 0.2
+        b.rawSharpnessScale = 0.8
+        XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
+    }
+
     func testFalseWhenAllRawNativeFieldsAreTheSame() {
         var a = EditState.identity
         var b = EditState.identity
@@ -56,6 +81,12 @@ final class EditStateRawRedecodeTests: XCTestCase {
         b.shadowBoostScale = 0.3
         a.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.1, y: 0.9)]
         b.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.1, y: 0.9)]
+        a.rawLuminanceNoiseReductionAdjust = 0.4
+        b.rawLuminanceNoiseReductionAdjust = 0.4
+        a.rawColorNoiseReductionScale = 0.6
+        b.rawColorNoiseReductionScale = 0.6
+        a.rawSharpnessScale = 0.7
+        b.rawSharpnessScale = 0.7
         XCTAssertFalse(a.requiresRawRedecode(comparedTo: b))
     }
 

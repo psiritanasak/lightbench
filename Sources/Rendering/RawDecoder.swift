@@ -25,12 +25,21 @@ import UniformTypeIdentifiers
 /// `rawWhiteBalanceNeutralPoints`, seeding `CIRAWFilter.neutralLocation`
 /// for a true no-search white-balance eyedropper (RAW-only, geometry-
 /// identity-only — see that field's own `EditState` doc comment).
+/// Phase 6 slice 5 added `rawLuminanceNoiseReductionAdjust` (an additive
+/// offset — a multiplicative scale was measured DEAD on this camera's own
+/// zero native default, see that field's own `EditState` doc comment),
+/// `rawColorNoiseReductionScale`, and `rawSharpnessScale` (both relative
+/// scales, same shape as `shadowBoostScale`) — settling the "precedence"
+/// question that originally deferred this slice: these run at DECODE
+/// time, entirely upstream of and independent from `EditPipeline`'s
+/// existing post-decode `noiseReduction`/`sharpness` stages, so the two
+/// compose additively rather than conflicting.
 /// `applyRawNativeSettings` below is now the ONE place all of them are
 /// read (mirrored by `EditState.requiresRawRedecode`, the one place
 /// they're compared) — see each field's own `EditState` doc comment for
 /// what it does and how its design was shaped by live measurement
 /// against the user's real camera. `CIRAWFilter`'s remaining RAW-native
-/// controls (RAW-native NR/sharpness/detail/moiré,
+/// controls (`contrastAmount`/`detailAmount`/`moireReductionAmount`,
 /// `CIRAWDecoderVersion9` opt-in) are deferred to a later slice;
 /// `lensCorrectionEnabled` specifically was MEASURED unsupported on the
 /// user's own camera (`isLensCorrectionSupported == false` on three
@@ -128,6 +137,36 @@ enum RawDecoder {
     static func confirmedOrientation(of url: URL) async -> CGImagePropertyOrientation? {
         await RenderGate.shared.run {
             readExifOrientation(of: url)
+        }
+    }
+
+    /// Which of the slice-5 RAW-native adjustments (luminance/color noise
+    /// reduction, sharpness) `CIRAWFilter` actually supports for `url` —
+    /// `isLuminanceNoiseReductionSupported`/`isColorNoiseReductionSupported`/
+    /// `isSharpnessSupported` are per-camera-profile capability flags,
+    /// structurally identical to `isLensCorrectionSupported` (measured
+    /// `false` for the ORIGINAL slice-2 candidate — see this file's own
+    /// type-level doc comment). `ImageDocumentModel` reads this ONCE per
+    /// RAW photo load and caches the result, same pattern as
+    /// `confirmedOrientation` above and for the same reason: constructing
+    /// a `CIRAWFilter` touches `RawCamera.framework`, so it must go
+    /// through `RenderGate` and must not be re-done per UI update.
+    /// Returns `.unsupported` (all `false`) if construction fails.
+    struct RawAdjustmentSupport: Equatable {
+        let luminanceNoiseReduction: Bool
+        let colorNoiseReduction: Bool
+        let sharpness: Bool
+        static let unsupported = RawAdjustmentSupport(luminanceNoiseReduction: false, colorNoiseReduction: false, sharpness: false)
+    }
+
+    static func confirmedAdjustmentSupport(of url: URL) async -> RawAdjustmentSupport {
+        await RenderGate.shared.run {
+            guard let filter = CIRAWFilter(imageURL: url) else { return .unsupported }
+            return RawAdjustmentSupport(
+                luminanceNoiseReduction: filter.isLuminanceNoiseReductionSupported,
+                colorNoiseReduction: filter.isColorNoiseReductionSupported,
+                sharpness: filter.isSharpnessSupported
+            )
         }
     }
 
@@ -285,11 +324,35 @@ enum RawDecoder {
     /// that could plausibly flip an internal "user overrode this" flag on
     /// any write, regardless of the value written.
     ///
+    /// `rawColorNoiseReductionScale`/`rawSharpnessScale` are the SAME
+    /// relative shape as `shadowBoostScale` above, for the identical
+    /// reason: their underlying `CIRAWFilter` properties
+    /// (`colorNoiseReductionAmount`, `sharpnessAmount`) are per-file,
+    /// camera-profile-seeded (measured `0.5`/`0.9` respectively on real
+    /// D610 NEFs; the SDK header documents "the default value will vary
+    /// per image" for each, same wording as `boostShadowAmount`'s own) —
+    /// each reads `filter`'s current value first via `*=`, guarded to
+    /// only mutate when `!= 1`, same structural-no-op reasoning as
+    /// `shadowBoostScale`.
+    ///
+    /// `rawLuminanceNoiseReductionAdjust` is DIFFERENT — reviewer-caught:
+    /// it was originally the same `*=` scale shape, but this camera's own
+    /// native `luminanceNoiseReductionAmount` measures `0.0`, so `native
+    /// * anything` is always `0` — a provably dead control across its
+    /// ENTIRE range, not just a narrow inert band like
+    /// `boostShadowAmount`'s upper half. Switched to an ADDITIVE offset
+    /// (`filter.luminanceNoiseReductionAmount + adjust`, clamped to the
+    /// property's own `0...1` range) — confirmed live that an absolute
+    /// `1.0` assignment DOES move real pixels on this camera, so there is
+    /// genuinely useful range above `0.0` an offset can reach that a
+    /// scale never could. See `EditState.rawLuminanceNoiseReductionAdjust`'s
+    /// own doc comment for the full reasoning.
+    ///
     /// `rawWhiteBalanceNeutralPoints` seeds `filter.neutralLocation`
     /// directly, converting its stored normalized (0...1) fraction to
     /// absolute pixel coordinates via `filter.nativeSize` (available
     /// before `.outputImage` is ever accessed — no extra decode cost).
-    /// UNLIKE the other three fields, this one's correctness is NOT
+    /// UNLIKE every other field above, this one's correctness is NOT
     /// position-independent in general: measured live that
     /// `neutralLocation` produces a different result depending on
     /// whether `orientation` was already set to a non-`.up` value at the
@@ -302,18 +365,36 @@ enum RawDecoder {
     /// identical either order in that specific regime), not left
     /// genuinely untouched. Do not add another RAW-native POINT field
     /// without re-measuring this — it does not follow from the other
-    /// three fields' own "position doesn't matter" precedent.
+    /// six fields' own "position doesn't matter" precedent (all six are
+    /// non-spatial scalars; the neutral point is the one genuinely
+    /// spatial field here).
     ///
-    /// All four clamped defensively — matching `decodeDraft`'s existing
+    /// All seven clamped defensively — matching `decodeDraft`'s existing
     /// `scaleFactor` clamp precedent — even though the Adjust-tab sliders
     /// (or, for the neutral point, `ImageDocumentModel.pickWhiteBalance`'s
-    /// own eligibility gate) already constrain them. No capability gate
-    /// needed for any of the four, unlike a future `lensCorrectionEnabled`:
-    /// all are general RAW rendering parameters, not tied to a
-    /// per-camera-profile capability database, so they apply
-    /// unconditionally to any RAW file. `boostShadowAmount`'s result needs
-    /// no upper clamp — scaling a value already within `CIRAWFilter`'s own
-    /// `0...2` range by a factor in `0...1` cannot leave that range.
+    /// own eligibility gate) already constrain them. `boostShadowAmount`'s
+    /// (and the two remaining scales') result needs no upper clamp —
+    /// scaling a value already within `CIRAWFilter`'s own declared range
+    /// by a factor in `0...1` cannot leave that range.
+    ///
+    /// UNLIKE `boostAmount`/`rawExposureEV`/`shadowBoostScale`, the three
+    /// fields added in slice 5 DO have a real capability gate —
+    /// reviewer-caught: an earlier draft of this comment claimed
+    /// otherwise, but `isLuminanceNoiseReductionSupported`/
+    /// `isColorNoiseReductionSupported`/`isSharpnessSupported` are
+    /// structurally identical to `isLensCorrectionSupported` (the exact
+    /// flag that killed slice 2's `lensCorrectionEnabled` candidate).
+    /// Measured `true` for all three on this camera — this slice IS
+    /// viable, not another dead end — but a different camera COULD
+    /// measure `false`, and applying the value unconditionally would then
+    /// be a silent no-op paying a full re-decode for nothing.
+    /// `confirmedAdjustmentSupport(of:)` below reads all three flags,
+    /// gated, once per RAW photo load; `ImageDocumentModel` caches the
+    /// result and disables each of the three UI rows individually rather
+    /// than gating the write here — applying the value is still safe
+    /// even when unsupported (Core Image documents no crash, just no
+    /// effect), so the gate only needs to prevent a MISLEADING always-
+    /// enabled slider, not an unsafe write.
     private static func applyRawNativeSettings(_ editState: EditState, to filter: CIRAWFilter) {
         filter.boostAmount = Float(min(1, max(0, editState.boostAmount)))
         let ev = min(2, max(-2, editState.rawExposureEV))
@@ -323,6 +404,19 @@ enum RawDecoder {
         let shadowScale = min(1, max(0, editState.shadowBoostScale))
         if shadowScale != 1 {
             filter.boostShadowAmount *= Float(shadowScale)
+        }
+        let lumNRAdjust = min(1, max(-1, editState.rawLuminanceNoiseReductionAdjust))
+        if lumNRAdjust != 0 {
+            let combined = filter.luminanceNoiseReductionAmount + Float(lumNRAdjust)
+            filter.luminanceNoiseReductionAmount = min(1, max(0, combined))
+        }
+        let colorNRScale = min(1, max(0, editState.rawColorNoiseReductionScale))
+        if colorNRScale != 1 {
+            filter.colorNoiseReductionAmount *= Float(colorNRScale)
+        }
+        let sharpnessScale = min(1, max(0, editState.rawSharpnessScale))
+        if sharpnessScale != 1 {
+            filter.sharpnessAmount *= Float(sharpnessScale)
         }
         if let point = editState.rawWhiteBalanceNeutralPoints.first,
            filter.nativeSize.width > 0, filter.nativeSize.height > 0 {

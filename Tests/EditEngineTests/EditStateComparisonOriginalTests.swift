@@ -71,6 +71,9 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.rawExposureEV = 0.6
         s.shadowBoostScale = 0.2
         s.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.35, y: 0.65)]
+        s.rawLuminanceNoiseReductionAdjust = 0.15
+        s.rawColorNoiseReductionScale = 0.45
+        s.rawSharpnessScale = 0.75
         return s
     }
 
@@ -167,5 +170,23 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         let edited = fullyEditedState()
         XCTAssertEqual(edited.comparisonOriginal().rawWhiteBalanceNeutralPoints, edited.rawWhiteBalanceNeutralPoints)
         XCTAssertNotEqual(edited.rawWhiteBalanceNeutralPoints, EditState.identity.rawWhiteBalanceNeutralPoints, "test fixture should start non-default")
+    }
+
+    func testRawLuminanceNoiseReductionAdjustIsPreservedNotReset() {
+        let edited = fullyEditedState()
+        XCTAssertEqual(edited.comparisonOriginal().rawLuminanceNoiseReductionAdjust, edited.rawLuminanceNoiseReductionAdjust)
+        XCTAssertNotEqual(edited.rawLuminanceNoiseReductionAdjust, EditState.identity.rawLuminanceNoiseReductionAdjust, "test fixture should start non-default")
+    }
+
+    func testRawColorNoiseReductionScaleIsPreservedNotReset() {
+        let edited = fullyEditedState()
+        XCTAssertEqual(edited.comparisonOriginal().rawColorNoiseReductionScale, edited.rawColorNoiseReductionScale)
+        XCTAssertNotEqual(edited.rawColorNoiseReductionScale, EditState.identity.rawColorNoiseReductionScale, "test fixture should start non-default")
+    }
+
+    func testRawSharpnessScaleIsPreservedNotReset() {
+        let edited = fullyEditedState()
+        XCTAssertEqual(edited.comparisonOriginal().rawSharpnessScale, edited.rawSharpnessScale)
+        XCTAssertNotEqual(edited.rawSharpnessScale, EditState.identity.rawSharpnessScale, "test fixture should start non-default")
     }
 }

@@ -57,11 +57,13 @@ final class RawDecoderTests: XCTestCase {
     // MARK: - RAW-native fields, non-RAW behavior
 
     /// The RAW-native `EditState` fields (`boostAmount`, `rawExposureEV`,
-    /// `shadowBoostScale`, `rawWhiteBalanceNeutralPoints`) configure
-    /// `CIRAWFilter` itself, so they must have ZERO effect on the non-RAW
-    /// `decode` branch (`CIImage(contentsOf:)`, which never touches
-    /// `CIRAWFilter` at all). Writes a real temp PNG, same
-    /// fixture-writing pattern `ThumbnailGeneratorTests` already uses.
+    /// `shadowBoostScale`, `rawWhiteBalanceNeutralPoints`,
+    /// `rawLuminanceNoiseReductionAdjust`, `rawColorNoiseReductionScale`,
+    /// `rawSharpnessScale`) configure `CIRAWFilter` itself, so they must
+    /// have ZERO effect on the non-RAW `decode` branch
+    /// (`CIImage(contentsOf:)`, which never touches `CIRAWFilter` at
+    /// all). Writes a real temp PNG, same fixture-writing pattern
+    /// `ThumbnailGeneratorTests` already uses.
     func testDecodeIgnoresRawNativeFieldsForNonRawFiles() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("RawDecoderTests-\(UUID().uuidString)", isDirectory: true)
@@ -76,11 +78,17 @@ final class RawDecoderTests: XCTestCase {
         low.rawExposureEV = -2
         low.shadowBoostScale = 0
         low.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.1, y: 0.1)]
+        low.rawLuminanceNoiseReductionAdjust = 0
+        low.rawColorNoiseReductionScale = 0
+        low.rawSharpnessScale = 0
         var high = EditState.identity
         high.boostAmount = 1
         high.rawExposureEV = 2
         high.shadowBoostScale = 1
         high.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.9, y: 0.9)]
+        high.rawLuminanceNoiseReductionAdjust = 1
+        high.rawColorNoiseReductionScale = 1
+        high.rawSharpnessScale = 1
 
         let lowResult = await RawDecoder.decode(contentsOf: url, editState: low)
         let highResult = await RawDecoder.decode(contentsOf: url, editState: high)

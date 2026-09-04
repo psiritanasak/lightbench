@@ -2540,7 +2540,10 @@ final class EditPipelineTests: XCTestCase {
             boostAmount: 0.35,
             rawExposureEV: 0.75,
             shadowBoostScale: 0.4,
-            rawWhiteBalanceNeutralPoints: [RawNeutralPoint(x: 0.3, y: 0.7)]
+            rawWhiteBalanceNeutralPoints: [RawNeutralPoint(x: 0.3, y: 0.7)],
+            rawLuminanceNoiseReductionAdjust: 0.2,
+            rawColorNoiseReductionScale: 0.8,
+            rawSharpnessScale: 0.15
         )
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(EditState.self, from: data)
@@ -2548,14 +2551,16 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(original, decoded)
     }
 
-    /// Pins the architecture Phase 6 slices 2-4 depend on: the RAW-native
+    /// Pins the architecture Phase 6 slices 2-5 depend on: the RAW-native
     /// fields (`boostAmount`, `rawExposureEV`, `shadowBoostScale`,
-    /// `rawWhiteBalanceNeutralPoints`) configure `CIRAWFilter` itself,
-    /// upstream of `EditPipeline` — none is one of this function's stages
-    /// and all must have zero effect on its output. Fails loudly if a
-    /// future session tries to "wire the missing fields into the
-    /// pipeline" by mistake (there's nothing there to wire them into;
-    /// they only take effect via `RawDecoder`/`ImageDocumentModel.redecodeForRawNativeChange`).
+    /// `rawWhiteBalanceNeutralPoints`, `rawLuminanceNoiseReductionAdjust`,
+    /// `rawColorNoiseReductionScale`, `rawSharpnessScale`) configure
+    /// `CIRAWFilter` itself, upstream of `EditPipeline` — none is one of
+    /// this function's stages and all must have zero effect on its
+    /// output. Fails loudly if a future session tries to "wire the
+    /// missing fields into the pipeline" by mistake (there's nothing
+    /// there to wire them into; they only take effect via
+    /// `RawDecoder`/`ImageDocumentModel.redecodeForRawNativeChange`).
     func testRawNativeFieldsHaveNoEffectOnTheEditPipeline() {
         let image = CIImage(color: CIColor(red: 0.4, green: 0.5, blue: 0.6)).cropped(to: CGRect(x: 0, y: 0, width: 16, height: 16))
         // Reviewer-caught (slice 2): comparing two otherwise-IDENTITY
@@ -2572,11 +2577,17 @@ final class EditPipelineTests: XCTestCase {
         low.boostAmount = 0
         low.rawExposureEV = -2
         low.shadowBoostScale = 0
+        low.rawLuminanceNoiseReductionAdjust = 0
+        low.rawColorNoiseReductionScale = 0
+        low.rawSharpnessScale = 0
         var high = low
         high.boostAmount = 1
         high.rawExposureEV = 2
         high.shadowBoostScale = 1
         high.rawWhiteBalanceNeutralPoints = [RawNeutralPoint(x: 0.25, y: 0.75)]
+        high.rawLuminanceNoiseReductionAdjust = 1
+        high.rawColorNoiseReductionScale = 1
+        high.rawSharpnessScale = 1
 
         let lowOutput = EditPipeline.apply(low, to: image)
         let highOutput = EditPipeline.apply(high, to: image)

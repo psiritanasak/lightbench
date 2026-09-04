@@ -38,6 +38,16 @@ final class ImageDocumentModel: ObservableObject {
     /// on the main actor once before) this cache avoids entirely. Not
     /// `@Published` — nothing in the UI displays it.
     private(set) var currentRawOrientationIsUp = false
+    /// Which RAW-native NR/Sharpness adjustments `CIRAWFilter` actually
+    /// supports for `currentURL` (see `RawDecoder.confirmedAdjustmentSupport`'s
+    /// own doc comment) — `.unsupported` for non-RAW photos. `@Published`,
+    /// unlike `currentRawOrientationIsUp` above: `AdjustTabView` reads
+    /// this directly to disable each RAW NR/Sharpness row individually,
+    /// so SwiftUI needs to observe it. Cached at load time for the same
+    /// reason as `currentRawOrientationIsUp` — constructing a
+    /// `CIRAWFilter` to read these flags must go through `RenderGate`,
+    /// not be re-done synchronously per UI update.
+    @Published private(set) var currentRawAdjustmentSupport = RawDecoder.RawAdjustmentSupport.unsupported
     @Published var loadErrorMessage: String?
     /// User-facing feedback when saving a sidecar fails (folder-bookmark
     /// resolution or the write itself) — mirrors `whiteBalanceSampleMessage`'s
@@ -273,6 +283,7 @@ final class ImageDocumentModel: ObservableObject {
         // "working" instead of unresponsive.
         let resolvedImage: CIImage
         let isRawOrientationUp: Bool
+        let rawAdjustmentSupport: RawDecoder.RawAdjustmentSupport
         if RawDecoder.isRaw(url) {
             isLoadingImage = true
             resolvedImage = await RawDecoder.materialize(raw)
@@ -283,10 +294,15 @@ final class ImageDocumentModel: ObservableObject {
             let orientation = await RawDecoder.confirmedOrientation(of: url)
             guard myGeneration == loadGeneration else { return }
             isRawOrientationUp = orientation == .up
+            // Same caching rationale as orientation just above — see
+            // `currentRawAdjustmentSupport`'s own doc comment.
+            rawAdjustmentSupport = await RawDecoder.confirmedAdjustmentSupport(of: url)
+            guard myGeneration == loadGeneration else { return }
             isLoadingImage = false
         } else {
             resolvedImage = raw
             isRawOrientationUp = false
+            rawAdjustmentSupport = .unsupported
         }
         // Reviewer-caught: the early flush above only covers edits made
         // BEFORE this function's first `await`. The Adjust sidebar stays
@@ -307,6 +323,7 @@ final class ImageDocumentModel: ObservableObject {
         currentFileName = url.lastPathComponent
         currentURL = url
         currentRawOrientationIsUp = isRawOrientationUp
+        currentRawAdjustmentSupport = rawAdjustmentSupport
         isLoadingPhoto = true
         editState = restoredState
         isLoadingPhoto = false
@@ -320,10 +337,10 @@ final class ImageDocumentModel: ObservableObject {
 
     // MARK: - RAW-native re-decode (Phase 6 slices 2-3)
 
-    /// How long a pause in a RAW-native field's changes (`boostAmount`,
-    /// `rawExposureEV`, `shadowBoostScale`) must last before a
-    /// re-decode actually fires. A dragged slider writes `editState` many
-    /// times per second; without
+    /// How long a pause in a RAW-native field's changes (see
+    /// `EditState.requiresRawRedecode` for the current full list) must
+    /// last before a re-decode actually fires. A dragged slider writes
+    /// `editState` many times per second; without
     /// this, every intermediate value would trigger its own full RAW
     /// demosaic — exactly the per-frame-decode freeze `RawDecoder.materialize`
     /// exists to prevent, one level up. Slightly longer than

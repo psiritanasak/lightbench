@@ -667,6 +667,71 @@ struct EditState: Equatable, Codable {
     /// re-decoding.
     var rawWhiteBalanceNeutralPoints: [RawNeutralPoint] = []
 
+    /// Additive offset on the file's OWN `luminanceNoiseReductionAmount`
+    /// (CIRAWFilter's own pre-demosaic luminance noise reduction). `0` =
+    /// untouched. NOT a multiplicative scale like `shadowBoostScale` —
+    /// reviewer-caught: an earlier draft WAS a `0...1` scale (`1` =
+    /// untouched, `0` = off), but this camera's own native
+    /// `luminanceNoiseReductionAmount` measures `0.0` — so `native * 0`
+    /// is `0` REGARDLESS of the scale, making that shape a provably dead
+    /// control across its ENTIRE range on any file with a zero native
+    /// default, exactly the trap `lensCorrectionEnabled` was deferred to
+    /// avoid in slice 2, just discovered one slice later instead of
+    /// before shipping. An additive offset has no such degenerate case —
+    /// confirmed live that an ABSOLUTE assignment of `1.0` DOES move real
+    /// pixels (a measured, non-zero delta on a real NEF), so there is
+    /// genuinely useful range above this camera's own native `0.0`; an
+    /// offset reaches it (`native + offset`, clamped to the property's
+    /// own `0...1` valid range) where a scale never could.
+    ///
+    /// Per-file-camera-profile reason for being relative, not absolute,
+    /// is otherwise identical to `shadowBoostScale`'s (SDK header
+    /// documents this default "varies per image"). Guarded to only
+    /// mutate when `!= 0` — same structural-no-op requirement as every
+    /// other read-modify-write RAW-native field.
+    ///
+    /// Distinct from the existing post-decode `noiseReduction` field
+    /// (`CINoiseReduction`, any photo type) — this one runs at DECODE
+    /// time, on the RAW sensor data before demosaic, architecturally
+    /// upstream of and independent from that stage; the two compose
+    /// additively rather than conflicting, same as `rawExposureEV`
+    /// composing with `exposureEV`.
+    ///
+    /// Same structural caveat as the other RAW-native fields:
+    /// `EditPipeline` never reads this; it only takes effect by
+    /// re-decoding.
+    var rawLuminanceNoiseReductionAdjust: Double = 0
+
+    /// Multiplicative scale on the file's OWN `colorNoiseReductionAmount`
+    /// (CIRAWFilter's own pre-demosaic chroma noise reduction). Same
+    /// shape, same reasoning, same per-file-default caveat as
+    /// `shadowBoostScale` — measured `0.5` on three real D610 NEFs (a
+    /// meaningfully non-zero default, confirmed live to be effectively
+    /// scaled by `*=`, UNLIKE `rawLuminanceNoiseReductionAdjust` above —
+    /// a multiplicative scale genuinely works here specifically because
+    /// this camera's native default isn't zero). Known limitation of the
+    /// scale shape: can only ever REDUCE color NR below this camera's
+    /// own `0.5` native ceiling, never increase it — accepted, since (a)
+    /// it wasn't measured to have useful range above native the way
+    /// luminance NR did, and (b) a future camera with a genuinely
+    /// zero-or-near-zero native default here would hit the same dead-
+    /// range trap `rawLuminanceNoiseReductionAdjust`'s doc comment
+    /// describes — re-measure before assuming this shape still holds on
+    /// a different camera.
+    var rawColorNoiseReductionScale: Double = 1.0
+
+    /// Multiplicative scale on the file's OWN `sharpnessAmount`
+    /// (CIRAWFilter's own pre-demosaic edge sharpening). Same shape,
+    /// same reasoning, same per-file-default caveat and same "can only
+    /// reduce, not increase beyond this camera's native ceiling"
+    /// limitation as `rawColorNoiseReductionScale` above — measured
+    /// `0.9` on three real D610 NEFs (also meaningfully non-zero,
+    /// confirmed live to be effectively scaled). Distinct from the
+    /// existing post-decode `sharpness` field (`CISharpenLuminance`) for
+    /// the same reason `rawExposureEV` is distinct from `exposureEV` —
+    /// decode-time vs. post-decode, additive not conflicting.
+    var rawSharpnessScale: Double = 1.0
+
     /// True when every geometric transform (straighten/perspective/crop/
     /// flip) is at its identity value — the exact field GROUP already
     /// named together in `comparisonOriginal()`/`applyingPreset()`'s own
@@ -699,6 +764,9 @@ struct EditState: Equatable, Codable {
             || rawExposureEV != other.rawExposureEV
             || shadowBoostScale != other.shadowBoostScale
             || rawWhiteBalanceNeutralPoints != other.rawWhiteBalanceNeutralPoints
+            || rawLuminanceNoiseReductionAdjust != other.rawLuminanceNoiseReductionAdjust
+            || rawColorNoiseReductionScale != other.rawColorNoiseReductionScale
+            || rawSharpnessScale != other.rawSharpnessScale
     }
 
     /// The no-op edit state: every adjustment at its default (identity) value.
@@ -765,9 +833,10 @@ struct EditState: Equatable, Codable {
         // horizontalPerspective, flipHorizontal, flipVertical) is left
         // untouched — inherited from `self` via `var s = self` above.
         // `boostAmount`/`rawExposureEV`/`shadowBoostScale`/
-        // `rawWhiteBalanceNeutralPoints` are ALSO left untouched, for a
-        // different reason: `EditPipeline` never reads any of them at
-        // all (see their own doc comments), so resetting them here
+        // `rawWhiteBalanceNeutralPoints`/`rawLuminanceNoiseReductionAdjust`/
+        // `rawColorNoiseReductionScale`/`rawSharpnessScale` are ALSO left
+        // untouched, for a different reason: `EditPipeline` never reads
+        // any of them at all (see their own doc comments), so resetting them here
         // couldn't be honored by either side of the Compare render
         // anyway — inherit them rather than set a
         // value this method has no way to actually apply.
@@ -829,8 +898,9 @@ struct EditState: Equatable, Codable {
         // redEyePoints are NOT copied — they stay `target`'s own via
         // `var result = target` above.
         // `boostAmount`/`rawExposureEV`/`shadowBoostScale`/
-        // `rawWhiteBalanceNeutralPoints` are ALSO not copied, for a
-        // different reason: carrying them would make applying ANY preset
+        // `rawWhiteBalanceNeutralPoints`/`rawLuminanceNoiseReductionAdjust`/
+        // `rawColorNoiseReductionScale`/`rawSharpnessScale` are ALSO not
+        // copied, for a different reason: carrying them would make applying ANY preset
         // kick off a multi-second RAW re-decode (no other preset field
         // does that), and would silently set RAW-decode parameters on a
         // JPEG target — dead weight that also
@@ -894,6 +964,7 @@ extension EditState {
         case sharpness
         case boostAmount
         case rawExposureEV, shadowBoostScale, rawWhiteBalanceNeutralPoints
+        case rawLuminanceNoiseReductionAdjust, rawColorNoiseReductionScale, rawSharpnessScale
     }
 
     init(from decoder: Decoder) throws {
@@ -960,5 +1031,8 @@ extension EditState {
         rawExposureEV = try container.decodeIfPresent(Double.self, forKey: .rawExposureEV) ?? 0
         shadowBoostScale = try container.decodeIfPresent(Double.self, forKey: .shadowBoostScale) ?? 1.0
         rawWhiteBalanceNeutralPoints = try container.decodeIfPresent([RawNeutralPoint].self, forKey: .rawWhiteBalanceNeutralPoints) ?? []
+        rawLuminanceNoiseReductionAdjust = try container.decodeIfPresent(Double.self, forKey: .rawLuminanceNoiseReductionAdjust) ?? 0
+        rawColorNoiseReductionScale = try container.decodeIfPresent(Double.self, forKey: .rawColorNoiseReductionScale) ?? 1.0
+        rawSharpnessScale = try container.decodeIfPresent(Double.self, forKey: .rawSharpnessScale) ?? 1.0
     }
 }

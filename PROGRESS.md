@@ -4196,6 +4196,102 @@ already proven not to render red on a macOS Menu/button this session).
   string) are noted here, not fixed — low-risk, and the reviewer's own
   call was "worth doing only if touching the file again."
 
+### Phase 6 slice 4: rawWhiteBalanceNeutralPoints, a true no-search RAW white-balance eyedropper — SHIPPED, not yet live-verified
+- User chose this scope over RAW-native NR/sharpness and the
+  `CIRAWDecoderVersion9` opt-in. `CIRAWFilter.neutralLocation`: set it to
+  a pixel, the decoder computes and applies the correct white balance
+  directly — no search, vs. the existing eyedropper's `WhiteBalanceSolver`
+  (~52-evaluation search against post-decode `CITemperatureAndTint`).
+- **Measurement changed the design twice, not once**, same discipline as
+  every RAW slice this session:
+  1. Feeding `CIRAWFilter`'s own computed `neutralTemperature`/
+     `neutralTint` for a tapped point directly into the app's EXISTING
+     `whiteBalanceTemperature`/`whiteBalanceTint` fields does NOT
+     neutralize the same pixel — measured `[37,44,59]` → `[48,43,38]`
+     (right direction, nowhere near neutral) vs. `[47,47,48]` via
+     `neutralLocation` itself. The two mechanisms are numerically
+     incompatible, so this shipped as a genuine FOURTH RAW-native
+     `EditState` field (`rawWhiteBalanceNeutralPoints: [RawNeutralPoint]`,
+     at most one element, mirrors `redEyePoints`' empty-means-off
+     convention), following `boostAmount`/`rawExposureEV`/
+     `shadowBoostScale`'s exact architecture — not a thin translation
+     layer on top of the existing two fields.
+  2. `neutralLocation` operates on the RAW's own native, un-rotated,
+     PRE-geometry pixel grid. A tap on the CURRENT on-screen view would
+     need inverting through straighten/perspective/crop/flip to map back
+     — not simple math for straighten/perspective. User chose (via
+     `AskUserQuestion`) to sidestep this: the fast path only activates
+     when app geometry is at identity (new `EditState.isGeometryAtIdentity`,
+     covering the same 9-field group already named together in
+     `comparisonOriginal()`/`applyingPreset()`) — found live, WHILE
+     verifying this, a SECOND related hazard: `neutralLocation` measured
+     to produce a different, implausible result depending on whether
+     `orientation` was already non-`.up` at assignment time (identical
+     regardless of order when orientation is `.up`) — so the fast path
+     ALSO requires the file's EXIF orientation to be CONFIRMED `.up`.
+     Every other case falls through unchanged to the existing search.
+- New `RawDecoder.confirmedOrientation(of:)` — `RenderGate`-gated,
+  returns the real `Optional` (unlike `exifOrientation(of:)`'s `.up`
+  fallback) — read ONCE per RAW photo load, cached on
+  `ImageDocumentModel.currentRawOrientationIsUp`, not re-read at tap time.
+- Reviewer (Opus 5, after the default model hit the account's monthly
+  spend limit TWICE mid-review — same pattern as every prior slice):
+  FIX FIRST → APPROVE. Round 1 caught three real bugs, all found by
+  tracing actual reachability, not by inspection alone:
+  1. The fast path wrote ONLY `rawWhiteBalanceNeutralPoints`, leaving
+     any pre-existing non-identity `whiteBalanceTemperature`/
+     `whiteBalanceTint` (from a manual nudge, "Fix Color Cast", a preset,
+     or an earlier slow-path tap before a crop was later removed) still
+     applied POST-decode on top of the RAW-neutralized result — a
+     silent double-correction with no message explaining it. Fixed: the
+     fast path now also resets both fields to identity, matching the
+     slow path's own always-overwrite semantics.
+  2. The orientation gate used `exifOrientation(of:)`, which defaults
+     UNREADABLE to `.up` — precisely the case the whole "confirmed `.up`"
+     design exists to avoid, since an unreadable file's TRUE orientation
+     could just as easily be non-`.up`. Fixed: gate on
+     `confirmedOrientation(of:)`'s real `Optional`, requiring a
+     genuinely-read `.up`, never a fallback.
+  3. The gate re-opened the file synchronously (ImageIO) on the main
+     actor at tap time — reintroducing a defect class this exact
+     function was already reviewer-caught and fixed for once before (see
+     `RawDecoder.decode`'s own doc comment, Phase 6 slice 1). Fixed by
+     the load-time RenderGate-gated caching described above.
+  Also flagged and fixed: an edge-case where a neutral point at fraction
+  `1.0` would land one pixel past the last valid row/column (clamped to
+  `nativeSize - 1`); stale doc comments still listing 3 RAW-native fields
+  instead of 4; and an inaccurate claim that `orientation` is "never
+  actually changed from its default" on the fast path (it IS assigned,
+  just to the same value it already held — reworded to say that
+  precisely). Measured live before commit, per the reviewer's ask:
+  `neutralLocation` produces IDENTICAL results through `decodeDraft`'s
+  draft-mode/`scaleFactor` path as a full decode (confirmed a RAW
+  thumbnail won't diverge from the Editor's own rendering) — recorded in
+  `decodeDraft`'s own doc comment.
+- 435 tests (15 new): a new `EditStateGeometryIdentityTests.swift`
+  (11 tests — one independent false-case per geometry field, so a
+  missed `&&` clause can't hide behind another), plus the established
+  RAW-native-field test set (`EditStateCodableTests`,
+  `EditPipelineTests`, `EditStateRawRedecodeTests`,
+  `EditStateComparisonOriginalTests`, `EditStatePresetTests`,
+  `RawDecoderTests`) extended for the fourth field, mirroring slice 3's
+  own additions exactly. 2 commits (feature+tests, then this doc entry).
+- **Known gap, accepted for this slice**: unlike the other three
+  RAW-native fields, this one has NO UI representation at all — no
+  slider, not shown anywhere, not resettable except via Undo or Revert
+  to Original. Documented explicitly in `AdjustTabView`'s existing
+  gap-note doc comment (the same one that already covers `boostAmount`/
+  `rawExposureEV`/`shadowBoostScale`'s absence from "Reset Adjustments").
+- **NOT yet live-verified** — next: the user's own pass, specifically
+  including an asymmetric tap test (a clearly warm area vs. a clearly
+  cool area) to confirm `neutralLocation`'s y-origin convention — the
+  one thing the reviewer flagged as needing visual inspection, not just
+  measurement — alongside the ordinary checklist (tap on an unedited RAW
+  photo neutralizes near-instantly with no visible "solving" delay; add
+  a crop, tap again, falls back to the existing slower search
+  unchanged; a fast-path correction survives a LATER crop being added;
+  non-RAW photos are completely unaffected).
+
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
 user-requested follow-ups (folder-mirrored nested collections; the Editor
@@ -4237,13 +4333,18 @@ miss alongside Rating/Flag/Search. No code change made or needed.
 LIVE-VERIFIED (2026-09-03) — see their own sections above.** Post-Phase-5
 follow-up #8 (click-to-type numeric entry on every Adjust/Crop slider) is
 ALSO SHIPPED, reviewer-APPROVED, and fully LIVE-VERIFIED (2026-09-03) —
-see its own section above. 420 tests passing (unchanged — follow-up #8
-added no new test surface, see its own section for why). Next: Phase 6
-slice 4
+see its own section above. **Phase 6 slice 4 (a true no-search RAW
+white-balance eyedropper via `CIRAWFilter.neutralLocation`) is SHIPPED and
+reviewer-APPROVED (2026-09-04) — see its own section above.** 435 tests
+passing. **Not yet live-verified** — next: the user's own pass, including
+the asymmetric-tap y-origin check described in slice 4's own section.
+After that, Phase 6 slice 5
 (`lensCorrectionEnabled` — deferred, measured unsupported on this camera,
-would need a different camera to revisit — `neutralTemperature`/a true
-no-search WB eyedropper/RAW-native NR/sharpness) is the next roadmap item,
-or the user may pick from IMPROVEMENTS.md's open items instead (D4
+would need a different camera to revisit — RAW-native NR/sharpness,
+`CIRAWDecoderVersion9` opt-in, or a genuine inverse-geometry transform so
+the WB eyedropper's fast path works beyond identity geometry) is the next
+roadmap item, or the user may pick from IMPROVEMENTS.md's open items
+instead (D4
 Library keyboard support, D5's remaining two parts, D6 accessibility
 pass, P2/P3/P5/P6 performance), or one of the Tier-1 Lightroom-gap WANTED
 items, or Phase 7 slice 1 (masking performance probe) — all logged in

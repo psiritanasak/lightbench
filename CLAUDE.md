@@ -912,11 +912,23 @@ Edits are stored as parameter sets and rendered live on the GPU.
    backfill call opts in), so opening a never-edited RAW photo on a
    read-only volume doesn't surface "Couldn't save edits" from merely
    viewing it.
-   465 tests (11 new). **Live verification (open a never-edited RAW
-   photo, `cat` its `.photoapp.json` sidecar, confirm the pin backfills
-   for a pre-slice-7 photo without any further edit, confirm the Revert
-   button's enabled/disabled state) is still PENDING** — see PROGRESS.md's
-   own slice-7 section for the exact checklist.
+   465 tests (11 new). **Fully LIVE-VERIFIED (2026-09-04)**: user confirmed
+   a fresh edit correctly pins `rawDecoderVersionPin: "7"` in the sidecar;
+   Revert to Original preserves the pin and correctly returns to disabled;
+   and — the direct test of the round-1 fix — a photo edited in a prior
+   session, with no pin key yet, got backfilled with the pin from merely
+   being opened, no edit required. A separate, unrelated sidecar-save
+   flake ("Couldn't save edits" not self-healing on an immediate retry
+   within the same process, unlike the similar Phase-5-era flake) surfaced
+   mid-pass; investigated with temporary diagnostic logging, then resolved
+   itself via a genuinely fresh process launch before the logging was even
+   needed — logging fully reverted, no code change shipped for it. See
+   PROGRESS.md's own slice-7 section for full detail. **Phase 6's
+   RAW-native work (all ten measured-viable `CIRAWFilter` controls plus
+   this determinism fix) is now functionally complete for this camera** —
+   only `lensCorrectionEnabled` (measured unsupported here) and the WB
+   eyedropper's beyond-identity-geometry stretch goal remain, both
+   deliberately deferred pending different circumstances, not blocking.
 7. Local Adjustments (Masking) — **not started.** The single biggest capability
    gap versus Lightroom (see the Lightroom gap-analysis subsection above, which
    this phase supersedes/formalizes for this one item). Every adjustment in this

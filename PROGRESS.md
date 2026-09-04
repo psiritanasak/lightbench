@@ -4488,7 +4488,7 @@ already proven not to render red on a macOS Menu/button this session).
   proactively this time (learning from slice 5's noise-reduction
   surprise), did not come up as an issue.
 
-### Phase 6 slice 7: `rawDecoderVersionPin` — deterministic RAW decode across OS updates — SHIPPED, reviewer-APPROVED (3 rounds), not yet live-verified
+### Phase 6 slice 7: `rawDecoderVersionPin` — deterministic RAW decode across OS updates — SHIPPED, reviewer-APPROVED (3 rounds), and LIVE-VERIFIED (2026-09-04)
 - Closes a gap CLAUDE.md logged all the way back at slice 1:
   `CIRAWFilter.decoderVersion` defaults to "the newest available decoder
   for the image type" and was neither pinned nor serialized — meaning
@@ -4575,15 +4575,35 @@ already proven not to render red on a macOS Menu/button this session).
   for `isEffectivelyIdentity`: identity-plus-pin is effectively-identity,
   identity-plus-pin-plus-one-real-field is not). 2 commits (feature+tests,
   then this doc entry).
-- **NOT YET live-verified** — needs: open a never-before-edited RAW photo,
-  make a trivial edit to force a sidecar save, `cat` the `.photoapp.json`
-  sidecar and confirm `rawDecoderVersionPin` is present (expect `"7"` on
-  this system); reopen and confirm the pin is unchanged; open a photo
-  edited in a PRIOR session (pre-slice-7 sidecar, no `rawDecoderVersionPin`
-  key) and confirm it gets backfilled WITHOUT any further edit — this last
-  one is the direct test of the round-1 fix; confirm Revert to Original is
-  correctly DISABLED on a freshly-opened, untouched RAW photo (the round-2
-  fix) and correctly ENABLES once a real edit is made.
+- **LIVE-VERIFIED (2026-09-04), full checklist, all confirmed by the
+  user**: a never-before-edited RAW photo (`DSC_1401.NEF`) showed
+  `rawDecoderVersionPin: "7"` in its sidecar after a trivial edit;
+  clicking Revert to Original preserved the pin (`"7"`, unchanged) and
+  correctly returned the button to disabled — the round-1 and round-2
+  fixes both confirmed working together, not just independently; a
+  SEPARATE photo edited in a prior session (`DSC_1425.NEF`, sidecar with
+  no `rawDecoderVersionPin` key beforehand) was opened with NO edit made
+  and its sidecar was immediately backfilled with the pin — the direct
+  test of the round-1 persistence fix, confirmed working.
+  **A separate, unrelated flake surfaced mid-pass and was investigated,
+  not shipped as a code change**: "Couldn't save edits" appeared after
+  granting folder access on a real edit, and did NOT self-heal on an
+  immediate retry within the same running app process (unlike the
+  Phase-5-era flake documented near line 3600, which self-healed on a
+  second grant attempt in the same process). Investigated with temporary
+  `print`-based diagnostic logging added to `saveSidecarNow`/
+  `requestFolderAccess`/`resolvedBookmarkURL` (same technique as the
+  Phase-5 investigation) — before the logging was even exercised, a
+  genuinely fresh process launch (running the built `.app` directly from
+  Terminal instead of reusing whatever was already running) resolved it
+  cleanly with zero code changes needed. Consistent with a stale/lingering
+  process holding onto security-scoped resource state from an earlier
+  debug session, not a regression in this slice's own code — the
+  diagnostic logging was fully reverted (`git checkout --` on the one
+  touched file, confirmed empty `git status`) since it was never needed
+  to find a root cause. Flagged here in case it recurs and needs deeper
+  investigation (mirroring the existing carried-forward note near line
+  3600 for the earlier variant of this same class of flake).
 
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
@@ -4636,21 +4656,23 @@ visibility, not a bug — see its own section above).** **Phase 6 slice 6
 (RAW-native Contrast/Detail/Moiré Reduction) is SHIPPED,
 reviewer-APPROVED on the FIRST pass, and LIVE-VERIFIED — 2026-09-04,
 see its own section above.** **Phase 6 slice 7 (`rawDecoderVersionPin`,
-deterministic RAW decode across OS updates) is SHIPPED and
+deterministic RAW decode across OS updates) is SHIPPED,
 reviewer-APPROVED (3 rounds — see its own section above for the two real
 bugs caught: the pin not persisting for pre-existing sidecars, and a
 follow-up bug where preserving it made "Revert to Original" read as
-permanently enabled on RAW photos) but **NOT YET live-verified** — that's
-the immediate next step, using the checklist in that section (cat a
-sidecar's `.photoapp.json`, confirm backfill on a pre-slice-7 photo,
-confirm the Revert button's enabled/disabled state). 465 tests passing.
-After live verification: the two remaining items on `CIRAWFilter`'s
-RAW-native deferred list are `lensCorrectionEnabled` (deferred, measured
-unsupported on this camera, needs a different camera body to revisit) and
-a genuine inverse-geometry transform so the WB eyedropper's fast path
-works beyond identity geometry — both smaller/more speculative than
-slice 7 was. Otherwise the user may pick from IMPROVEMENTS.md's open items
-instead (D4
+permanently enabled on RAW photos), and fully LIVE-VERIFIED (2026-09-04)
+— full checklist confirmed by the user, see its own section above,
+including a separately-investigated (and self-resolved, no code change)
+sidecar-save flake. 465 tests passing.
+**All ten measured-viable `CIRAWFilter` RAW-native controls plus this
+determinism fix are now shipped, reviewed, and live-verified — Phase 6's
+RAW-native work is functionally complete for this camera.** The two
+remaining items on `CIRAWFilter`'s deferred list are `lensCorrectionEnabled`
+(measured unsupported on this camera, needs a different camera body to
+revisit) and a genuine inverse-geometry transform so the WB eyedropper's
+fast path works beyond identity geometry — both smaller/more speculative
+than slice 7 was, and neither is blocking. Otherwise the user may pick
+from IMPROVEMENTS.md's open items instead (D4
 Library keyboard support, D5's remaining two parts, D6 accessibility
 pass, P2/P3/P5/P6 performance), or one of the Tier-1 Lightroom-gap WANTED
 items, or Phase 7 slice 1 (masking performance probe) — all logged in

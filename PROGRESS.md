@@ -4926,3 +4926,61 @@ scope — slice 1 shipped 2026-09-02, see its own section above.
 (See "Open reviewer issues" near the top of this file for current status —
 that section is kept up to date per-feature; this trailing one is historical
 and intentionally not duplicated further.)
+
+## IMPROVEMENTS.md P2 — interactive-drag preview proxy (IN PROGRESS, 2026-09-04)
+Full plan at `/Users/praween/.claude/plans/serialized-swimming-quilt.md`
+(Plan Mode session went through two design passes — session-default model,
+then an explicit Opus 5 critique of that draft per CLAUDE.md's `opusplan`
+rule for a change to the hottest render path — after which the design was
+substantially corrected: a units bug where "headroom" was reasoned in
+points against `MTKView.drawableSize`, which is actually device pixels,
+would have made the proxy silently never engage on the user's real
+photos). User confirmed 1.25 headroom (pixels-per-drawable-pixel, not
+per-point) and sustained-drag-only engagement.
+
+Also: user asked (mid-session) that the `reviewer` agent always run on
+Opus 5 going forward, not the session's default model — saved to memory
+(`feedback_reviewer_model_opus`).
+
+**4 commits planned, 2 done so far, each reviewer-APPROVED (Opus 5) before
+commit:**
+1. ✅ `ProxyScale.swift` + `ProxyInteraction.swift` + tests (pure geometry
+   + a count-based interaction detector, not timing-based — draw(in:) is
+   synchronous, so timestamps between edits are inflated by slow frames,
+   exactly the case this feature exists to fix). One reviewer round: a
+   NaN `zoomScale` could slip through `max(zoomScale, 1)`; fixed with an
+   explicit `.isFinite` guard.
+2. ✅ `ProxyBuilder.swift` + tests (headless `CVPixelBuffer` materializer,
+   mirrors `RawDecoder.materialize`'s shape — Lanczos downscale,
+   `extendedLinearSRGB`/RGBAh, routed through `RawDecoder.RenderGate`).
+   Two reviewer rounds, several real bugs caught: an unbounded `scale`
+   could overflow `Int` and trap (fixed by constraining to the function's
+   actual contract, `scale <= 1`); a border-darkening regression test
+   sampled the wrong pixel and was empirically vacuous (fixed, moved to
+   the true corner + asserted alpha); a missing `context.clearCaches()`
+   measured ~284MB retained across repeated builds (fixed); and a
+   "realized, not lazy" property had NO test at all — closed with a
+   genuinely clever probe (reviewer's own suggestion): build the proxy,
+   then mutate the SOURCE buffer's bytes, then sample the proxy — a lazy
+   graph would observe the mutation, a realized one can't. 503 tests
+   passing.
+3. NOT YET STARTED — wiring `ProxyScale`/`ProxyInteraction`/`ProxyBuilder`
+   into `ImageRenderer.draw(in:)` itself: the interaction-detection hookup,
+   the two-check cache-invalidation fix (extends the existing P3 cache so
+   Compare mode's `cachedOriginal` can't go stale against a proxied
+   `cachedEdited`), and the async generation-guarded proxy build/cache.
+   Highest-risk commit — this is the one that actually changes on-screen
+   rendering behavior.
+4. NOT YET STARTED — live measurement (temporary `CFAbsoluteTimeGetCurrent()`
+   prints, same drag/photo setup as P2's original justification
+   measurement, this time also confirming `drawableSize` is genuinely in
+   pixels as the corrected design assumes), full live visual pass (drag
+   smoothness, undo/redo/typed-value/toggle/preset never flash soft,
+   Compare Side-by-Side/Split sharpness match, zoom/pan/resize/crop/
+   straighten/RAW-mid-redecode edge cases), revert the prints, update
+   `IMPROVEMENTS.md`/this file with final numbers.
+
+**Exact next step**: implement commit 3 (the `ImageRenderer` wiring) per
+the plan file's §4-6, reviewer-approve, then commit 4's live measurement
+and verification pass — that one needs the USER to actually drag a slider
+live, not just automated tests.

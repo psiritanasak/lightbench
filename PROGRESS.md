@@ -4488,6 +4488,103 @@ already proven not to render red on a macOS Menu/button this session).
   proactively this time (learning from slice 5's noise-reduction
   surprise), did not come up as an issue.
 
+### Phase 6 slice 7: `rawDecoderVersionPin` — deterministic RAW decode across OS updates — SHIPPED, reviewer-APPROVED (3 rounds), not yet live-verified
+- Closes a gap CLAUDE.md logged all the way back at slice 1:
+  `CIRAWFilter.decoderVersion` defaults to "the newest available decoder
+  for the image type" and was neither pinned nor serialized — meaning
+  replaying the exact same saved edit after a future macOS/Core Image
+  update could silently decode a RAW photo differently, the one
+  documented exception to this app's "replaying the same params must be
+  deterministic" principle.
+- The user picked this slice via AskUserQuestion framed as
+  "`CIRAWDecoderVersion9` opt-in" — live measurement before writing any
+  code showed that framing didn't actually apply: `supportedDecoderVersions`
+  for a real D610 NEF on this system returns only `[6, 7]` (version 9 isn't
+  offered here at all), and the SDK header confirms a freshly-constructed
+  filter already defaults to the newest available version automatically —
+  there's no "opt in to get newer" action to build. Reframed as the
+  determinism/pinning problem instead. Confirmed live the setting genuinely
+  matters: switching this camera's decoder from its own default (7) to 6
+  produced a substantial measured pixel delta (57790, 256×256 region) — a
+  materially different demosaic, not cosmetic. Confirmed position-independent
+  (unlike `neutralLocation`): setting `decoderVersion` before vs. after
+  `boostAmount` produced byte-identical output.
+- Deliberately no new UI — this is bookkeeping, not a tunable control.
+  `EditState.rawDecoderVersionPin: String = ""` (11th RAW-native field,
+  `""` = not yet pinned). `RawDecoder.applyRawNativeSettings` applies it via
+  a MEMBERSHIP check against `filter.supportedDecoderVersions`, not a
+  min/max clamp like every other RAW-native field — the SDK header
+  documents an out-of-list assignment produces a nil output image.
+  `ImageDocumentModel.load(from:)` captures the pin exactly once, only when
+  a RAW photo's restored `EditState` has it still empty (a never-opened
+  photo, or a pre-slice-7 sidecar that predates the field) — never
+  overwritten once set.
+- **Reviewer (Opus 5, launched with the `opus` model override from the
+  start this time — not after a default-model spend-limit failure, given
+  this session's repeated history of hitting it mid-review): 3 full
+  rounds, FIX FIRST → FIX FIRST → APPROVE.**
+  - **Round 1, both blocking:** (1) the pin was captured into
+    `restoredState` but that assignment to `editState` happens inside the
+    `isLoadingPhoto` bracket, which deliberately suppresses
+    `scheduleSidecarSave()` — so a photo with a PRE-EXISTING sidecar (from
+    before this slice shipped) got backfilled only in memory, never
+    persisted to disk, unless the user happened to make another real edit.
+    Defeated the slice's entire purpose for exactly the photos it mattered
+    most for. Fixed by tracking whether `loadSidecarIfReachable` returned
+    non-nil, and — only in that case — calling `saveSidecarNow()` directly
+    after `currentURL`/`editState` are committed, with no new folder-access
+    prompt introduced (access was already known-resolvable). (2)
+    `revertToOriginal()`'s literal `EditState()` cleared the pin, and unlike
+    `load(from:)`'s write this one ISN'T `isLoadingPhoto`-guarded — so
+    revert both wrote an unpinned sidecar AND immediately re-decoded with
+    "whatever's currently newest" instead of the photo's original pin,
+    silently reintroducing the exact non-determinism this field exists to
+    close. Fixed by carrying the pin forward explicitly instead of
+    resetting it — the one RAW-native field revert does NOT clear.
+  - **Round 2, blocking (a real bug round 1 introduced and round-1 fixes
+    made permanent):** carrying the pin through both load and revert means
+    a RAW photo's `editState` never again equals literal `.identity` — so
+    "Revert to Original"'s `.disabled(editState == .identity)` gate in
+    `ContentView` read as permanently ENABLED for every RAW photo,
+    including a never-touched one; clicking it would commit a real history
+    step and fire a real sidecar save/possible folder-access prompt for a
+    photo the user never edited. Fixed with a new
+    `EditState.isEffectivelyIdentity` (copies self, clears only
+    `rawDecoderVersionPin`, compares to `.identity`) — every "is this photo
+    edited?" call site must use this instead of a bare identity comparison
+    once a RAW photo always carries a pin. Deliberately did NOT apply the
+    same fix to `ThumbnailGenerator`'s own `!= .identity` fast-path check —
+    that path intentionally decodes UNPINNED, so making it pin-insensitive
+    would desync the grid thumbnail's decoder version from the Editor's;
+    left as a documented, non-blocking perf nit (an identity-but-pinned RAW
+    photo pays one extra `EditPipeline` pass in the grid — correct, just
+    not maximally fast).
+  - Also took a non-blocking round-2 suggestion: `saveSidecarNow()` gained
+    a `suppressErrorMessage` parameter (default `false`, only the new
+    backfill call opts in) — so opening a never-edited RAW photo on a
+    read-only volume doesn't surface "Couldn't save edits" from merely
+    viewing it, preserving this app's "opening a photo should never itself
+    produce an error/prompt" invariant.
+  - A third non-blocking note (`RawDecoder`'s comment stating the SDK's
+    nil-output warning as unconditionally observed, when the reviewer's own
+    live measurement on this OS/macOS 26 showed it's actually silently
+    ignored) was reworded to attribute the claim to the header specifically
+    and note what was actually measured here — this project's "measured,
+    not assumed" documentation convention.
+- 465 tests (11 new, including 2 requested by the round-2 reviewer directly
+  for `isEffectivelyIdentity`: identity-plus-pin is effectively-identity,
+  identity-plus-pin-plus-one-real-field is not). 2 commits (feature+tests,
+  then this doc entry).
+- **NOT YET live-verified** — needs: open a never-before-edited RAW photo,
+  make a trivial edit to force a sidecar save, `cat` the `.photoapp.json`
+  sidecar and confirm `rawDecoderVersionPin` is present (expect `"7"` on
+  this system); reopen and confirm the pin is unchanged; open a photo
+  edited in a PRIOR session (pre-slice-7 sidecar, no `rawDecoderVersionPin`
+  key) and confirm it gets backfilled WITHOUT any further edit — this last
+  one is the direct test of the round-1 fix; confirm Revert to Original is
+  correctly DISABLED on a freshly-opened, untouched RAW photo (the round-2
+  fix) and correctly ENABLES once a real edit is made.
+
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
 user-requested follow-ups (folder-mirrored nested collections; the Editor
@@ -4538,13 +4635,21 @@ including a real live finding root-caused as content-adaptive
 visibility, not a bug — see its own section above).** **Phase 6 slice 6
 (RAW-native Contrast/Detail/Moiré Reduction) is SHIPPED,
 reviewer-APPROVED on the FIRST pass, and LIVE-VERIFIED — 2026-09-04,
-see its own section above.** 459 tests passing. Next: Phase 6 slice 7
-(`lensCorrectionEnabled` — deferred, measured unsupported on this camera,
-would need a different camera to revisit — or `CIRAWDecoderVersion9`
-opt-in, the last two items on `CIRAWFilter`'s RAW-native deferred list —
-or a genuine inverse-geometry transform so the WB eyedropper's fast path
-works beyond identity geometry) is the next roadmap item, or the user
-may pick from IMPROVEMENTS.md's open items
+see its own section above.** **Phase 6 slice 7 (`rawDecoderVersionPin`,
+deterministic RAW decode across OS updates) is SHIPPED and
+reviewer-APPROVED (3 rounds — see its own section above for the two real
+bugs caught: the pin not persisting for pre-existing sidecars, and a
+follow-up bug where preserving it made "Revert to Original" read as
+permanently enabled on RAW photos) but **NOT YET live-verified** — that's
+the immediate next step, using the checklist in that section (cat a
+sidecar's `.photoapp.json`, confirm backfill on a pre-slice-7 photo,
+confirm the Revert button's enabled/disabled state). 465 tests passing.
+After live verification: the two remaining items on `CIRAWFilter`'s
+RAW-native deferred list are `lensCorrectionEnabled` (deferred, measured
+unsupported on this camera, needs a different camera body to revisit) and
+a genuine inverse-geometry transform so the WB eyedropper's fast path
+works beyond identity geometry — both smaller/more speculative than
+slice 7 was. Otherwise the user may pick from IMPROVEMENTS.md's open items
 instead (D4
 Library keyboard support, D5's remaining two parts, D6 accessibility
 pass, P2/P3/P5/P6 performance), or one of the Tier-1 Lightroom-gap WANTED

@@ -843,6 +843,80 @@ Edits are stored as parameter sets and rendered live on the GPU.
    of crop/straighten/perspective/flip, not just at identity) is a
    separate, explicitly-deferred stretch goal from slice 4 — see that
    slice's own write-up above for why it was scoped out, not forgotten.
+   **Slice 7 (`rawDecoderVersionPin`, deterministic RAW decode across OS
+   updates) ✅ COMPLETE** (2026-09-04). The user picked this slice via
+   AskUserQuestion framed as "`CIRAWDecoderVersion9` opt-in" — live
+   measurement before writing any code showed that framing didn't
+   actually apply: `supportedDecoderVersions` for a real D610 NEF on this
+   system returns only `[6, 7]` (version 9 isn't offered at all here),
+   and the SDK header confirms a freshly-constructed filter already
+   defaults to the newest available version automatically — there's no
+   "opt in to get newer" action to build. Reframed instead as closing the
+   determinism gap this file logged all the way back at slice 1: without
+   pinning, replaying the same saved edit after a future macOS/Core Image
+   update could silently decode a RAW photo differently, the one
+   documented exception to this app's own "replaying the same params must
+   be deterministic" principle. Confirmed live the setting genuinely
+   matters, not cosmetic: switching this camera's decoder from its own
+   default (7) to 6 produced a substantial measured pixel delta (57790,
+   256×256 region) — a materially different demosaic. Confirmed
+   position-independent (unlike `neutralLocation`): setting
+   `decoderVersion` before vs. after `boostAmount` produced byte-identical
+   output.
+   Deliberately no new UI — an 11th RAW-native field
+   (`EditState.rawDecoderVersionPin: String = ""`, `""` = not yet
+   pinned), but unlike the other ten it isn't a creative/tunable control
+   at all, so there's no slider. Captured exactly once by
+   `ImageDocumentModel.load(from:)`, only when a RAW photo's restored
+   `EditState` still has it empty (a never-opened photo, or a
+   pre-slice-7 sidecar predating the field), never overwritten once set.
+   Applied in `RawDecoder.applyRawNativeSettings` via a MEMBERSHIP check
+   against `filter.supportedDecoderVersions`, not a min/max clamp like
+   every other RAW-native field — the SDK header documents that an
+   out-of-list assignment produces a nil output image.
+   Reviewer (Opus 5, launched with the model override from the start this
+   time, not after a spend-limit failure — this session's own established
+   workaround): **3 full rounds, FIX FIRST → FIX FIRST → APPROVE**, the
+   most rounds any RAW-native slice has needed. Round 1 caught two real
+   blocking bugs: the pin was captured only in memory for a photo with a
+   PRE-EXISTING sidecar (from before this slice shipped), since the
+   `editState` assignment happens inside the `isLoadingPhoto` bracket that
+   deliberately suppresses `scheduleSidecarSave()` — defeating the whole
+   feature for exactly the photos it mattered most for; fixed by
+   persisting immediately via a direct `saveSidecarNow()` call once
+   `currentURL` is set, but ONLY when a sidecar already existed (so no new
+   folder-access prompt is ever introduced for a genuinely untouched
+   photo). And `revertToOriginal()`'s literal `EditState()` cleared the
+   pin — unlike `load(from:)`'s write, that commit isn't
+   `isLoadingPhoto`-guarded, so revert both wrote an unpinned sidecar AND
+   immediately re-decoded with "whatever's newest now," silently
+   reintroducing the exact non-determinism this field exists to close;
+   fixed by carrying the pin forward across revert instead of resetting
+   it — the one RAW-native field revert does NOT clear.
+   Round 2 caught a real bug the round-1 fixes themselves introduced:
+   carrying the pin through both load and revert means a RAW photo's
+   `editState` never again equals literal `.identity`, so
+   `ContentView`'s "Revert to Original" button — gated on
+   `editState == .identity` — read as permanently ENABLED for every RAW
+   photo, including a never-touched one. Fixed with a new
+   `EditState.isEffectivelyIdentity` (copies self, clears only
+   `rawDecoderVersionPin`, compares to `.identity`) — every "is this
+   photo edited?" call site must use this, not a bare identity
+   comparison, once a RAW photo always carries a pin. Deliberately did
+   NOT apply the same fix to `ThumbnailGenerator`'s own `!= .identity`
+   fast-path check: that path intentionally decodes UNPINNED, so making
+   it pin-insensitive would desync the grid thumbnail's decoder version
+   from the Editor's — left as a documented, non-blocking perf nit
+   instead. Also took a non-blocking suggestion: `saveSidecarNow()`
+   gained a `suppressErrorMessage` parameter (default `false`, only the
+   backfill call opts in), so opening a never-edited RAW photo on a
+   read-only volume doesn't surface "Couldn't save edits" from merely
+   viewing it.
+   465 tests (11 new). **Live verification (open a never-edited RAW
+   photo, `cat` its `.photoapp.json` sidecar, confirm the pin backfills
+   for a pre-slice-7 photo without any further edit, confirm the Revert
+   button's enabled/disabled state) is still PENDING** — see PROGRESS.md's
+   own slice-7 section for the exact checklist.
 7. Local Adjustments (Masking) — **not started.** The single biggest capability
    gap versus Lightroom (see the Lightroom gap-analysis subsection above, which
    this phase supersedes/formalizes for this one item). Every adjustment in this

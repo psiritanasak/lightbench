@@ -706,11 +706,15 @@ Edits are stored as parameter sets and rendered live on the GPU.
    has NO UI representation at all (no slider, not shown, not resettable
    except via Undo/Revert to Original) — flagged explicitly in
    `AdjustTabView`'s existing gap-note doc comment for whoever next
-   touches the RAW section. **Not yet live-verified** — next: the user's
-   own pass, specifically including an asymmetric tap test (clearly warm
-   vs. clearly cool area) to confirm `neutralLocation`'s y-origin
-   convention, which the reviewer flagged as unverifiable without visual
-   inspection.
+   touches the RAW section. **Fully LIVE-VERIFIED (2026-09-04)**: user
+   confirmed near-instant correction with no crop applied; an asymmetric
+   tap test (clearly warm vs. clearly cool area) both corrected sensibly,
+   confirming `neutralLocation`'s y-origin convention is right-side-up
+   (the one thing the reviewer flagged as unverifiable without visual
+   inspection); adding a crop and tapping again correctly fell back to
+   the existing search; a fast-path correction survived a LATER crop
+   being added; and a non-RAW photo's eyedropper was unaffected. **Phase
+   6 slice 4 is now fully complete.**
    **Deferred to slice 5** (a separate session): `CIRAWFilter`'s
    remaining RAW-native controls — `lensCorrectionEnabled` (measured
    UNSUPPORTED on this app's own test camera — do not "fix" this

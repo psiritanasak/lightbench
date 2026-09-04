@@ -4196,7 +4196,7 @@ already proven not to render red on a macOS Menu/button this session).
   string) are noted here, not fixed — low-risk, and the reviewer's own
   call was "worth doing only if touching the file again."
 
-### Phase 6 slice 4: rawWhiteBalanceNeutralPoints, a true no-search RAW white-balance eyedropper — SHIPPED, not yet live-verified
+### Phase 6 slice 4: rawWhiteBalanceNeutralPoints, a true no-search RAW white-balance eyedropper — SHIPPED and LIVE-VERIFIED
 - User chose this scope over RAW-native NR/sharpness and the
   `CIRAWDecoderVersion9` opt-in. `CIRAWFilter.neutralLocation`: set it to
   a pixel, the decoder computes and applies the correct white balance
@@ -4282,15 +4282,16 @@ already proven not to render red on a macOS Menu/button this session).
   to Original. Documented explicitly in `AdjustTabView`'s existing
   gap-note doc comment (the same one that already covers `boostAmount`/
   `rawExposureEV`/`shadowBoostScale`'s absence from "Reset Adjustments").
-- **NOT yet live-verified** — next: the user's own pass, specifically
-  including an asymmetric tap test (a clearly warm area vs. a clearly
-  cool area) to confirm `neutralLocation`'s y-origin convention — the
-  one thing the reviewer flagged as needing visual inspection, not just
-  measurement — alongside the ordinary checklist (tap on an unedited RAW
-  photo neutralizes near-instantly with no visible "solving" delay; add
-  a crop, tap again, falls back to the existing slower search
-  unchanged; a fast-path correction survives a LATER crop being added;
-  non-RAW photos are completely unaffected).
+- **LIVE-VERIFIED (2026-09-04).** User confirmed all 6 checklist items:
+  a fresh RAW photo with no geometry edits corrects near-instantly on
+  tap (no visible "solving" delay); an asymmetric tap test (a clearly
+  warm area, then a clearly cool area) both corrected sensibly, with no
+  sign of an inverted y-origin; adding a crop and tapping again fell
+  back to the existing slower search, behaving exactly as before this
+  slice; a fast-path correction survived a LATER crop being added
+  (stayed anchored to the RAW's own native grid, not invalidated); and
+  a non-RAW photo's eyedropper was completely unaffected. **Phase 6
+  slice 4 is now fully complete.**
 
 ## Exact next step
 **Phase 2, Phase 3, Phase 4, and now Phase 5 are ALL COMPLETE**, plus eight
@@ -4334,11 +4335,9 @@ LIVE-VERIFIED (2026-09-03) — see their own sections above.** Post-Phase-5
 follow-up #8 (click-to-type numeric entry on every Adjust/Crop slider) is
 ALSO SHIPPED, reviewer-APPROVED, and fully LIVE-VERIFIED (2026-09-03) —
 see its own section above. **Phase 6 slice 4 (a true no-search RAW
-white-balance eyedropper via `CIRAWFilter.neutralLocation`) is SHIPPED and
-reviewer-APPROVED (2026-09-04) — see its own section above.** 435 tests
-passing. **Not yet live-verified** — next: the user's own pass, including
-the asymmetric-tap y-origin check described in slice 4's own section.
-After that, Phase 6 slice 5
+white-balance eyedropper via `CIRAWFilter.neutralLocation`) is SHIPPED,
+reviewer-APPROVED, and fully LIVE-VERIFIED (2026-09-04) — see its own
+section above.** 435 tests passing. Next: Phase 6 slice 5
 (`lensCorrectionEnabled` — deferred, measured unsupported on this camera,
 would need a different camera to revisit — RAW-native NR/sharpness,
 `CIRAWDecoderVersion9` opt-in, or a genuine inverse-geometry transform so

@@ -73,6 +73,7 @@ final class EditStatePresetTests: XCTestCase {
         s.rawContrastAdjust = 0.25
         s.rawDetailAdjust = 1.1
         s.rawMoireReductionAdjust = 0.35
+        s.rawDecoderVersionPin = "7"
         return s
     }
 
@@ -262,6 +263,17 @@ final class EditStatePresetTests: XCTestCase {
 
         XCTAssertEqual(result.rawMoireReductionAdjust, target.rawMoireReductionAdjust)
         XCTAssertNotEqual(result.rawMoireReductionAdjust, preset.rawMoireReductionAdjust)
+    }
+
+    func testTargetsRawDecoderVersionPinSurvivesAPreset() {
+        let preset = fullyEditedState() // rawDecoderVersionPin = "7"
+        var target = EditState.identity
+        target.rawDecoderVersionPin = "6"
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.rawDecoderVersionPin, target.rawDecoderVersionPin)
+        XCTAssertNotEqual(result.rawDecoderVersionPin, preset.rawDecoderVersionPin)
     }
 
     /// `applyingPreset(onto:)` and `comparisonOriginal()` draw the color/

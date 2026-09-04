@@ -552,7 +552,14 @@ struct ContentView: View {
             } label: {
                 Label("Revert to Original", systemImage: "arrow.counterclockwise")
             }
-            .disabled(document.currentImage == nil || document.editState == .identity)
+            // `isEffectivelyIdentity`, not `== .identity` — a RAW photo's
+            // `rawDecoderVersionPin` is invisible bookkeeping set on
+            // every open, not a user edit; a bare `== .identity` check
+            // would leave this button permanently enabled for every RAW
+            // photo, including never-touched ones (Phase 6 slice 7
+            // review round 2). See `EditState.isEffectivelyIdentity`'s
+            // own doc comment.
+            .disabled(document.currentImage == nil || document.editState.isEffectivelyIdentity)
         }
     }
 

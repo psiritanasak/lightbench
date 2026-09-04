@@ -46,16 +46,29 @@ import UniformTypeIdentifiers
 /// DELIBERATELY capped at the measured-useful `-1...1` despite the
 /// property accepting more, since the effect was measured to saturate
 /// hard above `1.0`.
+/// Phase 6 slice 7 added `rawDecoderVersionPin` — NOT a user-facing
+/// control like every field above, but a correctness/determinism fix:
+/// `CIRAWFilter.decoderVersion` defaults to "the newest available
+/// decoder" on its own (confirmed live, SDK header), so there was
+/// nothing to "opt in" to — the original "opt into `CIRAWDecoderVersion9`"
+/// framing didn't even apply on this machine (measured
+/// `supportedDecoderVersions` returns only `[6, 7]` here, `9` isn't
+/// offered at all). The actual gap, logged back in Phase 6 slice 1: an
+/// unpinned decoder version means replaying the same `EditState` after
+/// a future OS update could silently decode differently. `load(from:)`
+/// pins whatever version is currently resolved the FIRST time a RAW
+/// photo is opened, then that pin is preserved and applied on every
+/// subsequent decode, indefinitely — see `EditState.rawDecoderVersionPin`'s
+/// own doc comment.
 /// `applyRawNativeSettings` below is now the ONE place all of them are
 /// read (mirrored by `EditState.requiresRawRedecode`, the one place
 /// they're compared) — see each field's own `EditState` doc comment for
 /// what it does and how its design was shaped by live measurement
-/// against the user's real camera. `CIRAWFilter`'s remaining RAW-native
-/// controls (`CIRAWDecoderVersion9` opt-in) are deferred to a later
-/// slice; `lensCorrectionEnabled` specifically was MEASURED unsupported
-/// on the user's own camera (`isLensCorrectionSupported == false` on
-/// three sampled Nikon D610 NEFs) before slice 2 was scoped, so it's
-/// deferred deliberately, not an oversight — see CLAUDE.md/PROGRESS.md.
+/// against the user's real camera. `lensCorrectionEnabled` specifically
+/// was MEASURED unsupported on the user's own camera
+/// (`isLensCorrectionSupported == false` on three sampled Nikon D610
+/// NEFs) before slice 2 was scoped, so it's deferred deliberately, not
+/// an oversight — see CLAUDE.md/PROGRESS.md.
 enum RawDecoder {
     /// Serializes every heavy RAW render this app issues —
     /// `materialize`, `ThumbnailGenerator`'s RAW thumbnail path, and
@@ -187,6 +200,22 @@ enum RawDecoder {
                 detail: filter.isDetailSupported,
                 moireReduction: filter.isMoireReductionSupported
             )
+        }
+    }
+
+    /// The `decoderVersion` a FRESHLY-CONSTRUCTED `CIRAWFilter` resolves
+    /// to for `url` right now — i.e. Core Image's own current idea of
+    /// "newest available" for this file, on this OS. `nil` if
+    /// construction fails or `url` isn't RAW. `ImageDocumentModel.load(from:)`
+    /// calls this ONCE, only when a RAW photo has no existing
+    /// `rawDecoderVersionPin`, to capture what to pin going forward —
+    /// see `EditState.rawDecoderVersionPin`'s own doc comment for why
+    /// pinning exists at all.
+    static func currentDefaultDecoderVersion(of url: URL) async -> String? {
+        guard isRaw(url) else { return nil }
+        return await RenderGate.shared.run {
+            guard let filter = CIRAWFilter(imageURL: url) else { return nil }
+            return filter.decoderVersion.rawValue
         }
     }
 
@@ -386,6 +415,25 @@ enum RawDecoder {
     /// range, since that narrowing is a UI-usefulness choice, not a
     /// hard property limit.
     ///
+    /// `rawDecoderVersionPin` (slice 7) is unlike every field above in
+    /// kind, not just shape: it's not a creative adjustment at all, and
+    /// there's no corresponding UI row — see
+    /// `EditState.rawDecoderVersionPin`'s own doc comment for the
+    /// determinism problem it solves. Applied via a MEMBERSHIP check
+    /// against `filter.supportedDecoderVersions`, not a min/max clamp
+    /// like every other field here — the SDK header documents that
+    /// assigning a value outside that list produces a `nil` output
+    /// image entirely (not a merely-out-of-range value), so the guard
+    /// here is "skip the assignment if unsupported," not "clamp into
+    /// range." Confirmed live: this camera's `supportedDecoderVersions`
+    /// is `[6, 7]` — assigning `6` when the default is `7` produced a
+    /// substantial measured pixel delta (57790, 256×256 region), so
+    /// this is a genuinely different demosaic algorithm, not cosmetic.
+    /// Also confirmed position-independent (unlike `neutralLocation`
+    /// below): setting this before vs. after `boostAmount` produced
+    /// byte-identical output, so it's grouped with the other non-spatial
+    /// scalars for placement purposes.
+    ///
     /// `rawWhiteBalanceNeutralPoints` seeds `filter.neutralLocation`
     /// directly, converting its stored normalized (0...1) fraction to
     /// absolute pixel coordinates via `filter.nativeSize` (available
@@ -403,12 +451,14 @@ enum RawDecoder {
     /// identical either order in that specific regime), not left
     /// genuinely untouched. Do not add another RAW-native POINT field
     /// without re-measuring this — it does not follow from the other
-    /// nine fields' own "position doesn't matter" precedent (all nine
-    /// are non-spatial scalars; the neutral point is the one genuinely
-    /// spatial field here).
+    /// ten fields' own "position doesn't matter" precedent (all ten
+    /// are non-spatial; the neutral point is the one genuinely spatial
+    /// field here).
     ///
-    /// All ten clamped defensively — matching `decodeDraft`'s existing
-    /// `scaleFactor` clamp precedent — even though the Adjust-tab sliders
+    /// All eleven validated defensively — ten via min/max clamp,
+    /// matching `decodeDraft`'s existing `scaleFactor` clamp precedent,
+    /// `rawDecoderVersionPin` via membership check instead (see its own
+    /// paragraph above for why) — even though the Adjust-tab sliders
     /// (or, for the neutral point, `ImageDocumentModel.pickWhiteBalance`'s
     /// own eligibility gate) already constrain them. `boostShadowAmount`'s
     /// (and the two remaining scales') result needs no upper clamp —
@@ -479,6 +529,28 @@ enum RawDecoder {
         if moireAdjust != 0 {
             let combined = filter.moireReductionAmount + Float(moireAdjust)
             filter.moireReductionAmount = min(3, max(0, combined))
+        }
+        // Defensive membership check is NOT optional here, unlike most
+        // other clamps in this file — the SDK header documents that
+        // `decoderVersion` "Must be one of `supportedDecoderVersions`,
+        // otherwise a nil output image will be generated." Reviewer
+        // live-measured this exact claim on this OS (macOS 26) and found
+        // the actual failure mode milder than documented: assigning an
+        // unsupported version was silently ignored (readback stayed at
+        // the previous value, `outputImage` stayed non-nil) rather than
+        // producing a nil output image. This guard is kept regardless —
+        // the header's stated contract, not one OS's observed behavior,
+        // is what's safe to rely on going forward; a future OS could
+        // legitimately implement the documented nil-output behavior. A
+        // pin captured on one OS could theoretically no longer be listed
+        // after a future OS update drops support for an old decoder
+        // entirely; silently skipping the assignment (leaving the
+        // filter's own current default in place) is the only sane
+        // fallback, since there's no in-band way to surface an error
+        // this deep in the decode path.
+        if !editState.rawDecoderVersionPin.isEmpty,
+           filter.supportedDecoderVersions.map(\.rawValue).contains(editState.rawDecoderVersionPin) {
+            filter.decoderVersion = CIRAWDecoderVersion(rawValue: editState.rawDecoderVersionPin)
         }
         if let point = editState.rawWhiteBalanceNeutralPoints.first,
            filter.nativeSize.width > 0, filter.nativeSize.height > 0 {

@@ -60,11 +60,11 @@ final class RawDecoderTests: XCTestCase {
     /// `shadowBoostScale`, `rawWhiteBalanceNeutralPoints`,
     /// `rawLuminanceNoiseReductionAdjust`, `rawColorNoiseReductionScale`,
     /// `rawSharpnessScale`, `rawContrastAdjust`, `rawDetailAdjust`,
-    /// `rawMoireReductionAdjust`) configure `CIRAWFilter` itself, so they
-    /// must have ZERO effect on the non-RAW `decode` branch
-    /// (`CIImage(contentsOf:)`, which never touches `CIRAWFilter` at
-    /// all). Writes a real temp PNG, same fixture-writing pattern
-    /// `ThumbnailGeneratorTests` already uses.
+    /// `rawMoireReductionAdjust`, `rawDecoderVersionPin`) configure
+    /// `CIRAWFilter` itself, so they must have ZERO effect on the
+    /// non-RAW `decode` branch (`CIImage(contentsOf:)`, which never
+    /// touches `CIRAWFilter` at all). Writes a real temp PNG, same
+    /// fixture-writing pattern `ThumbnailGeneratorTests` already uses.
     func testDecodeIgnoresRawNativeFieldsForNonRawFiles() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("RawDecoderTests-\(UUID().uuidString)", isDirectory: true)
@@ -85,6 +85,7 @@ final class RawDecoderTests: XCTestCase {
         low.rawContrastAdjust = -1
         low.rawDetailAdjust = -3
         low.rawMoireReductionAdjust = -1
+        low.rawDecoderVersionPin = "6"
         var high = EditState.identity
         high.boostAmount = 1
         high.rawExposureEV = 2
@@ -96,6 +97,7 @@ final class RawDecoderTests: XCTestCase {
         high.rawContrastAdjust = 1
         high.rawDetailAdjust = 3
         high.rawMoireReductionAdjust = 1
+        high.rawDecoderVersionPin = "7"
 
         let lowResult = await RawDecoder.decode(contentsOf: url, editState: low)
         let highResult = await RawDecoder.decode(contentsOf: url, editState: high)

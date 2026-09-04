@@ -794,6 +794,49 @@ struct EditState: Equatable, Codable {
     /// re-decoding.
     var rawMoireReductionAdjust: Double = 0
 
+    /// The exact `CIRAWFilter.decoderVersion` string (e.g. `"7"`) pinned
+    /// at this photo's FIRST decode — `""` means "not yet pinned, use
+    /// whatever's currently newest" (the identity/default state for a
+    /// never-opened RAW photo, or any non-RAW photo, which never reads
+    /// this at all).
+    ///
+    /// UNLIKE every other RAW-native field, this is never a user-facing
+    /// slider — `CIRAWFilter.decoderVersion` defaults to "the newest
+    /// available decoder for the image type" on its own (confirmed live,
+    /// SDK header), so there's no "opt in to get newer" action to
+    /// expose. The problem this field solves is the opposite: WITHOUT
+    /// pinning, replaying the exact same `EditState` after a future
+    /// macOS/Core Image update could silently decode differently, once
+    /// "newest" means a different version than it did when the photo
+    /// was first edited — the one documented exception to this app's
+    /// own "replaying the same params must be deterministic" principle,
+    /// logged back in Phase 6 slice 1 and closed here. Confirmed live
+    /// the setting isn't cosmetic: switching this camera's decoder from
+    /// its own default (version 7) to version 6 produced a substantial
+    /// measured pixel delta (57790, 256×256 region) — a genuinely
+    /// different demosaic algorithm, not a rounding difference.
+    ///
+    /// Written by `ImageDocumentModel.load(from:)` — only when a RAW
+    /// photo's restored `EditState` has this field still empty (no prior
+    /// sidecar value to respect), so the pin, once set, is never silently
+    /// overwritten there. Also carried forward (not reset) by
+    /// `revertToOriginal()`, the one deliberate exception to that
+    /// method's usual "reset every RAW-native field to identity"
+    /// behavior — see its own doc comment.
+    ///
+    /// Deliberately EXCLUDED from any user-facing "is this photo edited?"
+    /// check (e.g. what gates the Revert-to-Original button) — see
+    /// `isEffectivelyIdentity` below, which every such call site must use
+    /// instead of a bare `== .identity`/`!= .identity` comparison once a
+    /// RAW photo carries a pin. This field is invisible bookkeeping, not
+    /// a user edit, and must never make an otherwise-untouched photo
+    /// appear "edited."
+    ///
+    /// Same structural caveat as the other RAW-native fields:
+    /// `EditPipeline` never reads this; it only takes effect by
+    /// re-decoding.
+    var rawDecoderVersionPin: String = ""
+
     /// True when every geometric transform (straighten/perspective/crop/
     /// flip) is at its identity value — the exact field GROUP already
     /// named together in `comparisonOriginal()`/`applyingPreset()`'s own
@@ -832,10 +875,33 @@ struct EditState: Equatable, Codable {
             || rawContrastAdjust != other.rawContrastAdjust
             || rawDetailAdjust != other.rawDetailAdjust
             || rawMoireReductionAdjust != other.rawMoireReductionAdjust
+            || rawDecoderVersionPin != other.rawDecoderVersionPin
     }
 
     /// The no-op edit state: every adjustment at its default (identity) value.
     static let identity = EditState()
+
+    /// True when this state is identity in every respect a USER can
+    /// perceive — i.e. `== .identity` except that `rawDecoderVersionPin`
+    /// is ignored. Phase 6 slice 7 review (round 2) caught a real bug a
+    /// bare `== .identity` comparison introduces once RAW photos always
+    /// carry a pin from their very first open: the Revert-to-Original
+    /// button (`ContentView`) would read as permanently enabled for every
+    /// RAW photo — including a never-touched one — since `editState`
+    /// would never again equal literal identity. Every call site that
+    /// means "has the user made any visible edit," not "is this struct
+    /// bit-for-bit its default," must use this instead of the raw
+    /// equality/inequality operator. (`ThumbnailGenerator`'s own
+    /// `!= .identity` fast-path check is a deliberate exception — see its
+    /// own comment — because that fast path deliberately decodes
+    /// UNPINNED, so treating a pinned-but-otherwise-identity photo as
+    /// "identity" there would decode the grid thumbnail with a different
+    /// decoder version than the Editor uses.)
+    var isEffectivelyIdentity: Bool {
+        var copy = self
+        copy.rawDecoderVersionPin = ""
+        return copy == .identity
+    }
 
     /// The "original" side for the Compare feature: the CURRENT geometry
     /// (crop/straighten/perspective/flip) is KEPT — copied via `var s =
@@ -900,8 +966,9 @@ struct EditState: Equatable, Codable {
         // `boostAmount`/`rawExposureEV`/`shadowBoostScale`/
         // `rawWhiteBalanceNeutralPoints`/`rawLuminanceNoiseReductionAdjust`/
         // `rawColorNoiseReductionScale`/`rawSharpnessScale`/
-        // `rawContrastAdjust`/`rawDetailAdjust`/`rawMoireReductionAdjust`
-        // are ALSO left untouched, for a different reason: `EditPipeline`
+        // `rawContrastAdjust`/`rawDetailAdjust`/`rawMoireReductionAdjust`/
+        // `rawDecoderVersionPin` are ALSO left untouched, for a different
+        // reason: `EditPipeline`
         // never reads any of them at all (see their own doc comments), so resetting them here
         // couldn't be honored by either side of the Compare render
         // anyway — inherit them rather than set a
@@ -966,15 +1033,19 @@ struct EditState: Equatable, Codable {
         // `boostAmount`/`rawExposureEV`/`shadowBoostScale`/
         // `rawWhiteBalanceNeutralPoints`/`rawLuminanceNoiseReductionAdjust`/
         // `rawColorNoiseReductionScale`/`rawSharpnessScale`/
-        // `rawContrastAdjust`/`rawDetailAdjust`/`rawMoireReductionAdjust`
-        // are ALSO not copied, for a different reason: carrying them would make applying ANY preset
+        // `rawContrastAdjust`/`rawDetailAdjust`/`rawMoireReductionAdjust`/
+        // `rawDecoderVersionPin` are ALSO not copied, for a different
+        // reason: carrying them would make applying ANY preset
         // kick off a multi-second RAW re-decode (no other preset field
         // does that), and would silently set RAW-decode parameters on a
         // JPEG target — dead weight that also
         // defeats `ThumbnailGenerator`'s `editState != .identity` fast
         // path for an otherwise-unedited thumbnail. Presets are
         // cross-photo looks; these are per-decode technical settings,
-        // not a look.
+        // not a look. `rawDecoderVersionPin` specifically must NEVER
+        // carry across photos: forcing one photo's target to decode
+        // with a DIFFERENT photo's pinned decoder version would be
+        // actively wrong, not just inert.
         return result
     }
 }
@@ -1033,6 +1104,7 @@ extension EditState {
         case rawExposureEV, shadowBoostScale, rawWhiteBalanceNeutralPoints
         case rawLuminanceNoiseReductionAdjust, rawColorNoiseReductionScale, rawSharpnessScale
         case rawContrastAdjust, rawDetailAdjust, rawMoireReductionAdjust
+        case rawDecoderVersionPin
     }
 
     init(from decoder: Decoder) throws {
@@ -1105,5 +1177,6 @@ extension EditState {
         rawContrastAdjust = try container.decodeIfPresent(Double.self, forKey: .rawContrastAdjust) ?? 0
         rawDetailAdjust = try container.decodeIfPresent(Double.self, forKey: .rawDetailAdjust) ?? 0
         rawMoireReductionAdjust = try container.decodeIfPresent(Double.self, forKey: .rawMoireReductionAdjust) ?? 0
+        rawDecoderVersionPin = try container.decodeIfPresent(String.self, forKey: .rawDecoderVersionPin) ?? ""
     }
 }

@@ -12,9 +12,9 @@ import XCTest
 /// `boostAmount`; slice 4 added `rawWhiteBalanceNeutralPoints`; slice 5
 /// added `rawLuminanceNoiseReductionAdjust`/`rawColorNoiseReductionScale`/
 /// `rawSharpnessScale`; slice 6 added `rawContrastAdjust`/
-/// `rawDetailAdjust`/`rawMoireReductionAdjust`. Each field gets its own
-/// true case so a missing `||` clause for any one of them can't hide
-/// behind another.
+/// `rawDetailAdjust`/`rawMoireReductionAdjust`; slice 7 added
+/// `rawDecoderVersionPin`. Each field gets its own true case so a
+/// missing `||` clause for any one of them can't hide behind another.
 final class EditStateRawRedecodeTests: XCTestCase {
     func testTrueWhenBoostAmountDiffers() {
         var a = EditState.identity
@@ -96,6 +96,14 @@ final class EditStateRawRedecodeTests: XCTestCase {
         XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
     }
 
+    func testTrueWhenRawDecoderVersionPinDiffers() {
+        var a = EditState.identity
+        var b = EditState.identity
+        a.rawDecoderVersionPin = "6"
+        b.rawDecoderVersionPin = "7"
+        XCTAssertTrue(a.requiresRawRedecode(comparedTo: b))
+    }
+
     func testFalseWhenAllRawNativeFieldsAreTheSame() {
         var a = EditState.identity
         var b = EditState.identity
@@ -119,6 +127,8 @@ final class EditStateRawRedecodeTests: XCTestCase {
         b.rawDetailAdjust = 1.1
         a.rawMoireReductionAdjust = 0.35
         b.rawMoireReductionAdjust = 0.35
+        a.rawDecoderVersionPin = "7"
+        b.rawDecoderVersionPin = "7"
         XCTAssertFalse(a.requiresRawRedecode(comparedTo: b))
     }
 

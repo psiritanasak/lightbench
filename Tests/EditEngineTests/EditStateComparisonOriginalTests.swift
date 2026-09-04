@@ -77,6 +77,7 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.rawContrastAdjust = 0.25
         s.rawDetailAdjust = 1.1
         s.rawMoireReductionAdjust = 0.35
+        s.rawDecoderVersionPin = "7"
         return s
     }
 
@@ -209,5 +210,11 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         let edited = fullyEditedState()
         XCTAssertEqual(edited.comparisonOriginal().rawMoireReductionAdjust, edited.rawMoireReductionAdjust)
         XCTAssertNotEqual(edited.rawMoireReductionAdjust, EditState.identity.rawMoireReductionAdjust, "test fixture should start non-default")
+    }
+
+    func testRawDecoderVersionPinIsPreservedNotReset() {
+        let edited = fullyEditedState()
+        XCTAssertEqual(edited.comparisonOriginal().rawDecoderVersionPin, edited.rawDecoderVersionPin)
+        XCTAssertNotEqual(edited.rawDecoderVersionPin, EditState.identity.rawDecoderVersionPin, "test fixture should start non-default")
     }
 }

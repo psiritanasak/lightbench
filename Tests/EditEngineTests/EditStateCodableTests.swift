@@ -48,6 +48,7 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.rawContrastAdjust, 0)
         XCTAssertEqual(state.rawDetailAdjust, 0)
         XCTAssertEqual(state.rawMoireReductionAdjust, 0)
+        XCTAssertEqual(state.rawDecoderVersionPin, "")
     }
 
     func testBoostAmountDecodesWhenPresent() throws {
@@ -118,6 +119,30 @@ final class EditStateCodableTests: XCTestCase {
         { "rawMoireReductionAdjust": 0.65 }
         """)
         XCTAssertEqual(state.rawMoireReductionAdjust, 0.65)
+    }
+
+    func testRawDecoderVersionPinDecodesWhenPresent() throws {
+        let state = try decode("""
+        { "rawDecoderVersionPin": "7" }
+        """)
+        XCTAssertEqual(state.rawDecoderVersionPin, "7")
+    }
+
+    /// Reviewer-requested (Phase 6 slice 7, round 2): `isEffectivelyIdentity`
+    /// is the one thing standing between a RAW photo's invisible decoder-
+    /// version pin and a permanently-enabled Revert-to-Original button —
+    /// see its own doc comment and `ContentView`'s call site.
+    func testIsEffectivelyIdentityTrueWhenOnlyTheDecoderPinDiffers() {
+        var state = EditState.identity
+        state.rawDecoderVersionPin = "7"
+        XCTAssertTrue(state.isEffectivelyIdentity)
+    }
+
+    func testIsEffectivelyIdentityFalseWhenARealFieldAlsoDiffers() {
+        var state = EditState.identity
+        state.rawDecoderVersionPin = "7"
+        state.exposureEV = 0.5
+        XCTAssertFalse(state.isEffectivelyIdentity)
     }
 
     func testEmptyObjectDecodesToExactIdentity() throws {

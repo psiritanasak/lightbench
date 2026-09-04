@@ -527,30 +527,46 @@ struct AdjustTabView: View {
     /// continuous adjustment VALUES.
     /// Reviewer-flagged, deliberate, documented gap: this deliberately
     /// mirrors `comparisonOriginal()`'s field list, which does NOT include
-    /// any of the ten RAW-native fields (`boostAmount`, `rawExposureEV`,
+    /// any of the ELEVEN RAW-native fields (`boostAmount`, `rawExposureEV`,
     /// `shadowBoostScale`, `rawWhiteBalanceNeutralPoints`,
     /// `rawLuminanceNoiseReductionAdjust`, `rawColorNoiseReductionScale`,
     /// `rawSharpnessScale`, `rawContrastAdjust`, `rawDetailAdjust`,
-    /// `rawMoireReductionAdjust` — see that method's own doc comment:
-    /// `EditPipeline` can't express any of them, so resetting them here
-    /// would trigger an unwanted full RAW re-decode from what should be
-    /// an instant, free action). Consequence: a RAW photo with every
-    /// OTHER field at identity but a non-default RAW section slider shows
-    /// this button (correctly) disabled, even though the RAW section's
-    /// own sliders are visibly non-identity — `revertToOriginal()`'s
-    /// literal `EditState()` commit is the control that resets all
-    /// ten, not this one.
+    /// `rawMoireReductionAdjust`, `rawDecoderVersionPin` — see that
+    /// method's own doc comment: `EditPipeline` can't express any of them,
+    /// so resetting them here would trigger an unwanted full RAW re-decode
+    /// from what should be an instant, free action). Consequence: a RAW
+    /// photo with every OTHER field at identity but a non-default RAW
+    /// section slider shows this button (correctly) disabled, even though
+    /// the RAW section's own sliders are visibly non-identity —
+    /// `revertToOriginal()`'s literal `EditState()` commit is the control
+    /// that resets the other ten, not this one (`rawDecoderVersionPin` is
+    /// the one exception — see its own paragraph below).
     ///
     /// `rawWhiteBalanceNeutralPoints` specifically is WORSE than the
-    /// other nine here — reviewer-caught: it has no slider or any other
-    /// visible representation in this section AT ALL, so a RAW-native WB
-    /// eyedropper tap is genuinely invisible state once set: neither this
-    /// button, nor the RAW section's own sliders, show anything changed.
-    /// Only Undo or Revert to Original clears it. Accepted as a known gap
-    /// for this slice (see PROGRESS.md) rather than adding a dedicated
-    /// affordance — flag if a future session's UI work in this file
-    /// touches the RAW section, since a "neutral point set (tap to
-    /// clear)" indicator would be the natural fix.
+    /// other RAW-native fields here — reviewer-caught: it has no slider or
+    /// any other visible representation in this section AT ALL, so a
+    /// RAW-native WB eyedropper tap is genuinely invisible state once set:
+    /// neither this button, nor the RAW section's own sliders, show
+    /// anything changed. Only Undo or Revert to Original clears it.
+    /// Accepted as a known gap for this slice (see PROGRESS.md) rather
+    /// than adding a dedicated affordance — flag if a future session's UI
+    /// work in this file touches the RAW section, since a "neutral point
+    /// set (tap to clear)" indicator would be the natural fix.
+    ///
+    /// `rawDecoderVersionPin` (Phase 6 slice 7) has NO row here, and never
+    /// will — unlike the other ten RAW-native fields, it isn't a
+    /// creative/tunable control at all, so there's nothing to draw a
+    /// slider for. It exists purely so replaying a photo's saved edits
+    /// decodes identically after a future macOS/Core Image update, and is
+    /// set exactly once, automatically, the first time a RAW photo is
+    /// opened (see `EditState.rawDecoderVersionPin`'s and
+    /// `ImageDocumentModel.load(from:)`'s own doc comments). It's also the
+    /// one RAW-native field `revertToOriginal()` deliberately does NOT
+    /// reset — clearing a photo's determinism pin on revert would silently
+    /// let a later re-decode use a different decoder algorithm than the
+    /// rest of that photo's history did. If a future session is tempted to
+    /// "fix" the apparent missing UI row for this field, don't — the
+    /// omission is intentional, not an oversight.
     private var isAdjustTabAtIdentity: Bool {
         let state = document.editState
         return state.exposureEV == 0

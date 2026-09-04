@@ -246,7 +246,17 @@ final class ImageDocumentModel: ObservableObject {
         // better than dropping the outgoing photo's pending edits on a
         // bad file.
         flushPendingSidecarSave()
-        let restoredState = loadSidecarIfReachable(for: url) ?? EditState()
+        // `var`, not `let` — Phase 6 slice 7's decoder-version pin (below)
+        // mutates this in place before it's committed to `editState` at
+        // the bottom of this function.
+        let existingSidecarState = loadSidecarIfReachable(for: url)
+        var restoredState = existingSidecarState ?? EditState()
+        // Set below only when this load backfills a decoder-version pin
+        // into a photo that ALREADY had a sidecar on disk — see the
+        // pin-capture block's own comment for why that specific case
+        // needs an immediate, explicit save rather than waiting on the
+        // normal `editState` `didSet` → `scheduleSidecarSave()` path.
+        var shouldPersistBackfilledDecoderPin = false
 
         // `await`ed even for non-RAW (which has no internal suspension
         // point) because Swift requires one signature — see `RawDecoder.decode`'s
@@ -299,6 +309,41 @@ final class ImageDocumentModel: ObservableObject {
             // `currentRawAdjustmentSupport`'s own doc comment.
             rawAdjustmentSupport = await RawDecoder.confirmedAdjustmentSupport(of: url)
             guard myGeneration == loadGeneration else { return }
+            // Phase 6 slice 7: pin the decoder version on this photo's
+            // FIRST decode only — `.isEmpty` is the entire mechanism
+            // that makes this a one-time, never-overwritten capture, not
+            // a re-pin-on-every-open. Harmless that this runs after the
+            // FIRST `RawDecoder.decode` call above already happened: an
+            // empty pin makes `applyRawNativeSettings` skip the
+            // assignment entirely, so that first decode already used
+            // exactly the value we're about to capture — see
+            // `EditState.rawDecoderVersionPin`'s own doc comment.
+            //
+            // Reviewer-caught: capturing it into `restoredState` alone is
+            // NOT enough to actually persist it — the assignment to
+            // `editState` further below happens inside the
+            // `isLoadingPhoto` bracket, which deliberately SKIPS
+            // `scheduleSidecarSave()` (that's the same mechanism that
+            // keeps merely OPENING a photo from ever prompting for folder
+            // access). For a genuinely never-edited photo that's correct:
+            // nothing worth persisting exists yet, and this backfill stays
+            // in memory only until a real edit eventually saves it. But
+            // for a photo that already has a sidecar on disk (from a
+            // session before this slice shipped), silently doing nothing
+            // would leave it permanently unpinned unless the user happens
+            // to make another real edit — defeating this field's entire
+            // purpose for exactly the photos it matters most for. So this
+            // one case is flagged here and persisted explicitly, further
+            // below, once `currentURL` is set — folder access is already
+            // known-resolvable at this point (an existing sidecar was
+            // just read from it), so this never introduces a NEW access
+            // prompt.
+            if restoredState.rawDecoderVersionPin.isEmpty,
+               let version = await RawDecoder.currentDefaultDecoderVersion(of: url) {
+                guard myGeneration == loadGeneration else { return }
+                restoredState.rawDecoderVersionPin = version
+                shouldPersistBackfilledDecoderPin = existingSidecarState != nil
+            }
             isLoadingImage = false
         } else {
             resolvedImage = raw
@@ -328,6 +373,19 @@ final class ImageDocumentModel: ObservableObject {
         isLoadingPhoto = true
         editState = restoredState
         isLoadingPhoto = false
+        // Persist the decoder-version pin backfilled above, for the one
+        // case (an already-existing sidecar) where leaving it in memory
+        // only isn't enough — see the pin-capture block's own comment.
+        // Must run AFTER `currentURL = url` above, since `saveSidecarNow()`
+        // reads it; must run OUTSIDE the `isLoadingPhoto` bracket, since
+        // that bracket's whole purpose is to suppress exactly this kind
+        // of save for a normal load. A direct call, not
+        // `scheduleSidecarSave()`'s debounce — nothing else is pending
+        // for this freshly-opened photo, so there's no coalescing benefit
+        // to waiting.
+        if shouldPersistBackfilledDecoderPin {
+            saveSidecarNow(suppressErrorMessage: true)
+        }
         // A RAW-native re-decode debounced during either await above is
         // now stale — `editState` was just overwritten with the INCOMING
         // photo's own already-correct `restoredState`, so firing it would
@@ -749,7 +807,21 @@ final class ImageDocumentModel: ObservableObject {
     /// relative to what the toolbar buttons show.
     func revertToOriginal() {
         finalizePendingCommit()
-        history.commit(EditState())
+        // Every other RAW-native field is correctly cleared by the literal
+        // `EditState()` below — revert legitimately means "discard this
+        // photo's edit history." `rawDecoderVersionPin` is the one
+        // exception: it isn't a creative adjustment, it's bookkeeping for
+        // which decoder algorithm produced the pixels the RAW file has
+        // been decoded with all along. Losing it here would mean revert
+        // both writes an unpinned sidecar to disk AND immediately
+        // re-decodes with "whatever's currently newest" instead of the
+        // photo's original pin — silently reintroducing the exact
+        // non-determinism this field exists to close, on every revert
+        // after any future OS/Core Image update. So it's carried forward
+        // explicitly instead of reset.
+        var identity = EditState()
+        identity.rawDecoderVersionPin = editState.rawDecoderVersionPin
+        history.commit(identity)
         applyHistoryState(history.current)
     }
 
@@ -911,10 +983,16 @@ final class ImageDocumentModel: ObservableObject {
     /// Resolves (or lazily requests) folder access, then encodes and writes
     /// the current `editState` to its sidecar. Declining a folder-access
     /// prompt is silent (not an error); a resolution or write FAILURE after
-    /// access was actually granted surfaces via `sidecarSaveErrorMessage`.
-    /// Skips re-prompting entirely for a folder already declined this
-    /// session (see `declinedFolders`).
-    private func saveSidecarNow() {
+    /// access was actually granted surfaces via `sidecarSaveErrorMessage`
+    /// — unless `suppressErrorMessage` is set, for the one caller
+    /// (the Phase 6 slice 7 decoder-version-pin backfill in `load(from:)`)
+    /// where the save is an automatic side effect of merely OPENING a
+    /// photo, not a user-initiated edit; surfacing "Couldn't save edits"
+    /// from just viewing a never-touched RAW photo on a read-only volume
+    /// would violate this app's own "opening a photo should never itself
+    /// produce an error/prompt" invariant. Skips re-prompting entirely for
+    /// a folder already declined this session (see `declinedFolders`).
+    private func saveSidecarNow(suppressErrorMessage: Bool = false) {
         guard let currentURL else { return }
         let folder = currentURL.deletingLastPathComponent()
         guard !declinedFolders.contains(folder.path) else { return }
@@ -922,7 +1000,9 @@ final class ImageDocumentModel: ObservableObject {
             return
         }
         guard folderURL.startAccessingSecurityScopedResource() else {
-            sidecarSaveErrorMessage = "Couldn't save edits: access to the containing folder is no longer available."
+            if !suppressErrorMessage {
+                sidecarSaveErrorMessage = "Couldn't save edits: access to the containing folder is no longer available."
+            }
             return
         }
         defer { folderURL.stopAccessingSecurityScopedResource() }
@@ -931,7 +1011,9 @@ final class ImageDocumentModel: ObservableObject {
             try data.write(to: Self.sidecarURL(for: currentURL), options: .atomic)
             onSidecarSaved?(currentURL)
         } catch {
-            sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"
+            if !suppressErrorMessage {
+                sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"
+            }
         }
     }
 }

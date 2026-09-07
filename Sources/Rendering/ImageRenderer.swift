@@ -76,6 +76,91 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     private var cachedOriginalState: EditState?
     private var cachedOriginal: CIImage?
 
+    // MARK: - P2 interactive proxy (IMPROVEMENTS.md)
+    //
+    // While a sustained slider drag is in progress, `edited`/`original`
+    // above are built from a downscaled PROXY of `image` instead of the
+    // full-resolution source, then a real full-resolution frame renders
+    // once the drag settles (~0.25s of no further `editState` change).
+    // Justified by live measurement: a continuous Sharpen drag with
+    // Sharpen+NoiseReduction+Definition active on a large photo showed
+    // `draw(in:)` frames frequently at 19-42ms with outliers at 184.7ms
+    // and 279.0ms — the P3 cache above does NOT help this case, since
+    // `editState` changes every frame of a drag, a guaranteed cache miss.
+    //
+    // Preview-vs-final divergence this trades in, most severe first:
+    //   - Noise Reduction: `CINoiseReduction.noiseLevel` is a per-pixel
+    //     threshold, measured resolution-INDEPENDENT with deliberately no
+    //     extent term (see `EditPipeline`'s `kNoiseReductionSpan` doc
+    //     comment) — downscaling itself already averages away some noise
+    //     before NR runs, so the interactive preview looks CLEANER than
+    //     the settled frame and the export.
+    //   - Sharpen / Definition: radii are extent FRACTIONS, so the
+    //     on-screen halo is right at fit zoom, but the absolute pixel
+    //     radius quantizes differently on a downscaled image.
+    //   - Red-eye at aggressive proxy scales: radius is a fraction of
+    //     `min(extent)`, so a pupil circle gets fewer pixels — least
+    //     severe, only visible on an already-small image at a low
+    //     required scale.
+    //   - Lanczos's negative lobes (`ProxyBuilder`) can put slightly
+    //     out-of-[0,1] linear values into the proxy at high-contrast edges
+    //     that a decoded 8-bit source never has. Harmless in practice —
+    //     `applyLevels` clamps before `CIGammaAdjust` runs — but a real,
+    //     if minor, extra divergence source.
+    // Every other stage (crop, straighten, perspective, flip, vignette,
+    // WB, exposure, levels, curves, HSL, saturation, B&W) is exactly
+    // extent-proportional or purely per-pixel, so a proxy renders
+    // identically to full-res for those, up to resampling — see
+    // `ProxyScale`'s own doc comment for the fuller argument.
+    //
+    // Interaction is detected purely by COUNTING consecutive `editState`
+    // changes (`ProxyInteraction`), not by timing between them — `draw(in:)`
+    // is synchronous, so timestamps would be inflated by exactly the slow
+    // frames this feature exists to fix. `isInteracting` only goes true on
+    // the 2nd+ change in a burst, so a single discrete change (undo/redo, a
+    // typed value, a toggle, a preset) always renders full-res immediately.
+    //
+    // Structural invariant that makes this safe to reason about: the proxy
+    // `CIImage` never escapes `ImageRenderer` — it's held by `cachedProxy`
+    // and (transitively, via the graphs rooted on it) `cachedPipelineSource`/
+    // `cachedEdited`/`cachedOriginal`, all four cleared together the moment
+    // the source `image` changes (see `draw(in:)`), and never assigned to
+    // `image` itself. Every other render path in this app (overlay fit
+    // rects in `ContentView`, the histogram, `ThumbnailGenerator`,
+    // `PhotoExporter`, `WhiteBalanceSolver`) reads `image`/`currentImage`
+    // directly and is structurally unreachable from the proxy.
+    private var interaction = ProxyInteraction()
+    private var lastDrawnEditState: EditState?
+    private weak var lastDrawnView: MTKView?
+    private var settleWorkItem: DispatchWorkItem?
+    private static let settleInterval: TimeInterval = 0.25 // feel, not measured —
+        // between the histogram debounce (0.15s) and the history coalesce
+        // debounce (0.35s), both in ImageDocumentModel.
+
+    private var cachedProxy: CIImage?
+    private var cachedProxyScale: CGFloat?
+    private var proxyBuildGeneration = 0
+    private var proxyBuildInFlight = false
+
+    /// Which of `image`/`cachedProxy` actually produced the current
+    /// `cachedEdited`/`cachedOriginal` — a SECOND, independent cache key
+    /// layered on top of the `cachedSourceImage` check above, not a
+    /// replacement for it. `cachedSourceImage`'s check is unconditional
+    /// (any new source image drops everything); this one additionally
+    /// catches the proxy transition mid-photo. Both must clear the SAME
+    /// two output slots together: today, `compare.originalState` doesn't
+    /// change during a slider drag, so without this, `cachedOriginal`
+    /// would hit and hand back a FULL-RES original composited against a
+    /// PROXY-derived `cachedEdited` — a sharpness mismatch right at the
+    /// Split divider, the one place the user is looking. Since Compare's
+    /// `original` and `edited` are always built from the SAME resolved
+    /// input within one `draw(in:)` call, Compare gets the proxy for BOTH
+    /// halves for free from this single key — costing nothing in quality,
+    /// since `EditState.comparisonOriginal()` already zeroes
+    /// `definition`/`sharpness`/`noiseReduction`, so the original half has
+    /// no convolution stage to diverge in the first place.
+    private var cachedPipelineSource: CIImage?
+
     init(device: MTLDevice) {
         guard let queue = device.makeCommandQueue() else {
             fatalError("Metal device failed to create a command queue")
@@ -126,21 +211,174 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
         return image.transformed(by: transform)
     }
 
+    /// Cancels and re-arms the trailing-edge silence timer on EVERY
+    /// observed `editState` change (not only the first) — same idiom as
+    /// all four debounces in `ImageDocumentModel` (`cancel()` → new
+    /// `DispatchWorkItem` → `DispatchQueue.main.asyncAfter`), including the
+    /// "clear the work-item reference first inside the closure" trick from
+    /// `scheduleSidecarSave()`. `interaction.settle()`'s own return value
+    /// gates the redraw so a burst that never actually used the proxy
+    /// doesn't pay one extra full-res redraw after every drag — reading
+    /// `lastDrawnView` at FIRE time (not capturing the parameter) so this
+    /// stays correct even if the view were ever replaced mid-drag.
+    private func scheduleSettleRedraw() {
+        settleWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.settleWorkItem = nil
+            let needsRedraw = self.interaction.settle()
+            if needsRedraw, let view = self.lastDrawnView {
+                view.setNeedsDisplay(view.bounds)
+            }
+        }
+        settleWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleInterval, execute: workItem)
+    }
+
+    /// Kicks off an ASYNC proxy build — never synchronous inside `draw(in:)`.
+    /// A synchronous materialize would hold `view.currentDrawable` and an
+    /// open `MTLCommandBuffer` across a tens-of-ms Core Image render on the
+    /// very first interactive frame after a photo loads, a stall the user
+    /// would feel as "the slider sticks when I first grab it." Building
+    /// asynchronously means the first few frames of a fresh burst render
+    /// full-res (no worse than today), the proxy lands a build later, and
+    /// every subsequent frame in that burst — and every later burst, since
+    /// the proxy is cached per photo — is fast. Mirrors
+    /// `ImageDocumentModel.redecodeForRawNativeChange`'s own
+    /// generation-token pattern: `proxyBuildGeneration` is bumped whenever
+    /// the source image changes (see `draw(in:)`), so a build that
+    /// completes after the photo has already changed is silently dropped
+    /// rather than installing the WRONG photo's proxy.
+    ///
+    /// AT MOST ONE build in flight at a time — reviewer-caught: an earlier
+    /// version also allowed starting a NEW build whenever the newly
+    /// required scale exceeded the in-flight target, meant to chase a
+    /// growing requirement mid-burst. `requiredScale` grows monotonically
+    /// across many frames of a real burst (e.g. dragging Straighten back
+    /// toward 0° shrinks the extent every frame, raising `fitScale`), so
+    /// that clause spawned a build on every such frame — reviewer-derived
+    /// (from the geometry, not instrumented on a live drag): tens of
+    /// concurrent builds for one drag, each holding its own ~80MB
+    /// `CVPixelBuffer` before even reaching `RenderGate`, all serialized
+    /// behind that same app-wide RAW gate (stalling RAW thumbnail/re-decode
+    /// work for seconds), with no guaranteed completion order so a
+    /// smaller-scale build finishing last could overwrite a better one and
+    /// trigger yet another rebuild. A single in-flight guard is simpler and
+    /// strictly better: frames just keep using the still-loading (slightly
+    /// too small) `cachedProxy` — exactly what they already do while ANY
+    /// build is pending — and `canReuse` naturally re-requests once, on the
+    /// next frame after the current build completes.
+    private func requestProxyBuild(from image: CIImage, scale: CGFloat) {
+        guard !proxyBuildInFlight else { return }
+        let generation = proxyBuildGeneration
+        proxyBuildInFlight = true
+        Task { [weak self] in
+            let built = await ProxyBuilder.build(image, scale: scale)
+            guard let self, generation == self.proxyBuildGeneration else { return }
+            self.proxyBuildInFlight = false
+            if let built {
+                self.cachedProxy = built
+                self.cachedProxyScale = scale
+                if let view = self.lastDrawnView {
+                    view.setNeedsDisplay(view.bounds)
+                }
+            }
+        }
+    }
+
+    /// Returns the `CIImage` the pipeline should actually run against this
+    /// frame: `image` itself unless a sustained drag is in progress AND
+    /// downscaling is worthwhile at the current display size/zoom.
+    ///
+    /// The required scale is computed via an EXACT probe —
+    /// `EditPipeline.apply(editState, to: image).extent.size` — rather than
+    /// estimating the post-crop extent from `EditState`'s crop insets
+    /// directly. This IS run on every interacting frame (it's the input to
+    /// `ProxyScale.canReuse` just below, so it can't be skipped), but it's
+    /// cheap regardless: `ContentView`'s own overlay-fit-rect code already
+    /// establishes that building the pipeline graph just to read `.extent`
+    /// renders no pixels — sub-millisecond graph allocation against the
+    /// 19-42ms frames this feature targets. Worth paying for what it buys:
+    /// an EXACT answer, correct for crop, straighten's extent growth, and
+    /// perspective automatically, instead of needing its own copy of
+    /// `EditPipeline`'s private crop-inset clamp to estimate it.
+    private func choosePipelineSource(image: CIImage, drawableSize: CGSize) -> CIImage {
+        guard interaction.isInteracting else { return image }
+
+        let isSideBySide = compare?.mode == .sideBySide
+        let container = ProxyScale.effectiveContainer(drawableSize: drawableSize, isSideBySide: isSideBySide)
+        let displayedExtentSize = EditPipeline.apply(editState, to: image).extent.size
+        let sourcePixelCount = image.extent.width * image.extent.height
+
+        guard let requiredScale = ProxyScale.requiredScale(
+            displayedExtentSize: displayedExtentSize, container: container, zoomScale: zoomScale
+        ), ProxyScale.isWorthwhile(requiredScale: requiredScale, sourcePixelCount: sourcePixelCount) else {
+            return image
+        }
+
+        if !ProxyScale.canReuse(cachedScale: cachedProxyScale, requiredScale: requiredScale) {
+            requestProxyBuild(from: image, scale: requiredScale)
+        }
+        return cachedProxy ?? image
+    }
+
     func draw(in view: MTKView) {
         guard let image,
               let drawable = view.currentDrawable,
               let commandBuffer = commandQueue.makeCommandBuffer()
         else { return }
 
+        lastDrawnView = view
+
+        // P2 interaction detection: purely a COUNT of consecutive `editState`
+        // changes across draws, re-arming the settle timer on every one —
+        // see `ProxyInteraction`'s own doc comment for why this is timing-
+        // independent by construction. Order matters: compare BEFORE
+        // overwriting `lastDrawnEditState`, or the settle draw itself (which
+        // changes nothing) would spuriously look like a new change and
+        // re-arm forever.
+        if editState != lastDrawnEditState {
+            interaction.noteEditStateChanged()
+            scheduleSettleRedraw()
+        }
+        lastDrawnEditState = editState
+
         // MARK: - Edit pipeline
         // Any true source-image change (a new photo loaded, or RAW
         // re-decode swapping `currentImage`) invalidates BOTH cached
-        // outputs — they were built from the OLD image. `!==` matches
-        // `MetalImageView.updateNSView`'s own identity comparison;
-        // `currentImage` is only ever reassigned wholesale, never mutated
-        // in place.
+        // outputs AND the P2 proxy state — they were all built from the OLD
+        // image. `!==` matches `MetalImageView.updateNSView`'s own identity
+        // comparison; `currentImage` is only ever reassigned wholesale,
+        // never mutated in place. This check is UNCONDITIONAL and stays
+        // that way even with the proxy in play below: it's the safety net
+        // that guarantees a stale proxy from a previous photo can never
+        // survive a real photo change, independent of whatever the proxy-
+        // selection logic below does.
         if image !== cachedSourceImage {
             cachedSourceImage = image
+            cachedProxy = nil
+            cachedProxyScale = nil
+            proxyBuildGeneration += 1
+            proxyBuildInFlight = false
+            interaction.reset()
+            settleWorkItem?.cancel()
+            settleWorkItem = nil
+            cachedPipelineSource = nil
+            cachedEditState = nil
+            cachedEdited = nil
+            cachedOriginalState = nil
+            cachedOriginal = nil
+        }
+
+        let drawableSize = view.drawableSize
+        let pipelineSource = choosePipelineSource(image: image, drawableSize: drawableSize)
+        interaction.recordFrame(usedProxy: pipelineSource !== image)
+
+        // A SECOND, independent invalidation for the resolved pipeline
+        // input — see `cachedPipelineSource`'s own doc comment for why this
+        // is additive, not a replacement for the `image` check above.
+        if pipelineSource !== cachedPipelineSource {
+            cachedPipelineSource = pipelineSource
             cachedEditState = nil
             cachedEdited = nil
             cachedOriginalState = nil
@@ -151,7 +389,7 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
         if let cachedEditState, cachedEditState == editState, let hit = cachedEdited {
             edited = hit
         } else {
-            edited = EditPipeline.apply(editState, to: image)
+            edited = EditPipeline.apply(editState, to: pipelineSource)
             cachedEditState = editState
             cachedEdited = edited
         }
@@ -160,7 +398,6 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
         // doesn't change extent so this is a no-op today, but the future crop
         // stage will change extent, so this must stay `edited` — don't
         // "simplify" it back to `image`.
-        let drawableSize = view.drawableSize
 
         // No manual y-flip anywhere in this file. Empirically verified against
         // this exact live on-screen MTKView (colorPixelFormat = .rgba16Float,
@@ -204,12 +441,16 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
             // identical to `edited`'s by construction — `comparisonOriginal()`
             // only resets color/tone fields — so `original.extent ==
             // edited.extent` always holds, and both sides can share ONE
-            // `fitRect`/`AspectFit` computation below.
+            // `fitRect`/`AspectFit` computation below. Built from
+            // `pipelineSource`, NOT `image` directly — during a proxied
+            // drag this means Compare gets the proxy for BOTH halves, which
+            // is what keeps them at matching sharpness (see
+            // `cachedPipelineSource`'s own doc comment).
             let original: CIImage
             if let cachedOriginalState, cachedOriginalState == compare.originalState, let hit = cachedOriginal {
                 original = hit
             } else {
-                original = EditPipeline.apply(compare.originalState, to: image)
+                original = EditPipeline.apply(compare.originalState, to: pipelineSource)
                 cachedOriginalState = compare.originalState
                 cachedOriginal = original
             }

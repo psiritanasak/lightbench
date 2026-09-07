@@ -52,10 +52,13 @@ enum ProxyBuilder {
     ///
     /// Returns `nil` on any failure — degenerate extent, filter failure,
     /// or `CVPixelBufferCreate` failure — never a force-unwrap. A `nil`
-    /// result means "stay on full-res this frame," never a lost image;
-    /// the caller only reconsiders building on the next `draw(in:)` where
-    /// `ProxyScale.canReuse` is still false, the normal per-frame cadence,
-    /// not a retry loop.
+    /// result means "stay on full-res this frame," never a lost image. It
+    /// IS retried on every subsequent interacting frame, since a `nil`
+    /// build never sets `cachedProxyScale`, so `ProxyScale.canReuse` stays
+    /// false — but each attempt is cheap: every failure path here returns
+    /// before the Lanczos render or the gated `CVPixelBuffer` write, so a
+    /// permanently-degenerate source costs one guard check per frame, not a
+    /// repeated real render.
     static func build(_ image: CIImage, scale: CGFloat) async -> CIImage? {
         let extent = image.extent
         // `CGRect.infinite`'s width/height are `CGFloat.greatestFiniteMagnitude`

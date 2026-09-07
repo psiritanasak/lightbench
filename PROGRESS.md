@@ -5017,3 +5017,30 @@ temporary print instrumentation to `ImageRenderer.draw(in:)`, have the
 user exercise the checklist above, record the numbers here and in
 `IMPROVEMENTS.md`, then fully revert the prints (confirmed via clean
 `git diff`) before the final commit.
+
+**A separate, unrelated bug surfaced during this pass (2026-09-07),
+NOT caused by P2 — root-caused via the temporary print instrumentation,
+not guessed.** User reported that in Compare Split mode, zooming in while
+the cursor was over the "original" (left/color) side showed some of the
+original photo mixed with the modified (B&W) one — a real compositing/
+crop artifact, with a screenshot at 131% zoom. Investigated by checking
+the live `[P2] frame=... proxy=...` log captured during the exact session
+the bug happened in: `proxy=` was `false` for every single frame across
+the entire zoom sequence (zoom oscillated 1.00→2.82→1.00 several times,
+including 131%) — the only `proxy=true` frames in the whole session
+occurred earlier, all at `zoom=1.00`, before any zooming started, and
+settled back to full-res well before the user began zooming. Since the
+pipeline was rendering from the full-resolution `image` the entire time
+this bug was observed, P2's proxy substitution is conclusively NOT the
+cause — this is a pre-existing bug in Compare Split + zoom compositing
+(`ImageRenderer.draw(in:)`'s `.split` case), unrelated to any code this
+feature touches. User confirmed (asked via AskUserQuestion): log it and
+stay focused on closing out P2 rather than investigate now, per
+CLAUDE.md's one-feature-per-session rule. **Needs its own Plan Mode
+session**: reproduce with Split mode + scroll-to-zoom centered over the
+original side, and check whether the existing crop-to-own-half fix from
+Post-Phase-5 follow-up #6 (documented for Side by Side's zoom-bleed bug)
+was ever verified for Split specifically — `fittedEdited` in the
+`.split` case is composited uncropped (unlike Side by Side's `.cropped(to:
+rightRect)`), which may be the same defect class re-appearing in the one
+mode that wasn't fixed for it.

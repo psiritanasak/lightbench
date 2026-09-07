@@ -80,7 +80,7 @@ inspection and are true — but that a structural inefficiency is real does NOT
 establish that fixing it is measurably faster. **Measure the impact before
 implementing, not just after.**
 
-### P2. Full-resolution pipeline render on every interactive slider tick
+### ~~P2. Full-resolution pipeline render on every interactive slider tick~~ — SHIPPED 2026-09-07
 
 **Where:** `Sources/Rendering/ImageRenderer.swift` `draw(in:)` (line ~114) —
 every `editState` change re-renders the FULL-RES image through the whole
@@ -115,6 +115,54 @@ it's a cache miss every time). Result: frequently well above the 16ms/
 observed stutters during interaction, not a theoretical concern. Proceeds
 to its own Plan Mode session (per this file's own "one item per session"
 rule) for the downscaled-proxy design below.
+
+**Shipped and live-verified (2026-09-07).** Two Plan Mode design passes
+before any code (session-default model, then an explicit Opus 5 critique
+per this file's own "one item per session" discipline for the hottest
+render path) caught a real units bug in the first draft: "headroom ≈2× the
+drawable's long edge" was reasoned in POINTS against `MTKView.drawableSize`,
+which is actually device PIXELS — at 2× this would have made the proxy
+silently never engage on a Retina display. Corrected to **1.25 proxy
+pixels per DRAWABLE pixel** (pixel-exact at fit zoom, no added softness).
+Interaction is detected by COUNTING consecutive `editState` changes
+(`ProxyInteraction`), not by timing between them — timing was proven
+unsound in review: `draw(in:)` is synchronous, so slow frames (exactly the
+184.7/279.0ms case above) inflate the measured gap between edits, making a
+timing-based detector fail precisely when this feature is needed most. 4
+commits, each reviewer-APPROVED (Opus 5): `ProxyScale`+`ProxyInteraction`
+(pure geometry + detector), `ProxyBuilder` (async `CVPixelBuffer`
+materializer mirroring `RawDecoder.materialize`), the `ImageRenderer`
+wiring (two-check cache invalidation extending the existing P3 cache,
+async generation-guarded build), then this live pass. Reviewer caught
+several real bugs pre-commit, most seriously an unbounded concurrent-build
+path that could spawn dozens of overlapping proxy builds during an
+ordinary drag (fixed: at most one build in flight at a time) — see
+PROGRESS.md's P2 section for the full list.
+
+**Live-measured (2026-09-07), same instrumentation as the justification
+above, reverted before this commit**: during a real continuous Sharpen
+drag with Sharpen+NR+Definition all at 100% on a 24MP RAW (`.NEF`) photo,
+proxied frames were **0.6-2ms** — the earlier 19-42ms typical / 184.7ms /
+279.0ms outliers are gone while the proxy is engaged. The only remaining
+slow frames (174.9ms, 203.5ms, 45.2ms) all occurred with the proxy NOT
+engaged — full-res renders during idle/zoom moments or the settle frame
+right after a burst, i.e. exactly the pre-existing cost those frames
+always had. One caveat recorded, not chased further this slice: a single
+~180ms hitch occurred on the one frame where a proxy REBUILD was
+requested (not the first build) — likely GPU-level contention between the
+interactive frame's own render and the concurrently-running background
+build (separate `CIContext`s, same underlying device), even though the
+build itself runs async and never blocks `draw(in:)` at the CPU/thread
+level. Smaller than the original outliers and appears to be a rare,
+one-time-per-rebuild event; worth another look if it recurs more severely
+on a lower-end GPU or larger source. User confirmed live: the drag felt
+smooth; undo/redo, typed-value entry, and applying a preset all rendered
+sharp immediately with no soft flash, matching the "only sustained drags
+engage the proxy" design. **A separate, pre-existing bug was found during
+this pass in Compare Split + zoom (unrelated to this feature — ruled out
+via the same instrumentation, which showed the proxy was NOT engaged for
+any frame during the entire repro) — logged in PROGRESS.md as its own
+future item, not fixed here.**
 
 ### ~~P3. `draw(in:)` rebuilds the pipeline graph on renders where nothing changed~~ — SHIPPED 2026-09-04
 
@@ -371,16 +419,12 @@ behavior change at this panel's scale).
 2. For every performance item: MEASURE before and after (os_signpost or
    simple timing), on a real large photo / real library, and record numbers
    in PROGRESS.md. No speculative optimization lands without a number.
-3. P1 is retired (disproved), P4 has shipped, D7, D1 (both halves), D2, D3,
-   D5 part 1, and now P3 have all shipped. Of what remains, D4/D5(remaining
-   2 parts)/D6 need their own Plan Mode scoping. P2 is the biggest
-   potential win but the most complex — its own measurement (a genuinely
-   different scenario: cost during an ACTIVE slider drag, not a
-   static-content redraw like P3's) is the required next step before any
-   P2 code, since P3's cache does NOT help P2's scenario (editState
-   changes every frame during a drag, so it's a cache miss every time).
-   Note P4 and P3 are the two items so far whose measurement DID justify
-   the fix; P1's did not. Measure, don't assume.
+3. P1 is retired (disproved), P4/P3/P2 have all shipped, D7, D1 (both
+   halves), D2, D3, D5 part 1 have all shipped. Of what remains, D4/D5
+   (remaining 2 parts)/D6 need their own Plan Mode scoping, and P5/P6 need
+   their own measurement first. Note P4, P3, and P2 are the three items so
+   far whose measurement DID justify the fix; P1's did not. Measure,
+   don't assume.
 4. D7 (split ContentView) and D1 (⌘←/⌘→ + the filmstrip) were the best
    first sessions and are now both done — see their own struck-through
    entries above for what shipped.

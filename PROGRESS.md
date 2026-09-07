@@ -4927,7 +4927,7 @@ scope — slice 1 shipped 2026-09-02, see its own section above.
 that section is kept up to date per-feature; this trailing one is historical
 and intentionally not duplicated further.)
 
-## IMPROVEMENTS.md P2 — interactive-drag preview proxy (IN PROGRESS, 2026-09-04)
+## IMPROVEMENTS.md P2 — interactive-drag preview proxy (SHIPPED + LIVE-VERIFIED, 2026-09-07)
 Full plan at `/Users/praween/.claude/plans/serialized-swimming-quilt.md`
 (Plan Mode session went through two design passes — session-default model,
 then an explicit Opus 5 critique of that draft per CLAUDE.md's `opusplan`
@@ -5001,22 +5001,58 @@ commit:**
    test precedent in this codebase, Metal-coupled glue whose bugs have
    historically been caught live, not by tests — verified instead via
    build + full suite + two independent Opus 5 review rounds).
-4. NOT YET STARTED — live measurement (temporary `CFAbsoluteTimeGetCurrent()`
-   prints, same drag/photo setup as P2's original justification
-   measurement, this time also confirming `drawableSize` is genuinely in
-   pixels as the corrected design assumes), full live visual pass (drag
-   smoothness, undo/redo/typed-value/toggle/preset never flash soft,
-   Compare Side-by-Side/Split sharpness match, zoom/pan/resize/crop/
-   straighten/RAW-mid-redecode edge cases), revert the prints, update
-   `IMPROVEMENTS.md`/this file with final numbers.
+4. ✅ Live measurement + verification pass (2026-09-07). Temporary
+   `CFAbsoluteTimeGetCurrent()` prints added to `ImageRenderer.draw(in:)`
+   and `requestProxyBuild` (frame time + whether the proxy was used +
+   `drawableSize` + zoom; proxy-build duration + scale + result). App
+   launched directly (not via `open`) so stdout streamed into the session
+   for live analysis — Swift's `print()` is block-buffered when stdout is
+   redirected to a file rather than a terminal, so output only fully
+   flushed once the app was quit; re-launched and re-tested once this was
+   understood.
+   - **First repro attempt was individual discrete taps** (setting
+     Definition/Sharpen/NR each to 100% one at a time) — correctly never
+     sustained the proxy (each isolated adjustment stayed under the
+     2-changes-in-a-burst threshold), exactly matching the "only sustained
+     drags engage" design. Confirms the detector's discrete-change
+     no-engage behavior live, not just in `ProxyInteractionTests`.
+   - **Second repro (the real target): continuous click-and-hold Sharpen
+     drag**, same photo (a 24MP `.NEF`), Sharpen+NR+Definition all at
+     100%. Proxied frames: **0.6-2ms** (a couple of blips at 23.3ms and
+     180.8ms — see below). The only slow frames in the ENTIRE session
+     (174.9ms, 203.5ms, 45.2ms, 23.1ms, 20.1ms) all had `proxy=false` —
+     full-res renders during idle/zoom moments or the settle frame right
+     after a burst — i.e. exactly the pre-existing cost those frames
+     already had; the proxy is what's different, and it works.
+   - **One caveat recorded, not chased further this slice**: the 180.8ms
+     blip landed on the exact frame where a SECOND proxy build was
+     requested (a rebuild, not the first-ever build) — likely GPU-level
+     contention between the interactive frame's own `ciContext.render`
+     and the concurrently-running background build's render (a separate
+     `CIContext` in `ProxyBuilder`, but the same underlying `MTLDevice`),
+     even though the build itself runs fully async and never blocks
+     `draw(in:)` at the CPU/thread level (confirmed by two reviewer
+     rounds). Much smaller than the original 184.7/279.0ms outliers and
+     looks like a rare, one-time-per-rebuild event; worth another look if
+     it recurs more severely on a lower-end GPU or a larger source photo,
+     not blocking for this slice.
+   - **User confirmed live**: the drag felt smooth; undo/redo, typing a
+     value directly, and applying a preset each rendered sharp
+     immediately, no soft flash — matching the "only sustained drags
+     engage the proxy" design (single discrete changes always stay at
+     full-res).
+   - Instrumentation fully reverted before commit — confirmed via
+     `git diff HEAD` showing zero changes to `ImageRenderer.swift` after
+     `git checkout --`, and the full 503-test suite re-run clean
+     afterward.
+   - `IMPROVEMENTS.md` P2 struck through with these final numbers.
 
-**Exact next step**: commit 4's live measurement and verification pass —
-needs the USER to actually drag a slider live on a real large photo with
-Sharpen+NoiseReduction+Definition active, not just automated tests. Add
-temporary print instrumentation to `ImageRenderer.draw(in:)`, have the
-user exercise the checklist above, record the numbers here and in
-`IMPROVEMENTS.md`, then fully revert the prints (confirmed via clean
-`git diff`) before the final commit.
+**IMPROVEMENTS.md P2 is now fully shipped, reviewer-approved (4 commits,
+each independently APPROVEd by Opus 5), and live-verified.** 503 tests
+passing throughout (no new tests in the final wiring commit — `draw(in:)`
+has zero test precedent in this codebase; correctness was established via
+two Plan Mode design passes before any code, four rounds of Opus 5 review
+across the four commits, and this live pass).
 
 **A separate, unrelated bug surfaced during this pass (2026-09-07),
 NOT caused by P2 — root-caused via the temporary print instrumentation,

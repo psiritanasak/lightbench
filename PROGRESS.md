@@ -4964,13 +4964,43 @@ commit:**
    then mutate the SOURCE buffer's bytes, then sample the proxy — a lazy
    graph would observe the mutation, a realized one can't. 503 tests
    passing.
-3. NOT YET STARTED — wiring `ProxyScale`/`ProxyInteraction`/`ProxyBuilder`
-   into `ImageRenderer.draw(in:)` itself: the interaction-detection hookup,
-   the two-check cache-invalidation fix (extends the existing P3 cache so
-   Compare mode's `cachedOriginal` can't go stale against a proxied
-   `cachedEdited`), and the async generation-guarded proxy build/cache.
-   Highest-risk commit — this is the one that actually changes on-screen
-   rendering behavior.
+3. ✅ Wired `ProxyScale`/`ProxyInteraction`/`ProxyBuilder` into
+   `ImageRenderer.draw(in:)`: count-based interaction detection, a second
+   `cachedPipelineSource` cache-invalidation key layered on top of the
+   existing P3 `cachedSourceImage` check (not a replacement — both must
+   fire together, since `cachedSourceImage`'s check is the unconditional
+   safety net and `cachedPipelineSource`'s catches the proxy transition
+   specifically), and an async, generation-token-guarded proxy build that
+   never blocks a frame. Two reviewer rounds (Opus 5) on this one, since
+   it's the file that actually changes on-screen rendering: round 1 caught
+   a real concurrency bug — the proxy-build guard allowed starting a NEW
+   concurrent build whenever the required scale grew, which a real drag
+   does on every frame (e.g. dragging Straighten back toward 0° shrinks
+   the extent every frame) — spawning dozens of overlapping builds, each
+   holding an ~80MB `CVPixelBuffer`, all serialized behind the app-wide RAW
+   `RenderGate` with no guaranteed completion order (could stall RAW
+   thumbnail/re-decode work for seconds — the exact freeze class
+   `RenderGate` exists to prevent). Fixed by allowing at most one build in
+   flight at a time; the now-dead `proxyBuildTargetScale` field was
+   deleted rather than left unused. Round 1 also flagged several doc
+   comments that didn't match what the code does (the extent probe runs
+   every interacting frame, not only on rebuild; the proxy is held
+   transitively by more than one cache slot; a failed build IS retried,
+   cheaply, not a one-shot) — all fixed. Round 2: APPROVE, one trivial
+   wording nit (a reviewer-derived-not-measured number mislabeled
+   "measured") fixed before commit. Both reviewer passes independently
+   re-verified all of: the two-check cache invalidation can never leave
+   `cachedEdited`/`cachedOriginal` stale against whichever source (proxy
+   or full-res) produced them; Compare's `edited`/`original` always come
+   from the same resolved source within one `draw(in:)` call, so they
+   can't diverge in sharpness; the settle-redraw regression guard
+   (`interaction.settle()`'s return value) correctly prevents an extra
+   full-res redraw after a burst that never used the proxy; the
+   `isInteracting == false` path is byte-identical to the pre-P2 code.
+   503 tests unchanged (no new tests possible here — `draw(in:)` has zero
+   test precedent in this codebase, Metal-coupled glue whose bugs have
+   historically been caught live, not by tests — verified instead via
+   build + full suite + two independent Opus 5 review rounds).
 4. NOT YET STARTED — live measurement (temporary `CFAbsoluteTimeGetCurrent()`
    prints, same drag/photo setup as P2's original justification
    measurement, this time also confirming `drawableSize` is genuinely in
@@ -4980,7 +5010,10 @@ commit:**
    straighten/RAW-mid-redecode edge cases), revert the prints, update
    `IMPROVEMENTS.md`/this file with final numbers.
 
-**Exact next step**: implement commit 3 (the `ImageRenderer` wiring) per
-the plan file's §4-6, reviewer-approve, then commit 4's live measurement
-and verification pass — that one needs the USER to actually drag a slider
-live, not just automated tests.
+**Exact next step**: commit 4's live measurement and verification pass —
+needs the USER to actually drag a slider live on a real large photo with
+Sharpen+NoiseReduction+Definition active, not just automated tests. Add
+temporary print instrumentation to `ImageRenderer.draw(in:)`, have the
+user exercise the checklist above, record the numbers here and in
+`IMPROVEMENTS.md`, then fully revert the prints (confirmed via clean
+`git diff`) before the final commit.

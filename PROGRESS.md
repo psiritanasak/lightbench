@@ -5080,3 +5080,25 @@ was ever verified for Split specifically — `fittedEdited` in the
 `.split` case is composited uncropped (unlike Side by Side's `.cropped(to:
 rightRect)`), which may be the same defect class re-appearing in the one
 mode that wasn't fixed for it.
+
+**FIXED and live-verified (2026-09-07), same session.** Confirmed exactly
+the hypothesis above: `fittedEdited` in `.split` was composited with no
+crop, while `fittedOriginal` was already bounded via `.cropped(to:
+originalRegion)`. Fix: added `.cropped(to: fitRect)` to `fittedEdited`,
+mirroring Side by Side's existing pattern exactly — a no-op at zoomScale 1,
+bounding the edited image to `fitRect` past 1x so its zoom-overhang can
+no longer bleed into the letterbox margins. Reviewer (Opus 5) went well
+beyond code-reading: reproduced the pre-fix bug pixel-for-pixel (rendered
+the actual pre/post composites at z=2 on a 6016×4016 image and showed the
+exact letterbox columns adjacent to the original half switching from pure
+edited-red to pure black), then confirmed zero bleeding pixels post-fix
+across 32 zoom/orientation/pan combinations with no new gap introduced
+inside `fitRect`, and confirmed the "no-op at zoomScale 1" claim by
+rendering 24 cases byte-identical with/without the crop (catching that
+the underlying float arithmetic isn't bit-exact, only pixel-identical —
+doc comment corrected to say so precisely, matching this file's own
+"measured, not assumed" discipline). User then confirmed live: bug is
+gone. One commit, 503 tests unchanged (no test precedent for `draw(in:)`
+in this codebase — verified via the reviewer's empirical reproduction
+plus live confirmation instead, same pattern as every other
+`ImageRenderer` fix in this project's history).

@@ -526,8 +526,55 @@ final class ImageDocumentModel: ObservableObject {
         histogramGeneration += 1
         let generation = histogramGeneration
 
+        // Downscale BEFORE the pipeline runs, not after (IMPROVEMENTS.md P5)
+        // — measured live: on a 24MP source with Sharpen/Noise Reduction/
+        // Definition all active, HistogramComputer.histogram(of:)'s render
+        // alone ranged 24.6-399.9ms, because those convolution stages
+        // executed at full source resolution before HistogramComputer's OWN
+        // downsample-to-256 ever got a chance to shrink the graph. Every
+        // extent-dependent EditPipeline stage derives its geometry as a
+        // FRACTION of the current extent (the same argument `ProxyScale` and
+        // `ThumbnailGenerator.thumbnail(for:maxPixelSize:editState:)` already
+        // document and ship), so downscaling first is correct, not an
+        // approximation, for every stage except Noise Reduction: measured
+        // resolution-INDEPENDENT with deliberately no extent term
+        // (`EditPipeline`'s `kNoiseReductionSpan` doc comment). This DOES
+        // mean the histogram's noise-driven tonal spread can diverge from a
+        // full-resolution computation whenever NR is active — the direction
+        // isn't asserted here (a plain affine minification can alias rather
+        // than average; see `ProxyBuilder`'s own note that a plain scale
+        // aliases visibly at aggressive ratios, unlike Lanczos, and this
+        // call site's ratio is more aggressive still). Accepted as a known,
+        // reviewer-flagged divergence for this coarse, debounced statistical
+        // display, not a precise per-pixel readout — not independently
+        // measured in which direction it moves.
+        //
+        // Plain affine, not Lanczos/`ProxyBuilder`: this matches
+        // `HistogramComputer`'s own existing plain-affine resample exactly
+        // (see its `histogram(of:)` implementation), so this introduces no
+        // NEW class of resampling error — it only moves an equivalent one
+        // earlier, ahead of the convolutions. `ProxyBuilder`'s async/
+        // `RenderGate`/`CVPixelBuffer` machinery was built for a different
+        // call site (`ImageRenderer`'s live on-screen render) and would add
+        // real coupling/cost for no benefit here.
+        //
+        // Sized against the DISPLAYED extent (post-crop/straighten/
+        // perspective), not `currentImage`'s own raw extent — reviewer-
+        // caught: crop alone can shrink the displayed extent to ~10% per
+        // side, so sizing against the uncropped source could still hand
+        // `HistogramComputer` a near-degenerate input on a cropped photo,
+        // exactly the case the headroom exists to prevent. The probe itself
+        // is cheap (`EditPipeline.apply` only builds a lazy graph — no
+        // pixels render to report `.extent`), the same argument
+        // `ImageRenderer.choosePipelineSource` already relies on.
+        let displayedExtentSize = EditPipeline.apply(referenceState, to: currentImage).extent.size
+        let downscale = HistogramComputer.inputDownscale(forDisplayedSize: displayedExtentSize)
+        let histogramInput = downscale < 1
+            ? currentImage.transformed(by: CGAffineTransform(scaleX: downscale, y: downscale))
+            : currentImage
+
         Task.detached(priority: .userInitiated) { [weak self] in
-            let edited = EditPipeline.apply(referenceState, to: currentImage)
+            let edited = EditPipeline.apply(referenceState, to: histogramInput)
             let data = HistogramComputer.histogram(of: edited)
             await MainActor.run {
                 guard let self, self.histogramGeneration == generation else { return }

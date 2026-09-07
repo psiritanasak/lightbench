@@ -38,7 +38,53 @@ enum HistogramComputer {
     /// rendering at full photo resolution for this would be wasted work
     /// with no visual benefit, and would make the debounced background
     /// recompute (see `ImageDocumentModel`) noticeably slower on large photos.
-    private static let sampleDimension = 256
+    /// Not `private`: `HistogramComputerTests` reads this directly (via
+    /// `@testable import`) to size its own resolution-independence fixtures
+    /// relative to this exact target, rather than duplicating the literal.
+    static let sampleDimension = 256
+
+    /// Downscale factor for a caller (`ImageDocumentModel.recomputeHistogram()`,
+    /// IMPROVEMENTS.md P5) to apply to its OWN source image BEFORE running
+    /// `EditPipeline.apply`, so convolution-backed stages (Sharpen/Noise
+    /// Reduction/Definition) never execute at full source resolution just to
+    /// feed this type's own 256px downsample. Pure and unit-tested, matching
+    /// this codebase's established pattern for exactly this shape of
+    /// geometry (`ProxyScale`, `AspectFit`, `ZoomPanGeometry`).
+    ///
+    /// `size` must be the DISPLAYED extent — i.e. `EditPipeline.apply(state,
+    /// to: source).extent.size`, taken AFTER geometry stages (crop,
+    /// straighten, perspective) have already run, not the source's own raw
+    /// extent. Sizing against the pre-pipeline extent would size the
+    /// downscale wrong for any cropped photo: a crop can shrink the
+    /// displayed extent to as little as ~10% per side
+    /// (`EditPipeline`'s own `kMaxCropInset`), so a headroom computed
+    /// against the UNCROPPED source could still hand this type's own
+    /// downsample a near-1:1 (or even smaller-than-target) input — exactly
+    /// the degenerate case the headroom exists to prevent.
+    ///
+    /// Headroom is `2x sampleDimension`, not exactly `sampleDimension`, so
+    /// this type's own downsample-to-256 step (above) stays a real, if
+    /// smaller, resize rather than a degenerate no-op. `min(1, ...)` never
+    /// upscales an image already smaller than the target — the same
+    /// invariant `ProxyScale.requiredScale`/`RawDecoder.decodeDraft`'s own
+    /// `scaleFactor = min(1, Float(CGFloat(maxPixelSize) / longestSide))`
+    /// both hold elsewhere. Returns `1` (no-op) on any degenerate input.
+    static func inputDownscale(forDisplayedSize size: CGSize) -> CGFloat {
+        // `.isFinite` alone does NOT catch `CGRect.infinite`'s width/height
+        // (`CGFloat.greatestFiniteMagnitude` — finite by IEEE semantics) —
+        // the same trap `RawDecoder.materialize`/`ProxyBuilder.build` both
+        // guard against with this identical upper bound. Unreachable from
+        // `recomputeHistogram`'s real caller today (a loaded photo's extent
+        // is never that large), kept for consistency with those two.
+        guard size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0,
+              size.width < CGFloat(Int32.max), size.height < CGFloat(Int32.max)
+        else {
+            return 1
+        }
+        let longSide = max(size.width, size.height)
+        return min(1, CGFloat(sampleDimension * 2) / longSide)
+    }
 
     /// Rendered in DISPLAY sRGB, NOT this app's scene-linear editing working
     /// space — a histogram conventionally represents the tonal distribution

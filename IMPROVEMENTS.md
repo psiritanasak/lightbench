@@ -224,7 +224,7 @@ gained an `init(database:)` testing seam and its first 7 tests, each verified to
 fail against the old implementation. A narrower write-ordering window remains
 and is recorded as a known limitation. Full write-up in PROGRESS.md.
 
-### P5. Histogram / average-color renders: verify the downsample position
+### ~~P5. Histogram / average-color renders: verify the downsample position~~ — SHIPPED 2026-09-07
 
 **Where:** `Sources/Rendering/Histogram.swift`, `ImageAverageColor.swift`,
 called from `ImageDocumentModel.recomputeHistogram()` /`fixColorCast()`.
@@ -235,6 +235,39 @@ breaks. Verify by measuring `recomputeHistogram` with those stages active on
 a big photo; if slow, downscale the input BEFORE `EditPipeline.apply` (the
 histogram is statistical — proxy input is unambiguously fine here, more so
 than for P2's on-screen preview).
+
+**Scope correction found while investigating**: the convolution caveat only
+applies to `recomputeHistogram()`. `fixColorCast()`'s own sampling state
+starts from a fresh `EditState()`, whose defaults (`sharpness`/`definition`/
+`noiseReduction` all `0`) mean `EditPipeline` never activates a convolution
+stage there regardless of resolution — structurally exempt, not measured
+and found fast.
+
+**Measured (2026-09-07) — justified, shipped.** Temporary
+`CFAbsoluteTimeGetCurrent()` instrumentation around `recomputeHistogram()`'s
+two lines: `EditPipeline.apply` (graph construction) was ~free, 0.0-5.7ms;
+`HistogramComputer.histogram(of:)` (the actual render) ranged
+**24.6-399.9ms** on a 24MP source with Sharpen/NR/Definition all active —
+real, felt lag for what's meant to be live histogram feedback, not a
+theoretical concern.
+
+**Shipped**: a pre-pipeline downscale, sized against the DISPLAYED extent
+(post-crop/straighten/perspective, via a cheap `EditPipeline.apply(...)
+.extent.size` probe — not the raw source extent, which a reviewer caught
+would size the headroom wrong on any cropped photo) via a new pure,
+unit-tested `HistogramComputer.inputDownscale(forDisplayedSize:)`, matching
+the `ProxyScale`/`AspectFit` convention. **Live-measured after**: a steady
+**13-68ms** (one 220ms outlier on the apparent first call of the session,
+not recurring). The one accepted, explicitly-not-measured divergence:
+Noise Reduction is resolution-independent, so downscaling before it runs
+changes the histogram's noise-driven tonal spread in an unasserted
+direction whenever NR is active — accepted for this coarse, debounced
+statistical display. Two reviewer rounds (Opus 5) — round 1 caught the
+crop-sizing bug, an unmeasured NR-divergence-direction claim, a wrong
+"aliasing doesn't matter" justification, a misattributed `RawDecoder`
+precedent, and a resolution-independence test that could only ever pass
+(a solid color trivially resamples to itself) — all fixed. 510 tests (5
+new), 0 regressions.
 
 ### P6. Minor, take-if-passing-by
 
@@ -419,11 +452,11 @@ behavior change at this panel's scale).
 2. For every performance item: MEASURE before and after (os_signpost or
    simple timing), on a real large photo / real library, and record numbers
    in PROGRESS.md. No speculative optimization lands without a number.
-3. P1 is retired (disproved), P4/P3/P2 have all shipped, D7, D1 (both
+3. P1 is retired (disproved), P4/P3/P2/P5 have all shipped, D7, D1 (both
    halves), D2, D3, D5 part 1 have all shipped. Of what remains, D4/D5
-   (remaining 2 parts)/D6 need their own Plan Mode scoping, and P5/P6 need
-   their own measurement first. Note P4, P3, and P2 are the three items so
-   far whose measurement DID justify the fix; P1's did not. Measure,
+   (remaining 2 parts)/D6 need their own Plan Mode scoping, and P6 needs
+   its own measurement first. Note P4, P3, P2, and P5 are the four items
+   so far whose measurement DID justify the fix; P1's did not. Measure,
    don't assume.
 4. D7 (split ContentView) and D1 (⌘←/⌘→ + the filmstrip) were the best
    first sessions and are now both done — see their own struck-through

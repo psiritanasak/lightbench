@@ -5102,3 +5102,76 @@ gone. One commit, 503 tests unchanged (no test precedent for `draw(in:)`
 in this codebase — verified via the reviewer's empirical reproduction
 plus live confirmation instead, same pattern as every other
 `ImageRenderer` fix in this project's history).
+
+## IMPROVEMENTS.md P5 — histogram downsample position (SHIPPED, 2026-09-07)
+
+**Scope correction found during investigation**: P5's write-up covered two
+call sites (`ImageDocumentModel.recomputeHistogram()` and `fixColorCast()`),
+but only the first is actually exposed to the convolution caveat.
+`fixColorCast()`'s sampling state starts from a fresh `EditState()` —
+`sharpness`/`definition`/`noiseReduction` all default to `0`, and
+`EditPipeline` guards each stage on `!= 0` — so that path can never have a
+convolution stage active regardless of resolution; it's a cheap
+geometry-only pass. Confirmed by reading `EditState`'s actual defaults and
+`EditPipeline`'s actual guards, not assumed.
+
+**Measured (2026-09-07) — justified.** Temporary
+`CFAbsoluteTimeGetCurrent()` instrumentation around `recomputeHistogram()`'s
+two lines, same tool as P2/P3: `EditPipeline.apply` (just builds a lazy
+graph) was ~free (0.0-5.7ms); `HistogramComputer.histogram(of:)` (the
+actual render, forcing the convolutions to run at source resolution before
+`HistogramComputer`'s own internal 256px downsample ever got a chance to
+shrink the graph) ranged **24.6-399.9ms** on a 24MP RAW photo with
+Sharpen+Noise Reduction+Definition all active — several calls exceeded
+200-400ms, a real felt lag for supposedly-live histogram feedback (the
+histogram is debounced ~150ms after the last edit, so this is at most once
+per settle, not per frame — a lower-frequency exposure than P2's, which is
+why this needed its own measurement rather than assuming P2's fix applied
+here too).
+
+**Shipped**: a pre-pipeline downscale in `recomputeHistogram()`, via a new
+pure, unit-tested `HistogramComputer.inputDownscale(forDisplayedSize:)`
+(`Sources/Rendering/Histogram.swift`) — headroom 2x
+`HistogramComputer.sampleDimension` (512), `min(1, ...)` never-upscale,
+degenerate-input guards matching `RawDecoder`/`ProxyBuilder`'s own
+precedent. A plain affine scale, not Lanczos/`ProxyBuilder` — deliberately:
+this matches `HistogramComputer`'s own existing plain-affine resample
+exactly (introduces no NEW class of resampling error, just moves an
+equivalent one earlier), and `ProxyBuilder`'s async/`RenderGate`/
+`CVPixelBuffer` machinery was built for a different call site
+(`ImageRenderer`'s live on-screen render) and would add real coupling/cost
+for no benefit here. **Live-measured after**: a steady **13-68ms** (one
+220ms outlier on the apparent first call of the session, not a recurring
+cost).
+
+**Two reviewer rounds (Opus 5)** — round 1 caught a real, blocking bug:
+the first draft sized the downscale headroom against `currentImage`'s own
+RAW/pre-pipeline extent, but `HistogramComputer` receives the
+POST-pipeline (post-crop/straighten/perspective) extent — on a photo
+cropped past ~50% linear, the headroom would have degenerated to exactly
+the no-op size the 2x multiplier exists to prevent, or worse, upsampled a
+tightly-cropped photo's ~51px input back up to 256 buckets. Fixed by
+probing the DISPLAYED extent instead (`EditPipeline.apply(referenceState,
+to: currentImage).extent.size` — cheap, no pixels render, the same pattern
+`ImageRenderer.choosePipelineSource` already uses). Round 1 also caught:
+an asserted-but-unmeasured claim about which direction Noise Reduction's
+resolution-independence would shift the histogram (corrected to state the
+direction isn't measured, only that it diverges); a wrong "aliasing
+doesn't matter for a bucket count" justification (corrected to the real
+reason — this matches `HistogramComputer`'s own existing resample, not a
+new tolerance for aliasing); a misattributed `RawDecoder.materialize`
+precedent for the never-upscale clamp (corrected to the actual precedent,
+`RawDecoder.decodeDraft`'s `scaleFactor`); and a resolution-independence
+test that could only ever pass regardless of whether the fix was correct
+(a solid color trivially resamples to itself at any resolution) — replaced
+with a 45:19 (not 50/50) two-region proportion test that genuinely
+exercises the property. Round 2: APPROVE, two small non-blocking
+doc-accuracy/guard-consistency notes applied before commit. 510 tests (5
+new: the replaced proportion test plus 4 direct tests of the new pure
+`inputDownscale` helper), 0 regressions.
+
+**IMPROVEMENTS.md P5 is now fully shipped, reviewed, and live-verified.**
+P1/P2/P3/P4/P5 are all closed (P1 disproved, the other four measured and
+fixed). Remaining IMPROVEMENTS.md items: P6 (needs its own measurement
+first), D4/D5 (2 remaining parts)/D6 (each needs its own Plan Mode
+scoping).

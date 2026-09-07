@@ -493,7 +493,25 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
                 // screen while the content zooms/pans underneath it —
                 // exactly matching how the divider's screen position is
                 // independent of zoom in every other mode too.
+                //
+                // `.cropped(to: fitRect)` on `fittedEdited` is required once
+                // zoom is in play — a real, live-caught bug, the same class
+                // Side by Side already had to fix above: `fitted(_:into:
+                // zoomScale:panOffsetNorm:)`'s own output extent matches
+                // `fitRect` at zoomScale 1 (rendered output measured
+                // byte-identical with or without this crop there — some
+                // combinations differ from `fitRect` by sub-ulp float
+                // rounding, but never enough to survive pixel-grid
+                // rasterization, so the omission was invisible), but
+                // strictly LARGER than `fitRect` past 1x — without this
+                // crop, that overhang was visible in the letterbox margin
+                // band around the image, including the band adjacent to the
+                // ORIGINAL side of the divider, looking like edited content
+                // mixed into the original. `fittedOriginal`'s own crop to
+                // `originalRegion` (already a sub-rect of `fitRect`) needed
+                // no change — only `fittedEdited` was ever unbounded.
                 let fittedEdited = fitted(edited, into: fitRect, zoomScale: zoomScale, panOffsetNorm: panOffset)
+                    .cropped(to: fitRect)
                 let fittedOriginal = fitted(original, into: fitRect, zoomScale: zoomScale, panOffsetNorm: panOffset)
                 // `CompareDividerOverlay` measures `position` in SwiftUI's
                 // top-down space (0 = visual top, matching `fitRect.minY`

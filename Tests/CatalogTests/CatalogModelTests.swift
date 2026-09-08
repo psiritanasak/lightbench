@@ -238,4 +238,62 @@ final class CatalogModelTests: XCTestCase {
         )
         XCTAssertFalse(model.membershipsByPhotoID[photoID, default: []].contains(collectionID))
     }
+
+    // MARK: - Collections (D5, IMPROVEMENTS.md)
+
+    func testRenameCollectionRefreshesTheList() async throws {
+        _ = try await database.createCollection(name: "Trip")
+        let model = await makeModel()
+        let collection = try XCTUnwrap(model.collections.first)
+
+        model.renameCollection(collection, to: "Vacation")
+
+        try await waitUntil("the rename to reach the published list") {
+            await model.collections.contains { $0.name == "Vacation" }
+        }
+    }
+
+    func testDeleteCollectionPrunesLocalStateSynchronously() async throws {
+        let collection = try await database.createCollection(name: "Trip")
+        let model = await makeModel()
+
+        model.deleteCollection(collection)
+
+        // No await: local-first, same discipline as removePhoto's/
+        // deletePreset's own tests.
+        XCTAssertTrue(model.collections.isEmpty)
+        try await waitUntil("the deletion to reach the database") {
+            try await self.database.allCollections().isEmpty
+        }
+    }
+
+    func testDeletingTheCurrentlyViewedCollectionResetsToAllPhotos() async throws {
+        let collection = try await database.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+        let model = await makeModel()
+        model.selectedFilter = .collection(collectionID)
+        try await waitUntil("the filter change to settle") {
+            await model.selectedFilter == .collection(collectionID)
+        }
+
+        model.deleteCollection(collection)
+
+        // The real regression this test exists to catch, per
+        // `deleteCollection`'s own doc comment: the filter must NOT flip
+        // synchronously, only after the delete write has landed —
+        // reviewer-caught that asserting solely on the EVENTUAL value
+        // below doesn't pin this, since a synchronous-reset version
+        // satisfies "eventually .allPhotos" too, just sooner. Checked
+        // immediately, with no `await` in between `deleteCollection`'s
+        // call and this line, so nothing could have let the write
+        // complete yet.
+        XCTAssertEqual(
+            model.selectedFilter, .collection(collectionID),
+            "the filter must not flip until the delete write has landed"
+        )
+
+        try await waitUntil("selectedFilter to fall back to .allPhotos") {
+            await model.selectedFilter == .allPhotos
+        }
+    }
 }

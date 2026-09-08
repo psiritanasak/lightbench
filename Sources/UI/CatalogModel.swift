@@ -464,6 +464,96 @@ final class CatalogModel: ObservableObject {
         }
     }
 
+    /// Renames `collection`. Same shape as `createCollection`: validate up
+    /// front, fire-and-forget write, then full `refresh()` — NOT a
+    /// local-first splice, for the same reason `createPreset`'s own doc
+    /// comment already gives: the sidebar list is alphabetical, not
+    /// insertion-ordered, so there's no local position to guess at ahead
+    /// of the write.
+    ///
+    /// `isFolder` guard: rename on a folder-tree collection is out of
+    /// scope for this slice (see `deleteCollection`'s own doc comment for
+    /// the full reasoning — a folder's `name` diverging from its
+    /// `folderPath` interacts oddly with re-import). `CollectionSidebarView`
+    /// never offers this action for a folder row, but the guard is
+    /// defense-in-depth against a future caller reaching this method
+    /// directly, not just documentation.
+    func renameCollection(_ collection: PhotoCollection, to name: String) {
+        guard let database, let id = collection.id, !collection.isFolder else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task.detached { [weak self] in
+            try? await database.renameCollection(id: id, to: trimmed)
+            await self?.refresh()
+        }
+    }
+
+    /// Deletes `collection` — catalog rows only, the photos themselves are
+    /// never touched (see `CatalogDatabase.deleteCollection`'s own doc
+    /// comment). Local-first for the sidebar list (`collections` is
+    /// pruned synchronously, same shape/failure-resync reasoning as
+    /// `removePhoto`). Also resets `selectedFilter` to `.allPhotos` when
+    /// the collection being deleted is the one currently being viewed —
+    /// extending `toggleMembership`'s own `affectsCurrentFilter` check to
+    /// this mutator, so deleting the active filter falls back to "All
+    /// Photos" instead of leaving `selectedFilter` pointing at a vanished
+    /// ID (an empty grid with no sidebar row highlighted).
+    ///
+    /// Deliberately does NOT prune the deleted collection's ID out of
+    /// `membershipsByPhotoID`'s per-photo sets, unlike `removePhoto`'s own
+    /// discipline for a deleted PHOTO's id — harmless here rather than
+    /// latent: the only reader (`LibraryGridView`'s per-cell membership
+    /// menu) iterates `catalog.collections`, which no longer contains the
+    /// row, and SQLite's `AUTOINCREMENT` primary key never reuses a
+    /// deleted id, so a stale entry can't resurface as a phantom checkmark
+    /// on some later, unrelated collection.
+    ///
+    /// `isFolder` guard: deleting a folder-tree collection recursively
+    /// deletes its ENTIRE subtree (`parentId` is itself `ON DELETE CASCADE`,
+    /// self-referencing — `Migrations/004_folder_collections.swift`), and
+    /// the next "Import Folder Tree…" of the same root silently recreates
+    /// it anyway (`findOrCreateFolderCollection` matches by disk path, not
+    /// name) — both deliberately out of scope for this slice (see
+    /// CLAUDE.md/IMPROVEMENTS.md's D5 write-up). `CollectionSidebarView`
+    /// never offers this action for a folder row, but the guard is
+    /// defense-in-depth against a future caller reaching this method
+    /// directly, not just documentation.
+    ///
+    /// The filter reset happens ONLY AFTER the delete write completes, not
+    /// synchronously up front like `collections`' own local removal — a
+    /// real race caught before this shipped: `selectedFilter`'s own
+    /// `didSet` kicks off `Task { await refresh() }` whenever it actually
+    /// changes, and if that fired before this method's write lands,
+    /// `refresh()` would re-fetch the collection from the database (still
+    /// there) and silently restore the row `collections.removeAll` just
+    /// removed — permanently, since this method never refreshes on its
+    /// own success path. Deferring the filter flip until the write is
+    /// confirmed removes that race entirely: any refresh a later flip
+    /// triggers now correctly finds the row already gone. Regression-
+    /// tested by `testDeletingTheCurrentlyViewedCollectionResetsToAllPhotos`,
+    /// which asserts the filter has NOT yet flipped immediately after this
+    /// call returns (not just that it eventually does).
+    func deleteCollection(_ collection: PhotoCollection) {
+        guard let database, let id = collection.id, !collection.isFolder else { return }
+        collections.removeAll { $0.id == id }
+        Task.detached { [weak self] in
+            do {
+                try await database.deleteCollection(id: id)
+                await self?.clearSelectedFilterIfCollectionDeleted(id)
+            } catch {
+                await self?.refresh()
+            }
+        }
+    }
+
+    /// See `deleteCollection`'s own doc comment for why this is called
+    /// only after the delete write completes, never synchronously.
+    private func clearSelectedFilterIfCollectionDeleted(_ collectionID: Int64) {
+        if selectedFilter == .collection(collectionID) {
+            selectedFilter = .allPhotos
+        }
+    }
+
     /// Toggles `photo`'s membership in `collection` — same local-first
     /// shape and failure-resync reasoning as `setRating`/`setFlagged`,
     /// plus one case they don't have.

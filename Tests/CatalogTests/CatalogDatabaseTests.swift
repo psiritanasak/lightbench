@@ -280,6 +280,65 @@ final class CatalogDatabaseTests: XCTestCase {
         XCTAssertEqual(memberships, [CollectionPhoto(collectionId: collectionID, photoId: photoID)])
     }
 
+    func testRenameCollectionUpdatesTheName() async throws {
+        let db = try makeDatabase()
+        let collection = try await db.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+
+        try await db.renameCollection(id: collectionID, to: "Vacation")
+
+        let collections = try await db.allCollections()
+        XCTAssertEqual(collections.map(\.name), ["Vacation"])
+    }
+
+    func testRenameCollectionOnNonexistentIDIsANoOp() async throws {
+        let db = try makeDatabase()
+        _ = try await db.createCollection(name: "Trip")
+
+        try await db.renameCollection(id: 999_999, to: "Vacation")
+
+        let collections = try await db.allCollections()
+        XCTAssertEqual(collections.map(\.name), ["Trip"])
+    }
+
+    /// A real, executable proof of the `ON DELETE CASCADE` FK, the
+    /// collection-delete mirror of
+    /// `testDeletePhotoCascadeDeletesCollectionMemberships` — this is the
+    /// first live DELETE on `collection` in the whole project.
+    func testDeleteCollectionCascadeDeletesMemberships() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+        let importedPhotos = try await db.allPhotos()
+        let photoID = try XCTUnwrap(importedPhotos.first?.id)
+        let collection = try await db.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+        try await db.setMembership(photoID: photoID, collectionID: collectionID, isMember: true)
+        let membershipsBeforeDelete = try await db.allMemberships()
+        XCTAssertEqual(membershipsBeforeDelete.count, 1)
+
+        try await db.deleteCollection(id: collectionID)
+
+        let membershipsAfterDelete = try await db.allMemberships()
+        XCTAssertTrue(membershipsAfterDelete.isEmpty)
+        let remainingCollections = try await db.allCollections()
+        XCTAssertTrue(remainingCollections.isEmpty)
+        // The photo itself must survive — only the collection and its
+        // membership row go, the mirror image of the photo-delete cascade
+        // test's own assertion.
+        let remainingPhotos = try await db.allPhotos()
+        XCTAssertEqual(remainingPhotos.count, 1)
+    }
+
+    func testDeleteCollectionOnNonexistentIDIsANoOp() async throws {
+        let db = try makeDatabase()
+        _ = try await db.createCollection(name: "Trip")
+
+        try await db.deleteCollection(id: 999_999)
+
+        let remaining = try await db.allCollections()
+        XCTAssertEqual(remaining.count, 1)
+    }
+
     // MARK: - Folder-mirrored collections
 
     /// Builds a `FolderScanNode` tree directly (no real filesystem walk —

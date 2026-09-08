@@ -220,6 +220,42 @@ final class CatalogDatabase: Sendable {
         }
     }
 
+    /// Renames `id` to `name` (D5, IMPROVEMENTS.md) — the project's first
+    /// `UPDATE` on any table other than `photo` (`setRating`/`setFlagged`
+    /// above are the only prior precedent for this shape). Trimming/empty
+    /// validation happens in `CatalogModel`, not here — this method trusts
+    /// its input, matching `createCollection`'s own split of concerns.
+    /// Renaming a nonexistent ID is a silent no-op (`updateAll` on an empty
+    /// filter), matching this file's other mutators' tolerance of stale IDs.
+    func renameCollection(id: Int64, to name: String) async throws {
+        try await dbQueue.write { db in
+            _ = try PhotoCollection.filter(PhotoCollection.Columns.id == id)
+                .updateAll(db, PhotoCollection.Columns.name.set(to: name))
+        }
+    }
+
+    /// Removes collection `id` (D5, IMPROVEMENTS.md) — the project's first
+    /// row-DELETE on `collection`. Photos themselves are never touched;
+    /// only the collection row and its `collection_photo` membership rows
+    /// go, the latter via the `ON DELETE CASCADE` FK from
+    /// `Migrations/003_collections.swift` — `CatalogDatabaseTests`
+    /// exercises this cascade directly rather than just trusting the
+    /// migration's own comment. If `id` names a FOLDER collection
+    /// (`isFolder == true`), this ALSO recursively deletes its entire
+    /// subtree, since `parentId` is itself `ON DELETE CASCADE` and
+    /// self-referencing (`Migrations/004_folder_collections.swift`) —
+    /// `CatalogModel`/`CollectionSidebarView` deliberately don't expose
+    /// this method for folder rows in this slice (see IMPROVEMENTS.md's
+    /// D5 write-up for why), but the database layer itself doesn't
+    /// distinguish, so this doc comment records the real behavior for
+    /// whoever extends this later. Deleting a nonexistent ID is a silent
+    /// no-op, matching `deletePhoto`.
+    func deleteCollection(id: Int64) async throws {
+        try await dbQueue.write { db in
+            _ = try PhotoCollection.filter(PhotoCollection.Columns.id == id).deleteAll(db)
+        }
+    }
+
     /// Every photo in `collectionID`, via its `collection_photo` join
     /// rows. Does not affect `allPhotos()` — collection membership is a
     /// separate relation, not a filter on the base library.

@@ -18,6 +18,24 @@ struct CollectionSidebarView: View {
     @State private var isPresentingNewCollection = false
     @State private var newCollectionName = ""
 
+    /// D5 (IMPROVEMENTS.md): rename/delete, flat "Collections" rows only —
+    /// deliberately not offered on "Folders" rows, since deleting a folder
+    /// collection recursively deletes its whole subtree
+    /// (`Migrations/004_folder_collections.swift`'s self-referencing
+    /// `ON DELETE CASCADE` on `parentId`) and both rename and delete
+    /// interact oddly with re-import (`findOrCreateFolderCollection`
+    /// matches purely by `folderPath`, never `name`) — out of scope for
+    /// this slice, matching this project's own prior explicit exclusion
+    /// when folder collections first shipped.
+    ///
+    /// `presenting:`-driven (unlike the "New Collection" alert above,
+    /// which needs no per-item state) — both need to know WHICH collection
+    /// was tapped, the same shape `LibraryGridView`'s "Remove from
+    /// Library?" alert already established for exactly this reason.
+    @State private var collectionPendingRename: PhotoCollection?
+    @State private var renameText = ""
+    @State private var collectionPendingDeletion: PhotoCollection?
+
     /// `List(selection:)` only accepts an Optional-wrapped selection
     /// binding (it needs to represent "nothing selected"), even though
     /// `catalog.selectedFilter` itself is deliberately non-optional (see
@@ -40,7 +58,31 @@ struct CollectionSidebarView: View {
             Section("Collections") {
                 ForEach(catalog.collections.filter { !$0.isFolder }) { collection in
                     if let id = collection.id {
-                        Text(collection.name).tag(LibraryFilter.collection(id))
+                        Text(collection.name)
+                            .tag(LibraryFilter.collection(id))
+                            .contextMenu {
+                                Button("Rename…") {
+                                    renameText = collection.name
+                                    collectionPendingRename = collection
+                                }
+                                Button(role: .destructive) {
+                                    collectionPendingDeletion = collection
+                                } label: {
+                                    // `role: .destructive` alone doesn't
+                                    // render red text on a macOS context
+                                    // menu item — the same live-caught
+                                    // lesson already documented at
+                                    // `LibraryGridView`'s own destructive
+                                    // menu item.
+                                    Label {
+                                        Text("Delete")
+                                            .foregroundStyle(.red)
+                                    } icon: {
+                                        Image(systemName: "trash")
+                                            .foregroundStyle(.red)
+                                    }
+                                }
+                            }
                     }
                 }
                 Button("New Collection…") {
@@ -72,6 +114,36 @@ struct CollectionSidebarView: View {
             Button("Cancel", role: .cancel) {
                 newCollectionName = ""
             }
+        }
+        .alert(
+            "Rename Collection",
+            isPresented: Binding(
+                get: { collectionPendingRename != nil },
+                set: { isPresented in if !isPresented { collectionPendingRename = nil } }
+            ),
+            presenting: collectionPendingRename
+        ) { collection in
+            TextField("Name", text: $renameText)
+            Button("Rename") {
+                catalog.renameCollection(collection, to: renameText)
+                collectionPendingRename = nil
+            }
+            Button("Cancel", role: .cancel) {
+                collectionPendingRename = nil
+            }
+        }
+        .alert(
+            "Delete Collection?",
+            isPresented: Binding(
+                get: { collectionPendingDeletion != nil },
+                set: { isPresented in if !isPresented { collectionPendingDeletion = nil } }
+            ),
+            presenting: collectionPendingDeletion
+        ) { collection in
+            Button("Delete", role: .destructive) { catalog.deleteCollection(collection) }
+            Button("Cancel", role: .cancel) {}
+        } message: { collection in
+            Text("\"\(collection.name)\" will be deleted. The photos in it, and their files on disk, are not affected.")
         }
     }
 

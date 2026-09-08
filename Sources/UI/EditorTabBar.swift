@@ -23,6 +23,7 @@ struct EditorTabBar: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(tab == selectedTab ? [.isSelected] : [])
             }
         }
         .padding(4)

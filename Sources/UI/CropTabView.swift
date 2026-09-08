@@ -76,12 +76,19 @@ struct CropTabView: View {
                         if preset == selectedAspect {
                             Image(systemName: "checkmark")
                                 .foregroundStyle(.secondary)
+                                // D6 (IMPROVEMENTS.md): the row's own
+                                // `.isSelected` trait below already conveys
+                                // this; without hiding it too, VoiceOver
+                                // would announce the checkmark redundantly
+                                // as a second, unlabeled glyph.
+                                .accessibilityHidden(true)
                         }
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .padding(.vertical, 4)
+                .accessibilityAddTraits(preset == selectedAspect ? [.isSelected] : [])
             }
         }
     }

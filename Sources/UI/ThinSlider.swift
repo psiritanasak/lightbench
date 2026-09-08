@@ -30,6 +30,26 @@ enum ThinSliderGeometry {
         guard usableSpan > 0 else { return 0 }
         return ((x - thumbWidth / 2) / usableSpan).clamped(to: 0...1)
     }
+
+    /// The step size for one VoiceOver increment/decrement — 1/20th of the
+    /// range. Shared by `incremented`/`decremented` below purely so the
+    /// `/20` constant isn't duplicated between them.
+    private static func step(in range: ClosedRange<Double>) -> Double {
+        (range.upperBound - range.lowerBound) / 20
+    }
+
+    /// D6 (IMPROVEMENTS.md): one VoiceOver increment, clamped to `range` —
+    /// matches what `ThinSlider`'s `accessibilityAdjustableAction` used
+    /// inline before this was extracted so it could be unit-tested and
+    /// reused by `CompareDividerOverlay`'s own adjustable action.
+    static func incremented(_ value: Double, in range: ClosedRange<Double>) -> Double {
+        Swift.min(value + step(in: range), range.upperBound)
+    }
+
+    /// One VoiceOver decrement, clamped to `range`.
+    static func decremented(_ value: Double, in range: ClosedRange<Double>) -> Double {
+        Swift.max(value - step(in: range), range.lowerBound)
+    }
 }
 
 private extension Double {
@@ -45,6 +65,15 @@ private extension Double {
 struct ThinSlider: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
+    /// D6 (IMPROVEMENTS.md): the announced `accessibilityValue` defaulted
+    /// to a bare 0-100% of `range`, which reviewer-caught mismatches what's
+    /// actually on screen for most rows — a Temperature row shows "6500K"
+    /// but VoiceOver said "62%"; an EV row shows "0.00 EV" but VoiceOver
+    /// said "50%". Callers that already have a real formatted string (e.g.
+    /// `EditSliderRow`'s own `format` closure) pass it here instead. `nil`
+    /// keeps the previous percent behavior — additive, no call-site changes
+    /// required elsewhere.
+    var valueDescription: ((Double) -> String)? = nil
 
     private let trackHeight: CGFloat = 4
     private let thumbWidth: CGFloat = 5
@@ -86,12 +115,13 @@ struct ThinSlider: View {
         }
         .frame(height: rowHeight)
         .accessibilityElement()
-        .accessibilityValue(Text(String(format: "%.0f%%", ThinSliderGeometry.fraction(of: value, in: range) * 100)))
+        .accessibilityValue(Text(
+            valueDescription?(value) ?? String(format: "%.0f%%", ThinSliderGeometry.fraction(of: value, in: range) * 100)
+        ))
         .accessibilityAdjustableAction { direction in
-            let step = (range.upperBound - range.lowerBound) / 20
             switch direction {
-            case .increment: value = Swift.min(value + step, range.upperBound)
-            case .decrement: value = Swift.max(value - step, range.lowerBound)
+            case .increment: value = ThinSliderGeometry.incremented(value, in: range)
+            case .decrement: value = ThinSliderGeometry.decremented(value, in: range)
             @unknown default: break
             }
         }

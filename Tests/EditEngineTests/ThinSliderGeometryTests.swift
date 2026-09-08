@@ -111,4 +111,30 @@ final class ThinSliderGeometryTests: XCTestCase {
         XCTAssertFalse(result.isNaN)
         XCTAssertEqual(result, 0, accuracy: accuracy)
     }
+
+    // MARK: - incremented(_:in:) / decremented(_:in:) — D6 (IMPROVEMENTS.md):
+    // extracted from `ThinSlider`'s own `accessibilityAdjustableAction` so
+    // `CompareDividerOverlay` could reuse the identical step size instead of
+    // duplicating a second "1/20th of the range" constant.
+
+    func testIncrementedStepsByOneTwentiethOfRange() {
+        XCTAssertEqual(ThinSliderGeometry.incremented(0, in: 0...100), 5, accuracy: accuracy)
+    }
+
+    func testDecrementedStepsByOneTwentiethOfRange() {
+        XCTAssertEqual(ThinSliderGeometry.decremented(100, in: 0...100), 95, accuracy: accuracy)
+    }
+
+    func testIncrementedClampsAtUpperBound() {
+        XCTAssertEqual(ThinSliderGeometry.incremented(99, in: 0...100), 100, accuracy: accuracy)
+    }
+
+    func testDecrementedClampsAtLowerBound() {
+        XCTAssertEqual(ThinSliderGeometry.decremented(1, in: 0...100), 0, accuracy: accuracy)
+    }
+
+    func testIncrementedAndDecrementedOnDegenerateZeroWidthRangeDoNotProduceNaN() {
+        XCTAssertEqual(ThinSliderGeometry.incremented(3, in: 3...3), 3, accuracy: accuracy)
+        XCTAssertEqual(ThinSliderGeometry.decremented(3, in: 3...3), 3, accuracy: accuracy)
+    }
 }

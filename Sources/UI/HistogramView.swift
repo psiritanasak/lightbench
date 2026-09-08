@@ -37,6 +37,11 @@ struct HistogramView: View {
         .frame(height: 60)
         .background(Color.black.opacity(0.2))
         .clipShape(RoundedRectangle(cornerRadius: 4))
+        // D6 (IMPROVEMENTS.md): purely presentational and non-interactive —
+        // a per-bin histogram readout would be meaningless spoken aloud, so
+        // this is explicitly, deliberately hidden rather than left silently
+        // present as an undescribed `Canvas` element in the AX tree.
+        .accessibilityHidden(true)
     }
 
     private func draw(_ values: [Float], into context: GraphicsContext, size: CGSize, barWidth: CGFloat, color: Color) {

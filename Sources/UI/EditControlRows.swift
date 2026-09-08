@@ -76,6 +76,21 @@ struct EditSliderRow: View {
                         .foregroundStyle(.secondary)
                         .contentShape(Rectangle())
                         .onTapGesture { beginEditingText() }
+                        // D6 (IMPROVEMENTS.md): this is a plain `Text` with
+                        // a tap gesture, so it's the most invisible
+                        // interactive affordance in the app — VoiceOver
+                        // sees static text with no indication it can be
+                        // activated. `.isButton` + an explicit action makes
+                        // "type an exact value" reachable the same way a
+                        // real button would be. Reviewer-caught: labeling
+                        // this "\(label) value" with its own
+                        // `accessibilityValue` duplicates the `ThinSlider`
+                        // below almost word-for-word — phrased as an ACTION
+                        // instead ("type a value"), since the slider already
+                        // owns announcing the current value.
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityLabel("Type \(label) value")
+                        .accessibilityAction { beginEditingText() }
                 }
                 Button {
                     value = identity
@@ -87,7 +102,7 @@ struct EditSliderRow: View {
                 .disabled(value == identity)
                 .accessibilityLabel("Reset \(label)")
             }
-            ThinSlider(value: $value, range: range)
+            ThinSlider(value: $value, range: range, valueDescription: format)
                 .accessibilityLabel(label)
         }
     }

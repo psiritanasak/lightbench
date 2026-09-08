@@ -167,6 +167,8 @@ struct LibraryGridView: View {
             .buttonStyle(.bordered)
             .foregroundStyle(catalog.flaggedOnly ? .yellow : .secondary)
             .help("Flagged only")
+            .accessibilityLabel("Flagged only")
+            .accessibilityAddTraits(catalog.flaggedOnly ? [.isSelected] : [])
 
             Spacer(minLength: 12)
 
@@ -189,6 +191,7 @@ struct LibraryGridView: View {
             Image(systemName: "photo")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             // Floor raised from 100 to 120 alongside the cell-width fix
             // below (live-caught overlap bug) — this comment went through
             // two reviewer-caught inaccuracies before landing on real,
@@ -200,11 +203,17 @@ struct LibraryGridView: View {
             // `.caption2` icon shrink alone still left 120 above the
             // minimum; only tightening the row's own spacing (6→4) is
             // what actually brought the row under 120 with real margin.
-            ThinSlider(value: $thumbnailSize, range: Self.thumbnailSizeRange)
+            ThinSlider(
+                value: $thumbnailSize,
+                range: Self.thumbnailSizeRange,
+                valueDescription: { "\(Int($0.rounded())) points" }
+            )
                 .frame(width: 100)
+                .accessibilityLabel("Thumbnail size")
             Image(systemName: "photo")
                 .font(.body)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
@@ -299,39 +308,61 @@ private struct LibraryThumbnailCell: View {
                 // unconditionally in `.task(id:)` below, not gated on the
                 // decode having failed, specifically because a cache HIT
                 // means the decode never fails at all.
-                if isMissing {
-                    missingPlaceholder
-                } else if let image {
-                    // `.frame(width:height:)` BEFORE `.clipShape` here is
-                    // load-bearing, not cosmetic: without it, `.aspectRatio(
-                    // contentMode: .fill)` reports a DIFFERENT (often much
-                    // larger) size to the enclosing ZStack depending on
-                    // each photo's own native aspect ratio. That was
-                    // invisible with the ZStack's old default (.center)
-                    // alignment, but once `alignment: .topLeading` was
-                    // added (for the badge below), it caused the badge to
-                    // sit at a different effective position per photo —
-                    // caught live. Pinning the image's own reported size
-                    // to exactly `cellSize` makes the ZStack's content box
-                    // (and therefore "top-leading") consistent for every
-                    // photo regardless of its native dimensions — and is
-                    // exactly why the D3 edited-badge overlay below also
-                    // waits until AFTER this same frame+clip.
-                    Image(decorative: image, scale: 1)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: cellSize, height: cellSize)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                } else {
-                    // Feedback while the thumbnail decodes — most visible
-                    // right after re-sorting, which scrambles which photos
-                    // land in the LazyVGrid's currently-rendered window,
-                    // so previously off-screen/uncached photos briefly
-                    // show this instead of a silent blank box.
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: cellSize, height: cellSize)
+                // D6 (IMPROVEMENTS.md): wrapped so the thumbnail itself can
+                // be ONE focusable "open" element, a sibling of the
+                // selection checkbox `Button` below inside this same outer
+                // `ZStack` — reviewer-caught: putting `.isButton` +
+                // `.accessibilityAction` on the whole-cell container
+                // instead (further down, `children: .contain`) doesn't
+                // reliably work, since VoiceOver treats a `.contain`
+                // container as something to navigate INTO, not activate.
+                // Deliberately `ZStack`, not `Group` — reviewer-caught:
+                // SwiftUI applies a `Group`'s modifiers to EACH of its
+                // children individually, not to the group as a whole, so
+                // this only happened to behave as one element because the
+                // `if`/`else if`/`else` below always yields exactly one
+                // child; `ZStack` is a real container view, so the "one
+                // accessibility element" intent is structural, not
+                // incidental on that branching staying single-view.
+                ZStack {
+                    if isMissing {
+                        missingPlaceholder
+                    } else if let image {
+                        // `.frame(width:height:)` BEFORE `.clipShape` here is
+                        // load-bearing, not cosmetic: without it, `.aspectRatio(
+                        // contentMode: .fill)` reports a DIFFERENT (often much
+                        // larger) size to the enclosing ZStack depending on
+                        // each photo's own native aspect ratio. That was
+                        // invisible with the ZStack's old default (.center)
+                        // alignment, but once `alignment: .topLeading` was
+                        // added (for the badge below), it caused the badge to
+                        // sit at a different effective position per photo —
+                        // caught live. Pinning the image's own reported size
+                        // to exactly `cellSize` makes the ZStack's content box
+                        // (and therefore "top-leading") consistent for every
+                        // photo regardless of its native dimensions — and is
+                        // exactly why the D3 edited-badge overlay below also
+                        // waits until AFTER this same frame+clip.
+                        Image(decorative: image, scale: 1)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: cellSize, height: cellSize)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    } else {
+                        // Feedback while the thumbnail decodes — most visible
+                        // right after re-sorting, which scrambles which photos
+                        // land in the LazyVGrid's currently-rendered window,
+                        // so previously off-screen/uncached photos briefly
+                        // show this instead of a silent blank box.
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: cellSize, height: cellSize)
+                    }
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(isMissing ? "\(photo.filename), missing" : photo.filename)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { onTap() }
                 // Always-visible selection checkbox — tapping IT toggles
                 // selection (a `Button` claims its own tap before the
                 // cell's whole-VStack `.onTapGesture` below sees it, the
@@ -352,6 +383,8 @@ private struct LibraryThumbnailCell: View {
                 }
                 .buttonStyle(.plain)
                 .padding(6)
+                .accessibilityLabel("Select photo")
+                .accessibilityAddTraits(catalog.isSelected(photo) ? [.isSelected] : [])
             }
             .frame(width: cellSize, height: cellSize)
             .clipped()
@@ -365,6 +398,12 @@ private struct LibraryThumbnailCell: View {
                 .font(.caption)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                // D6 (IMPROVEMENTS.md): the thumbnail element above already
+                // carries `photo.filename` as its own accessibility label —
+                // without this, VoiceOver would announce the filename twice
+                // per cell (once as that button's label, once as this
+                // visible caption).
+                .accessibilityHidden(true)
 
             // `spacing: 4`, tightened from 6 — reviewer-measured (twice):
             // at `.body`-sized flag/folder icons and `spacing: 6`, this
@@ -393,6 +432,12 @@ private struct LibraryThumbnailCell: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(photo.isFlagged ? .yellow : .secondary)
+                .accessibilityLabel("Flag")
+                // D6 (IMPROVEMENTS.md): `.isSelected`, matching the
+                // selection checkbox's own idiom for the same "binary
+                // on/off state" shape above — one convention for both
+                // rather than mixing in `accessibilityValue` here too.
+                .accessibilityAddTraits(photo.isFlagged ? [.isSelected] : [])
 
                 Menu {
                     ForEach(catalog.collections) { collection in
@@ -408,6 +453,12 @@ private struct LibraryThumbnailCell: View {
                                     Image(systemName: "checkmark")
                                 }
                             }
+                            // D6 (IMPROVEMENTS.md): the checkmark above is
+                            // glyph-only, so membership state is invisible
+                            // to VoiceOver reading this menu item — fold it
+                            // into the item's own label instead.
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(isMember ? "\(collection.name), member" : collection.name)
                         }
                     }
                     if isMissing {
@@ -448,6 +499,7 @@ private struct LibraryThumbnailCell: View {
                 // uncertainty entirely rather than trying to measure a
                 // glyph whose presence/size isn't guaranteed.
                 .menuIndicator(.hidden)
+                .accessibilityLabel("Photo options")
             }
         }
         // Live-caught: only the thumbnail `ZStack` above constrained its
@@ -478,6 +530,18 @@ private struct LibraryThumbnailCell: View {
         .clipped()
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+        // D6 (IMPROVEMENTS.md): `children: .contain` (not `.combine`/
+        // `.ignore`) keeps the star rating/flag/menu/checkbox/thumbnail
+        // below individually reachable as child elements, rather than
+        // collapsing the whole cell into one opaque element. Reviewer-
+        // caught: a `.contain` container is something VoiceOver navigates
+        // INTO, not something it activates — so the "open" label/trait/
+        // action live on the thumbnail element above instead (a focusable
+        // child, sibling to the checkbox `Button`), not here. No explicit
+        // label on the container itself either, to avoid double-announcing
+        // `photo.filename` (it's both the thumbnail child's label AND the
+        // visible `Text(photo.filename)` row below, both already children).
+        .accessibilityElement(children: .contain)
         .task(id: photo.path) {
             // Reset immediately: a reused cell carries over `@State` from
             // whatever photo it PREVIOUSLY showed (same as `image`/
@@ -545,6 +609,11 @@ private struct LibraryThumbnailCell: View {
                 .foregroundStyle(.white)
         }
         .padding(6)
+        // D6 (IMPROVEMENTS.md): explicit `.accessibilityElement` rather
+        // than relying on label propagation up from the `Image` child —
+        // matches every other element in this file's own new pattern.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Edited")
     }
 }
 
@@ -568,6 +637,30 @@ private struct StarRatingRow: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(star <= rating ? .yellow : .secondary)
+            }
+        }
+        // D6 (IMPROVEMENTS.md): without this, VoiceOver sees 5 separate,
+        // identically-named "star"/"star fill" buttons per grid cell with
+        // no indication of the current rating. `children: .ignore` collapses
+        // them into ONE adjustable element instead — mouse/tap behavior
+        // (including the tap-current-star-to-clear convenience above) is
+        // completely untouched, this only changes what the accessibility
+        // tree reports.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Rating")
+        .accessibilityValue(rating == 0 ? "No rating" : "\(rating) of 5 stars")
+        .accessibilityAdjustableAction { direction in
+            // Reviewer-caught: guard the bounds rather than clamping
+            // unconditionally — `onSet(rating)` at either end would fire a
+            // redundant `catalog.setRating` write (DB round-trip +
+            // `@Published` mutation) for a genuine no-op, the same phantom-
+            // write class `EditSliderRow`'s `seedText` guard exists to
+            // prevent. The mouse path never hits this either (tapping the
+            // current star toggles to 0, it doesn't re-set the same value).
+            switch direction {
+            case .increment: if rating < 5 { onSet(rating + 1) }
+            case .decrement: if rating > 0 { onSet(rating - 1) }
+            @unknown default: break
             }
         }
     }

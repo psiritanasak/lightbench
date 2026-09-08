@@ -33,6 +33,14 @@ struct RedEyeOverlayView: View {
         }
         .frame(width: fitRect.width, height: fitRect.height)
         .position(x: fitRect.midX, y: fitRect.midY)
+        // D6 (IMPROVEMENTS.md): tap-to-place/tap-to-remove is a spatial
+        // gesture with no non-mouse equivalent yet — hidden rather than
+        // left silently present-but-unreachable. Not a total dead end for
+        // AT: the already-labeled "Clear All Red-Eye Corrections" button
+        // (`AdjustTabView.swift`) remains a reachable escape hatch, just
+        // not a way to place points in the first place — a genuine gap,
+        // see IMPROVEMENTS.md's D8 for the actual tracked follow-up.
+        .accessibilityHidden(true)
     }
 
     /// Maps a stored point (normalized 0...1, SwiftUI-local/y-down — same

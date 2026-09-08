@@ -49,5 +49,10 @@ struct PanOverlay: View {
                     panOffset = .zero
                 }
             )
+            // D6 (IMPROVEMENTS.md): click-drag-to-pan and double-tap-to-
+            // reset-zoom have no non-mouse equivalent yet — hidden rather
+            // than left silently present-but-unreachable. See
+            // IMPROVEMENTS.md's D8 for the actual tracked follow-up.
+            .accessibilityHidden(true)
     }
 }

@@ -71,6 +71,24 @@ struct CompareDividerOverlay: View {
         }
         .frame(width: fitRect.width, height: fitRect.height)
         .position(x: fitRect.midX, y: fitRect.midY)
+        // D6 (IMPROVEMENTS.md): `position` (0...1) was reachable only by
+        // mouse — two bare `Color.clear` gesture surfaces with no
+        // accessibility element at all. Mirrors `ThinSlider`'s own
+        // element/value/adjustable-action shape exactly, reusing its step
+        // math (`ThinSliderGeometry.incremented`/`decremented`) rather than
+        // duplicating a second "1/20th of the range" constant. Purely
+        // additive — the two gesture surfaces above are untouched, and
+        // accessibility modifiers don't affect hit-testing.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Compare divider")
+        .accessibilityValue(String(format: "%.0f%%", position * 100))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: position = ThinSliderGeometry.incremented(position, in: 0...1)
+            case .decrement: position = ThinSliderGeometry.decremented(position, in: 0...1)
+            @unknown default: break
+            }
+        }
     }
 
     /// The wide, invisible, topmost hit-target centered on the line's

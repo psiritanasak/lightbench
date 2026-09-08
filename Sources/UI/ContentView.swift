@@ -621,6 +621,7 @@ struct ContentView: View {
                     || isPickingWhiteBalance || isPlacingRedEyeCorrections
             )
             .tint(compareMode != .off ? .yellow : nil)
+            .accessibilityAddTraits(compareMode != .off ? [.isSelected] : [])
             .onChange(of: compareMode) { _, newMode in
                 if newMode != .off {
                     isPickingWhiteBalance = false
@@ -681,6 +682,7 @@ struct ContentView: View {
                     Label("Filmstrip", systemImage: "square.grid.3x1")
                 }
                 .tint(isFilmstripVisible ? .yellow : nil)
+                .accessibilityAddTraits(isFilmstripVisible ? [.isSelected] : [])
             }
         }
     }
@@ -774,6 +776,16 @@ struct ContentView: View {
                                         isPickingWhiteBalance = false
                                     }
                                 )
+                                // D6 (IMPROVEMENTS.md): a spatial tap-anywhere-
+                                // on-the-image gesture has no non-mouse
+                                // equivalent yet — deliberately hidden rather
+                                // than left silently present-but-unreachable
+                                // in the AX tree. Genuinely fixing this needs
+                                // new interaction design (e.g. a keyboard-
+                                // driven crosshair), out of scope for this
+                                // labeling-only pass — see IMPROVEMENTS.md's
+                                // D8 for the actual tracked follow-up.
+                                .accessibilityHidden(true)
                         }
                         // Red-Eye correction markers/tap-capture. Gated on
                         // `!isCroppingActive` and `!isPickingWhiteBalance`

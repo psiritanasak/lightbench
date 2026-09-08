@@ -84,6 +84,15 @@ struct CropOverlayView: View {
         }
         .frame(width: fitRect.width, height: fitRect.height)
         .position(x: fitRect.midX, y: fitRect.midY)
+        // D6 (IMPROVEMENTS.md): the 8 drag handles + interior drag area are
+        // mouse-only gesture surfaces with no accessibility element of
+        // their own — hidden rather than left silently present-but-inert
+        // in the AX tree. Not a functional gap: the same four crop insets
+        // this overlay manipulates are already independently AT-adjustable
+        // through `CropTabView`'s labeled `EditSliderRow`s
+        // (`CropTabView.swift`), so this is a mouse-only ALTERNATIVE path,
+        // not the only way to crop.
+        .accessibilityHidden(true)
     }
 
     // MARK: - Visuals

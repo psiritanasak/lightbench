@@ -259,6 +259,7 @@ struct AdjustTabView: View {
             }
             .buttonStyle(.bordered)
             .tint(isPickingWhiteBalance ? .yellow : nil)
+            .accessibilityAddTraits(isPickingWhiteBalance ? [.isSelected] : [])
             Button {
                 document.fixColorCast()
             } label: {
@@ -337,6 +338,7 @@ struct AdjustTabView: View {
             }
             .buttonStyle(.bordered)
             .tint(isPlacingRedEyeCorrections ? .yellow : nil)
+            .accessibilityAddTraits(isPlacingRedEyeCorrections ? [.isSelected] : [])
             EditSliderRow(
                 label: "Red-Eye Size", value: $document.editState.redEyeSize,
                 range: 0...1, identity: 0.5, displayMultiplier: 100
@@ -508,6 +510,7 @@ struct AdjustTabView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.red)
+                        .accessibilityLabel("Delete preset \(preset.name)")
                     }
                 }
             }
@@ -671,6 +674,8 @@ struct AdjustTabView: View {
                             )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(band.label)
+                    .accessibilityAddTraits(panel.selectedSelectiveColorBand == band ? [.isSelected] : [])
                 }
             }
             .frame(maxWidth: .infinity, alignment: .center)

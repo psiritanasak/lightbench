@@ -557,6 +557,26 @@ adjustable action, not 5 unlabeled buttons), the selection checkbox
 (state), `CompareDividerOverlay` (adjustable), crop handles. VoiceOver-walk
 the Editor and Library once each.
 
+**Shipped 2026-09-08.** See `PROGRESS.md`'s own D6 section for what
+shipped, what the reviewer caught across 3 rounds, and the live AX-tree
+verification results (via the real Accessibility API, not System Events —
+see that section for why).
+
+### D8. Keyboard/AT paths for the three mouse-only spatial overlays (deferred from D6)
+
+D6's accessibility pass explicitly scoped these OUT as new interaction
+design, not labeling — each is currently `.accessibilityHidden(true)`
+with a doc comment naming this entry:
+- WB eyedropper tap-to-pick (`ContentView.swift`'s WB tap-capture overlay)
+- Red-Eye tap-to-place/tap-to-remove (`RedEyeOverlayView.swift`)
+- Click-drag-to-pan and double-tap-to-reset-zoom (`PanOverlay.swift`)
+
+Each needs its own interaction design (e.g. a keyboard-driven crosshair
+for WB/red-eye placement, arrow-key panning, a dedicated reset-zoom
+action) before it can get real accessibility support — there's no
+existing "point on the image" AT-accessible pattern in this codebase to
+extend, unlike the labeling-only fixes D6 itself shipped.
+
 ### ~~D7. Code design: split ContentView.swift (1352 lines)~~ — SHIPPED 2026-08-28
 
 It currently holds: tab state, crop/aspect logic, zoom/pan gesture math

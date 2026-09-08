@@ -94,11 +94,15 @@ private struct FilmstripCell: View {
             // gating on decode failure alone misses an already-cached
             // photo whose file was deleted afterward).
             if isMissing {
+                // D6 (IMPROVEMENTS.md): this row's own `.accessibilityLabel`
+                // would previously have announced "Missing" on its own, but
+                // the cell-wide `.accessibilityElement(children: .ignore)`
+                // added below discards it as a child — folded into the
+                // cell's own label instead (see below) so nothing regresses.
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 14))
                     .foregroundStyle(.orange)
                     .frame(width: cellSize, height: cellSize)
-                    .accessibilityLabel("Missing")
             } else if let image {
                 // `.frame` BEFORE `.clipShape` — same load-bearing ordering
                 // as `LibraryThumbnailCell` (see its own doc comment):
@@ -124,6 +128,16 @@ private struct FilmstripCell: View {
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+        // D6 (IMPROVEMENTS.md): same gap as `LibraryThumbnailCell` — an
+        // `.onTapGesture` on a plain view isn't AT-actionable, the
+        // thumbnail is `Image(decorative:)` (deliberately silent), and
+        // "current photo" is an accent-color stroke only. `children:
+        // .ignore` (not `.contain`) since this cell, unlike the Library
+        // grid's, has no child controls of its own to preserve.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(isMissing ? "\(photo.filename), missing" : photo.filename)
+        .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : [.isButton])
+        .accessibilityAction { onTap() }
         .task(id: photo.path) {
             // Reset immediately — see `LibraryThumbnailCell`'s own
             // `.task(id:)` for why a reused cell must not carry over the

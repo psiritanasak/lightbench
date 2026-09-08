@@ -148,4 +148,89 @@ final class PhotoImporterTests: XCTestCase {
 
         XCTAssertNil(PhotoImporter.scanFolderTree(at: root))
     }
+
+    // MARK: - confirmedActiveFolderRoot (D5, IMPROVEMENTS.md — missing-file detection)
+
+    func testConfirmedActiveFolderRootMatchesAPhotoDirectlyUnderAnActiveFolder() {
+        let activeFolders: Set<String> = ["/Users/x/Trip"]
+
+        XCTAssertEqual(
+            PhotoImporter.confirmedActiveFolderRoot(
+                forPhotoAt: "/Users/x/Trip/photo.jpg", activeFolders: activeFolders
+            ),
+            "/Users/x/Trip"
+        )
+    }
+
+    /// Folder-tree imports only bookmark the ROOT — a photo several levels
+    /// deep under that root must still match.
+    func testConfirmedActiveFolderRootMatchesAPhotoInANestedSubfolder() {
+        let activeFolders: Set<String> = ["/Users/x/Trip"]
+
+        XCTAssertEqual(
+            PhotoImporter.confirmedActiveFolderRoot(
+                forPhotoAt: "/Users/x/Trip/Day1/Morning/photo.jpg", activeFolders: activeFolders
+            ),
+            "/Users/x/Trip"
+        )
+    }
+
+    func testConfirmedActiveFolderRootIsNilWhenNoFolderIsActive() {
+        XCTAssertNil(
+            PhotoImporter.confirmedActiveFolderRoot(forPhotoAt: "/Users/x/Trip/photo.jpg", activeFolders: [])
+        )
+    }
+
+    /// The reason for the `+ "/"` suffix in the implementation: a naive
+    /// `hasPrefix` without it would wrongly match a sibling folder that
+    /// merely shares a string prefix.
+    func testConfirmedActiveFolderRootDoesNotMatchASimilarlyNamedSiblingFolder() {
+        let activeFolders: Set<String> = ["/Users/x/Trip"]
+
+        XCTAssertNil(
+            PhotoImporter.confirmedActiveFolderRoot(
+                forPhotoAt: "/Users/x/Trip2/photo.jpg", activeFolders: activeFolders
+            )
+        )
+    }
+
+    /// Reviewer-flagged gap: `activeFolders` entries come from `URL.path`,
+    /// which never carries a trailing slash — but pin the assumption
+    /// directly, since the whole prefix check rests on it.
+    func testConfirmedActiveFolderRootIsNilWhenActiveFolderHasATrailingSlash() {
+        let activeFolders: Set<String> = ["/Users/x/Trip/"]
+
+        XCTAssertNil(
+            PhotoImporter.confirmedActiveFolderRoot(
+                forPhotoAt: "/Users/x/Trip/photo.jpg", activeFolders: activeFolders
+            ),
+            "activeFolders entries are assumed never to carry a trailing slash"
+        )
+    }
+
+    /// Degenerate case: a photo path can never legitimately EQUAL an
+    /// active folder's own path (a folder isn't a photo file), but the
+    /// prefix check must not match this either.
+    func testConfirmedActiveFolderRootIsNilWhenPhotoPathEqualsTheActiveFolder() {
+        let activeFolders: Set<String> = ["/Users/x/Trip"]
+
+        XCTAssertNil(
+            PhotoImporter.confirmedActiveFolderRoot(forPhotoAt: "/Users/x/Trip", activeFolders: activeFolders)
+        )
+    }
+
+    /// Two active roots can both match the same photo (a flat import of
+    /// `/Trip/Day1` followed later by a tree import of `/Trip` itself puts
+    /// BOTH in `activeFolders`) — the longest (most specific) match must
+    /// win deterministically, not whichever `Set` happens to iterate first.
+    func testConfirmedActiveFolderRootPicksTheLongestMatchWhenMultipleRootsMatch() {
+        let activeFolders: Set<String> = ["/Users/x/Trip", "/Users/x/Trip/Day1"]
+
+        XCTAssertEqual(
+            PhotoImporter.confirmedActiveFolderRoot(
+                forPhotoAt: "/Users/x/Trip/Day1/photo.jpg", activeFolders: activeFolders
+            ),
+            "/Users/x/Trip/Day1"
+        )
+    }
 }

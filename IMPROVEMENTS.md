@@ -460,6 +460,42 @@ shape. 2 rounds, FIX FIRST → APPROVE. 522 tests (3 new). **Live-verified
 by the user** — the toolbar menu appears once photos are checked in the
 Library grid and adding to a collection works as expected.
 
+**Missing-file detection (D5's remaining 3rd part) shipped 2026-09-08**,
+closing out D5 entirely. View-layer only, computed live per cell-appearance
+— deliberately no DB migration/persisted `isMissing` column (a persisted
+flag would need unsettled answers to "when is it re-verified, who clears
+it," and would make a false positive permanent across relaunches instead
+of scoped to one cell). `LibraryThumbnailCell` and `FilmstripCell` (the
+Editor's own filmstrip — fixed too, since it shares the identical
+"spins forever on a permanent decode failure" bug) now show a "Missing"
+placeholder instead of an indefinite spinner once a thumbnail decode is
+confirmed permanently failed. The core design risk: this app is fully
+sandboxed, and a folder's security-scoped bookmark can fail to
+(re-)activate SILENTLY — from the process's point of view, "file exists
+but sandbox access isn't active" and "file genuinely deleted" are
+indistinguishable, so a naive `fileExists` check would flag an entire
+folder of present photos as missing the moment its bookmark has any
+hiccup. Mitigated with a new `PhotoImporter.confirmedActiveFolderRoot(forPhotoAt:activeFolders:)`
+(pure, unit-tested) gating on `CatalogModel.activeFolders`, plus a new
+`CatalogModel.isPhotoConfirmedMissing(_:)` that ALSO reverifies the
+matched root itself is still reachable (not just that it was activated at
+some point) before trusting a negative result on the photo — both
+filesystem checks run off the main actor via `Task.detached`, since the
+one case they run is exactly the slow-filesystem path (a stalled network
+mount or spun-down external drive). Reviewer (Opus 5): 2 rounds, FIX FIRST
+→ APPROVE. Round 1 caught the real gap in the design — `activeFolders` is
+insert-only and never pruned, so a root that WAS active but later became
+unreachable (ejected volume, deleted/renamed import folder) would read as
+"confirmed access" when it no longer holds, flagging that entire folder's
+photos as missing; fixed by having the pure gate return the matched root
+itself (not just a `Bool`) so the caller can reverify it. Also caught the
+main-thread `stat` risk and a stale-`isMissing`-on-cell-reuse bug, both
+fixed. Small non-blocking polish applied after APPROVE: fail-closed
+operand order (checks the photo first, short-circuiting the extra root
+stat in the common present-file case), and deterministic longest-prefix-match
+when multiple active roots nest (was `Set.first`, undefined iteration
+order). 530 tests (11 new). NOT yet live-verified by the user.
+
 ### D6. Accessibility pass over custom controls
 
 Past reviews repeatedly caught accessibility nits (ThinSlider, Adjust

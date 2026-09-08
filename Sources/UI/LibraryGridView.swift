@@ -203,6 +203,13 @@ private struct LibraryThumbnailCell: View {
 
     @State private var image: CGImage?
     @State private var hasEdits = false
+    /// D5 (IMPROVEMENTS.md): true only when the thumbnail decode failed
+    /// AND we've confirmed active security-scoped access to this photo's
+    /// folder AND the file genuinely isn't there — see `.task(id:)` below
+    /// and `CatalogModel.isPhotoConfirmedMissing(_:)`'s own doc comment
+    /// for why all three conditions are required (a bare `fileExists`
+    /// check alone would misreport a sandbox-access hiccup as "deleted").
+    @State private var isMissing = false
 
     var body: some View {
         VStack(spacing: 4) {
@@ -210,14 +217,18 @@ private struct LibraryThumbnailCell: View {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color.gray.opacity(0.2))
                 if image == nil {
-                    // Feedback while the thumbnail decodes — most visible
-                    // right after re-sorting, which scrambles which photos
-                    // land in the LazyVGrid's currently-rendered window,
-                    // so previously off-screen/uncached photos briefly
-                    // show this instead of a silent blank box.
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: cellSize, height: cellSize)
+                    if isMissing {
+                        missingPlaceholder
+                    } else {
+                        // Feedback while the thumbnail decodes — most visible
+                        // right after re-sorting, which scrambles which photos
+                        // land in the LazyVGrid's currently-rendered window,
+                        // so previously off-screen/uncached photos briefly
+                        // show this instead of a silent blank box.
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: cellSize, height: cellSize)
+                    }
                 }
                 if let image {
                     // `.frame(width:height:)` BEFORE `.clipShape` here is
@@ -332,13 +343,37 @@ private struct LibraryThumbnailCell: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .task(id: photo.path) {
+            // Reset immediately: a reused cell carries over `@State` from
+            // whatever photo it PREVIOUSLY showed (same as `image`/
+            // `hasEdits` below), and a stale "Missing" is more alarming
+            // than a stale thumbnail — reviewer-caught.
+            isMissing = false
             // `async let` so the cheap synchronous sidecar stat doesn't
             // serialize behind the (much slower) thumbnail decode.
             async let thumbnail = catalog.thumbnail(for: photo)
             let sidecarURL = ImageDocumentModel.sidecarURL(for: URL(fileURLWithPath: photo.path))
             hasEdits = FileManager.default.fileExists(atPath: sidecarURL.path)
-            image = await thumbnail
+            let decoded = await thumbnail
+            image = decoded
+            if decoded == nil {
+                isMissing = await catalog.isPhotoConfirmedMissing(photo)
+            }
         }
+    }
+
+    /// D5 (IMPROVEMENTS.md): replaces the indefinite `ProgressView` spinner
+    /// once a decode failure is confirmed permanent (the file is
+    /// genuinely gone, not just slow to load) — see `.task(id:)` above.
+    private var missingPlaceholder: some View {
+        VStack(spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 20))
+                .foregroundStyle(.orange)
+            Text("Missing")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: cellSize, height: cellSize)
     }
 
     /// D3 (IMPROVEMENTS.md): same circular-backdrop visual language the

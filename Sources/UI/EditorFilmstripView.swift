@@ -79,15 +79,26 @@ private struct FilmstripCell: View {
     let onTap: () -> Void
 
     @State private var image: CGImage?
+    /// D5 (IMPROVEMENTS.md): mirrors `LibraryThumbnailCell`'s own field —
+    /// same underlying "decode fails forever" bug, same gated check.
+    @State private var isMissing = false
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 4)
                 .fill(Color.gray.opacity(0.2))
             if image == nil {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: cellSize, height: cellSize)
+                if isMissing {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.orange)
+                        .frame(width: cellSize, height: cellSize)
+                        .accessibilityLabel("Missing")
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: cellSize, height: cellSize)
+                }
             }
             if let image {
                 // `.frame` BEFORE `.clipShape` — same load-bearing ordering
@@ -111,7 +122,15 @@ private struct FilmstripCell: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .task(id: photo.path) {
-            image = await catalog.thumbnail(for: photo)
+            // Reset immediately — see `LibraryThumbnailCell`'s own
+            // `.task(id:)` for why a reused cell must not carry over the
+            // previous photo's `isMissing` value.
+            isMissing = false
+            let decoded = await catalog.thumbnail(for: photo)
+            image = decoded
+            if decoded == nil {
+                isMissing = await catalog.isPhotoConfirmedMissing(photo)
+            }
         }
     }
 }

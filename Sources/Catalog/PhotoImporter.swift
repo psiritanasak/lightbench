@@ -85,4 +85,58 @@ enum PhotoImporter {
         }
         return FolderScanNode(url: folder, imageFiles: imageFiles, children: children)
     }
+
+    // MARK: - Missing-file detection (D5, IMPROVEMENTS.md)
+
+    /// Returns the root in `activeFolders` that `path` sits under, if any —
+    /// `nil` if none matches. `activeFolders` is the set of root folder
+    /// paths `CatalogModel` currently holds confirmed security-scoped
+    /// access to (see `CatalogModel.activateKnownFolders`). A photo whose
+    /// file isn't under any confirmed-active folder can't be reliably
+    /// checked for on-disk existence: a bookmark that failed to activate
+    /// (or went stale) looks identical to "file deleted" from this
+    /// process's point of view — macOS sandboxing deliberately doesn't
+    /// leak the difference.
+    ///
+    /// Returning the matched ROOT (not just a `Bool`) matters,
+    /// reviewer-caught: `activeFolders` is insert-only — nothing ever
+    /// removes an entry once `startAccessingSecurityScopedResource()`
+    /// succeeds, even if the volume is later ejected or the root itself
+    /// is deleted/renamed out from under the app mid-session. So "this
+    /// root is in `activeFolders`" only proves access was granted at SOME
+    /// point this session, not that it's reachable right now. The caller
+    /// (`CatalogModel.isPhotoConfirmedMissing(_:)`) additionally checks
+    /// that the returned root itself still exists before trusting a
+    /// negative existence check on the photo — "root present, this one
+    /// file gone" is a genuine delete; "root itself gone/unmounted" is
+    /// unverifiable and must not be reported as a missing photo.
+    ///
+    /// Extracted as a `static` function taking `activeFolders` explicitly,
+    /// not just a `CatalogModel` instance method, so it's directly
+    /// unit-testable with plain `Set<String>` literals —
+    /// `CatalogModel.init(database:)` deliberately skips
+    /// `activateKnownFolders()` in tests (it touches `UserDefaults`/real
+    /// security scopes), so there'd be no way to exercise this gating
+    /// logic through the model alone.
+    ///
+    /// The `+ "/"` suffix matters: without it, an active folder
+    /// `/Users/x/Trip` would wrongly match a sibling
+    /// `/Users/x/Trip2/photo.jpg`. Folder-tree imports only bookmark the
+    /// ROOT (`CatalogModel.importFolderTree`), so a photo several levels
+    /// deep under that root must still match — a plain prefix check
+    /// (not exact-parent-only) is what makes that work.
+    ///
+    /// When MULTIPLE active roots match (e.g. a flat import of
+    /// `/Trip/Day1` followed later by a tree import of `/Trip` itself —
+    /// both end up in `activeFolders`), picks the LONGEST matching prefix
+    /// rather than an arbitrary one — reviewer-caught: `Set` has no
+    /// defined iteration order, so `.first` would make the result (and
+    /// therefore whether a deleted `Day1` photo reads as missing) depend
+    /// on hash-seed-driven iteration order rather than which root is
+    /// actually the nearest, most specific match.
+    static func confirmedActiveFolderRoot(forPhotoAt path: String, activeFolders: Set<String>) -> String? {
+        activeFolders
+            .filter { path.hasPrefix($0 + "/") }
+            .max(by: { $0.count < $1.count })
+    }
 }

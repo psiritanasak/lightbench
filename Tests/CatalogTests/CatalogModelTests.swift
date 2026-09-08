@@ -361,4 +361,48 @@ final class CatalogModelTests: XCTestCase {
             await model.selectedFilter == .allPhotos
         }
     }
+
+    // MARK: - Missing-file detection (D5, IMPROVEMENTS.md)
+
+    /// End-to-end coverage for the composite gate `isPhotoConfirmedMissing`
+    /// applies — `PhotoImporterTests` already pins the pure prefix-match
+    /// alone, but not the root-liveness check layered on top of it
+    /// (reviewer-caught: `activeFolders` is insert-only, so a root that
+    /// was active but is no longer reachable — an ejected volume, a
+    /// deleted/renamed import folder — must not make every photo under it
+    /// read as individually deleted).
+    func testIsPhotoConfirmedMissingRequiresBothAnActiveRootAndAnAbsentFile() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CatalogModelTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let presentURL = tempDir.appendingPathComponent("present.jpg")
+        XCTAssertTrue(
+            FileManager.default.createFile(atPath: presentURL.path, contents: Data()),
+            "test fixture setup must actually create the file"
+        )
+        let missingURL = tempDir.appendingPathComponent("gone.jpg") // catalogued, never actually created
+
+        _ = try await database.importPhotos(at: [presentURL, missingURL])
+        let model = await makeModel()
+        model.activeFolders = [tempDir.path]
+        let present = try XCTUnwrap(model.photos.first { $0.filename == "present.jpg" })
+        let missing = try XCTUnwrap(model.photos.first { $0.filename == "gone.jpg" })
+
+        var isMissing = await model.isPhotoConfirmedMissing(present)
+        XCTAssertFalse(isMissing, "a photo whose file exists must never be reported missing")
+
+        isMissing = await model.isPhotoConfirmedMissing(missing)
+        XCTAssertTrue(isMissing, "a photo under an active, reachable root with no file on disk IS missing")
+
+        // The regression this test exists to pin: the root itself becomes
+        // unreachable (simulating an ejected volume / deleted import
+        // folder) while `activeFolders` still lists it (never pruned).
+        try FileManager.default.removeItem(at: tempDir)
+        isMissing = await model.isPhotoConfirmedMissing(missing)
+        XCTAssertFalse(
+            isMissing,
+            "an unreachable ROOT must not make its photos read as individually deleted"
+        )
+    }
 }

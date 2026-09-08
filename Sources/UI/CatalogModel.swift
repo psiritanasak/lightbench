@@ -135,7 +135,13 @@ final class CatalogModel: ObservableObject {
     /// twice), since there is no matching `stop` anywhere in this file
     /// (see `activateKnownFolders`'s doc comment) — an unguarded repeat
     /// call would just accumulate unmatched starts for no benefit.
-    private var activeFolders: Set<String> = []
+    ///
+    /// Internal, not `private`: `CatalogModelTests` seeds this directly
+    /// with a real temp-file root to exercise `isPhotoConfirmedMissing(_:)`
+    /// end-to-end (D5, IMPROVEMENTS.md) — `init(database:)`'s testing seam
+    /// deliberately skips `activateKnownFolders()` (real security scopes,
+    /// `UserDefaults`), so there's no other way to populate this in a test.
+    var activeFolders: Set<String> = []
 
     private let thumbnailCache = ThumbnailCache()
 
@@ -299,6 +305,56 @@ final class CatalogModel: ObservableObject {
     /// at `init`) has resolved its stored bookmark.
     func thumbnail(for photo: Photo) async -> CGImage? {
         await thumbnailCache.thumbnail(for: photo)
+    }
+
+    /// True only if `photo`'s file is confirmed genuinely missing — used by
+    /// the Library grid and Editor filmstrip to distinguish "deleted" from
+    /// "still decoding" or "can't currently verify" once a thumbnail
+    /// decode fails. Three things all have to hold: `photo.path` sits
+    /// under a folder we hold confirmed security-scoped access to
+    /// (`PhotoImporter.confirmedActiveFolderRoot`), that ROOT folder
+    /// itself is still reachable right now (reviewer-caught: `activeFolders`
+    /// is insert-only and never pruned when a volume is later ejected or
+    /// the root is deleted/renamed mid-session, so membership alone only
+    /// proves access was granted at some point, not that it still holds),
+    /// and the photo's own file doesn't exist.
+    ///
+    /// Note: the stored bookmark path (`activeFolders`/`folderBookmarks`
+    /// use the bookmark KEY, not `resolved.path` — see `activateKnownFolders`)
+    /// means a moved/renamed root fails this check even though its
+    /// CONTENTS may still be reachable at the new location — that's a
+    /// false NEGATIVE (a genuine deletion under a moved root goes
+    /// undetected), never a false positive, so it's an accepted gap, not
+    /// a bug: this function only ever errs toward under-reporting
+    /// "Missing," never over-reporting it.
+    ///
+    /// Both filesystem checks run inside `Task.detached`, off the
+    /// `MainActor` this class is isolated to — reviewer-caught: a `stat`
+    /// on a spun-down external drive or dead network mount can block for
+    /// seconds, and this runs on exactly that slow-filesystem path (the
+    /// one case a decode has already failed). `folders`/`path`/`root` are
+    /// captured as local values before entering the detached closure so
+    /// it never touches `self`, matching this app's established
+    /// isolation-capture discipline (see `ThumbnailCache`'s own doc
+    /// comment on the same hazard) — a plain `Task {}` would inherit this
+    /// `@MainActor` class's isolation regardless of captures and put the
+    /// `stat` right back on the main thread, so `Task.detached` is
+    /// required here, not just a style choice.
+    ///
+    /// Checks the photo's own file FIRST, the root second, short-circuited
+    /// with `&&` — reviewer-caught: the reverse order has a wider window
+    /// for a root that's unmounted/deleted BETWEEN the two stats to read
+    /// as "not missing" instead of "can't verify," and this order also
+    /// skips the extra root stat entirely in the common case (file
+    /// present).
+    func isPhotoConfirmedMissing(_ photo: Photo) async -> Bool {
+        let folders = activeFolders
+        guard let root = PhotoImporter.confirmedActiveFolderRoot(forPhotoAt: photo.path, activeFolders: folders)
+        else { return false }
+        let path = photo.path
+        return await Task.detached {
+            !FileManager.default.fileExists(atPath: path) && FileManager.default.fileExists(atPath: root)
+        }.value
     }
 
     /// Drops the cached thumbnail for the photo at `url` — called when

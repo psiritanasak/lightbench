@@ -5337,3 +5337,111 @@ instance from before this session's fixes was still running, which is
 likely why the menu wasn't visible on the first try), the toolbar menu
 appears once photos are checked in the Library grid and adding to a
 collection works.
+
+### Missing-file detection (D5's remaining 3rd part, shipped 2026-09-08)
+
+Closes out D5 entirely (remove-from-catalog and rename/delete-collections
+already shipped). Before this, a photo whose file was deleted from disk
+after import spun forever in the Library grid — `image == nil` always
+fell back to `ProgressView`, with no way to distinguish "still decoding"
+from "will never decode."
+
+**Scoped view-layer-only, computed live per cell-appearance** — no DB
+migration, no persisted `isMissing` column. Deliberate: a persisted flag
+would need answers this codebase hasn't settled (when is it re-verified,
+who clears it), and would make one false positive permanent across
+relaunches instead of scoped to a single cell's next appearance. Catalog
+rows and on-disk files are already expected to be able to diverge (the
+remove-from-catalog session's own write-up says so explicitly), so
+nothing here auto-removes a missing photo's row — the existing "Remove
+from Library" menu action already covers that.
+
+**The one real hazard, designed around up front, not discovered later**:
+this app is fully sandboxed (only `files.user-selected.read-write`), and
+each imported folder's access depends on a security-scoped bookmark that
+`CatalogModel.activateKnownFolders()` re-activates at launch —
+`startAccessingSecurityScopedResource()` can fail SILENTLY, and a
+stale/unresolvable bookmark is dropped just as silently, with no
+user-visible signal either way. From the process's own point of view,
+"file exists but sandbox access isn't currently active" and "file
+genuinely deleted" are indistinguishable by a bare `fileExists` check —
+macOS sandboxing deliberately doesn't leak the difference. A naive
+implementation would therefore flag an entire folder of perfectly-present
+photos as "Missing" the instant its bookmark had any activation hiccup —
+actively worse than the spinner it replaces.
+
+**Mitigation**: new `PhotoImporter.confirmedActiveFolderRoot(forPhotoAt:activeFolders:)`
+— pure, unit-tested, taking `CatalogModel.activeFolders` (the set of root
+folder paths currently holding confirmed security-scoped access)
+explicitly, rather than being a `CatalogModel` instance method, so it's
+directly testable with plain `Set<String>` literals (`CatalogModel.init(database:)`'s
+testing seam deliberately skips the real `activateKnownFolders()` — it
+touches `UserDefaults`/real security scopes). Returns the matched root
+(not just a `Bool`) via a longest-matching-prefix search — a photo whose
+path isn't under any confirmed-active root can't be reliably checked at
+all. New `CatalogModel.isPhotoConfirmedMissing(_:)` uses it: only once a
+thumbnail decode has already failed does it check (off the main actor,
+via `Task.detached`, since this is exactly the slow-filesystem path) that
+the photo's own file is absent AND the matched root itself is still
+reachable. `LibraryThumbnailCell` (`LibraryGridView.swift`) and
+`FilmstripCell` (`EditorFilmstripView.swift` — fixed too, since it shares
+the identical bug and would otherwise visibly disagree with a fixed grid
+for the same file) both gained an `isMissing` `@State`, computed in their
+existing `.task(id:)`, swapping the indefinite spinner for a small
+"Missing" placeholder (orange `exclamationmark.triangle.fill` + text in
+the grid, icon-only in the filmstrip) once confirmed.
+
+Reviewer (Opus 5): 2 rounds, FIX FIRST → APPROVE.
+- **Round 1** caught the real gap the design's own risk analysis had
+  missed: `activeFolders` is insert-only — nothing ever removes an entry
+  once activation succeeds, even if the volume is later ejected or the
+  imported root itself is deleted/renamed mid-session. So "this root is
+  in `activeFolders`" only proves access was granted at SOME point this
+  session, not that it still holds now — the exact false-positive class
+  the design set out to prevent, reached by a different route (a root
+  that goes stale AFTER activation, not one that failed TO activate).
+  Fixed by having the pure function return the matched root itself (not
+  a `Bool`), so the caller can additionally verify that root is still
+  reachable before trusting a negative result on the photo. Also caught:
+  the filesystem checks running synchronously on the `@MainActor` (a
+  `stat` on a spun-down external drive or dead network mount can block
+  for seconds — exactly the failure path this feature runs on) — fixed
+  with `Task.detached`, capturing `root`/`photo.path` as local values so
+  the closure never touches `self`; `isMissing` not being reset when a
+  `.task(id:)`-recycled cell switches to a different photo, so a photo
+  following a "Missing" one could transiently show "Missing" itself —
+  fixed with an explicit reset at task start; and a missing accessibility
+  label on the filmstrip's icon-only placeholder — fixed.
+- **Round 2 APPROVE**, with small non-blocking polish applied anyway
+  before commit: fail-closed/short-circuiting operand order (check the
+  photo's own file first, the root second — narrows the unmount-between-
+  the-two-stats window and skips the extra root stat in the common
+  present-file case); deterministic longest-matching-prefix instead of
+  `Set.first` when multiple active roots nest (a flat import of a
+  subfolder followed later by a tree import of its parent puts both in
+  `activeFolders` — `Set` has no defined iteration order, so which root
+  "won" could silently vary by launch); a stale doc-comment reference to
+  the old (pre-round-1) function name; and a discarded `Bool` result in
+  the new end-to-end test's fixture setup.
+- `CatalogModel.activeFolders` was widened from `private` to internal
+  (default) access specifically so `CatalogModelTests` can seed it
+  directly with a real temp-file root — the only way to exercise
+  `isPhotoConfirmedMissing(_:)` end-to-end given the model's testing seam
+  skips real security scopes. Reviewer confirmed this widening is
+  contained (three mutation sites, all inside `CatalogModel`, all
+  MainActor-isolated).
+
+530 tests (11 new): 6 in `PhotoImporterTests` for the pure gate
+(direct child, nested subfolder, no active folders, sibling-folder
+false-match guard, trailing-slash guard, longest-match-among-nested-roots),
+1 end-to-end in `CatalogModelTests` (`testIsPhotoConfirmedMissingRequiresBothAnActiveRootAndAnAbsentFile`,
+using a real temp directory — seeds it as an active root, confirms a
+present file isn't flagged, an absent one is, then DELETES the temp
+directory itself and re-confirms the same absent file is no longer
+flagged — the direct regression pin for the round-1 fix). No new tests
+for the SwiftUI cell bodies themselves, matching this codebase's
+established convention that plain View-body logic isn't unit-tested,
+only extracted pure logic is. **NOT yet live-verified by the user** — next
+step is deleting a real file from an imported folder while the app is
+running and confirming the grid cell shows "Missing" while sibling
+photos in the same folder render normally.

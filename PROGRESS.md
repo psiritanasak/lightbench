@@ -5687,6 +5687,164 @@ Everything below is committed on `master`; working tree is clean as of
 D5 (Library management gaps) is now **fully complete** — all three parts
 shipped across this and earlier sessions.
 
-**Next step**: D6, accessibility pass over custom controls (see
-`IMPROVEMENTS.md`'s own D6 entry) — not yet started. Per CLAUDE.md
-workflow rules, start that session with Plan Mode.
+### D6: Accessibility pass over custom controls (complete, live-verified 2026-09-08)
+
+A full survey (Explore agent) of `Sources/UI/` found the app's entire
+accessibility surface was 7 modifier call sites in 3 files (`ThinSlider`,
+`EditControlRows`, `EditorFilmstripView`) — every other custom control
+(built from `Button`+bare SF
+Symbol, `Color.clear`+gesture, `Canvas`, or `.onTapGesture`) was silent,
+stateless, or unreachable to VoiceOver. Confirmed with the user
+(AskUserQuestion) to do a full declarative pass across every gap found,
+not just D6's 4 named controls, and to verify live via the real
+Accessibility API rather than a manual VoiceOver walk.
+
+**What shipped** (~13 files, additive-only — zero behavior change for
+mouse/pointer users): `StarRatingRow` collapsed from 5 unlabeled buttons
+into one `accessibilityElement` with a value ("N of 5 stars") and an
+adjustable action; the Library grid's selection checkbox/flag button/
+folder-options menu/edited badge all labeled (the filename caption below
+the thumbnail is hidden instead, to avoid double-announcing it — the
+thumbnail element itself now carries the filename as its label), with the
+whole grid cell restructured so its thumbnail becomes ONE focusable "open"
+element (a sibling of the checkbox, not a `.contain`-container-level
+action — see the round-1/round-2 fix below for why); the Editor filmstrip
+cell; Selective Color's 8 band swatches; the preset delete button; armed-
+state buttons (WB pick, Fix Red-Eye, Compare menu, Filmstrip toggle,
+`EditorTabBar` tab pills) now expose `.isSelected` instead of color-tint
+only; Crop's aspect-preset rows; `EditSliderRow`'s click-to-type readout
+(previously a bare `Text` + tap gesture, the most invisible affordance in
+the app) now announces as an action; and a new adjustable action on
+`CompareDividerOverlay`, reusing step math extracted from `ThinSlider`
+into `ThinSliderGeometry.incremented`/`decremented` (unit-tested). Five
+overlay sites (`CropOverlayView`, `RedEyeOverlayView`, `PanOverlay`,
+`HistogramView`, and the WB tap-capture overlay inline in `ContentView`)
+got deliberate, documented `.accessibilityHidden(true)`
+— mouse-only spatial gestures or pure decoration, each comment naming the
+already-existing alternative AT path where one exists (crop's 4 insets
+stay adjustable via `CropTabView`'s `EditSliderRow`s). `ThinSlider` gained
+an optional `valueDescription` closure so rows announce their real
+formatted value (e.g. "6500K", "+0%") instead of an always-0–100%
+readout — `EditSliderRow` passes its existing `format` closure. New
+IMPROVEMENTS.md **D8** entry tracks the 3 mouse-only spatial overlays
+(WB eyedropper tap, red-eye placement, pan/zoom-reset) explicitly
+deferred as new-interaction-design work, not labeling.
+
+**Reviewer (Opus 5): 3 rounds, FIX FIRST → FIX FIRST → APPROVE** — every
+round caught real issues, none of them cosmetic:
+- **Round 1**: `EditorFilmstripView`'s missing-photo cell had its own
+  `.accessibilityLabel("Missing")` silently discarded once the cell got
+  `children: .ignore` — fixed by folding `isMissing` into the cell's own
+  label. The whole Library grid cell had `.accessibilityElement(children:
+  .contain)` + `.isButton` + `.accessibilityAction` all together — flagged
+  as an unreliable combination (VoiceOver navigates INTO a `.contain`
+  container rather than activating it) — fixed by moving the "open"
+  label/trait/action onto the thumbnail content specifically (wrapped so
+  it's one focusable child, a sibling of the checkbox `Button`, inside the
+  same `ZStack`), leaving the outer container as a bare `.contain` with no
+  trait/action of its own. Also: `StarRatingRow`'s adjustable action fired
+  a redundant DB write at the 0/5 bounds (guarded); `ThinSliderGeometry`
+  duplicated its own `/20` step constant across `incremented`/
+  `decremented` (extracted to a private `step(in:)`); the thumbnail-size
+  slider's value truncated instead of rounded; `EditSliderRow`'s readout
+  and its `ThinSlider` both announced the identical value (readout
+  relabeled to an action-only "Type X value").
+- **Round 2**: caught that fixing round 1 by wrapping the thumbnail
+  content in a `Group` was still fragile — SwiftUI applies a `Group`'s
+  modifiers to EACH child individually, not to the group as a whole, so
+  it only behaved as one element because the underlying `if`/`else
+  if`/`else` happens to always yield exactly one child; switched to a
+  real `ZStack` so the "one element" intent is structural, not incidental.
+  Also caught that a doc-comment claim ("tracked as a follow-up") pointed
+  at an IMPROVEMENTS.md entry that didn't exist yet — the same defect
+  class as round 1's regression, just relocated into prose — fixed by
+  actually writing D8 before commit. Smaller nits: the filename was still
+  announced twice (thumbnail label + visible caption) — hidden the
+  caption from accessibility; the edited badge relied on label
+  propagation instead of its own explicit element; the flag button used a
+  different state idiom (`accessibilityValue`) than the checkbox
+  (`.isSelected`) for the same binary-state shape — unified on
+  `.isSelected`.
+
+**Live AX-tree verification (2026-09-08)**: the user's standing rule
+requires asking permission per task before any screen-automation/AT
+driving — asked via AskUserQuestion up front, approved for this task.
+First attempt used `System Events`/AppleScript, and appeared to show
+several fixes NOT working (StarRatingRow still 5 separate buttons, the
+new thumbnail "open" button missing entirely, no labels surfacing on any
+custom button) — before concluding those were real regressions, checked
+against an already-shipped, previously-verified-live control
+(`ThinSlider`'s own adjustable action) using the same method, which
+ALSO appeared broken. That ruled out the app: `System Events`' Apple
+Event bridge simply doesn't expose `AXTitle`/`AXDescription` for these
+SwiftUI-composed elements at all (confirmed: the attribute doesn't exist
+in `AXUIElementCopyAttributeNames`' own list, not merely empty) — a
+tooling blind spot, not an app defect. Also separately caught: the
+running `PhotoApp.app` process during the first inspection pass predated
+today's rebuild entirely (stale binary from an earlier launch), which
+would have invalidated any result either way — quit and relaunched the
+freshly-built binary before drawing any conclusion.
+Switched to a small `ApplicationServices`/`AXUIElement`-based Swift CLI
+(the same underlying API VoiceOver itself uses) against the fresh
+process, which confirmed every fix genuinely works at runtime:
+- Library grid: thumbnail element's `AXDescription` = the photo's
+  filename, role `AXButton`; `AXPress` on it genuinely opened the photo
+  in the Editor (window title changed). Checkbox labeled "Select photo".
+  `StarRatingRow` is ONE `AXUnknown` element, `AXAttributedDescription` =
+  "Rating", `AXValueDescription` = "No rating"/"N of 5 stars"; `AXIncrement`/
+  `AXDecrement` genuinely changed the persisted rating (verified via a
+  fresh process query after each action, then reverted to 0 to leave the
+  library untouched). Flag button labeled "Flag"; folder menu labeled
+  "Photo options"; edited badge labeled "Edited".
+- Editor: `EditSliderRow`'s readout announces as "Type Temperature value"
+  (action-only, no duplicate value). The `ThinSlider` value fix confirmed
+  directly: Temperature announces `AXValueDescription` = "6500K" (not
+  "50%"); Black Point (a percent-formatted row) announces "+0%", matching
+  its own on-screen format exactly.
+- Armed-state traits confirmed structurally, not just visually: "Pick
+  White Balance" has NO `AXSelected` attribute at rest, gains
+  `AXSelected = 1` after `AXPress` arms it, and loses it again on
+  disarm. `EditorTabBar`'s "Adjust" pill correctly shows `AXSelected = 1`
+  while active (a bonus find — this trait wasn't in the original survey's
+  Selective Color/Compare/Filmstrip list but uses the identical pattern).
+  Selective Color's "Red" swatch (the default band) correctly shows
+  `AXSelected = 1`.
+- The `.accessibilityHidden(true)` overlays are moot in practice, not
+  just successfully hidden: the image pane's `Color.clear`+gesture
+  overlays (WB tap, red-eye, pan) contribute ZERO accessibility children
+  regardless of the modifier — confirmed by diffing the pane's child
+  count with WB-pick armed vs. disarmed (4 children either time, all 4
+  being the `EditorTabBar` pills) — matching the reviewer's own round-2
+  non-blocking note that `Color.clear`/`Path`/`Canvas` don't vend
+  accessibility elements on this platform in the first place. The hidden
+  modifiers stay as documentation of intent, not as something load-bearing.
+
+**Not independently live-verified this pass** (reviewed statically only,
+same "covered by construction" convention this file uses elsewhere):
+`CompareDividerOverlay`'s adjustable action (identical `ThinSliderGeometry`
+recipe as the already-verified `StarRatingRow`/`ThinSlider`, not
+independently re-tested through Compare Split mode); the folder menu's
+per-collection "member" label (macOS bridges `Menu` content to
+`NSMenuItem`, which the reviewer flagged as commonly ignoring SwiftUI
+accessibility modifiers — not confirmed either way); the filmstrip's
+missing-photo label fold-in (needs a photo whose original file is
+actually absent on disk, not set up this pass).
+
+543 tests (5 new `ThinSliderGeometryTests` cases for the extracted step
+math, up from 538) — consistent with this codebase's standing convention
+that plain SwiftUI `View` bodies aren't unit-tested, only pure extracted
+geometry is.
+
+D6 is now **fully complete**. IMPROVEMENTS.md's D8 (deferred keyboard/AT
+paths for the WB eyedropper/red-eye placement/pan-zoom-reset) is the only
+accessibility work left, and is explicitly out of scope until it gets its
+own interaction-design session.
+
+**Next step**: nothing else is queued from IMPROVEMENTS.md's D-series —
+it's now fully shipped (D1–D6, D8 tracked separately as new work, not a
+gap in D6 itself). Candidates for the next session: **D8** (new
+interaction design, not a quick follow-up — needs its own Plan Mode
+scoping) or **Phase 7** (Local Adjustments/Masking, CLAUDE.md's own
+roadmap item 7 — slice 1 is a performance probe, see that section for
+the full slicing plan). Per CLAUDE.md workflow rules, start either with
+Plan Mode.

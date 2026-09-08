@@ -365,6 +365,179 @@ final class CatalogModel: ObservableObject {
         }.value
     }
 
+    // MARK: - Relocating missing photos (D5 follow-up, IMPROVEMENTS.md)
+
+    /// Presents a FOLDER picker (not a file picker — reviewer-caught, see
+    /// below) for where `photo` was moved to, and updates its catalog row
+    /// to point at the same-named file there. Unlike this class's usual
+    /// local-first-then-resync mutators, this writes to the database
+    /// FIRST and only then reflects the outcome via a full `refresh()` —
+    /// relocate has a real, common failure mode a synchronous local check
+    /// can't detect at all (the destination path may already be claimed
+    /// by a DIFFERENT catalogued row, see `CatalogDatabase.relocatePhotos`'s
+    /// own doc comment), so there's nothing safe to assume optimistically
+    /// ahead of the write.
+    ///
+    /// Known gap, not solved this slice: folder-mirrored collection
+    /// membership (`importFolderTree`) is NOT updated by a relocate — a
+    /// photo keeps its membership in its OLD folder's `PhotoCollection`
+    /// even though `folderPath` no longer contains it, and isn't added to
+    /// the destination folder's collection even if one already exists.
+    /// The sidebar's "Folders" section can therefore list a relocated
+    /// photo under a folder it's no longer physically inside.
+    ///
+    /// A FOLDER picker, not a single-file picker: an earlier draft let the
+    /// user pick the exact file directly, then tried to derive and grant
+    /// access to its PARENT folder — reviewer-caught as very likely a
+    /// silent no-op under this app's sandbox entitlement
+    /// (`files.user-selected.read-write`). Powerbox grants a security
+    /// scope for exactly the item the user picked in the panel; a file
+    /// selection does not extend to its parent directory. Every other
+    /// folder-access grant in this app is a folder the user picked in a
+    /// DIRECTORY-mode panel (`importFolder`, `importFolderTree`,
+    /// `ImageDocumentModel.requestFolderAccess` — the last one's own doc
+    /// comment exists specifically because deriving a parent from an
+    /// already-picked file isn't sufficient). Matching by filename within
+    /// a picked folder (shared with `relocateSelectedPhotos` via
+    /// `PhotoImporter.matchByFilename`) sidesteps the problem entirely —
+    /// same tradeoff as the batch flow: a renamed (not just moved) file
+    /// won't be found this way, accepted for this slice.
+    ///
+    /// Inherited limitation from `isPhotoConfirmedMissing` (the gate that
+    /// controls whether this action is even offered, via the Library
+    /// grid's `isMissing`): it requires the photo's ORIGINALLY-IMPORTED
+    /// folder root to still exist, to distinguish "deleted" from "can't
+    /// verify". So if the user moved/renamed the WHOLE containing folder
+    /// (not just this one file out of an intact folder), the photo never
+    /// reads as "Missing" in the first place, and this action is never
+    /// offered for it. Documented, not solved, this slice.
+    func relocatePhoto(_ photo: Photo) async {
+        guard let id = photo.id, let database else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the folder \"\(photo.filename)\" was moved to."
+        panel.prompt = "Locate"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        // Captured, not treated as fatal — `activateFolderAccess` returns
+        // a warning for TWO independent failure modes, only one of which
+        // actually blocks this relocate: if only the BOOKMARK write
+        // failed (access still holds for this session,
+        // `activateFolderAccess`'s own doc comment), the relocate can
+        // still proceed; only a failed `startAccessingSecurityScopedResource()`
+        // means we truly can't read the folder. Folded into the final
+        // summary instead of short-circuiting, matching `importFolder`'s
+        // own established handling of this exact helper's return value
+        // (reviewer-caught: an earlier draft treated ANY warning as fatal
+        // and could silently abandon a relocate that would have worked).
+        let accessWarning = activateFolderAccess(for: folder)
+
+        // Directory enumeration is real, blocking filesystem I/O —
+        // reviewer-caught: must not run on this @MainActor class's own
+        // thread, matching `importFolder`/`importFolderTree`'s existing
+        // `Task.detached` discipline for the identical concern.
+        let (moves, _) = await Task.detached { PhotoImporter.matchByFilename([photo], in: folder) }.value
+        guard let move = moves.first else {
+            importStatusMessage = ["Couldn't find \"\(photo.filename)\" in that folder.", accessWarning]
+                .compactMap { $0 }.joined(separator: " ")
+            return
+        }
+
+        let oldPath = photo.path
+        var summary: String
+        do {
+            let relocated = try await database.relocatePhotos([move])
+            if relocated.contains(id) {
+                invalidateThumbnail(for: URL(fileURLWithPath: oldPath))
+                // Sidecars live next to the ORIGINAL file
+                // (`ImageDocumentModel.sidecarURL(for:)`) and are never
+                // moved by this action — flagged here rather than solved,
+                // since moving one would need write access to the OLD
+                // folder too, not otherwise needed anywhere in this app.
+                summary = "Relocated \"\(photo.filename)\". If it had saved edits, move its sidecar file too to keep them."
+            } else {
+                summary = "Couldn't relocate \"\(photo.filename)\" — a different photo is already catalogued at that location."
+            }
+        } catch {
+            summary = "Couldn't relocate \"\(photo.filename)\"."
+        }
+        if let accessWarning { summary += " \(accessWarning)" }
+        importStatusMessage = summary
+        await refresh()
+    }
+
+    /// Batch counterpart to `relocatePhoto(_:)`. Only the
+    /// currently-selected photos that are ACTUALLY confirmed missing get
+    /// matched — an unrelated selected photo whose file is already
+    /// present is left untouched, not blindly relocated just because a
+    /// same-named file happens to exist in the chosen folder. Same
+    /// inherited "whole folder moved" limitation as `relocatePhoto(_:)`'s
+    /// own doc comment describes.
+    func relocateSelectedPhotos() async {
+        guard let database else { return }
+        let visibleSelectedIDs = Set(photos.compactMap(\.id)).intersection(selectedPhotoIDs)
+        guard !visibleSelectedIDs.isEmpty else { return }
+        let candidates = photos.filter { visibleSelectedIDs.contains($0.id ?? -1) }
+
+        var missing: [Photo] = []
+        for photo in candidates where await isPhotoConfirmedMissing(photo) {
+            missing.append(photo)
+        }
+        guard !missing.isEmpty else {
+            importStatusMessage = "None of the selected photos are missing."
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the folder these \(missing.count) photo(s) were moved to."
+        panel.prompt = "Locate"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        // See `relocatePhoto(_:)`'s own doc comment for why this is
+        // captured and folded into the summary rather than treated as
+        // unconditionally fatal.
+        let accessWarning = activateFolderAccess(for: folder)
+
+        // See `relocatePhoto(_:)`'s own doc comment for why this must not
+        // run on the main actor.
+        let (moves, unmatchedCount) = await Task.detached {
+            PhotoImporter.matchByFilename(missing, in: folder)
+        }.value
+        guard !moves.isEmpty else {
+            importStatusMessage = ["No matching files found in that folder.", accessWarning]
+                .compactMap { $0 }.joined(separator: " ")
+            return
+        }
+
+        var summary: String
+        do {
+            let relocated = try await database.relocatePhotos(moves)
+            for move in moves where relocated.contains(move.photoID) {
+                if let oldPath = candidates.first(where: { $0.id == move.photoID })?.path {
+                    invalidateThumbnail(for: URL(fileURLWithPath: oldPath))
+                }
+            }
+            await refresh()
+            let conflictCount = moves.count - relocated.count
+            summary = "Relocated \(relocated.count) of \(missing.count) photo(s)."
+            if unmatchedCount > 0 { summary += " \(unmatchedCount) not found in that folder." }
+            if conflictCount > 0 { summary += " \(conflictCount) skipped (already catalogued at that location)." }
+            if relocated.count > 0 {
+                // See `relocatePhoto(_:)`'s own doc comment — sidecars
+                // (saved edits) are never moved by this action.
+                summary += " Move any saved-edit sidecar files too, to keep their edits."
+            }
+        } catch {
+            await refresh()
+            summary = "Couldn't relocate the selected photos."
+        }
+        if let accessWarning { summary += " \(accessWarning)" }
+        importStatusMessage = summary
+    }
+
     /// Drops the cached thumbnail for the photo at `url` — called when
     /// that photo's edits are saved (wired from `ImageDocumentModel.
     /// onSidecarSaved` in `ContentView`), so the NEXT time it's decoded

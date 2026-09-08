@@ -233,4 +233,46 @@ final class PhotoImporterTests: XCTestCase {
             "/Users/x/Trip/Day1"
         )
     }
+
+    // MARK: - matchByFilename (D5 follow-up — relocating missing photos)
+
+    private func makePhoto(id: Int64, filename: String) -> Photo {
+        Photo(id: id, path: "/tmp/gone/\(filename)", filename: filename, fileSize: nil, importedAt: Date())
+    }
+
+    func testMatchByFilenameMatchesCaseInsensitively() throws {
+        try touch("Photo.JPG")
+        let photo = makePhoto(id: 1, filename: "photo.jpg")
+
+        let (moves, unmatchedCount) = PhotoImporter.matchByFilename([photo], in: tempDir)
+
+        XCTAssertEqual(moves.count, 1)
+        XCTAssertEqual(moves.first?.photoID, 1)
+        XCTAssertEqual(moves.first?.newPath, tempDir.appendingPathComponent("Photo.JPG").path)
+        XCTAssertEqual(unmatchedCount, 0)
+    }
+
+    func testMatchByFilenameCountsUnmatchedPhotos() throws {
+        try touch("found.jpg")
+        let found = makePhoto(id: 1, filename: "found.jpg")
+        let notFound = makePhoto(id: 2, filename: "missing.jpg")
+
+        let (moves, unmatchedCount) = PhotoImporter.matchByFilename([found, notFound], in: tempDir)
+
+        XCTAssertEqual(moves.map(\.photoID), [1])
+        XCTAssertEqual(unmatchedCount, 1)
+    }
+
+    /// `matchByFilename` reuses `imageFiles(in:)`, which already excludes
+    /// sidecar/non-image files — this just confirms that filtering still
+    /// applies here, not a re-test of `imageFiles(in:)` itself.
+    func testMatchByFilenameIgnoresNonImageFilesInTheFolder() throws {
+        try touch("photo.jpg.photoapp.json") // a sidecar, not an image
+        let photo = makePhoto(id: 1, filename: "photo.jpg.photoapp.json")
+
+        let (moves, unmatchedCount) = PhotoImporter.matchByFilename([photo], in: tempDir)
+
+        XCTAssertTrue(moves.isEmpty)
+        XCTAssertEqual(unmatchedCount, 1)
+    }
 }

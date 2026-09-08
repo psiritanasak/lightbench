@@ -5486,8 +5486,116 @@ reviewer-confirmed as a defensible boundary for this kind of feature, not
 a rationalization — the user's actual reported bug was fully explained by
 the cache-masking defect above, not by this boundary.
 
-**NOT yet live-verified by the user** — next step is deleting a real file
-from an imported folder while the app is running, THEN navigating away
-from the Library and back (or scrolling the cell off/on screen) to
-trigger a re-check, and confirming the grid cell shows "Missing" while
+**Live-verified by the user (2026-09-08)**: after navigating away from the
+Library and back, a deleted file's cell correctly shows "Missing" while
 sibling photos in the same folder render normally.
+
+### Relocate missing photos (single + batch), shipped 2026-09-08
+
+Direct follow-up, requested by the user immediately after confirming
+missing-file detection worked live: "if I moved photo to new location
+... I should be able to fix path to photo in both of a single photo or
+case of I moved multiple photos." A new per-cell "Locate…" menu item
+(`LibraryGridView.swift`, shown only when that cell's own `isMissing` is
+true) and a toolbar "Locate Selected…" batch action
+(`ContentView.swift`, same `!catalog.selectedPhotoIDs.isEmpty` gate as
+"Add to Collection"), both pointing the catalog at a moved photo's new
+location.
+
+**Design**: `Photo.path` is `UNIQUE` in the schema but not the primary
+key, and nothing in this codebase had ever updated an existing row's
+`path` before — every prior write was INSERT, DELETE, or a non-unique
+column UPDATE. New `CatalogDatabase.relocatePhotos(_ moves:
+[(photoID: Int64, newPath: String)]) async throws -> Set<Int64>` handles
+both the single-photo and batch cases with one shared primitive: one
+`dbQueue.write` transaction, fetch-mutate-`update(db)` per pair (not a
+fixed `updateAll` assignment list — see the fileSize fix below), skipping
+(not aborting the whole batch on) any pair whose destination is already
+claimed by a DIFFERENT catalogued row — deliberately different from
+`addPhotos`' all-or-nothing FK-violation precedent, since a naming
+collision here is a plausible, common outcome of a batch move (the
+destination folder may already have been separately imported). New
+`PhotoImporter.matchByFilename(_ photos: [Photo], in folder: URL)` (a
+new pure-ish static function, unit-tested without a live `CatalogModel`,
+following `confirmedActiveFolderRoot`'s own precedent) matches photos to
+same-named files in one picked folder via a lowercased-filename
+dictionary built from the existing shallow `imageFiles(in:)` scan —
+by NAME only, not content; a same-named-but-different file would be
+wrongly adopted, accepted and flagged, not solved (content-hash matching
+is a much bigger feature).
+
+**Reviewer (Opus 5) caught the most significant sandbox bug of this
+whole session, in the first draft, before any live testing**: the
+original single-photo flow let the user pick the exact file directly
+(a FILE-mode `NSOpenPanel`), then tried to derive that file's PARENT
+folder and grant security-scoped access to it. This is very likely a
+silent no-op under this app's sandbox entitlement
+(`files.user-selected.read-write`) — Powerbox grants a scope for exactly
+the item the user picked in the panel; a file selection does not extend
+to its parent directory. Every other folder-access grant in this app
+(`importFolder`, `importFolderTree`, `ImageDocumentModel.requestFolderAccess`)
+already picks a folder directly via a DIRECTORY-mode panel for exactly
+this reason — `requestFolderAccess`'s own doc comment exists specifically
+because deriving a parent from an already-picked file isn't sufficient.
+Fixed by redesigning single-photo relocate to use the SAME folder-picker
++ `matchByFilename` approach as the batch flow (single photo = batch of
+one) — accepting the same tradeoff the batch flow already had: a
+RENAMED (not just moved) file won't be found this way, since matching is
+by filename.
+
+Two more real bugs caught in the same first round: (1) the destination-
+collision probe didn't exclude the photo's OWN current row, so relocating
+a photo back to its own already-current path (a stale `isMissing`
+snapshot, or the file having been restored) reported a false "a
+different photo is already catalogued at that location" — fixed by
+excluding the target photo's own ID from the probe, and by refactoring
+from a fixed `updateAll(...)` assignment list to fetch-mutate-`update(db)`
+(this also fixed a related issue: a failed `attributesOfItem` read on
+the new file would otherwise NULL out a previously-known `fileSize`
+instead of leaving it alone). (2) `PhotoImporter.matchByFilename`'s
+directory scan (real, blocking filesystem I/O) ran synchronously on the
+`@MainActor` in both call sites — fixed with `Task.detached`, matching
+`importFolder`/`importFolderTree`'s own established discipline for the
+identical concern.
+
+Round 2: reviewer independently reverted the collision-probe self-
+exclusion fix in a scratch copy and confirmed the new
+`testRelocatePhotosToItsOwnCurrentPathSucceeds` regression test genuinely
+fails without it (the sibling `testRelocatePhotosWithinBatchCollisionOnlyFirstWins`
+test does NOT pin that specific fix — it's a forward regression guard for
+new behavior, not a before/after pin, confirmed by the same revert
+check) — APPROVE. Small polish applied after APPROVE, not requiring a
+third round: `activateFolderAccess`'s returned warning was being treated
+as unconditionally fatal even though only ONE of its two failure modes
+actually blocks a relocate (a failed bookmark WRITE still leaves access
+working for the current session) — fixed to fold the warning into the
+final summary message instead of always aborting, matching
+`importFolder`'s own established handling of the identical helper; and
+the result summary now explicitly notes that saved-edit sidecar files
+are not moved by this action (documented, not solved — moving one would
+need write access to the OLD folder too, not otherwise needed anywhere
+in this app).
+
+**Known, documented gaps, not solved this slice**: sidecars (saved
+edits) are never moved — surfaced in the result message instead;
+folder-mirrored collection membership (`importFolderTree`) is not
+updated by a relocate, so a photo can end up listed under a "Folders"
+sidebar entry it's no longer physically inside; and — inherited directly
+from missing-file detection's own design — a photo can only be located
+via this feature once it reads as "Missing" in the first place, which
+requires its ORIGINALLY-IMPORTED folder root to still exist on disk. So
+moving or renaming the WHOLE containing folder (not just one file out of
+an otherwise-intact folder) isn't covered: those photos never show
+"Missing", so "Locate…"/"Locate Selected…" are never offered for them.
+
+538 tests (10 new): `CatalogDatabaseTests` gained
+`testRelocatePhotosUpdatesPathFilenameAndFileSize` (using REAL temp
+files so the `fileSize` claim in its own name is actually exercised, not
+just fake `/tmp/...` paths), `testRelocatePhotosSkipsADestinationAlreadyClaimedByAnotherRow`,
+`testRelocatePhotosWithinBatchCollisionOnlyFirstWins`,
+`testRelocatePhotosToItsOwnCurrentPathSucceeds`, and a strengthened
+`testRelocatePhotosOnNonexistentIDIsANoOp` (now also asserts row count
+and that an unrelated row is untouched). `PhotoImporterTests` gained 3
+tests for `matchByFilename` (case-insensitive match, unmatched count,
+sidecar/non-image files correctly excluded). NOT yet live-verified by
+the user.

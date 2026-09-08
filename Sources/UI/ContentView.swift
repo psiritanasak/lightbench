@@ -363,7 +363,11 @@ struct ContentView: View {
                 Text(message)
             }
             .alert(
-                "Import Folder",
+                // Was "Import Folder" — widened to a generic title once
+                // this same `importStatusMessage`/alert pair started also
+                // reporting relocate-photo summaries (D5 follow-up), not
+                // just import summaries.
+                "Photo Catalog",
                 isPresented: Binding(
                     get: { catalog.importStatusMessage != nil },
                     set: { isPresented in
@@ -534,6 +538,12 @@ struct ContentView: View {
                         }
                     }
                     .disabled(catalog.collections.isEmpty || selectedPhotosVisibleInGrid.isEmpty)
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button("Locate Selected…") {
+                        Task { await catalog.relocateSelectedPhotos() }
+                    }
+                    .disabled(selectedPhotosVisibleInGrid.isEmpty)
                 }
                 ToolbarItem(placement: .automatic) {
                     Button("Clear Selection") {

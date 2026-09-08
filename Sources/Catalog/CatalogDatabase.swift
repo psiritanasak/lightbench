@@ -173,6 +173,51 @@ final class CatalogDatabase: Sendable {
         }
     }
 
+    /// Relocates each `(photoID, newPath)` pair in ONE transaction (D5
+    /// follow-up: point the catalog at a photo's new location after it was
+    /// moved on disk, not deleted). Skips any pair whose destination is
+    /// already claimed by a DIFFERENT catalogued row — checked via the
+    /// same `path == ...` probe `insertPhotoIfNeeded` already uses, EXCLUDING
+    /// the photo's own current row (reviewer-caught: without that
+    /// exclusion, relocating a photo back to its own already-current path
+    /// — a stale `isMissing` snapshot, or the file having been restored —
+    /// would find itself and get reported as "a different photo is
+    /// already there," which is false; excluding self makes that a
+    /// harmless successful no-op instead) — rather than aborting the
+    /// whole batch: unlike `addPhotos`'s FK violation (a rare edge case
+    /// there), a naming collision here is a plausible, common outcome of
+    /// a batch move (the destination folder may have already been
+    /// separately imported).
+    ///
+    /// Fetch-mutate-update, not `updateAll` with a fixed assignment list
+    /// — reviewer-caught: a failed `attributesOfItem` read (network
+    /// hiccup, permissions) must leave the EXISTING `fileSize` alone, not
+    /// null it out; only overwriting `fileSize` when a fresh read
+    /// actually succeeds is what a fixed `updateAll(... .set(to: nil))`
+    /// can't express without first fetching the row anyway. Returns the
+    /// IDs actually relocated, so callers can report a partial-success
+    /// summary rather than an all-or-nothing result.
+    func relocatePhotos(_ moves: [(photoID: Int64, newPath: String)]) async throws -> Set<Int64> {
+        try await dbQueue.write { db in
+            var relocated: Set<Int64> = []
+            for move in moves {
+                guard try Photo.filter(Photo.Columns.path == move.newPath)
+                    .filter(Photo.Columns.id != move.photoID)
+                    .fetchCount(db) == 0
+                else { continue }
+                guard var photo = try Photo.filter(Photo.Columns.id == move.photoID).fetchOne(db) else { continue }
+                photo.path = move.newPath
+                photo.filename = URL(fileURLWithPath: move.newPath).lastPathComponent
+                if let fileSize = (try? FileManager.default.attributesOfItem(atPath: move.newPath))?[.size] as? Int64 {
+                    photo.fileSize = fileSize
+                }
+                try photo.update(db)
+                relocated.insert(move.photoID)
+            }
+            return relocated
+        }
+    }
+
     // MARK: - Presets (Phase 5 slice 2)
 
     /// Ordered by `name`, same reasoning as `allCollections()` — a picker

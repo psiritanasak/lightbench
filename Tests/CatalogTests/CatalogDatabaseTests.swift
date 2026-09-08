@@ -194,6 +194,117 @@ final class CatalogDatabaseTests: XCTestCase {
         XCTAssertEqual(remaining.count, 1)
     }
 
+    // MARK: - Relocating missing photos (D5 follow-up)
+
+    /// Real temp files (not fake `/tmp/...` paths) so `fileSize` is
+    /// meaningfully asserted, not just left at its imported-time value —
+    /// reviewer-caught: the original version of this test used
+    /// nonexistent paths throughout, so its own `fileSize` claim in the
+    /// test name was never actually exercised.
+    func testRelocatePhotosUpdatesPathFilenameAndFileSize() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CatalogDatabaseTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let oldURL = tempDir.appendingPathComponent("a.jpg")
+        FileManager.default.createFile(atPath: oldURL.path, contents: Data(repeating: 0, count: 10))
+        let newURL = tempDir.appendingPathComponent("renamed.jpg")
+        FileManager.default.createFile(atPath: newURL.path, contents: Data(repeating: 0, count: 99))
+
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [oldURL])
+        let imported = try await db.allPhotos()
+        let photoID = try XCTUnwrap(imported.first?.id)
+        XCTAssertEqual(imported.first?.fileSize, 10)
+
+        let relocated = try await db.relocatePhotos([(photoID: photoID, newPath: newURL.path)])
+
+        XCTAssertEqual(relocated, [photoID])
+        let updated = try await db.allPhotos()
+        let photo = try XCTUnwrap(updated.first)
+        XCTAssertEqual(photo.path, newURL.path)
+        XCTAssertEqual(photo.filename, "renamed.jpg", "filename is denormalized from path and must be refreshed too")
+        XCTAssertEqual(photo.fileSize, 99, "fileSize must be refreshed from the NEW location, not left stale")
+    }
+
+    /// The real collision case a batch move can hit: the destination
+    /// path is already claimed by a DIFFERENT catalogued row. Unlike
+    /// `addPhotos`' FK-violation precedent (abort the whole transaction),
+    /// this must skip only the offending pair and still relocate the rest.
+    func testRelocatePhotosSkipsADestinationAlreadyClaimedByAnotherRow() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [
+            URL(fileURLWithPath: "/tmp/old/a.jpg"),
+            URL(fileURLWithPath: "/tmp/old/b.jpg"),
+            URL(fileURLWithPath: "/tmp/existing/taken.jpg")
+        ])
+        let photos = try await db.allPhotos()
+        let idA = try XCTUnwrap(photos.first { $0.path == "/tmp/old/a.jpg" }?.id)
+        let idB = try XCTUnwrap(photos.first { $0.path == "/tmp/old/b.jpg" }?.id)
+
+        let relocated = try await db.relocatePhotos([
+            (photoID: idA, newPath: "/tmp/new/a.jpg"),
+            (photoID: idB, newPath: "/tmp/existing/taken.jpg") // collides with the third imported photo
+        ])
+
+        XCTAssertEqual(relocated, [idA], "only the non-colliding pair should relocate")
+        let updated = try await db.allPhotos()
+        XCTAssertEqual(updated.first { $0.id == idA }?.path, "/tmp/new/a.jpg")
+        XCTAssertEqual(updated.first { $0.id == idB }?.path, "/tmp/old/b.jpg", "the colliding photo must be left untouched")
+        XCTAssertEqual(updated.count, 3, "no row was deleted or merged")
+    }
+
+    /// Two entries in the SAME batch targeting the same not-yet-existing
+    /// destination — a within-batch collision, distinct from colliding
+    /// with a pre-existing row. GRDB serializes the whole batch inside one
+    /// transaction/connection, so the second pair's collision probe sees
+    /// the first pair's already-applied UPDATE and correctly skips it.
+    func testRelocatePhotosWithinBatchCollisionOnlyFirstWins() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [
+            URL(fileURLWithPath: "/tmp/old/a.jpg"),
+            URL(fileURLWithPath: "/tmp/old/b.jpg")
+        ])
+        let photos = try await db.allPhotos()
+        let idA = try XCTUnwrap(photos.first { $0.path == "/tmp/old/a.jpg" }?.id)
+        let idB = try XCTUnwrap(photos.first { $0.path == "/tmp/old/b.jpg" }?.id)
+
+        let relocated = try await db.relocatePhotos([
+            (photoID: idA, newPath: "/tmp/new/shared.jpg"),
+            (photoID: idB, newPath: "/tmp/new/shared.jpg")
+        ])
+
+        XCTAssertEqual(relocated, [idA], "only the first pair in the batch should claim the shared destination")
+        let updated = try await db.allPhotos()
+        XCTAssertEqual(updated.first { $0.id == idB }?.path, "/tmp/old/b.jpg", "the second pair must be left untouched")
+    }
+
+    /// A photo "relocated" back to its OWN current path (a stale
+    /// `isMissing` snapshot, or the file having been restored) must
+    /// succeed, not be reported as colliding with itself.
+    func testRelocatePhotosToItsOwnCurrentPathSucceeds() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/old/a.jpg")])
+        let imported = try await db.allPhotos()
+        let photoID = try XCTUnwrap(imported.first?.id)
+
+        let relocated = try await db.relocatePhotos([(photoID: photoID, newPath: "/tmp/old/a.jpg")])
+
+        XCTAssertEqual(relocated, [photoID], "relocating to the photo's own current path must not read as a collision")
+    }
+
+    func testRelocatePhotosOnNonexistentIDIsANoOp() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/old/a.jpg")])
+
+        let relocated = try await db.relocatePhotos([(photoID: 999_999, newPath: "/tmp/new/a.jpg")])
+
+        XCTAssertTrue(relocated.isEmpty)
+        let photos = try await db.allPhotos()
+        XCTAssertEqual(photos.count, 1, "a no-op must not insert, delete, or otherwise change row count")
+        XCTAssertEqual(photos.first?.path, "/tmp/old/a.jpg", "the unrelated existing row must be untouched")
+    }
+
     // MARK: - Collections (Phase 4 slice 4)
 
     func testCreateCollectionAssignsAnID() async throws {

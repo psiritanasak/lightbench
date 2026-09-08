@@ -325,6 +325,14 @@ private struct LibraryThumbnailCell: View {
                             }
                         }
                     }
+                    if isMissing {
+                        Divider()
+                        Button {
+                            Task { await catalog.relocatePhoto(photo) }
+                        } label: {
+                            Label("Locate…", systemImage: "questionmark.folder")
+                        }
+                    }
                     Divider()
                     Button(role: .destructive) {
                         onRequestRemoval()

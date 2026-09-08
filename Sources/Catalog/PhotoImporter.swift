@@ -139,4 +139,52 @@ enum PhotoImporter {
             .filter { path.hasPrefix($0 + "/") }
             .max(by: { $0.count < $1.count })
     }
+
+    // MARK: - Relocating missing photos (D5 follow-up, IMPROVEMENTS.md)
+
+    /// Matches each of `photos` to a same-named file in `folder` — a
+    /// SHALLOW scan via `imageFiles(in:)` (not `scanFolderTree`), so this
+    /// folder itself can't contain two files sharing an EXACT-case name —
+    /// the ambiguity a recursive scan would introduce doesn't apply here.
+    /// Matched case-INSENSITIVELY via a lowercased dictionary key, mainly
+    /// for APFS's own default case-insensitive-but-preserving behavior —
+    /// but reviewer-caught: on a case-SENSITIVE volume (case-sensitive
+    /// APFS, most SMB/NFS shares), `Photo.JPG` and `photo.jpg` coexisting
+    /// in one folder WOULD collide on this lowercased key, and whichever
+    /// `imageFiles(in:)` happens to enumerate last silently wins — an
+    /// accepted, narrow gap for this slice, not solved (a full fix would
+    /// need to know the destination volume's case-sensitivity, which
+    /// nothing else in this codebase currently checks).
+    ///
+    /// Matches by NAME only, not content — a same-named-but-different
+    /// file in the chosen folder would be wrongly adopted. Accepted for
+    /// this slice, flagged not solved: content-hash matching would
+    /// correctly reject that case but is a much bigger feature, and
+    /// filename is already what every other identity check in this
+    /// codebase relies on (`Photo.filename`, `insertPhotoIfNeeded`'s own
+    /// `path`-based re-import idempotency).
+    ///
+    /// Returns the matched `(photoID, newPath)` pairs plus a count of
+    /// photos with no match found (including any with a `nil` `id`,
+    /// which can never be matched at all — reviewer-caught: the original
+    /// draft silently dropped those from the count instead), so the
+    /// caller can report a partial-success summary.
+    static func matchByFilename(
+        _ photos: [Photo], in folder: URL
+    ) -> (moves: [(photoID: Int64, newPath: String)], unmatchedCount: Int) {
+        var byLowercasedName: [String: URL] = [:]
+        for url in imageFiles(in: folder) {
+            byLowercasedName[url.lastPathComponent.lowercased()] = url
+        }
+        var moves: [(photoID: Int64, newPath: String)] = []
+        var unmatchedCount = 0
+        for photo in photos {
+            guard let id = photo.id, let match = byLowercasedName[photo.filename.lowercased()] else {
+                unmatchedCount += 1
+                continue
+            }
+            moves.append((id, match.path))
+        }
+        return (moves, unmatchedCount)
+    }
 }

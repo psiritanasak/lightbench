@@ -504,8 +504,50 @@ cached thumbnail, not just a failed decode; 2 more reviewer rounds (FIX
 FIRST → FIX FIRST → APPROVE) caught a dropped reset/cancellation guard
 and a stale doc comment along the way. See PROGRESS.md for full detail,
 including the confirmed (not a bug) scope boundary: detection happens on
-a cell's next appearance, not via live filesystem monitoring. NOT yet
-live-verified by the user.
+a cell's next appearance, not via live filesystem monitoring.
+**Live-verified by the user**: after navigating away and back, a
+deleted file correctly shows "Missing" while sibling photos render
+normally.
+
+**Relocate missing photos (single + batch) shipped 2026-09-08**, a direct
+follow-up requested right after live-verifying missing-file detection: a
+new per-cell "Locate…" menu item (shown only when that cell's `isMissing`)
+and a toolbar "Locate Selected…" batch action, both pointing the catalog
+at a moved photo's new location instead of leaving it permanently
+"Missing". New `CatalogDatabase.relocatePhotos(_:)` (one transaction,
+many `(photoID, newPath)` pairs, skips — doesn't abort the batch on — a
+destination already claimed by a DIFFERENT row, since that's a plausible
+outcome of a batch move, unlike `addPhotos`' rare FK-violation precedent)
+and `PhotoImporter.matchByFilename(_:in:)` (matches selected/single
+missing photos to same-named files in one picked folder — filename only,
+not content, flagged not solved).
+
+Reviewer (Opus 5) caught the session's most significant sandbox bug so
+far in the first draft: relocating via a single-FILE picker, then trying
+to derive and grant security-scoped access to that file's PARENT folder,
+is very likely a silent no-op under this app's sandbox entitlement —
+Powerbox only grants a scope for the exact item picked, never its
+parent, and every other folder-access grant in this app already picks a
+folder directly for exactly this reason
+(`ImageDocumentModel.requestFolderAccess`'s own doc comment documents
+the same limitation). Fixed by making single-photo relocate use the same
+folder-picker + filename-match approach as the batch flow (accepting the
+same tradeoff: a renamed, not just moved, file won't be found). Two more
+real bugs caught in the same round: a false "already catalogued
+elsewhere" collision when relocating a photo back to its own current
+path (the collision probe didn't exclude the photo's own row), and a
+synchronous directory scan on the main actor (fixed with `Task.detached`,
+matching `importFolder`'s existing discipline). 2 rounds, FIX FIRST →
+APPROVE — round 2 reviewer independently reverted the collision-probe fix
+in a scratch copy and confirmed the new regression test genuinely fails
+without it. Known, documented (not solved) gaps: a relocate doesn't move
+the photo's edit sidecar (surfaced in the result summary message instead)
+or update folder-mirrored collection membership; and — inherited from
+missing-file detection itself — a photo can only be located once it
+reads as "Missing", which requires its ORIGINAL folder root to still
+exist, so moving/renaming an entire containing folder (not just one file
+out of an intact folder) isn't covered by this slice. 538 tests (10 new).
+NOT yet live-verified by the user.
 
 ### D6. Accessibility pass over custom controls
 

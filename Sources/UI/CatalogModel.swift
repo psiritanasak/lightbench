@@ -58,6 +58,22 @@ final class CatalogModel: ObservableObject {
     /// same as `selectedFilter`.
     @Published private(set) var selectedPhotoIDs: Set<Int64> = []
 
+    /// D4 (IMPROVEMENTS.md): the keyboard-navigable "focused" photo in the
+    /// Library grid — Lightroom's own distinction between "focused" (one
+    /// cell, arrow-key/rating-key target) and "selected" (`selectedPhotoIDs`
+    /// above, an export batch). Deliberately a DIFFERENT shape from that
+    /// property, not just a narrower version of it: a single optional
+    /// `String` keyed on `Photo.path` (matching `LibraryNavigation`'s and
+    /// `EditorFilmstripView`'s own path-based convention), not an
+    /// `Int64`-keyed `Set`. Also deliberately NOT cleared in
+    /// `selectedFilter`'s `didSet` below, unlike `selectedPhotoIDs` — a
+    /// focused path that's no longer in `displayedPhotos` (filtered out, or
+    /// a different Collection/Folder) already reads as "nothing focused"
+    /// to any lookup against that array, with no extra invalidation code
+    /// needed, and it comes back "sticky" for free if the user returns to
+    /// where it's still visible.
+    @Published var focusedPhotoPath: String?
+
     /// Sort/filter/search refinement, applied entirely in memory on top of
     /// whatever source set `selectedFilter` already produced — see
     /// `displayedPhotos`. Deliberately INDEPENDENT of `selectedFilter`

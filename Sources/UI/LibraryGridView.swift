@@ -51,7 +51,102 @@ struct LibraryGridView: View {
         return min(max(thumbnailSize, Self.thumbnailSizeRange.lowerBound), Self.thumbnailSizeRange.upperBound)
     }
 
-    private var columns: [GridItem] { [GridItem(.adaptive(minimum: cellSize), spacing: 12)] }
+    /// D4 (IMPROVEMENTS.md): the `ScrollView`'s own on-screen width — see
+    /// its `.background(GeometryReader)` call site (in `body`) for why it's
+    /// measured there rather than on the `LazyVGrid` itself. `0` until the
+    /// first layout pass, which `LibraryGridColumns` treats as "1 column"
+    /// rather than dividing by zero.
+    @State private var gridWidth: Double = 0
+
+    /// D4 (IMPROVEMENTS.md): one-shot guard for restoring scroll position
+    /// to the focused cell when returning to the Library from the Editor
+    /// (this view is torn down/rebuilt on every Editor↔Library switch —
+    /// see `thumbnailSize`'s own doc comment above for the same lifecycle,
+    /// so this genuinely resets each time, not "once ever"). Runs from the
+    /// width `GeometryReader`'s own `.onAppear` rather than the
+    /// `ScrollView`'s bare one purely so there's a single, obvious place
+    /// that only ever fires once per Library visit — reviewer-verified
+    /// (empirically, via an `NSHostingView` probe) that `ScrollViewProxy.
+    /// scrollTo` itself resolves correctly against post-layout geometry
+    /// regardless of which `.onAppear` triggers it, so this move fixed a
+    /// theorized ordering issue that, measured, turned out not to be a
+    /// real bug — it's a no-op behaviorally, kept for the cleaner call site.
+    @State private var hasRestoredInitialScrollPosition = false
+
+    private static let gridSpacing: Double = 12
+    /// Explicit, not the parameterless `.padding()`'s platform default —
+    /// reviewer-caught: `columnCount` below needs to subtract this exact
+    /// amount from `gridWidth` (the pre-padding `ScrollView` frame), so an
+    /// unverified assumption about what `.padding()` defaults to on macOS
+    /// would silently desync the two.
+    private static let gridPadding: Double = 16
+
+    /// The single source of truth for how many columns the grid renders —
+    /// see `LibraryGridColumns`'s own doc comment for why this replaced
+    /// `GridItem(.adaptive(minimum:))`: an adaptive grid's own column count
+    /// isn't obtainable from code, so Up/Down arrow navigation (added this
+    /// session) would have nothing authoritative to jump by. `columns`
+    /// below and the key-handling methods further down both read this SAME
+    /// property, so the grid's layout and its keyboard math can't drift
+    /// apart.
+    ///
+    /// Known, accepted imprecision: `gridWidth` is the `ScrollView`'s full
+    /// frame, which doesn't subtract a legacy always-on vertical scroller
+    /// (System Settings → General → "Show scroll bars: Always", ~15pt) —
+    /// on that setting this can compute one column too many. Not corrected
+    /// here; reviewer-measured (empirically) that this makes adjacent
+    /// cells overlap by roughly `scrollerWidth / (columnCount + 1)` (~2pt
+    /// for a typical column count), not merely "tighter" as an earlier
+    /// version of this comment claimed — cosmetic, only when the pane
+    /// width happens to sit within ~15pt of a column boundary, but a real
+    /// (if small) visual artifact, not a purely internal number.
+    private var columnCount: Int {
+        // Clipped HERE, not just at `columns`' own `Array(repeating:count:)`
+        // call site — reviewer-caught: the Up/Down key math further down
+        // also reads `columnCount` directly, so clipping only at the array
+        // site would leave the two desynced above the clip threshold. Both
+        // now share the exact same number either way — unreachable in
+        // real use (`LibraryGridColumns.count`'s own `1_000_000` ceiling
+        // needs a ~132,000pt-wide window at this view's smallest cell
+        // size), but genuinely one source of truth rather than two call
+        // sites that happen to usually agree.
+        min(
+            LibraryGridColumns.count(
+                forWidth: gridWidth - 2 * Self.gridPadding, cellSize: cellSize, spacing: Self.gridSpacing
+            ),
+            1000
+        )
+    }
+
+    private var columns: [GridItem] {
+        // D4 (IMPROVEMENTS.md): `.flexible(minimum: 1, maximum: cellSize)`,
+        // not `.fixed(cellSize)` — reviewer-caught (empirically, via an
+        // `NSHostingView` probe): `.fixed` columns give the `LazyVGrid` a
+        // hard MINIMUM width that propagates upward through the
+        // `ScrollView` to the window itself, creating a one-way layout
+        // ratchet — enlarging the window (or dragging the sidebar
+        // narrower) could grow `columnCount` but never let it shrink back,
+        // since the grid would refuse to lay out narrower than its old
+        // column count already demanded. `.flexible` has no such minimum
+        // (it can compress down to `1`pt), so the `ScrollView`/window stay
+        // freely resizable in both directions — `columnCount` remains the
+        // one authoritative source `body`'s `GeometryReader` and the
+        // Up/Down key math both read, only the GridItem flavor changed.
+        // Every cell already pins its own `.frame(width: cellSize)`
+        // (`LibraryThumbnailCell`, below) and centers within its column
+        // regardless of the column's own width, so this is visually a
+        // no-op — the same reasoning that applied to the original
+        // `.adaptive`→`.fixed` switch. `columnCount`'s own `1000` clip
+        // (defending against `LibraryGridColumns.count`'s documented
+        // `1_000_000` pathological-input ceiling, a worse failure mode
+        // here than the `Int` trap it exists to avoid) is applied there,
+        // not re-applied here, so this and the Up/Down key math can't
+        // desync above the clip threshold.
+        Array(
+            repeating: GridItem(.flexible(minimum: 1, maximum: cellSize), spacing: Self.gridSpacing),
+            count: columnCount
+        )
+    }
 
     /// D5 (IMPROVEMENTS.md): the photo a "Remove from Library" tap is
     /// asking to confirm. Lives here, not `ContentView`, deliberately —
@@ -60,6 +155,18 @@ struct LibraryGridView: View {
     /// file's own `mainContent` doc comment); a 6th alert there would risk
     /// the same failure again.
     @State private var photoPendingRemoval: Photo?
+
+    /// D4 (IMPROVEMENTS.md): whether the grid itself (as opposed to the
+    /// search field, a Picker, or a cell's own Button) currently owns
+    /// keyboard focus — required for `.onKeyPress` below to fire at all.
+    /// `.focusable()`/`.onKeyPress` are used here rather than the app's one
+    /// existing low-level keyboard mechanism (`MetalImageView`'s
+    /// `NSEvent` scroll monitor) deliberately: that monitor fires BEFORE
+    /// SwiftUI's own focus dispatch, which is exactly wrong here — it would
+    /// turn digits typed into `filterBar`'s search `TextField` into rating
+    /// changes. `.onKeyPress` only fires while this container genuinely
+    /// holds focus, so typing in the search field is naturally unaffected.
+    @FocusState private var isGridFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -76,21 +183,76 @@ struct LibraryGridView: View {
                 } else if catalog.displayedPhotos.isEmpty {
                     noMatchesState
                 } else {
-                    ScrollView {
-                        LazyVGrid(columns: columns, spacing: 12) {
-                            ForEach(catalog.displayedPhotos) { photo in
-                                LibraryThumbnailCell(catalog: catalog, photo: photo, cellSize: cellSize) {
-                                    onOpen(photo)
-                                } onRequestRemoval: {
-                                    photoPendingRemoval = photo
+                    // D4 (IMPROVEMENTS.md): the app's first `ScrollViewReader`
+                    // over the Library grid (precedent: `EditorFilmstripView`'s
+                    // filmstrip) — lets arrow-key focus changes below scroll
+                    // the newly-focused cell into view.
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVGrid(columns: columns, spacing: Self.gridSpacing) {
+                                ForEach(catalog.displayedPhotos) { photo in
+                                    LibraryThumbnailCell(
+                                        catalog: catalog, photo: photo, cellSize: cellSize,
+                                        isFocused: catalog.focusedPhotoPath == photo.path
+                                    ) {
+                                        onOpen(photo)
+                                    } onRequestRemoval: {
+                                        photoPendingRemoval = photo
+                                    }
+                                    .id(photo.path)
                                 }
                             }
+                            .padding(Self.gridPadding)
                         }
-                        .padding()
+                        // D4 (IMPROVEMENTS.md): measures the SCROLL VIEW's
+                        // own frame, not the `LazyVGrid`'s — reviewer-caught:
+                        // `.fixed` columns (unlike `.adaptive`) give the grid
+                        // an INTRINSIC width equal to its own column count,
+                        // so a `.background(GeometryReader)` on the grid
+                        // itself would measure a value that's a function of
+                        // `columnCount`, which is a function of that same
+                        // measurement — a circular fixed point with no
+                        // connection to the pane's actual available width.
+                        // The `ScrollView`'s own frame is sized by ITS
+                        // parent (the `HSplitView` pane in `ContentView`),
+                        // independent of its scrollable content, which
+                        // breaks that circularity. `gridPadding` is
+                        // subtracted explicitly in `columnCount` below,
+                        // rather than relying on `.padding()`'s unverified
+                        // default amount.
+                        .background(
+                            GeometryReader { geometry in
+                                Color.clear
+                                    .onAppear {
+                                        gridWidth = geometry.size.width
+                                        restoreInitialScrollPositionIfNeeded(proxy)
+                                    }
+                                    .onChange(of: geometry.size.width) { _, newWidth in gridWidth = newWidth }
+                            }
+                        )
+                        // D4 (IMPROVEMENTS.md): reclaims grid keyboard focus
+                        // on any click inside the scroll area — including a
+                        // cell's own checkbox/star/flag/menu `Button`s, whose
+                        // own tap can otherwise shift AppKit's key-view focus
+                        // onto that specific control. `.simultaneousGesture`
+                        // (not `.gesture` or `.onTapGesture`) runs ALONGSIDE
+                        // those buttons' own taps rather than intercepting
+                        // them, so this never blocks a rating/flag/menu tap.
+                        .simultaneousGesture(TapGesture().onEnded { isGridFocused = true })
+                        .onChange(of: catalog.focusedPhotoPath) { _, newPath in
+                            if let newPath {
+                                withAnimation { proxy.scrollTo(newPath, anchor: .center) }
+                            }
+                        }
                     }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .focusable()
+            .focusEffectDisabled()
+            .focused($isGridFocused)
+            .onKeyPress { keyPress in handleKeyPress(keyPress) }
+            .onAppear { isGridFocused = true }
             if !catalog.photos.isEmpty {
                 thumbnailSizeBar
             }
@@ -140,6 +302,144 @@ struct LibraryGridView: View {
                 thumbnailSize = cellSize
             }
         }
+    }
+
+    /// See `hasRestoredInitialScrollPosition`'s own doc comment for why
+    /// this runs from the width `GeometryReader`'s `onAppear`, not the
+    /// `ScrollView`'s.
+    private func restoreInitialScrollPositionIfNeeded(_ proxy: ScrollViewProxy) {
+        guard !hasRestoredInitialScrollPosition else { return }
+        hasRestoredInitialScrollPosition = true
+        if let path = catalog.focusedPhotoPath {
+            proxy.scrollTo(path, anchor: .center)
+        }
+    }
+
+    // MARK: - D4 (IMPROVEMENTS.md): keyboard navigation
+
+    /// One dispatch point for every key the grid handles, binding
+    /// `catalog.displayedPhotos` ONCE per event — the same "don't ask
+    /// twice" discipline `PhotoAppApp.photoNeighbors` already documents,
+    /// since this is a full filter+sort of the library on every access.
+    /// Unhandled keys return `.ignored` so menu shortcuts (owned at the
+    /// `Commands` level — see `PhotoAppApp.swift`'s one-owner-per-key-combo
+    /// rule) and ordinary typing elsewhere are never intercepted.
+    ///
+    /// Reviewer-caught: bails immediately if ⌘/⌥/⌃ is held, so an unowned
+    /// modified combo (⌘F, ⌥F, ⌃1…⌃5) never falls through to the plain-
+    /// character branches below and silently flags/rates a photo — and
+    /// ⌘←/⌘→ specifically fall all the way through to here while
+    /// `showLibrary` is true, since `PhotoAppApp`'s own Photo-menu items
+    /// are merely `.disabled` (not absent) in that state, and a disabled
+    /// `NSMenuItem` doesn't consume the keystroke. Checking against this
+    /// SPECIFIC "semantic" set, rather than subtracting an "allowed" set
+    /// like Shift, is deliberate: macOS reports every arrow-key `NSEvent`
+    /// as ALSO carrying `.numericPad`/`.function` regardless of any real
+    /// modifier (an earlier version of this guard subtracted only
+    /// `.shift`, which made it reject every arrow press outright — measured
+    /// live: a plain Left-arrow's `KeyPress.modifiers` is `[.numericPad,
+    /// .function]`, not empty), and `.function` is itself deprecated on
+    /// macOS 12+. Checking `isDisjoint` against the three modifiers that
+    /// actually change a key's MEANING sidesteps both problems and stays
+    /// correct even if a future macOS attaches other incidental flags to
+    /// arrow/character events.
+    private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        let semanticModifiers: EventModifiers = [.command, .option, .control]
+        guard keyPress.modifiers.isDisjoint(with: semanticModifiers) else { return .ignored }
+        let displayed = catalog.displayedPhotos
+        switch keyPress.key {
+        case .leftArrow: return moveFocus(by: -1, in: displayed)
+        case .rightArrow: return moveFocus(by: 1, in: displayed)
+        case .upArrow: return moveFocus(by: -columnCount, in: displayed)
+        case .downArrow: return moveFocus(by: columnCount, in: displayed)
+        case .return: return openFocused(in: displayed)
+        default: break
+        }
+        if let character = keyPress.characters.first {
+            if let digit = character.wholeNumberValue, (0...5).contains(digit) {
+                return setRatingOnFocused(digit, in: displayed)
+            }
+            if character == "." || character == "f" || character == "F" {
+                return toggleFlagOnFocused(in: displayed)
+            }
+        }
+        return .ignored
+    }
+
+    /// Moves focus by `offset` positions in `photos` — `±1` for Left/Right,
+    /// `±columnCount` for Up/Down, reusing `LibraryNavigation.neighbor(of:
+    /// in:offset:)` as-is (it already takes an arbitrary offset over any
+    /// `[Photo]` array; no changes needed there). When nothing is currently
+    /// focused, or the focused path fell out of `photos` (filtered away,
+    /// or the sidebar moved to a different Collection/Folder), any arrow
+    /// press focuses the FIRST photo instead of moving relative to nothing
+    /// — matching `LibraryNavigation`'s own "degrade safely, don't jump
+    /// somewhere wrong" convention. Reaching a grid edge (an out-of-bounds
+    /// offset) is a no-op, not a wraparound — same convention.
+    ///
+    /// Known, accepted limitation: Down from a row directly above a
+    /// COLUMN THAT DOESN'T EXIST in a partial final row (fewer photos than
+    /// `columnCount`) is one such out-of-bounds no-op — those trailing
+    /// cells are only reachable via Left/Right, not Down. Not fixed this
+    /// session; clamping Down to the last valid item would need its own
+    /// care to avoid landing on an unintended row.
+    private func moveFocus(by offset: Int, in photos: [Photo]) -> KeyPress.Result {
+        guard !photos.isEmpty else { return .ignored }
+        guard let currentPath = catalog.focusedPhotoPath,
+              photos.contains(where: { $0.path == currentPath }) else {
+            catalog.focusedPhotoPath = photos.first?.path
+            return .handled
+        }
+        if let next = LibraryNavigation.neighbor(of: currentPath, in: photos, offset: offset) {
+            catalog.focusedPhotoPath = next.path
+        }
+        return .handled
+    }
+
+    /// Return opens the focused photo — the exact same `onOpen` closure a
+    /// mouse click on a cell already calls, so `ContentView.libraryContent`
+    /// needs no changes to support this.
+    private func openFocused(in photos: [Photo]) -> KeyPress.Result {
+        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.path == path }) else {
+            return .ignored
+        }
+        onOpen(photo)
+        return .handled
+    }
+
+    private func setRatingOnFocused(_ rating: Int, in photos: [Photo]) -> KeyPress.Result {
+        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.path == path }) else {
+            return .ignored
+        }
+        catalog.setRating(rating, for: photo)
+        advanceFocusIfNoLongerVisible(previousPath: path, previousList: photos)
+        return .handled
+    }
+
+    private func toggleFlagOnFocused(in photos: [Photo]) -> KeyPress.Result {
+        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.path == path }) else {
+            return .ignored
+        }
+        catalog.setFlagged(!photo.isFlagged, for: photo)
+        advanceFocusIfNoLongerVisible(previousPath: path, previousList: photos)
+        return .handled
+    }
+
+    /// Reviewer-caught: rating/flagging the focused photo can filter it
+    /// OUT of `displayedPhotos` (e.g. rating it below `catalog.minimumRating`,
+    /// or unflagging it while `catalog.flaggedOnly` is on) — without this,
+    /// focus would silently keep pointing at a now-invisible photo until
+    /// the next arrow press reset it all the way back to the grid's first
+    /// item. Instead, moves focus to whichever photo now occupies the SAME
+    /// position in the freshly re-filtered list — a sensible neighbor
+    /// rather than a jump back to the start. A no-op when the photo is
+    /// still visible (the overwhelmingly common case).
+    private func advanceFocusIfNoLongerVisible(previousPath: String, previousList: [Photo]) {
+        let freshList = catalog.displayedPhotos
+        guard !freshList.contains(where: { $0.path == previousPath }) else { return }
+        guard let previousIndex = previousList.firstIndex(where: { $0.path == previousPath }) else { return }
+        let clampedIndex = min(previousIndex, freshList.count - 1)
+        catalog.focusedPhotoPath = freshList.indices.contains(clampedIndex) ? freshList[clampedIndex].path : nil
     }
 
     private var filterBar: some View {
@@ -277,6 +577,13 @@ private struct LibraryThumbnailCell: View {
     let catalog: CatalogModel
     let photo: Photo
     let cellSize: CGFloat
+    /// D4 (IMPROVEMENTS.md): the grid's keyboard-focused photo, passed down
+    /// as a plain `let` rather than read from `catalog` in here — this
+    /// struct deliberately keeps `catalog` a non-`@ObservedObject` `let`
+    /// (see this type's own doc comment above) for the same reason
+    /// `EditorFilmstripView`'s `FilmstripCell` receives `isCurrent` as a
+    /// parameter instead of comparing against a published property itself.
+    let isFocused: Bool
     let onTap: () -> Void
     let onRequestRemoval: () -> Void
 
@@ -393,6 +700,17 @@ private struct LibraryThumbnailCell: View {
                     editedBadge
                 }
             }
+            // D4 (IMPROVEMENTS.md): the keyboard-focus ring — deliberately
+            // a DIFFERENT color from the selection checkbox's
+            // `Color.accentColor` (above) and the Editor filmstrip's own
+            // accent-colored "current photo" ring, so "keyboard-focused"
+            // never visually reads as "export-selected". Same technique as
+            // `EditorFilmstripView`'s current-photo ring, just white
+            // instead of accent.
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.white, lineWidth: isFocused ? 2 : 0)
+            )
 
             Text(photo.filename)
                 .font(.caption)
@@ -530,6 +848,23 @@ private struct LibraryThumbnailCell: View {
         .clipped()
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+        // D4 (IMPROVEMENTS.md): reviewer-caught — without this, mouse
+        // interaction never wrote `catalog.focusedPhotoPath` at all, so
+        // clicking a DIFFERENT cell's checkbox/star/flag (none of which
+        // open the photo) left the keyboard's notion of "focused" pointing
+        // at whatever was last arrow-key-focused, possibly scrolled off-
+        // screen — a subsequent rating/flag keypress would then silently
+        // mutate the WRONG photo. `.simultaneousGesture` (not `.gesture`,
+        // which would compete with the checkbox/star/flag `Button`s' own
+        // taps) runs alongside them, so any click anywhere in this cell —
+        // including on those controls — also focuses this cell's own
+        // photo; live-verified for the checkbox/star/flag buttons and a
+        // plain cell-body tap. NOT independently verified for the `Menu`
+        // specifically — macOS opens a `Menu` on mouse-DOWN into its own
+        // native tracking loop, which is harder to probe than a plain
+        // `Button` tap; expected to behave the same way but flagged here
+        // rather than silently assumed.
+        .simultaneousGesture(TapGesture().onEnded { catalog.focusedPhotoPath = photo.path })
         // D6 (IMPROVEMENTS.md): `children: .contain` (not `.combine`/
         // `.ignore`) keeps the star rating/flag/menu/checkbox/thumbnail
         // below individually reachable as child elements, rather than

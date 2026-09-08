@@ -5668,3 +5668,25 @@ runs. 538 tests unchanged (pure SwiftUI layout code, no extracted pure
 logic — matches this codebase's own convention of not unit-testing
 plain View bodies; verified by the reviewer's own precise rendering
 measurements instead, both pre- and post-fix, across all 3 rounds).
+**Live-verified by the user (2026-09-08)**: no more overlap at the
+slider's smallest setting.
+
+---
+
+## Session checkpoint (2026-09-08) — safe pause point
+
+Everything below is committed on `master`; working tree is clean as of
+`ef12a70`. All four items this session shipped, were reviewer-approved
+(Opus 5), tested, and live-verified by the user:
+1. Batch-add-to-collection (`19cd0cc`/`612f460`)
+2. Missing-file detection in the Library grid + Editor filmstrip
+   (`e5533c1`/`095fcb3`)
+3. Relocating missing photos, single + batch (`a4f2435`)
+4. Library grid icon-row overlap fix (`ef12a70`)
+
+D5 (Library management gaps) is now **fully complete** — all three parts
+shipped across this and earlier sessions.
+
+**Next step**: D6, accessibility pass over custom controls (see
+`IMPROVEMENTS.md`'s own D6 entry) — not yet started. Per CLAUDE.md
+workflow rules, start that session with Plan Mode.

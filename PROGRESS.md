@@ -5175,3 +5175,28 @@ P1/P2/P3/P4/P5 are all closed (P1 disproved, the other four measured and
 fixed). Remaining IMPROVEMENTS.md items: P6 (needs its own measurement
 first), D4/D5 (2 remaining parts)/D6 (each needs its own Plan Mode
 scoping).
+
+## Adjust panel "can't scroll" report — investigated, NOT a bug (2026-09-08)
+User reported the Adjust sidebar couldn't be scrolled up/down at all.
+Explored the actual code before touching anything (this sidebar has a
+documented, hard-won history with scroll-adjacent AppKit interop — see the
+"Sidebar content-shift-on-scroll bug" section above and its "Lesson
+recorded" note about a previously-reverted fix that broke slider
+interaction live despite two clean reviewer passes): `ContentView.swift`'s
+`editControls` genuinely wraps all four sidebar tabs, including Adjust, in
+a real `ScrollView`; `.scrollIndicators(.hidden)` (already-shipped, commit
+`3280b8e`) fully and deliberately explains the invisible-scrollbar half of
+the report; neither `AdjustTabView`/`AdjustSectionContainer`/`CropTabView`
+has any `.frame(height:)`/`.fixedSize()`/`.layoutPriority` that could
+suppress the ScrollView's content sizing. One real candidate was found
+(`.disabled(document.currentImage == nil)` disables a `ScrollView`'s own
+scroll gesture on macOS, not just child controls) but ruled out — the user
+confirmed a photo was loaded and sliders were responsive. Every Adjust
+section defaults collapsed, so the live hypothesis was "nothing to
+scroll yet, not broken scrolling" — **confirmed live**: user expanded all
+sections (so content genuinely exceeds the visible panel height) and
+scrolling worked normally. No code change. Worth remembering if this
+resurfaces: ask whether sections are expanded before assuming a scroll
+regression, and do not reach for `NSScrollView`/`NSViewRepresentable`
+probing in this exact file without re-reading the content-shift bug's
+"Lesson recorded" note first.

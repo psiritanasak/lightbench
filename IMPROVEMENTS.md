@@ -456,8 +456,9 @@ captured-before-the-write `affectsCurrentFilter` flag that could go stale
 during a large batch if the user switches filters mid-write — fixed with
 a new `refreshIfViewingCollection(_:)`, re-checking `selectedFilter` at
 completion instead, mirroring `deleteCollection`'s own race-avoidance
-shape. 2 rounds, FIX FIRST → APPROVE. 522 tests (3 new). NOT yet
-live-verified by the user.
+shape. 2 rounds, FIX FIRST → APPROVE. 522 tests (3 new). **Live-verified
+by the user** — the toolbar menu appears once photos are checked in the
+Library grid and adding to a collection works as expected.
 
 ### D6. Accessibility pass over custom controls
 

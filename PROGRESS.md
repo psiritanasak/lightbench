@@ -5331,5 +5331,9 @@ DB rollback test, and `CatalogModelTests`'
 `testAddSelectedPhotosUpdatesMembershipMapSynchronously` +
 `testAddSelectedPhotosExcludesAPhotoNoLongerVisibleInTheGrid`, the latter
 replacing an earlier test that turned out to describe an unreachable
-scenario once the intersection fix landed). NOT yet live-verified by the
-user.
+scenario once the intersection fix landed). **Live-verified by the user
+(2026-09-08)**: after relaunching to pick up the build (a stale prior
+instance from before this session's fixes was still running, which is
+likely why the menu wasn't visible on the first try), the toolbar menu
+appears once photos are checked in the Library grid and adding to a
+collection works.

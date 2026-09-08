@@ -5848,3 +5848,120 @@ scoping) or **Phase 7** (Local Adjustments/Masking, CLAUDE.md's own
 roadmap item 7 — slice 1 is a performance probe, see that section for
 the full slicing plan). Per CLAUDE.md workflow rules, start either with
 Plan Mode.
+
+### D4: Library keyboard support (complete, pending live verification 2026-09-08)
+
+`IMPROVEMENTS.md`'s D4 entry, flagged there as "a real feature with
+design decisions — Plan Mode, confirm scope with the user first."
+Research (Explore agent) before designing: the app's entire existing
+keyboard surface was ⌘-modified `Commands`/`CommandMenu` items
+(`PhotoAppApp.swift`) — zero `.onKeyPress`/`.focusable()` precedent
+anywhere, and the one low-level `NSEvent` monitor in the app
+(`MetalImageView`'s scroll-wheel handler) was confirmed the WRONG tool
+here, since it fires before SwiftUI's own focus dispatch and would steal
+keystrokes from the grid's search `TextField`. Confirmed with the user
+(AskUserQuestion) to build full 2D grid navigation (all four arrow
+directions, matching Lightroom/Photos) rather than a Left/Right-only
+linear scope.
+
+**What shipped**: a new `focusedPhotoPath: String?` on `CatalogModel` —
+deliberately a DIFFERENT shape from the existing export-selection
+`selectedPhotoIDs: Set<Int64>` (single optional, path-keyed, not cleared
+on Collection/Folder switch, since a stale path just reads as "nothing
+focused" against a fresh `displayedPhotos` lookup with no extra
+invalidation code needed). New `Sources/UI/LibraryGridColumns.swift`
+(pure, unit-tested — `CropAspectMath`/`CompareLayout`/`ZoomPanGeometry`/
+`ThinSliderGeometry` precedent): the fit formula `GridItem(.adaptive(
+minimum:))` computes internally, made explicit so Up/Down arrow math has
+an authoritative column count to jump by (SwiftUI never exposes an
+adaptive grid's own rendered column count). `LibraryNavigation.neighbor(
+of:in:offset:)` needed ZERO changes — already generic on offset, reused
+directly for Left/Right (`±1`) and Up/Down (`±columnCount`).
+`LibraryGridView` gained `.focusable()`/`@FocusState`/`.onKeyPress`
+keyboard capture, a `ScrollViewReader` (second use in the app, after
+`EditorFilmstripView`'s filmstrip) to scroll the focused cell into view,
+and a white focus-ring overlay on `LibraryThumbnailCell` — deliberately a
+different color from the selection checkbox's `Color.accentColor` so
+"keyboard-focused" and "export-selected" never visually merge. Arrow
+keys/Return/digits/`.`/`f` all reuse existing mutators
+(`catalog.setRating`/`setFlagged`, the same `onOpen` closure a mouse
+click already calls) — no new `CatalogModel` write paths.
+
+**Reviewer (Opus 5): 3 rounds, FIX FIRST → FIX FIRST → APPROVE** — the
+most consequential review sequence of any D-series item: BOTH round-1
+fixes for round-1's own blocking findings turned out to be broken, caught
+only because round 2 verified empirically (an `NSHostingView` probe)
+instead of trusting the reasoning:
+- **Round 1** found: (1) the width `GeometryReader` was chained after
+  `.padding()` on the `LazyVGrid` itself, measuring a padded value instead
+  of the pane's real available width; (2) mouse clicks never wrote
+  `focusedPhotoPath` at all (only keyboard did), so clicking a DIFFERENT
+  cell's star/flag/checkbox left keyboard focus pointing at a possibly
+  off-screen photo — a subsequent rating/flag keypress would silently
+  mutate the WRONG photo.
+- **Round 2**, re-verifying round 1's fixes: (1) moving the
+  `GeometryReader` to measure the `LazyVGrid` post-padding was still
+  wrong — `.fixed` columns give the grid an INTRINSIC width equal to its
+  own column count, so measuring the grid's own rendered width just
+  measures a function of `columnCount`, a circular fixed point untethered
+  from the pane's actual width; fixed for real by moving the measurement
+  to the `ScrollView`'s own frame (sized by its `HSplitView` parent,
+  independent of scrollable content) with an explicit named
+  `gridPadding` constant subtracted, rather than trusting `.padding()`'s
+  unverified default. (2) a new `keyPress.modifiers.subtracting(.shift)`
+  guard (added to stop unowned ⌘F/⌥F/⌃1-5 combos from reaching the
+  plain-character branches) measured to reject EVERY arrow key press
+  outright — macOS reports arrow-key events as carrying
+  `.numericPad`/`.function` regardless of any real modifier, so the
+  entire feature was silently dead on arrival; fixed by widening the
+  subtracted set. Round 2 also caught, independently: `.fixed` columns
+  create a one-way layout RATCHET — the grid's own hard minimum width
+  propagates up through the `ScrollView` to the window, so enlarging the
+  window could grow `columnCount` but NEVER let it shrink back (measured:
+  a 1400→900→600→420pt shrink sequence stuck at the same column count
+  every time) — fixed by switching to `.flexible(minimum: 1, maximum:
+  cellSize)`, which has no hard minimum to propagate.
+- **Round 3**, re-verifying round 2's fixes empirically again (same
+  `NSHostingView`-probe discipline): both were confirmed genuinely correct
+  this time — plain arrows now admitted, ⌘-combos still rejected;
+  window/pane resize now tracked bidirectionally (`columnCount` measured
+  cycling 7→4→2→1→4→7→1→6→1 across a real resize sequence). Non-blocking
+  polish applied before commit: the modifier guard was rewritten from
+  "subtract an allowed set" to "reject if any of ⌘/⌥/⌃ is held" — both
+  correctness-equivalent (re-verified against the same 15 probed cases)
+  and removes a macOS-12+-deprecated `.function` reference the original
+  form triggered a build warning on; the `1000`-column defensive clip
+  (guarding `LibraryGridColumns.count`'s documented `1_000_000`
+  pathological-input ceiling against a runaway `Array(repeating:count:)`
+  allocation) moved to live inside `columnCount` itself rather than only
+  at `columns`' own call site, so the Up/Down key math and the rendered
+  grid can't desync above that clip; two doc comments corrected against
+  what the reviewer had actually measured (a scroll-restore timing "fix"
+  that measured as a behavioral no-op — `ScrollViewProxy.scrollTo`
+  resolves correctly regardless of which `.onAppear` triggers it; the
+  scrollbar-width imprecision note's "slightly tighter" reworded to the
+  measured reality, cells overlapping by ~2pt in the rare case it's
+  triggered at all).
+
+553 tests (11 new: `LibraryGridColumnsTests` — exact-fit, remainder,
+single-column, and the degenerate zero/negative/non-finite-width and
+zero-cellSize/huge-width cases the review rounds' own findings added).
+No tests for the key-dispatch logic or focus ring themselves — plain
+SwiftUI interaction glue, matching this codebase's standing convention
+(`ThinSlider`, `EditSliderRow`, `CompareDividerOverlay`'s gestures are
+all verified live instead).
+
+**NOT yet live-verified by the user** — per the standing screen-
+automation permission rule, this session did not drive the app via
+AppleScript/Accessibility APIs to confirm interactive behavior (unlike
+D6's live AX-tree pass, which the user explicitly authorized for that
+specific task). Needs a manual pass: arrow keys move the focus ring in
+all 4 directions (wrapping row-to-row on Left/Right, stopping — not
+wrapping — at grid edges on Up/Down); 0–5/`.`/`f` rate/flag the focused
+photo; Return opens it; clicking a star/checkbox/menu in one cell then
+immediately pressing an arrow still moves focus from THAT cell (the
+per-cell `.simultaneousGesture` mouse-focus fix); typing in the search
+field is unaffected by digit/`.`/`f` keys; resizing the window/dragging
+the thumbnail-size slider lays out cells identically to before AND stays
+freely resizable in both directions (the `.adaptive`→`.flexible` column
+switch, the specific thing round 2 caught breaking).

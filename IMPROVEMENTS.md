@@ -385,6 +385,10 @@ focused-photo concept (distinct from the export checkbox set — keep them
 separate; Lightroom does). This is a real feature with design decisions —
 Plan Mode, confirm scope with the user first.
 
+**Shipped 2026-09-08.** See `PROGRESS.md`'s own D4 section for what
+shipped and what the reviewer caught across 3 rounds. NOT yet
+live-verified by the user.
+
 ### D5. Library management gaps — part 1 of 3 (remove photos from catalog) SHIPPED 2026-08-31
 
 Three separate items, each its own session: rename/delete collections

@@ -239,6 +239,71 @@ final class CatalogModelTests: XCTestCase {
         XCTAssertFalse(model.membershipsByPhotoID[photoID, default: []].contains(collectionID))
     }
 
+    func testAddSelectedPhotosUpdatesMembershipMapSynchronously() async throws {
+        let collection = try await database.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+        let model = await makeModel()
+        let photoA = try XCTUnwrap(model.photos.first)
+        let photoB = try XCTUnwrap(model.photos.dropFirst().first)
+        let idA = try XCTUnwrap(photoA.id)
+        let idB = try XCTUnwrap(photoB.id)
+        model.toggleSelection(of: photoA)
+        model.toggleSelection(of: photoB)
+
+        model.addSelectedPhotos(to: collection)
+
+        // No await: local-first, same discipline as toggleMembership's own test.
+        XCTAssertTrue(model.membershipsByPhotoID[idA, default: []].contains(collectionID))
+        XCTAssertTrue(model.membershipsByPhotoID[idB, default: []].contains(collectionID))
+        try await waitUntil("both memberships to reach the database") {
+            let inCollection = Set(try await self.database.photos(inCollection: collectionID).map(\.id))
+            return inCollection.isSuperset(of: [idA, idB])
+        }
+    }
+
+    /// Reviewer-caught regression test: `toggleMembership` removes a photo
+    /// from `photos` when it's toggled OUT of the currently-viewed
+    /// collection (the ghost-cell case,
+    /// `testRemovingFromTheCurrentlyViewedCollectionDropsThePhotoFromTheGrid`
+    /// above), but it does NOT prune that photo's ID from
+    /// `selectedPhotoIDs` — unlike `removePhoto`, which does. So a photo
+    /// can be selected, then silently vanish from the grid while STAYING
+    /// selected. Without intersecting against `photos`, a later
+    /// `addSelectedPhotos` would silently re-add that now-invisible photo
+    /// to whatever collection it was toggled out of — this pins that it
+    /// does not.
+    func testAddSelectedPhotosExcludesAPhotoNoLongerVisibleInTheGrid() async throws {
+        let trip = try await database.createCollection(name: "Trip")
+        let tripID = try XCTUnwrap(trip.id)
+        let other = try await database.createCollection(name: "Other")
+        let otherID = try XCTUnwrap(other.id)
+        let model = await makeModel()
+        let photo = try XCTUnwrap(model.photos.first)
+        let photoID = try XCTUnwrap(photo.id)
+
+        model.toggleMembership(of: photo, in: trip)
+        try await waitUntil("membership to reach the database") {
+            try await self.database.photos(inCollection: tripID).contains { $0.id == photoID }
+        }
+        model.selectedFilter = .collection(tripID)
+        try await waitUntil("the grid to show the collection") { model.photos.count == 1 }
+        model.toggleSelection(of: photo)
+        model.toggleMembership(of: photo, in: trip) // ghost-cell removal — photo vanishes from `photos`...
+        try await waitUntil("the photo to leave the grid") { model.photos.isEmpty }
+        XCTAssertTrue(
+            model.selectedPhotoIDs.contains(photoID),
+            "precondition: toggleMembership must not prune the selection on its own"
+        )
+
+        model.addSelectedPhotos(to: other)
+
+        // No await: the guard against an empty intersection is synchronous.
+        XCTAssertFalse(
+            model.membershipsByPhotoID[photoID, default: []].contains(otherID),
+            "a photo no longer visible in the grid must not be silently re-added via a stale selection"
+        )
+    }
+
     // MARK: - Collections (D5, IMPROVEMENTS.md)
 
     func testRenameCollectionRefreshesTheList() async throws {

@@ -5259,7 +5259,77 @@ non-active collection changes nothing else; Folders rows show no context
 menu at all, confirming the scope boundary holds.
 
 **Missing-file detection (D5's remaining 1 of 3 parts) is still open**, its
-own session. **A new, related feature request came out of this session's
-live testing**: batch-add multiple selected Library photos to a collection
-at once (today it's one photo at a time via each cell's own membership
-menu) — not yet started, see its own section below once scoped.
+own session.
+
+### Batch-add selected Library photos to a collection (D5 follow-up, shipped)
+
+The feature request that came out of the rename/delete-collections session
+above: a new toolbar `Menu("Add to Collection")`, visible only when the
+Library grid's own multi-select checkbox has 1+ photos checked, adding all
+of them to a chosen collection in one action — previously only possible
+one photo at a time via each cell's own membership `Menu`.
+
+Always ADDS, never toggles: a batch selection can be a mix of
+members/non-members of any given collection, so "toggle" has no
+unambiguous meaning across N photos the way it does for one. Scope matches
+the existing per-cell menu exactly — every collection is offered,
+including folder-tree ones (unlike rename/delete, adding a manual
+membership to a folder collection isn't destructive). Deliberately
+excluded: an inline "New Collection…" shortcut (the existing sidebar flow
+already covers creation; a second alert-owning `@State` here would need
+its own routing decision given this codebase's prior alert-count/
+type-checker history). `CatalogDatabase.addPhotos(_:toCollection:)` is a
+new batched write — one `dbQueue.write` looping an `insert(db, onConflict:
+.ignore)` per photo ID, mirroring `importFolderTree`'s own "one
+transaction, many rows" shape rather than N separate `setMembership`
+calls. `CatalogModel.addSelectedPhotos(to:)` is local-first (every
+selected ID gets the collection inserted into `membershipsByPhotoID`
+synchronously), one batched `Task.detached` write.
+
+**A real bug caught by the reviewer, not by testing**: the first draft
+acted on raw `selectedPhotoIDs` directly. `toggleMembership` removes a
+photo from `photos` when it's toggled OUT of the currently-viewed
+collection (the ghost-cell case, already shipped) but does NOT prune that
+photo's ID from `selectedPhotoIDs` — unlike `removePhoto`, which does. So
+a photo could be selected, silently vanish from the grid via that path,
+and remain selected — and a later batch-add would silently re-add it to
+whatever collection it was just removed from, invisibly. Fixed by
+intersecting the raw selection against `photos` before acting
+(`let visibleSelectedIDs = Set(photos.compactMap(\.id))
+.intersection(selectedPhotoIDs)`), reusing the exact same
+"intersect-with-currently-displayed" pattern `ContentView.photosToExport`
+already established for Export. The toolbar `Menu`'s own `.disabled` was
+also widened to gate on this same intersection (a new
+`selectedPhotosVisibleInGrid` computed property in `ContentView`), not
+just `collections.isEmpty` — otherwise the menu could sit enabled for a
+selection that would silently do nothing.
+
+**A second, related bug the reviewer caught**: the original code captured
+`affectsCurrentFilter` (whether the target collection is the one currently
+being viewed) BEFORE the async batched write started. For a large batch,
+that write can take long enough for the user to switch the sidebar filter
+mid-flight, making the captured flag stale by completion. Fixed with a new
+private `refreshIfViewingCollection(_:)`, re-checking `selectedFilter` on
+the `MainActor` at completion instead of trusting a value captured at call
+time — structurally identical to `deleteCollection`'s own
+`clearSelectedFilterIfCollectionDeleted`, which already solves the same
+class of race for the delete path.
+
+Reviewer (Opus 5): 2 rounds, FIX FIRST → APPROVE. Round 1 caught both bugs
+above (plus the now-corrected doc comment, which had wrongly claimed the
+refresh-on-current-filter branch was fully unreachable — it becomes a
+no-op only once the intersection fix is in place, and stops being a no-op
+if the filter changes mid-write, which is exactly what fix #2 handles).
+Also added, per the reviewer's recommendation:
+`testAddPhotosRollsBackEntirelyOnAnInvalidPhotoID` in
+`CatalogDatabaseTests`, pinning that `onConflict: .ignore` only suppresses
+a primary-key conflict, not a foreign-key violation — so a stale/deleted
+photo ID in a batch throws and rolls back the ENTIRE transaction, not just
+the offending row (verified empirically by the reviewer against GRDB's own
+source before the fix, then pinned as a real test). 522 tests (3 new: the
+DB rollback test, and `CatalogModelTests`'
+`testAddSelectedPhotosUpdatesMembershipMapSynchronously` +
+`testAddSelectedPhotosExcludesAPhotoNoLongerVisibleInTheGrid`, the latter
+replacing an earlier test that turned out to describe an unreachable
+scenario once the intersection fix landed). NOT yet live-verified by the
+user.

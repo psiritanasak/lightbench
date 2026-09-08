@@ -29,6 +29,16 @@ struct ContentView: View {
         return catalog.photos.filter { catalog.isSelected($0) }
     }
 
+    /// What "Add to Collection" actually acts on — the same
+    /// currently-displayed-and-selected intersection
+    /// `CatalogModel.addSelectedPhotos` itself computes internally, so the
+    /// menu can't be left enabled for a selection that would silently do
+    /// nothing (e.g. a photo toggled out of the collection being viewed,
+    /// which stays selected — see that method's own doc comment).
+    private var selectedPhotosVisibleInGrid: [Photo] {
+        catalog.photos.filter { catalog.isSelected($0) }
+    }
+
     /// Phase 4 slice 2: toggles the main window between the single-photo
     /// Editor (the existing `HSplitView`, unchanged) and the Library
     /// thumbnail grid. Presentation-only — switching back to the Editor
@@ -515,6 +525,16 @@ struct ContentView: View {
                 .disabled(photosToExport.isEmpty || exportModel.isExporting)
             }
             if !catalog.selectedPhotoIDs.isEmpty {
+                ToolbarItem(placement: .automatic) {
+                    Menu("Add to Collection") {
+                        ForEach(catalog.collections) { collection in
+                            Button(collection.name) {
+                                catalog.addSelectedPhotos(to: collection)
+                            }
+                        }
+                    }
+                    .disabled(catalog.collections.isEmpty || selectedPhotosVisibleInGrid.isEmpty)
+                }
                 ToolbarItem(placement: .automatic) {
                     Button("Clear Selection") {
                         catalog.clearSelection()

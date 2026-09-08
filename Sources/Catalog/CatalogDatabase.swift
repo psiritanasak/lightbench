@@ -298,6 +298,30 @@ final class CatalogDatabase: Sendable {
         }
     }
 
+    /// Adds every photo in `photoIDs` to `collectionID` in ONE batched
+    /// transaction (D5 follow-up: batch-add from a Library multi-select) —
+    /// not N separate `setMembership` calls, mirroring `importFolderTree`'s
+    /// own established "one `dbQueue.write`, many rows" shape below.
+    /// Add-only: unlike `setMembership`, there's no `isMember` direction,
+    /// since a batch selection can be a mix of members/non-members and
+    /// "add all" is the only unambiguous semantic for that case.
+    /// `onConflict: .ignore` per row makes an already-member photo a
+    /// no-op, the same idempotency `setMembership`'s add path relies on.
+    /// A since-deleted photo ID in the batch would trip the
+    /// `collection_photo` FK and abort the whole transaction — not
+    /// specially guarded per-row here, matching `importPhotos`/
+    /// `importFolderTree`'s own tolerance for not isolating individual
+    /// rows; the caller resyncs local state via a full `refresh()` on any
+    /// failure.
+    func addPhotos(_ photoIDs: [Int64], toCollection collectionID: Int64) async throws {
+        try await dbQueue.write { db in
+            for photoID in photoIDs {
+                try CollectionPhoto(collectionId: collectionID, photoId: photoID)
+                    .insert(db, onConflict: .ignore)
+            }
+        }
+    }
+
     // MARK: - Folder-mirrored nested collections
 
     /// Imports an entire recursively-scanned folder tree: every folder

@@ -266,6 +266,71 @@ final class CatalogDatabaseTests: XCTestCase {
         XCTAssertTrue(inCollection.isEmpty)
     }
 
+    func testAddPhotosAddsAllToCollection() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [
+            URL(fileURLWithPath: "/tmp/a.jpg"),
+            URL(fileURLWithPath: "/tmp/b.jpg"),
+            URL(fileURLWithPath: "/tmp/c.jpg")
+        ])
+        let photoIDs = try await db.allPhotos().map { try XCTUnwrap($0.id) }
+        let collection = try await db.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+
+        try await db.addPhotos(photoIDs, toCollection: collectionID)
+
+        let inCollection = try await db.photos(inCollection: collectionID)
+        XCTAssertEqual(Set(inCollection.map(\.id)), Set(photoIDs))
+    }
+
+    func testAddPhotosIsIdempotentForAlreadyMembers() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [
+            URL(fileURLWithPath: "/tmp/a.jpg"),
+            URL(fileURLWithPath: "/tmp/b.jpg")
+        ])
+        let photoIDs = try await db.allPhotos().map { try XCTUnwrap($0.id) }
+        let collection = try await db.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+        try await db.setMembership(photoID: photoIDs[0], collectionID: collectionID, isMember: true)
+
+        try await db.addPhotos(photoIDs, toCollection: collectionID)
+
+        let inCollection = try await db.photos(inCollection: collectionID)
+        XCTAssertEqual(
+            Set(inCollection.map(\.id)), Set(photoIDs),
+            "a photo already a member must not error or duplicate when included in a batch add"
+        )
+    }
+
+    /// Reviewer-verified claim, now pinned: `insert(db, onConflict: .ignore)`
+    /// only suppresses a UNIQUE/PK conflict, NOT a foreign-key violation —
+    /// so a stale/nonexistent photo ID in the batch throws, and because
+    /// the whole loop runs inside one `dbQueue.write`, GRDB rolls back the
+    /// ENTIRE transaction, not just the offending row.
+    func testAddPhotosRollsBackEntirelyOnAnInvalidPhotoID() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+        let photos = try await db.allPhotos()
+        let validID = try XCTUnwrap(photos.first?.id)
+        let collection = try await db.createCollection(name: "Trip")
+        let collectionID = try XCTUnwrap(collection.id)
+        let nonexistentID: Int64 = 999_999
+
+        do {
+            try await db.addPhotos([validID, nonexistentID], toCollection: collectionID)
+            XCTFail("a batch containing a nonexistent photo ID must throw, not silently skip it")
+        } catch {
+            // Expected — the foreign-key violation on `nonexistentID`.
+        }
+
+        let inCollection = try await db.photos(inCollection: collectionID)
+        XCTAssertTrue(
+            inCollection.isEmpty,
+            "a failed batch must leave zero rows added, not just skip the invalid one"
+        )
+    }
+
     func testAllMembershipsReflectsCurrentState() async throws {
         let db = try makeDatabase()
         _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])

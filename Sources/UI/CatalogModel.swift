@@ -593,6 +593,73 @@ final class CatalogModel: ObservableObject {
         }
     }
 
+    /// Adds every currently-selected photo, RESTRICTED to those still in
+    /// `photos` (D5 follow-up, requested after rename/delete collections
+    /// shipped) to `collection` in one action. Always ADDS, never
+    /// toggles — unlike `toggleMembership`, a batch selection can be a
+    /// mix of members/non-members, and "add all" is the only semantic
+    /// that isn't ambiguous for that case.
+    ///
+    /// The `photos`-intersection matters, reviewer-caught: unlike
+    /// `removePhoto` (which prunes `selectedPhotoIDs`, `:414`),
+    /// `toggleMembership` does NOT prune a photo's selection when it
+    /// removes that photo from the currently-viewed collection's grid —
+    /// so a photo toggled OUT of the collection being viewed can remain
+    /// in `selectedPhotoIDs` while no longer visible. Without this
+    /// intersection, a later "Add to Collection" would silently re-add
+    /// that invisible photo. `ContentView.photosToExport` already
+    /// establishes this exact "intersect the raw selection with the
+    /// currently-displayed set" pattern for Export; this mirrors it.
+    /// Local-first: every intersected ID gets `collection` inserted into
+    /// `membershipsByPhotoID` synchronously, same discipline as
+    /// `toggleMembership`'s own local update; the write itself is one
+    /// batched transaction (`CatalogDatabase.addPhotos`), not N separate
+    /// calls.
+    func addSelectedPhotos(to collection: PhotoCollection) {
+        guard let database, let collectionID = collection.id else { return }
+        let visibleSelectedIDs = Set(photos.compactMap(\.id)).intersection(selectedPhotoIDs)
+        guard !visibleSelectedIDs.isEmpty else { return }
+        let photoIDs = Array(visibleSelectedIDs)
+
+        for photoID in photoIDs {
+            membershipsByPhotoID[photoID, default: []].insert(collectionID)
+        }
+
+        Task.detached { [weak self] in
+            do {
+                try await database.addPhotos(photoIDs, toCollection: collectionID)
+                await self?.refreshIfViewingCollection(collectionID)
+            } catch {
+                await self?.refresh()
+            }
+        }
+    }
+
+    /// Refreshes only if `collectionID` is STILL the active filter at
+    /// completion — re-checked here, on the `MainActor`, rather than a
+    /// flag captured before the (potentially large, batched) write
+    /// started. Reviewer-caught: capturing `affectsCurrentFilter` up
+    /// front would miss a filter change the user makes while this
+    /// write is still in flight — the same race `deleteCollection`'s own
+    /// `clearSelectedFilterIfCollectionDeleted` already avoids by
+    /// re-reading `selectedFilter` at completion instead of trusting a
+    /// captured value.
+    ///
+    /// With the `photos`-intersection above, every added photo was
+    /// already visible under whatever filter was active at call time —
+    /// so if that filter is STILL `.collection(collectionID)` here, every
+    /// added photo was already a member of it, making this refresh a
+    /// genuine no-op in practice. Kept anyway, matching `toggleMembership`'s
+    /// own "handled anyway, not left to depend on that reasoning staying
+    /// true" precedent — and it stops being a no-op the moment the target
+    /// collection differs from what was active at call time but matches
+    /// by completion (e.g. the user switches filters mid-write).
+    private func refreshIfViewingCollection(_ collectionID: Int64) async {
+        if selectedFilter == .collection(collectionID) {
+            await refresh()
+        }
+    }
+
     // MARK: - Folder access (read-only, persisted across relaunches)
 
     /// Captures a security-scoped bookmark for `folder` and activates it

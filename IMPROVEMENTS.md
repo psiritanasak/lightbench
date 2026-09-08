@@ -435,6 +435,30 @@ regression test fails against it). `isFolder` guards added to both new
 exclusion. 517 tests (7 new), live-verified by the user. **Missing-file
 detection is still open**, its own session.
 
+**Batch-add-to-collection shipped 2026-09-08** (feature request that came
+directly out of live-testing rename/delete above, outside the original
+3-part D5 scope): a new toolbar `Menu("Add to Collection")`, visible when
+the Library grid's multi-select has 1+ photos checked, adds all of them to
+a chosen collection in one action — previously one photo at a time via
+each cell's own membership menu. `CatalogDatabase.addPhotos(_:toCollection:)`
+is a new batched write (one `dbQueue.write` looping an
+`insert(db, onConflict: .ignore)` per photo ID, mirroring
+`importFolderTree`'s "one transaction, many rows" shape).
+`CatalogModel.addSelectedPhotos(to:)` always ADDS, never toggles — a
+mixed selection has no unambiguous toggle semantic. Reviewer (Opus 5)
+caught two real bugs in the first draft: acting on raw `selectedPhotoIDs`
+directly, which can contain a photo that silently vanished from the grid
+(`toggleMembership` doesn't prune the selection when a photo is toggled
+out of the collection being viewed) and would then get invisibly
+re-added — fixed by intersecting the selection against `photos` first,
+reusing `ContentView.photosToExport`'s existing pattern; and a
+captured-before-the-write `affectsCurrentFilter` flag that could go stale
+during a large batch if the user switches filters mid-write — fixed with
+a new `refreshIfViewingCollection(_:)`, re-checking `selectedFilter` at
+completion instead, mirroring `deleteCollection`'s own race-avoidance
+shape. 2 rounds, FIX FIRST → APPROVE. 522 tests (3 new). NOT yet
+live-verified by the user.
+
 ### D6. Accessibility pass over custom controls
 
 Past reviews repeatedly caught accessibility nits (ThinSlider, Adjust

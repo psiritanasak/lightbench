@@ -24,7 +24,34 @@ struct LibraryGridView: View {
     /// deliberately untouched.
     @AppStorage("PhotoApp.libraryThumbnailSize") private var thumbnailSize: Double = 140
 
-    private var columns: [GridItem] { [GridItem(.adaptive(minimum: thumbnailSize), spacing: 12)] }
+    /// Single source of truth for the slider's bounds — reviewer-caught:
+    /// the floor and the read-site/migration clamps below used to
+    /// duplicate this range as separate literals, which a future range
+    /// change could silently desync. The floor of 120 is only safe
+    /// because `LibraryThumbnailCell`'s icon row was ALSO measured (twice
+    /// — an earlier pass here overclaimed a "108pt" figure the reviewer
+    /// then measured as actually 122pt, still ABOVE this floor) and
+    /// tightened to a real, verified 116.0pt layout-minimum / 113pt
+    /// visible-ink-minimum — see that cell's own `HStack` doc comment for
+    /// the full numbers.
+    private static let thumbnailSizeRange: ClosedRange<Double> = 120...240
+
+    /// Clamped read of `thumbnailSize` — reviewer-caught: a value
+    /// persisted from BEFORE the floor was raised from 100 to 120 must
+    /// not render at the old, too-small size even on the very FIRST
+    /// frame after an upgrade, before `.onAppear`'s migration below has
+    /// had a chance to run. The `isFinite` guard (matching this
+    /// codebase's own established habit, e.g. `EditSliderRow`'s typed-
+    /// input fix) isn't reachable through `ThinSlider` itself — every one
+    /// of its own code paths is already clamped/finite — only through a
+    /// hand-corrupted `UserDefaults` value; `min(max(.nan, ...), ...)`
+    /// would otherwise still be `.nan` and reach `.frame(width:)`.
+    private var cellSize: Double {
+        guard thumbnailSize.isFinite else { return Self.thumbnailSizeRange.lowerBound }
+        return min(max(thumbnailSize, Self.thumbnailSizeRange.lowerBound), Self.thumbnailSizeRange.upperBound)
+    }
+
+    private var columns: [GridItem] { [GridItem(.adaptive(minimum: cellSize), spacing: 12)] }
 
     /// D5 (IMPROVEMENTS.md): the photo a "Remove from Library" tap is
     /// asking to confirm. Lives here, not `ContentView`, deliberately —
@@ -52,7 +79,7 @@ struct LibraryGridView: View {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 12) {
                             ForEach(catalog.displayedPhotos) { photo in
-                                LibraryThumbnailCell(catalog: catalog, photo: photo, cellSize: thumbnailSize) {
+                                LibraryThumbnailCell(catalog: catalog, photo: photo, cellSize: cellSize) {
                                     onOpen(photo)
                                 } onRequestRemoval: {
                                     photoPendingRemoval = photo
@@ -80,6 +107,38 @@ struct LibraryGridView: View {
             Button("Cancel", role: .cancel) {}
         } message: { photo in
             Text("\"\(photo.filename)\" will be removed from the Library. The original file on disk is not affected.")
+        }
+        .onAppear {
+            // Normalizes the STORED value on every appearance (this view
+            // is torn down/rebuilt on every Editor↔Library switch, so
+            // this genuinely re-runs each time, not "once ever" despite
+            // reading like a one-time migration at a glance) — a value
+            // persisted from BEFORE the slider's floor was raised from
+            // 100 to 120 (live-caught cell-overlap bug) would otherwise
+            // keep the STORED preference stuck out of range forever; the
+            // slider itself only clamps where its THUMB is drawn, never
+            // the stored value, and the `cellSize` computed property
+            // above already covers every RENDER in the meantime, so this
+            // is pure hygiene, not load-bearing for correctness. Guarded
+            // so a value already in range doesn't trigger a redundant
+            // `UserDefaults`/`objectWillChange` write on every single
+            // Library visit. Writes back the already-clamped `cellSize`
+            // (not a fresh `min(max(...))` recompute) — reviewer-caught:
+            // recomputing independently here meant a corrupt NaN value
+            // evaluated `min(max(.nan, ...), ...)` to NaN again (Swift's
+            // `min`/`max` return their first argument when a NaN
+            // comparison is false), so this guard's own "already in
+            // range" check kept re-detecting the same corruption and
+            // rewriting the same NaN back forever — the exact repeated
+            // write this guard exists to prevent. Reusing `cellSize` also
+            // removes a subtler divergence: for `+.infinity`, the old
+            // recompute here normalized to 240 while `cellSize` (above)
+            // separately normalized to 120, so the first frame and every
+            // frame after `.onAppear` disagreed.
+            let range = Self.thumbnailSizeRange
+            if !thumbnailSize.isFinite || thumbnailSize < range.lowerBound || thumbnailSize > range.upperBound {
+                thumbnailSize = cellSize
+            }
         }
     }
 
@@ -130,7 +189,18 @@ struct LibraryGridView: View {
             Image(systemName: "photo")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            ThinSlider(value: $thumbnailSize, range: 100...240)
+            // Floor raised from 100 to 120 alongside the cell-width fix
+            // below (live-caught overlap bug) — this comment went through
+            // two reviewer-caught inaccuracies before landing on real,
+            // measured numbers, see the icon row's own `HStack` doc
+            // comment for the full history: at the icon row's ORIGINAL
+            // font sizes/spacing, 120 was measured as 9pt BELOW the
+            // row's true minimum (actively insufficient, not "zero-slack"
+            // as an earlier version of this exact comment claimed); the
+            // `.caption2` icon shrink alone still left 120 above the
+            // minimum; only tightening the row's own spacing (6→4) is
+            // what actually brought the row under 120 with real margin.
+            ThinSlider(value: $thumbnailSize, range: Self.thumbnailSizeRange)
                 .frame(width: 100)
             Image(systemName: "photo")
                 .font(.body)
@@ -296,7 +366,18 @@ private struct LibraryThumbnailCell: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            HStack(spacing: 6) {
+            // `spacing: 4`, tightened from 6 — reviewer-measured (twice):
+            // at `.body`-sized flag/folder icons and `spacing: 6`, this
+            // row's true minimum was 129.0pt layout / 126pt visible-ink;
+            // shrinking those two icons to `.caption2` (below) dropped
+            // that to 122.0pt/119pt — STILL above the slider's 120pt
+            // floor, an overclaimed "~108pt" in an earlier version of
+            // this fix that the reviewer caught was simply wrong. `spacing:
+            // 4` is what actually buys real margin: 116.0pt layout /
+            // 113pt visible-ink, i.e. 4pt/7pt of slack under the 120
+            // floor — the number `.clipped()`'s own doc comment below
+            // needs to be true for "backstop, not load-bearing" to hold.
+            HStack(spacing: 4) {
                 StarRatingRow(rating: photo.rating) { newRating in
                     catalog.setRating(newRating, for: photo)
                 }
@@ -304,7 +385,11 @@ private struct LibraryThumbnailCell: View {
                 Button {
                     catalog.setFlagged(!photo.isFlagged, for: photo)
                 } label: {
+                    // `.caption2`, matching `StarRatingRow`'s own icon
+                    // size — see the `HStack`'s own doc comment above for
+                    // the measured effect.
                     Image(systemName: photo.isFlagged ? "flag.fill" : "flag")
+                        .font(.caption2)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(photo.isFlagged ? .yellow : .secondary)
@@ -353,11 +438,44 @@ private struct LibraryThumbnailCell: View {
                     }
                 } label: {
                     Image(systemName: "folder.badge.plus")
+                        .font(.caption2)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+                // Reviewer-caught: a macOS `Menu`'s built-in disclosure
+                // indicator isn't accounted for in the row-width
+                // measurement above at all — hiding it removes the
+                // uncertainty entirely rather than trying to measure a
+                // glyph whose presence/size isn't guaranteed.
+                .menuIndicator(.hidden)
             }
         }
+        // Live-caught: only the thumbnail `ZStack` above constrained its
+        // own width to `cellSize` — the outer VStack (filename + the
+        // star/flag/folder row below it) had no width constraint of its
+        // own at all, so at the slider's smallest sizes the icon row's
+        // fixed-size content (5 star buttons + flag + folder menu, none
+        // of which can compress below their own minimum size) needed more
+        // width than one grid column actually had, and SwiftUI let it
+        // paint past the cell's own bounds into the NEXT cell's column —
+        // exactly the "folder icon overlaps the next photo's star row"
+        // report. `.clipped()` alone isn't the real fix — the actual fix
+        // is constraining the whole cell, not just the thumbnail, to
+        // `cellSize`, AND measuring (not guessing) that the row's content
+        // genuinely fits inside the slider's floor with real margin.
+        // Measured twice by the reviewer: `.body`-sized flag/folder icons
+        // at `spacing: 6` needed 129.0pt layout / 126pt visible-ink —
+        // above the 120pt floor entirely; shrinking those two icons to
+        // `.caption2` alone only got to 122.0pt/119pt — STILL above the
+        // floor (an earlier version of this fix's doc comments claimed
+        // "~108pt" here, which was simply wrong); tightening the row's
+        // own `HStack` spacing from 6 to 4 is what actually buys margin:
+        // 116.0pt layout / 113pt visible-ink, 4pt/7pt of slack under 120.
+        // `.clipped()` stays anyway, purely as a backstop so a future,
+        // even-narrower addition to this row degrades to a clipped edge
+        // within its OWN cell, never bleeding into a neighbor again.
+        .frame(width: cellSize)
+        .clipped()
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .task(id: photo.path) {

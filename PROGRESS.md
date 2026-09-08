@@ -5597,5 +5597,74 @@ just fake `/tmp/...` paths), `testRelocatePhotosSkipsADestinationAlreadyClaimedB
 `testRelocatePhotosOnNonexistentIDIsANoOp` (now also asserts row count
 and that an unrelated row is untouched). `PhotoImporterTests` gained 3
 tests for `matchByFilename` (case-insensitive match, unmatched count,
-sidecar/non-image files correctly excluded). NOT yet live-verified by
-the user.
+sidecar/non-image files correctly excluded). Live-verified by the user
+— relocate worked correctly on the first try.
+
+### Library grid: thumbnail-size slider overlap bug, fixed 2026-09-08
+
+Live-caught by the user (with a screenshot) right after relocate shipped:
+dragging the Library grid's thumbnail-size slider to its smallest
+setting made each cell's folder-menu icon visually overlap the star-
+rating row of the adjacent cell.
+
+Root cause: `LibraryThumbnailCell`'s outer `VStack` (filename + the
+star/flag/folder-menu row below the thumbnail) had no width constraint
+of its own — only the inner thumbnail `ZStack` was pinned to `cellSize`.
+The icon row's fixed-size content (5 star buttons + a flag icon + a
+folder-menu icon, none of which can compress) needed more width than one
+grid column had at the slider's smallest sizes, and with nothing
+constraining the outer VStack, SwiftUI let it paint past the cell's own
+bounds into the next column.
+
+Fix went through 3 reviewer rounds (Opus 5), each catching a real,
+precisely-measured problem with the previous round's own numbers — this
+was the most measurement-intensive UI fix of the session:
+- **Round 1 (FIX FIRST)**: the proposed `.frame(width: cellSize)` +
+  `.clipped()` structural fix was correct, but the doc comments'
+  "~108pt" estimate for the icon row's minimum width, and the new
+  slider floor of 120, were both unmeasured guesses. Reviewer measured
+  (via `NSImage` glyph metrics) the row's TRUE minimum at the icons'
+  original font size as exactly 120.0pt — identical to the proposed
+  floor, meaning zero margin, with a macOS `Menu`'s built-in disclosure
+  indicator (unaccounted for at all) as an additional unknown that could
+  make it worse.
+- **Round 2 (FIX FIRST)**: shrunk the flag/folder icons to `.caption2`
+  (matching the star row) and added `.menuIndicator(.hidden)`. Reviewer
+  re-measured with `NSHostingView.fittingSize` (layout minimum) AND
+  `ImageRenderer` rasterization with a per-pixel ink sweep (visible-glyph
+  minimum) — two independent methods — and found the row's true minimum
+  was now 122.0pt/119pt: STILL above the 120pt floor (the "~108pt" claim
+  was simply wrong), meaning `.clipped()` remained load-bearing rather
+  than the intended backstop. Also confirmed `.menuIndicator(.hidden)`
+  contributes exactly 0pt (kept anyway — removes the ambiguity, costs
+  nothing) and that the read-site clamp genuinely closes the
+  stale-persisted-value gap from round 1.
+- **Round 3 (APPROVE)**: tightened the icon row's own `HStack` spacing
+  from 6 to 4 (the reviewer had already measured this exact variant as
+  116.0pt/113pt during round 2 while checking alternatives). Re-verified
+  with both methods again post-fix: real margin (4pt layout/7pt ink) at
+  the floor, no ink loss at `cellSize == 120` down to a sub-floor 110,
+  and — via an ink-gap analysis rather than a "does it look cramped"
+  guess — the tightened gap (6.0pt) is still 1.5pt WIDER than the
+  star-to-star gap already shipping in the same row, so it reads no more
+  cramped than its own existing neighbors. Two more non-blocking
+  inaccuracies caught and fixed before commit: the `.onAppear` migration
+  recomputed `min(max(...))` independently instead of reusing the
+  already-correct `cellSize` read, so a hand-corrupted NaN persisted
+  value would re-detect and rewrite the same NaN forever (the exact
+  repeated-write the guard existed to prevent) — fixed by writing back
+  `cellSize` itself; and a stale doc comment on the slider still claimed
+  120 was the ORIGINAL font size's "exact, zero-slack minimum," when the
+  actual measurement showed 120 was 9pt below that minimum (actively
+  insufficient, not zero-slack) — corrected.
+
+New `LibraryGridView.thumbnailSizeRange` is the single source of truth
+for the slider's `100...240` → `120...240` bounds (previously duplicated
+as separate literals across the slider, the read-site clamp, and the
+migration); a persisted pre-fix value below 120 is normalized on next
+appearance, with a clamped `cellSize` computed property covering the
+gap on the very first frame before that appearance-triggered migration
+runs. 538 tests unchanged (pure SwiftUI layout code, no extracted pure
+logic — matches this codebase's own convention of not unit-testing
+plain View bodies; verified by the reviewer's own precise rendering
+measurements instead, both pre- and post-fix, across all 3 rounds).

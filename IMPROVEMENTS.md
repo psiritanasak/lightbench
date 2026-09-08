@@ -410,6 +410,31 @@ that session) — full write-up in PROGRESS.md. 380 tests (6 new). NOT yet
 verified live. **Rename/delete collections and missing-file detection are
 still open**, each still its own session.
 
+**Rename/delete collections shipped 2026-09-08** as
+`CatalogDatabase.renameCollection(id:to:)` (the project's first `UPDATE` on
+any table other than `photo`) + `deleteCollection(id:)` (the first DELETE
+on `collection`, relying on the already-shipped `ON DELETE CASCADE` for
+membership cleanup) + a `.contextMenu` on flat "Collections" sidebar rows
+(the codebase's first use of that modifier) — "Rename…" and a destructive
+"Delete", mirroring the confirmation-alert shape "Remove from Library?"
+already established. Deliberately excludes "Folders" rows (folder-tree
+collections): deleting one would recursively delete its whole subtree, and
+both rename and delete interact oddly with re-import (folder-tree import
+matches by disk path, not name) — out of scope this slice, matching this
+project's own prior exclusion when folder collections first shipped.
+`CatalogModel.deleteCollection` also falls back `selectedFilter` to
+`.allPhotos` when the deleted collection was the one being viewed.
+Reviewer (Opus 5) caught a real race in the first draft — setting
+`selectedFilter` synchronously before the delete write lands triggers its
+own `didSet`-driven refresh, which could re-fetch the still-present row
+and silently undo the local removal — fixed by deferring the filter reset
+until the write is confirmed, then verified empirically (reviewer rebuilt
+a scratch copy with the synchronous version reverted and confirmed the new
+regression test fails against it). `isFolder` guards added to both new
+`CatalogModel` methods as defense-in-depth beyond the UI-level scope
+exclusion. 517 tests (7 new), live-verified by the user. **Missing-file
+detection is still open**, its own session.
+
 ### D6. Accessibility pass over custom controls
 
 Past reviews repeatedly caught accessibility nits (ThinSlider, Adjust

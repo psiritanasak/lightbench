@@ -5200,3 +5200,66 @@ resurfaces: ask whether sections are expanded before assuming a scroll
 regression, and do not reach for `NSScrollView`/`NSViewRepresentable`
 probing in this exact file without re-reading the content-shift bug's
 "Lesson recorded" note first.
+
+## D5 part 2 of 3 — rename/delete collections (SHIPPED + LIVE-VERIFIED, 2026-09-08)
+Sidebar `.contextMenu` (the codebase's first use of that modifier) on flat
+"Collections" rows only — "Rename…" + a destructive "Delete", mirroring
+"Remove from Library?"'s own confirmation-alert shape. **Scope, confirmed
+with the user up front via `AskUserQuestion`**: excludes "Folders" rows
+(folder-tree collections) — deleting one would recursively delete its
+whole subtree (`parentId` is itself `ON DELETE CASCADE`, self-referencing),
+and rename/delete both interact oddly with re-import (folder-tree import
+matches purely by disk path, never name) — matches this project's own
+prior explicit exclusion when folder collections first shipped, kept out
+again rather than solved this session.
+
+`CatalogDatabase.renameCollection(id:to:)` is the project's first `UPDATE`
+on any table other than `photo` (mirrors `setRating`/`setFlagged`'s exact
+shape); `deleteCollection(id:)` is the first DELETE on `collection`
+(mirrors `deletePhoto(id:)`, relying on the already-shipped `ON DELETE
+CASCADE` FK for membership cleanup — verified by a real cascade test, the
+collection-delete mirror of the existing photo-delete cascade test, not
+just trusted from the migration's own comment). `CatalogModel.deleteCollection`
+also falls back `selectedFilter` to `.allPhotos` when the collection being
+deleted is the one currently being viewed, extending `toggleMembership`'s
+own `affectsCurrentFilter` precedent.
+
+**A real race caught and fixed before this shipped, then verified
+empirically twice** (once by me while writing it, once independently by
+the reviewer): `selectedFilter`'s own `didSet` kicks off `Task { await
+refresh() }` whenever it changes. The first draft set `selectedFilter =
+.allPhotos` SYNCHRONOUSLY inside `deleteCollection`, before the async
+delete write landed — meaning that didSet-triggered refresh could re-fetch
+the collection from the database (still there) and silently restore the
+row `collections.removeAll` had just removed locally, permanently, since
+`deleteCollection`'s own success path never calls `refresh()` on its own.
+Fixed by deferring the filter reset into the same `Task.detached`, only
+after the write is confirmed. Reviewer (Opus 5) additionally caught that
+the regression test for this only asserted the EVENTUAL value
+(`selectedFilter == .allPhotos`), which a reverted synchronous version
+would also eventually satisfy, just sooner — fixed by asserting the filter
+has NOT yet flipped immediately after `deleteCollection` returns (no
+`await` in between), then the reviewer independently rebuilt a scratch
+copy with the synchronous version reverted and confirmed the strengthened
+test genuinely fails against it. `isFolder` guards were added to both new
+`CatalogModel` methods (not just the UI-level `.contextMenu` exclusion) as
+defense-in-depth, per the reviewer's own suggestion.
+
+Reviewer: 2 rounds — round 1 FIX FIRST (the race-test weakness above, a
+new compiler warning from an unchecked `updateAll` result, a doc comment
+overclaiming the `didSet` as "unconditional", a missing doc comment, an
+undocumented-but-harmless `membershipsByPhotoID` staleness, and the
+`isFolder` defense-in-depth suggestion) → all fixed → round 2 APPROVE.
+517 tests (7 new), 0 regressions, no new compiler warnings (three
+pre-existing warnings elsewhere in the codebase are unrelated to this
+diff). **Live-verified by the user**: rename re-sorts the sidebar and
+preserves membership; deleting the actively-viewed collection falls back
+to "All Photos" with the photos themselves untouched; deleting a
+non-active collection changes nothing else; Folders rows show no context
+menu at all, confirming the scope boundary holds.
+
+**Missing-file detection (D5's remaining 1 of 3 parts) is still open**, its
+own session. **A new, related feature request came out of this session's
+live testing**: batch-add multiple selected Library photos to a collection
+at once (today it's one photo at a time via each cell's own membership
+menu) — not yet started, see its own section below once scoped.

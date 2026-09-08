@@ -494,7 +494,18 @@ fixed. Small non-blocking polish applied after APPROVE: fail-closed
 operand order (checks the photo first, short-circuiting the extra root
 stat in the common present-file case), and deterministic longest-prefix-match
 when multiple active roots nest (was `Set.first`, undefined iteration
-order). 530 tests (11 new). NOT yet live-verified by the user.
+order). 530 tests (11 new). **Live-caught bug, fixed same session**: the
+user's first test showed no placeholder at all — root cause was
+`ThumbnailCache` serving an already-cached thumbnail forever with no
+freshness check, so the missing-check (gated on decode failure) never
+ran for any previously-viewed photo. Fixed by running the check
+unconditionally on every cell appearance and letting it override a
+cached thumbnail, not just a failed decode; 2 more reviewer rounds (FIX
+FIRST → FIX FIRST → APPROVE) caught a dropped reset/cancellation guard
+and a stale doc comment along the way. See PROGRESS.md for full detail,
+including the confirmed (not a bug) scope boundary: detection happens on
+a cell's next appearance, not via live filesystem monitoring. NOT yet
+live-verified by the user.
 
 ### D6. Accessibility pass over custom controls
 

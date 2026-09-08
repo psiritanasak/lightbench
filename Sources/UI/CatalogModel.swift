@@ -309,8 +309,14 @@ final class CatalogModel: ObservableObject {
 
     /// True only if `photo`'s file is confirmed genuinely missing — used by
     /// the Library grid and Editor filmstrip to distinguish "deleted" from
-    /// "still decoding" or "can't currently verify" once a thumbnail
-    /// decode fails. Three things all have to hold: `photo.path` sits
+    /// "present" (whether just decoded or served from `ThumbnailCache`) or
+    /// "can't currently verify." Called UNCONDITIONALLY on every cell
+    /// appearance, not gated on a failed decode — reviewer-caught, after
+    /// shipping the gated version: `ThumbnailCache` serves an
+    /// already-decoded thumbnail forever with no freshness check, so a
+    /// photo viewed before its file was deleted would never fail its
+    /// decode again, and a check gated on decode failure would never run
+    /// for it. Three things all have to hold: `photo.path` sits
     /// under a folder we hold confirmed security-scoped access to
     /// (`PhotoImporter.confirmedActiveFolderRoot`), that ROOT folder
     /// itself is still reachable right now (reviewer-caught: `activeFolders`
@@ -331,8 +337,10 @@ final class CatalogModel: ObservableObject {
     /// Both filesystem checks run inside `Task.detached`, off the
     /// `MainActor` this class is isolated to — reviewer-caught: a `stat`
     /// on a spun-down external drive or dead network mount can block for
-    /// seconds, and this runs on exactly that slow-filesystem path (the
-    /// one case a decode has already failed). `folders`/`path`/`root` are
+    /// seconds, and (now that this runs on every appearance, not just a
+    /// failed decode) that cost lands on the common path too, not just an
+    /// already-slow one. The `&&` below still short-circuits to a single
+    /// stat in the ordinary present-file case. `folders`/`path`/`root` are
     /// captured as local values before entering the detached closure so
     /// it never touches `self`, matching this app's established
     /// isolation-capture discipline (see `ThumbnailCache`'s own doc

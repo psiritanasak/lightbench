@@ -5441,7 +5441,53 @@ directory itself and re-confirms the same absent file is no longer
 flagged — the direct regression pin for the round-1 fix). No new tests
 for the SwiftUI cell bodies themselves, matching this codebase's
 established convention that plain View-body logic isn't unit-tested,
-only extracted pure logic is. **NOT yet live-verified by the user** — next
-step is deleting a real file from an imported folder while the app is
-running and confirming the grid cell shows "Missing" while sibling
-photos in the same folder render normally.
+only extracted pure logic is.
+
+**Live-caught bug, fixed same session (2026-09-08), before any live
+success**: the user's first live test reported no "Missing" placeholder
+appearing at all. Root cause: `ThumbnailCache.thumbnail(for:)` serves an
+already-decoded `CGImage` from its `NSCache` forever, with no freshness
+check — it has no way to know the underlying file was deleted after
+being cached. The shipped check was gated on `decoded == nil`, so for any
+photo already viewed in this session (the overwhelmingly common case —
+the user had almost certainly opened the Library grid before deleting a
+file to test with), the decode kept "succeeding" from cache and the
+missing-check never ran at all. The feature was structurally incapable
+of detecting a deletion for any previously-viewed photo.
+
+Fixed by calling `CatalogModel.isPhotoConfirmedMissing(_:)`
+UNCONDITIONALLY on every cell appearance (via `async let`, concurrent
+with the thumbnail fetch), and by making `isMissing` take priority over
+a cached `image` in the render logic (previously: missing-placeholder
+only shown when `image == nil`; now: missing-placeholder shown whenever
+`isMissing`, even over an already-cached thumbnail). Reviewer (Opus 5):
+2 more rounds on top of the original 2, FIX FIRST → FIX FIRST → APPROVE.
+Round 1 (of this fix) caught that the always-run change silently dropped
+a previously-reviewer-mandated `isMissing = false` reset at task start,
+and that neither async call checks `Task.isCancelled`, so a superseded
+`.task` (a recycled cell) could write a stale result over a different
+photo's own in-flight check — fixed by capturing both results into
+locals and adding `guard !Task.isCancelled else { return }` before either
+gets written to `@State`. Also caught two now-inaccurate doc comments
+(one claimed the filesystem checks "run on exactly that slow-filesystem
+path (the one case a decode has already failed)," no longer true since
+this runs unconditionally) — fixed.
+
+**Explicitly confirmed scope boundary, not a bug**: this feature detects
+a deletion on a cell's NEXT appearance (recycled onto a different photo
+via scroll, a sort/filter change, or a Library↔Editor round trip, which
+`ContentView` already tears down and rebuilds) — it does NOT live-monitor
+the filesystem, so a cell that stays continuously on-screen while its
+file is deleted out from under it won't update until it next appears.
+Adding live monitoring (FSEvents/`NSFilePresenter`) was explicitly out of
+scope from the original plan ("no bulk 'scan for missing photos' action
+— this is purely per-cell, computed lazily as each cell appears") and
+reviewer-confirmed as a defensible boundary for this kind of feature, not
+a rationalization — the user's actual reported bug was fully explained by
+the cache-masking defect above, not by this boundary.
+
+**NOT yet live-verified by the user** — next step is deleting a real file
+from an imported folder while the app is running, THEN navigating away
+from the Library and back (or scrolling the cell off/on screen) to
+trigger a re-check, and confirming the grid cell shows "Missing" while
+sibling photos in the same folder render normally.

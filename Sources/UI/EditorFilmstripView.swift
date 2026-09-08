@@ -80,27 +80,26 @@ private struct FilmstripCell: View {
 
     @State private var image: CGImage?
     /// D5 (IMPROVEMENTS.md): mirrors `LibraryThumbnailCell`'s own field —
-    /// same underlying "decode fails forever" bug, same gated check.
+    /// see its doc comment for why this is computed unconditionally, not
+    /// gated on the decode failing.
     @State private var isMissing = false
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 4)
                 .fill(Color.gray.opacity(0.2))
-            if image == nil {
-                if isMissing {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.orange)
-                        .frame(width: cellSize, height: cellSize)
-                        .accessibilityLabel("Missing")
-                } else {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: cellSize, height: cellSize)
-                }
-            }
-            if let image {
+            // D5 (IMPROVEMENTS.md): `isMissing` takes priority over a
+            // cached `image` — see `LibraryThumbnailCell`'s own doc
+            // comment for why (a `ThumbnailCache` hit never fails, so
+            // gating on decode failure alone misses an already-cached
+            // photo whose file was deleted afterward).
+            if isMissing {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.orange)
+                    .frame(width: cellSize, height: cellSize)
+                    .accessibilityLabel("Missing")
+            } else if let image {
                 // `.frame` BEFORE `.clipShape` — same load-bearing ordering
                 // as `LibraryThumbnailCell` (see its own doc comment):
                 // without it, `.aspectRatio(.fill)` reports a different
@@ -111,6 +110,10 @@ private struct FilmstripCell: View {
                     .aspectRatio(contentMode: .fill)
                     .frame(width: cellSize, height: cellSize)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: cellSize, height: cellSize)
             }
         }
         .frame(width: cellSize, height: cellSize)
@@ -126,11 +129,19 @@ private struct FilmstripCell: View {
             // `.task(id:)` for why a reused cell must not carry over the
             // previous photo's `isMissing` value.
             isMissing = false
-            let decoded = await catalog.thumbnail(for: photo)
-            image = decoded
-            if decoded == nil {
-                isMissing = await catalog.isPhotoConfirmedMissing(photo)
-            }
+            // Computed unconditionally, concurrently with the thumbnail
+            // fetch — see `LibraryThumbnailCell`'s own `.task(id:)` for
+            // why this can't be gated on the decode failing.
+            async let thumbnail = catalog.thumbnail(for: photo)
+            async let missingCheck = catalog.isPhotoConfirmedMissing(photo)
+            let thumb = await thumbnail
+            let missing = await missingCheck
+            // See `LibraryThumbnailCell`'s own `.task(id:)` for why this
+            // guard matters even though `.task(id:)` should only recycle
+            // onto a genuinely different path.
+            guard !Task.isCancelled else { return }
+            image = thumb
+            isMissing = missing
         }
     }
 }

@@ -5849,7 +5849,7 @@ roadmap item 7 — slice 1 is a performance probe, see that section for
 the full slicing plan). Per CLAUDE.md workflow rules, start either with
 Plan Mode.
 
-### D4: Library keyboard support (complete, pending live verification 2026-09-08)
+### D4: Library keyboard support (complete, live-verified 2026-09-09)
 
 `IMPROVEMENTS.md`'s D4 entry, flagged there as "a real feature with
 design decisions — Plan Mode, confirm scope with the user first."
@@ -5951,20 +5951,32 @@ SwiftUI interaction glue, matching this codebase's standing convention
 (`ThinSlider`, `EditSliderRow`, `CompareDividerOverlay`'s gestures are
 all verified live instead).
 
-**NOT yet live-verified by the user** — per the standing screen-
-automation permission rule, this session did not drive the app via
-AppleScript/Accessibility APIs to confirm interactive behavior (unlike
-D6's live AX-tree pass, which the user explicitly authorized for that
-specific task). Needs a manual pass: arrow keys move the focus ring in
-all 4 directions (wrapping row-to-row on Left/Right, stopping — not
-wrapping — at grid edges on Up/Down); 0–5/`.`/`f` rate/flag the focused
-photo; Return opens it; clicking a star/checkbox/menu in one cell then
-immediately pressing an arrow still moves focus from THAT cell (the
-per-cell `.simultaneousGesture` mouse-focus fix); typing in the search
-field is unaffected by digit/`.`/`f` keys; resizing the window/dragging
-the thumbnail-size slider lays out cells identically to before AND stays
-freely resizable in both directions (the `.adaptive`→`.flexible` column
-switch, the specific thing round 2 caught breaking).
+**Live verification, in two parts.** First, an AX-driven attempt (user
+authorized, same method as D6): mouse-side checks came back clean —
+clicking a cell's checkbox correctly set `focusedPhotoPath` (confirmed
+via `AXIncrement`/`AXDecrement` landing on exactly the clicked-then-
+arrow-key-moved neighbor, never the wrong cell), and the rating/flag
+state model behaved correctly under direct AX actions throughout. But
+actual synthetic KEYBOARD events (`CGEvent(...).post(tap:
+.cghidEventTap)`) never reached the app at all — proven cleanly by
+focusing the Library's own search `TextField` via a real mouse click
+(confirmed via `AXFocused == 1`, genuine AppKit-level focus) and sending
+a synthetic "f": the field's value stayed empty. Mouse clicks posted the
+exact same way worked perfectly throughout, so this isolates to macOS
+gating synthetic KEYBOARD input specifically for an unsigned/ad-hoc
+compiled tool (a separate, more restrictive TCC category than the
+Accessibility permission that's already granted) — not an app bug, and
+the same class of limitation the D8 review already hit trying to probe
+gesture composition. Second, the user then ran the actual manual
+checklist by hand (real physical key presses) and **confirmed D4 works
+correctly**: arrow keys move the focus ring in all 4 directions
+(wrapping row-to-row on Left/Right, stopping — not wrapping — at grid
+edges on Up/Down); 0–5/`.`/`f` rate/flag the focused photo; Return opens
+it; clicking a different cell then immediately pressing an arrow moves
+focus from THAT cell (the per-cell `.simultaneousGesture` mouse-focus
+fix); the search field is unaffected by digit/`.`/`f` keys; window
+resize grows AND shrinks the column count freely (the `.adaptive`→
+`.flexible` switch, the specific direction round 2 caught breaking).
 
 ### D8: Keyboard paths for the Editor's three mouse-only spatial overlays (complete, pending live verification 2026-09-09)
 

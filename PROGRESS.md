@@ -5965,3 +5965,128 @@ field is unaffected by digit/`.`/`f` keys; resizing the window/dragging
 the thumbnail-size slider lays out cells identically to before AND stays
 freely resizable in both directions (the `.adaptive`→`.flexible` column
 switch, the specific thing round 2 caught breaking).
+
+### D8: Keyboard paths for the Editor's three mouse-only spatial overlays (complete, pending live verification 2026-09-09)
+
+`IMPROVEMENTS.md`'s D8 entry, opened during D6's accessibility pass:
+the WB eyedropper (tap-to-pick), Red-Eye placement (tap-to-place/tap-to-
+remove), and pan/zoom-reset overlays were all mouse-only, each just
+`.accessibilityHidden(true)` with a comment pointing at this item.
+Confirmed with the user (AskUserQuestion) to build all three in one
+session rather than slicing, since WB pick and Red-Eye placement are the
+SAME interaction shape (a movable point + commit) and pan/zoom-reset
+shares the Editor's keyboard-focus plumbing this session had to build
+from scratch anyway.
+
+This is the Editor's FIRST use of `.focusable()`/`@FocusState`/
+`.onKeyPress` anywhere — a direct sequel to this same session's D4 work
+(Library grid keyboard nav), whose 3-round review sequence surfaced two
+bug classes deliberately avoided here from the start: the modifier guard
+used the D4-FINAL form (`keyPress.modifiers.isDisjoint(with: [.command,
+.option, .control])`, not `.subtracting(.shift)`, which D4 found rejects
+every arrow press outright since macOS tags arrow events with
+`.numericPad`/`.function` regardless of any real modifier); and nothing
+new here gives the image pane a hard minimum size the way D4's fixed
+grid columns did (the new crosshair overlay is `.allowsHitTesting(false)`
+and purely presentational).
+
+**What shipped**: a shared keyboard-driven crosshair for WB pick and
+Red-Eye placement — new `@State private var crosshairPosition` on
+`ContentView` (normalized 0...1/y-DOWN, the same convention
+`ImageDocumentModel.pickWhiteBalance`/`RedEyePoint` already use), reset
+to center and auto-focused whenever either mode newly arms. Arrow keys
+move it (new pure `Sources/UI/CrosshairGeometry.swift`, unit-tested);
+Return commits (WB: the exact existing `pickWhiteBalance` call, then
+disarms, mirroring the mouse handler; Red-Eye: a new shared
+`RedEyeHitTest.toggling(_:in:fitRect:threshold:)`, extracted so the
+mouse tap gesture and this keyboard path can't silently drift — see
+below); Escape disarms without committing, a genuinely NEW capability
+(previously the only way out was a toolbar click or switching tabs). New
+`Sources/UI/EditorCrosshairOverlay.swift` renders it as a "+" reticle
+(deliberately NOT `RedEyeOverlayView`'s own ring style — see round 1
+below). Separately, arrow keys pan while zoomed (reusing the EXISTING,
+already-tested `ZoomPanGeometry.clampedPan` — no new pan math) and `"0"`
+resets zoom+pan to identity, mirroring `PanOverlay`'s existing double-tap
+gesture exactly. Both the WB mouse handler and a new `RedEyeOverlayView.
+onTap` callback keep `crosshairPosition` in sync with the mouse, so
+switching from mouse to keyboard mid-session continues from the last
+touched point — the direct analogue of a real bug D4's reviewer caught.
+`ContentView`'s image-pane `ZStack` (already 6 conditional branches —
+Crop/WB/RedEye/CompareDivider/Pan×1-2) was refactored, extracting those 5
+pre-existing branches plus the new crosshair into one `pointAndZoomOverlays`
+property, proactively avoiding this file's own documented Swift
+type-checker ceiling rather than waiting for a 7th inline branch to hit it.
+
+**Reviewer (Opus 5): 2 rounds, FIX FIRST → APPROVE**:
+- **Round 1** caught 4 real issues: (1) holding Return past the
+  key-repeat delay non-deterministically toggled the same Red-Eye point
+  on/off — `.onKeyPress` defaults to `[.down, .repeat]` phases, and
+  add-or-remove is NOT idempotent — fixed by gating only the Return
+  commit on `keyPress.phase == .down` (arrows/Escape deliberately left
+  ungated: arrows need repeat, Escape's repeated disarm is idempotent).
+  (2) The keyboard crosshair was visually IDENTICAL to a committed
+  Red-Eye marker (same ring style/size/color), so a keyboard user got
+  zero feedback that a Return actually landed — fixed by redesigning
+  `EditorCrosshairOverlay` from a ring to a "+" reticle. (3) The Red-Eye
+  commit path reimplemented `RedEyeOverlayView.toggle(at:)`'s add-or-
+  remove sequence by hand, sharing only the threshold constant — fixed
+  by extracting `RedEyeHitTest.toggling`, now the ONE implementation both
+  the mouse gesture and the keyboard commit call. (4) Two
+  `.accessibilityHidden(true)` doc comments (`RedEyeOverlayView.swift`,
+  `PanOverlay.swift`) still pointed at D8 as unfinished future work, when
+  D8 *is* this diff — reworded to state a keyboard equivalent now exists
+  elsewhere, and this specific mouse-capture layer stays hidden only
+  because it itself vends no accessibility content. Also flagged for
+  live verification, not fixed in code: the new parent-`TapGesture`
+  (focus-reclaim) running alongside child `SpatialTapGesture`s (WB/
+  Red-Eye tap)/`DragGesture` (Pan) — a composition with no precedent in
+  this codebase (D4's own click-reclaim fix only proved this pattern
+  safe against `Button` taps, not spatial gestures); the reviewer
+  attempted an `NSHostingView`-probe the same way D4's round 2 did, but
+  couldn't get synthetic mouse events to reach SwiftUI's recognizers in
+  a non-activated accessory app — an inconclusive harness, not a clean
+  result either way.
+- **Round 2** re-verified all 4 round-1 fixes correct (including
+  checking the actual SDK interface for `KeyPress.phase`'s real type, and
+  hand-verifying the new "+" `Path`'s 4 line segments for correct,
+  non-crossed geometry) — APPROVE, with 2 non-blocking polish items
+  applied before commit: the new pane-level `.accessibilityLabel` used
+  the default `.accessibilityElement` children mode, which would have
+  let it override `CompareDividerOverlay`'s own already-shipped named,
+  adjustable accessibility element living in the same subtree (fixed
+  with `children: .contain`, matching that overlay's own established
+  pattern); and a doc comment on `RedEyeOverlayView.hitTestThreshold`
+  still described the pre-round-1-fix hand-rolled-duplicate design rather
+  than the shared `RedEyeHitTest.toggling` it now feeds.
+
+566 tests (13 new: 10 `CrosshairGeometryTests` for the step/clamp math,
+3 added to `RedEyeHitTestTests` for the new shared `toggling` function).
+No tests for the key-dispatch methods, focus wiring, or the gesture
+composition itself — plain SwiftUI interaction glue, matching this
+codebase's standing convention; verified live instead (below).
+
+**NOT yet live-verified by the user** — per the standing screen-
+automation permission rule, this session did not drive the app via
+AppleScript/Accessibility APIs (D6's live AX-tree pass and D4's
+verification were both done at the CODE level plus the user's own manual
+check; this session likewise leaves the interactive pass to the user).
+Needs a manual walkthrough, in particular the ONE thing neither review
+round could confirm statically or empirically: arm WB pick, confirm
+arrow keys move a white "+" and Return samples/disarms, Escape disarms
+without sampling; arm Red-Eye, confirm arrow keys move a yellow "+",
+Return adds/removes a point, Escape disarms; click to place a point with
+the MOUSE then immediately press an arrow key and confirm the crosshair
+continues from that clicked point; zoom in, confirm arrow keys pan and
+`"0"` resets; confirm ALL of the above still work identically via mouse
+only (no regression) — especially `PanOverlay`'s own double-tap-to-reset
+gesture, the single riskiest case for the new parent/child gesture
+composition; and an Editor→Library→Editor round trip with a
+point-placement mode still armed shows the crosshair again without
+requiring a click first.
+
+**Next step**: nothing else queued from `IMPROVEMENTS.md` — with D8
+shipped, that backlog file is down to just **P6** (minor,
+take-if-passing-by only, not a dedicated session). The next real
+candidate is **Phase 7** (Local Adjustments/Masking, `CLAUDE.md`'s own
+roadmap item 7 — slice 1 is a performance probe). Per CLAUDE.md workflow
+rules, start it with Plan Mode.

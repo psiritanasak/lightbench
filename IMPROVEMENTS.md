@@ -581,6 +581,12 @@ action) before it can get real accessibility support — there's no
 existing "point on the image" AT-accessible pattern in this codebase to
 extend, unlike the labeling-only fixes D6 itself shipped.
 
+**Shipped 2026-09-09.** See `PROGRESS.md`'s own D8 section for what
+shipped and what the reviewer caught across 2 rounds. NOT yet
+live-verified by the user — in particular the parent-`TapGesture`-
+alongside-child-spatial-gesture composition, which neither review round
+could confirm via static analysis or an empirical probe.
+
 ### ~~D7. Code design: split ContentView.swift (1352 lines)~~ — SHIPPED 2026-08-28
 
 It currently holds: tab state, crop/aspect logic, zoom/pan gesture math

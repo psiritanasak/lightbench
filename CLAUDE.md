@@ -1020,26 +1020,84 @@ Edits are stored as parameter sets and rendered live on the GPU.
       speculative mitigation (caching masked layers, downscaling, throttling)
       needed before starting it — revisit only if slice 2's real N-mask
       compositing measures differently from this single-mask probe.
-   2. **Mask data model + Radial mask only, no combining.** A new `Mask` type
-      — NOT the full 59-field `EditState`; a small curated subset matching
-      Lightroom's own per-mask panel (roughly Exposure/Contrast/Highlights/
-      Shadows/Whites-or-equivalent/Clarity/Saturation/Temp/Tint — pick the
-      actual set deliberately, don't default to "all of them"). Schema-
-      tolerant `Codable` following `EditState`'s own established
-      `decodeIfPresent ?? default` pattern. `EditState` gains `masks: [Mask]`
-      — a second variable-length field alongside the existing precedent,
-      `redEyePoints` (`EditState.swift:336`), but a bigger step up: each mask
-      needs its OWN full parameter set, unlike `redEyePoints`' "N points
-      sharing ONE shared param pair" shape. One mask at a time, Radial
-      geometry only (ellipse: center/radii/rotation/feather) — reuse Crop's
-      8-handle resize-drag precedent (`CropOverlayView.swift`) as the closest
-      existing interaction-code shape for a resizable geometric handle set;
-      it's the only existing precedent for a resizable (not just
-      placed-and-done) shape. New list UI for "Mask 1, Mask 2…" reusing
-      Presets' `ForEach(catalog.presets)` add/delete precedent
-      (`AdjustTabView.swift:407-436`) — the only existing dynamic-list UI
-      precedent in this codebase; note neither it nor `CollectionSidebarView`
-      has any drag-to-reorder precedent, so v1 shouldn't promise reordering.
+   2. **Mask data model + Radial mask (no combining) ✅ COMPLETE — data
+      model/pipeline half only** (2026-09-09). Shipped a new `Mask` type
+      (`Sources/EditEngine/Mask.swift`) — NOT the full `EditState` (which
+      turned out to be 69 stored fields, not the roadmap's stale "59-field"
+      estimate above); the curated 8-param set the user confirmed:
+      Exposure, Contrast, Highlights, Shadows, Clarity, Saturation,
+      Temperature, Tint. Schema-tolerant `Codable` following `EditState`'s
+      own `decodeIfPresent ?? default` pattern, in a hand-written extension
+      one level down (the first nested type in this codebase to need that
+      treatment — `RedEyePoint`/`RawNeutralPoint` both get away with
+      synthesized `Codable`). `EditState` gains `masks: [Mask]` — a second
+      variable-length field alongside `redEyePoints`, a bigger step up:
+      each mask owns its OWN full parameter set, unlike `redEyePoints`' "N
+      points sharing ONE shared param pair" shape. New
+      `Sources/EditEngine/RadialMaskGeometry.swift` (pure, `CoreGraphics`-
+      only, mirrors `CropAspectMath`'s "real math gets unit tests" role) is
+      the ellipse-via-affine-transform math (`CIRadialGradient` is
+      circle-only) feeding a new `EditPipeline.applyMasks` stage inserted
+      between Red-Eye and Vignette. **Scope deviation from this roadmap's
+      own text, confirmed deliberate, not drift**: this slice ships
+      MULTIPLE simultaneous masks per photo (sequential, compounding —
+      deliberately unlike Red-Eye's union-then-correct-once), pulling that
+      part of item 6 below forward; only INTERSECT/SUBTRACT boolean
+      combining semantics remain in slice 6. No UI yet (masks are only
+      reachable via unit tests and hand-authored sidecar JSON) — the list
+      UI / resize-drag handles this item originally scoped are deferred to
+      a separate Session B, still using Crop's 8-handle precedent and
+      Presets' `ForEach` add/delete precedent as planned.
+      Reviewer (Opus 5): 3 rounds — FIX FIRST → APPROVE → a clean final
+      APPROVE after addressing every non-blocking nit too, not just the
+      required fixes. Round 1 caught a real correctness bug: unclamped
+      mask Contrast/Shadows/Highlights/Saturation/Tint could drive
+      `CIColorControls`'s factor negative and invert hue/channels — this
+      slice ships with no UI, so a hand-authored sidecar was the only
+      input path and nothing else bounded these values; fixed by reusing
+      the same `clamped(_:to:)` helper the global path's own
+      `effectiveTone(_:)` already uses. Also caught: a factually backwards
+      doc-comment claim that `radiusX`/`radiusY`'s different denominators
+      "keep a circle a circle" (they don't — equal fractions draw an
+      ellipse matching the extent's own aspect ratio); a tautological
+      order-check test that would have passed regardless of where
+      `applyMasks` actually ran in the pipeline; two fully redundant
+      no-op tests. Round 2 (after those fixes) found a live perf
+      optimization opportunity — `corrected` (the per-mask correction
+      result) is now cropped to the ellipse's own bounding box right
+      before the blend, verified byte-identical (max diff 0.0 across 5
+      configs including rotated/off-image ellipses) since the mask is
+      exactly 0 outside that region anyway — plus a `!state.blackAndWhite`
+      gate so a mask's Temperature/Tint can't repaint color into an
+      already-desaturated B&W render, and a deterministic (not
+      random-per-decode) fallback for a mask's `id` when a sidecar is
+      missing one. 631 tests (166 new): the mask math is almost entirely
+      EQUIVALENCE-tested against the identically-valued global slider
+      (masking the whole frame and comparing pixels) rather than
+      hand-derived magic numbers — a stronger, self-verifying guarantee,
+      with real measured numbers reserved for genuinely spatial claims
+      (soft-edge falloff, rotation, the y-down convention), matching this
+      file's own Red-Eye/Vignette precedent.
+      **Live-measured perf (required by this roadmap's own slice-1
+      conditional above — "revisit only if slice 2's real N-mask
+      compositing measures differently from this single-mask probe," and
+      it does)**: 3 masks with Clarity active, same probe-and-fully-revert
+      methodology as slice 1, on the same two real assets. JPEG stays
+      comfortably under the 16ms/60fps budget at every frame type (~5-6ms
+      proxied, ~3.6-8.3ms full-res). **RAW does NOT**: full-resolution
+      frames measured ~15-21ms — at/slightly over budget — a real,
+      substantial cost versus RAW's own ~0.4-1.7ms masks-off baseline,
+      confirming Hazard-class concern the roadmap flagged rather than a
+      false alarm. Root cause: each mask's Clarity pays a full-image
+      `CIUnsharpMask` pass; the ROI-cropping optimization above narrows
+      this to each mask's own bounding box, but RAW's already-heavy
+      per-frame baseline (even from `RawDecoder.materialize`'s cached
+      buffer) means 3 such passes still add up. Accepted as a known,
+      documented finding for this slice rather than blocking it — see
+      PROGRESS.md's own write-up for the full numbers and the case for a
+      future targeted mitigation (e.g. skip Clarity specifically on the
+      interactive RAW path) if this proves to matter in practice once a
+      UI exists to create masks at all.
    3. **Linear (Graduated) mask** — second geometry type, reuses most of
       slice 2's plumbing; new interaction code is a draggable line + two
       parallel falloff guides (genuinely new — no existing precedent covers
@@ -1054,11 +1112,13 @@ Edits are stored as parameter sets and rendered live on the GPU.
       not manually drawn at all — closer in spirit to the existing "Fix Color
       Cast" auto-analysis button (`ImageDocumentModel.fixColorCast()`,
       whole-image gray-world stats) than to slices 2-4's shape-drawing.
-   6. **Combining masks** (intersect/subtract, multiple simultaneous masks
-      per photo) — deliberately LAST, since slices 2-5 all assume "one mask
-      at a time" to keep each slice's own risk contained; only take this on
-      once the single-mask performance/UX story (slice 1's whole reason for
-      existing) is proven acceptable across several real masks.
+   6. **Combining masks** (intersect/subtract boolean semantics between
+      masks) — deliberately LAST. Corrected scope (2026-09-09): slice 2
+      already shipped multiple simultaneous, independently-compounding
+      masks per photo (confirmed by the user, not drift from this
+      roadmap's original "one mask at a time" framing above) — what
+      remains here is specifically INTERSECT/SUBTRACT, i.e. one mask's
+      shape modifying another's rather than both applying independently.
 
    **Explicitly out of scope, needs its own separate research spike before
    even being scoped** (not part of this phase's slicing above): AI Subject/

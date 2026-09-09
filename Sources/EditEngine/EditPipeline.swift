@@ -53,6 +53,7 @@ enum EditPipeline {
         image = applyFlip(state, to: image)                   // geometric, before crop
         image = applyCrop(state, to: image)                   // geometric
         image = applyRedEye(state, to: image)                 // localized, scene-linear
+        image = applyMasks(state, to: image)                  // local adjustments, own perceptual sandwich
         image = applyVignette(state, to: image)               // radial, scene-linear
         image = applyDefinition(state, to: image)             // local contrast, perceptual, before detail pair
         image = applyNoiseReduction(state, to: image)         // detail, scene-linear, before sharpen
@@ -890,6 +891,242 @@ enum EditPipeline {
         return (blend.outputImage ?? image).cropped(to: extent)
     }
 
+    // MARK: - Local Adjustments (Masks)
+
+    private static func masksActive(_ state: EditState) -> Bool {
+        state.masks.contains { !$0.isIdentity }
+    }
+
+    /// Radial (ellipse) local adjustments — Phase 7 slice 2. Runs AFTER
+    /// Red-Eye, BEFORE Vignette: like Red-Eye, mask geometry is stored as
+    /// fractions of the CURRENT (post-crop) extent, so it must map against
+    /// the image the user actually sees and draws on — the same argument
+    /// this file already makes for Red-Eye/Vignette above. Placed after
+    /// Red-Eye specifically because Red-Eye is corrective retouching and
+    /// masks are creative local stylization: a mask drawn over an eye
+    /// should adjust the ALREADY-corrected pupil, not a still-red one that
+    /// then gets corrected differently underneath it (mirrors this file's
+    /// existing "detail stages refine the already-corrected pupil"
+    /// reasoning for why Red-Eye precedes Definition/Noise Reduction/
+    /// Sharpen). Placed before Vignette/Definition/Noise Reduction/Sharpen
+    /// because those are GLOBAL stages that should act on the final,
+    /// already-locally-stylized image — masks-vs-Vignette and masks-vs-
+    /// Red-Eye commutation were measured, not just argued, matching this
+    /// file's own standard for adjacency claims. MEASURED (a solid 0.7/0.1/
+    /// 0.1 red image, full-strength Red-Eye point + a fully-covering mask
+    /// at saturation -1): the shipped Red-Eye-then-mask order gives r =
+    /// 0.04000, the reverse (mask-then-Red-Eye) gives r = 0.07039 — a real,
+    /// order-dependent difference, confirming Red-Eye must run first so the
+    /// mask desaturates the ALREADY-corrected color, not the original red.
+    /// MEASURED (masks-vs-Vignette, using Contrast specifically — a pure
+    /// scalar op like Exposure commutes trivially with Vignette's own
+    /// per-pixel multiply, the same reason Red-Eye/Sharpen were separately
+    /// measured to commute with it, so that pair is NOT evidence masks
+    /// commute with Vignette in general): a 0.7 gray, 0.8 vignette strength,
+    /// 0.6 mask contrast, sampled near a corner (40,40) — shipped order
+    /// gives r = 0.60159, the reverse (Vignette-then-mask) gives r =
+    /// 0.47563. Real numbers, both directions, matching this file's own
+    /// measured-adjacency convention for Red-Eye/Vignette and Definition/
+    /// Vignette above.
+    ///
+    /// Each mask applies via the SAME mask-then-composite shape
+    /// `applyRedEye` already established: compute the correction over the
+    /// FULL, untouched image, build a soft ellipse mask via
+    /// `RadialMaskGeometry`, then `CIBlendWithMask`. UNLIKE Red-Eye,
+    /// multiple masks are NOT unioned into one shared mask first — each
+    /// mask is a SEPARATE, SEQUENTIAL blend pass in array order, so
+    /// overlapping masks COMPOUND (mask 2's effect lands on top of mask
+    /// 1's already-adjusted result). This is deliberate, not a missed
+    /// optimization: Red-Eye's union exists specifically so overlapping
+    /// placements of the SAME fixed correction don't double-apply; masks
+    /// are independent, user-authored, and DIFFERENT adjustments that are
+    /// meant to compound where they overlap, matching Lightroom's own
+    /// behavior and this slice's user-confirmed "multiple independent
+    /// masks" scope.
+    ///
+    /// Per mask, adjustments run through their OWN local perceptual
+    /// sandwich, mirroring the shape of `applyPerceptualAdjustments`
+    /// itself: White Balance and Exposure reuse the global scene-linear
+    /// stages verbatim (`whiteBalanced`/`applyExposure`); Contrast/
+    /// Shadows/Highlights/Saturation/Clarity are folded into ONE shared
+    /// `encodeToPerceptual`/`decodeToLinear` round-trip rather than each
+    /// stage opening its own. This is a measured, documented requirement,
+    /// not a style choice: `applyPerceptualAdjustments`'s own doc comment
+    /// records that a scene-linear contrast pivot crushes photographic
+    /// middle gray toward black, so running any of these scene-linear
+    /// would both look wrong AND diverge from the identically-named
+    /// global slider — the same "two mechanisms, numerically
+    /// incompatible" trap Phase 6 slice 4's write-up documents. Shadows/
+    /// Highlights reuse `applyCurves`'s SAME `EffectiveTone`/
+    /// `kCurvePointSpan` machinery (not `CIHighlightShadowAdjust` —
+    /// `EditState.definition`'s own doc comment already records that
+    /// filter as measured to be an ASYMMETRIC tone-mapper, rejected for
+    /// exactly this reason). `unsharpDefinition` (Clarity) is the ONE
+    /// extent-sensitive param in this set (CLAUDE.md Phase 7's "Hazard
+    /// 1") — its radius is derived from `perceptual.extent`, so it MUST
+    /// run on the FULL-image `corrected` built here, never on a subimage
+    /// cropped to the mask's own bounding box, or the radius silently
+    /// comes out wrong. Temperature/Tint are RELATIVE offsets from
+    /// wherever white balance already left the image (`kNeutralTemp +
+    /// mask.temperature`), not absolute Kelvin like the global field —
+    /// this stage runs AFTER the global white-balance stage has already
+    /// adapted the whole image, so an absolute per-mask value would
+    /// double-apply chromatic adaptation with no way to undo the first
+    /// pass (see `Mask.temperature`'s own doc comment).
+    ///
+    /// Per-param `if` guards below are correctness, not an optimization:
+    /// an unguarded filter chain can perturb the image even at identity
+    /// parameters (`applyLevels`'s own doc comment records this exact
+    /// trap for a different filter) — the guards, plus the mask-level
+    /// `isIdentity` skip and `RadialMaskGeometry`'s degenerate-geometry
+    /// `nil`, are what make a geometry-only mask (or a mask that fails to
+    /// resolve) render BYTE-IDENTICAL to no mask at all.
+    ///
+    /// The mask image itself is built the same defensive way `applyRedEye`
+    /// builds its union mask: a fully-transparent-black base spanning the
+    /// WHOLE extent, composited with the transformed circular gradient via
+    /// `CIMaximumCompositing` — this guarantees a defined value of 0
+    /// everywhere outside the ellipse, not just outside the gradient's own
+    /// local bounding box. MEASURED (not assumed): with `color1` fully
+    /// transparent (alpha 0, as used here), `CIRadialGradient.outputImage`
+    /// already has a FINITE extent equal to `radius1`'s own bounding
+    /// circle — Core Image recognizes the fully-transparent region beyond
+    /// `radius1` can be clipped away, so `.transformed(by:)` never
+    /// encounters `CGRect.infinite` in this configuration (verified by
+    /// printing the actual extent before and after the transform on a real
+    /// gradient; only an OPAQUE `color1` produces the infinite-extent case
+    /// some Core Image filters are documented to have).
+    private static func applyMasks(_ state: EditState, to image: CIImage) -> CIImage {
+        guard masksActive(state) else { return image }
+
+        let extent = image.extent
+        // Loop-invariant: only depends on `extent`, which is fixed for the
+        // whole stage (unlike Red-Eye's per-point loop, no per-mask state
+        // feeds this base).
+        let base = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: extent)
+        var img = image
+
+        for mask in state.masks {
+            guard !mask.isIdentity else { continue }
+            guard let geo = RadialMaskGeometry.resolve(
+                centerX: mask.centerX, centerY: mask.centerY,
+                radiusX: mask.radiusX, radiusY: mask.radiusY,
+                rotationDegrees: mask.rotationDegrees, feather: mask.feather,
+                extent: extent
+            ) else { continue }
+
+            // Reviewer-caught (Phase 7 slice 2): these four MUST clamp to
+            // -1...1 like the global path's own `effectiveTone(_:)` does
+            // (see that function's doc comment) before reaching
+            // `CIColorControls`/`CIToneCurve` — this slice ships with no UI
+            // yet, so a hand-authored sidecar is the only input path and
+            // nothing else bounds these values. An unclamped contrast/
+            // saturation can drive the color-controls factor negative,
+            // inverting hue/channels rather than "reading the same as the
+            // identically-named global slider," which is this type's own
+            // documented guarantee. Clarity needs no clamp — global
+            // `definition` is unclamped too (one-directional, see
+            // `EditState.definition`'s doc comment), so this is
+            // precedent-consistent, not an oversight.
+            let contrast = clamped(mask.contrast)
+            let shadows = clamped(mask.shadows)
+            let highlights = clamped(mask.highlights)
+            let saturation = clamped(mask.saturation)
+            // `whiteBalanced`'s `tint` term (`targetNeutral.y = -(tint/100)
+            // * kTintSpan`) has no internal guard either — same clamp,
+            // same reasoning, matching the documented -100...100 range
+            // `Mask.tint`'s own doc comment already claims.
+            let tint = clamped(mask.tint, to: -100...100)
+
+            var corrected = img
+            // Gated on `!blackAndWhite` too: `applyPerceptualAdjustments`
+            // already forced full desaturation earlier in the pipeline, and
+            // `whiteBalanced` is a per-channel color matrix — applying it to
+            // an already-monochrome image would paint color back into a
+            // black & white photo. Contrast/Saturation/Clarity are safe
+            // without this guard (chroma is already zero, so they have
+            // nothing to distort). Reviewer-noted exception to `Mask`'s own
+            // "reads the same as the global slider" guarantee: the GLOBAL
+            // white-balance stage runs BEFORE the forced desaturation, so it
+            // genuinely still affects a B&W render (the documented
+            // colored-filter effect above, see `applyPerceptualAdjustments`'s
+            // own doc comment) — a mask's WB is silently dropped instead.
+            // Deliberate: masks are local RETOUCHING/stylization applied to
+            // an already-graded image, not a second global grading pass.
+            if !state.blackAndWhite, mask.temperature != 0 || tint != 0 {
+                corrected = whiteBalanced(corrected, temperature: kNeutralTemp + mask.temperature, tint: tint)
+            }
+            corrected = applyExposure(mask.exposureEV, to: corrected)
+
+            if contrast != 0 || shadows != 0 || highlights != 0 || saturation != 0 || mask.clarity != 0 {
+                var perceptual = encodeToPerceptual(corrected)
+                if contrast != 0 {
+                    perceptual = applyContrast(contrast, to: perceptual)
+                }
+                if shadows != 0 || highlights != 0 {
+                    let effective = EffectiveTone(contrast: 0, shadows: shadows, highlights: highlights, saturation: 0)
+                    perceptual = applyCurves(effective, 0, to: perceptual)
+                }
+                if saturation != 0 {
+                    perceptual = applySaturation(saturation, to: perceptual)
+                }
+                if mask.clarity != 0 {
+                    perceptual = unsharpDefinition(mask.clarity, to: perceptual)
+                }
+                corrected = decodeToLinear(perceptual)
+            }
+
+            // Reviewer-suggested perf guard: on a B&W photo, a mask carrying
+            // ONLY temperature/tint (no other param) skips the WB branch
+            // above via the `!state.blackAndWhite` gate and has nothing
+            // else to apply, so `corrected` is still reference-identical to
+            // `img` here — skip the gradient/blend entirely rather than pay
+            // for a guaranteed no-op composite. `mask.isIdentity` alone
+            // doesn't catch this case (temperature/tint being non-zero
+            // means the mask isn't "identity," just inert THIS time).
+            guard corrected !== img else { continue }
+
+            let gradient = CIFilter.radialGradient()
+            gradient.center = .zero
+            gradient.radius0 = Float(geo.innerRadius)
+            gradient.radius1 = Float(geo.gradientRadius)
+            gradient.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 1)
+            gradient.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
+            guard let disc = gradient.outputImage else { continue }
+            let placed = disc.transformed(by: geo.transform)
+
+            let union = CIFilter.maximumCompositing()
+            union.inputImage = placed
+            union.backgroundImage = base
+            let maskImage = (union.outputImage ?? base).cropped(to: extent)
+
+            // Reviewer-caught perf fix (Phase 7 slice 2, motivated by the
+            // live-measured RAW-with-3-masks cost): `color1`'s alpha is 0,
+            // so — MEASURED, not assumed — `disc`'s own extent is already
+            // FINITE (bounded to `radius1`'s circle), never
+            // `CGRect.infinite`; only an OPAQUE `color1` produces that case.
+            // So `placed.extent` is a real, usable rect, and the mask is
+            // exactly 0 everywhere outside it (that's the whole point of
+            // the transparent `base` above). Cropping `corrected` to that
+            // rect AFTER computing it (not the INPUT before computing it —
+            // Clarity's unsharp radius still needs the full image visible
+            // to its own kernel) tells Core Image's lazy evaluator it only
+            // ever needs to actually produce pixels within the ellipse's
+            // own bounding box for the blend below, not the whole extent —
+            // byte-identical output (the blend already returns `img`
+            // unchanged wherever mask is 0), but far less work per mask
+            // when the ellipse is small relative to the full frame.
+            let correctedRegion = placed.extent.intersection(extent)
+            let blend = CIFilter.blendWithMask()
+            blend.inputImage = corrected.cropped(to: correctedRegion)
+            blend.backgroundImage = img
+            blend.maskImage = maskImage
+            img = (blend.outputImage ?? img).cropped(to: extent)
+        }
+
+        return img
+    }
+
     // MARK: - Vignette
 
     /// Slider-to-filter spans, MEASURED against `CIVignetteEffect` in this
@@ -1006,17 +1243,30 @@ enum EditPipeline {
     /// `EditState.definition`'s doc comment for the measurement.
     private static func applyDefinition(_ state: EditState, to image: CIImage) -> CIImage {
         guard definitionActive(state) else { return image }
+        return decodeToLinear(unsharpDefinition(state.definition, to: encodeToPerceptual(image)))
+    }
 
-        let extent = image.extent
+    /// The unsharp construction itself, factored out of `applyDefinition` so
+    /// Phase 7 slice 2's per-mask Clarity can reuse the EXACT same filter
+    /// technique — a mask's Clarity at value X is numerically identical to
+    /// this global Definition slider at value X, same `kDefinitionAmountSpan`/
+    /// `kDefinitionRadiusFraction`. Operates on ALREADY-PERCEPTUAL input —
+    /// the caller owns the encode/decode sandwich (`applyDefinition` opens
+    /// its own; `applyMasks` folds this into the one sandwich it already
+    /// opens for Contrast/Curves/Saturation, avoiding a second round trip
+    /// per mask). Radius is derived from `extent`, so the caller must pass
+    /// the FULL, untouched image — never a subimage cropped to some
+    /// region's bounding box — or the radius silently comes out wrong (see
+    /// `applyMasks`'s own doc comment on this exact hazard).
+    private static func unsharpDefinition(_ amount: Double, to perceptual: CIImage) -> CIImage {
+        let extent = perceptual.extent
         let radius = kDefinitionRadiusFraction * Double(min(extent.width, extent.height))
 
-        let encoded = encodeToPerceptual(image)
         let filter = CIFilter.unsharpMask()
-        filter.inputImage = encoded
+        filter.inputImage = perceptual
         filter.radius = Float(radius)
-        filter.intensity = Float(state.definition * kDefinitionAmountSpan)
-        let adjusted = filter.outputImage ?? encoded
-        return decodeToLinear(adjusted)
+        filter.intensity = Float(amount * kDefinitionAmountSpan)
+        return filter.outputImage ?? perceptual
     }
 
     // MARK: - Noise Reduction

@@ -38,6 +38,7 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.levelsWhitePoint, 1)
         XCTAssertEqual(state.vignetteRadius, 0.5)
         XCTAssertEqual(state.redEyeStrength, 0.7)
+        XCTAssertEqual(state.masks, [])
         XCTAssertEqual(state.boostAmount, 1.0)
         XCTAssertEqual(state.rawExposureEV, 0)
         XCTAssertEqual(state.shadowBoostScale, 1.0)
@@ -180,6 +181,93 @@ final class EditStateCodableTests: XCTestCase {
             RedEyePoint(x: 0.3, y: 0.4),
             RedEyePoint(x: 0.6, y: 0.65)
         ])
+    }
+
+    func testMasksArrayDefaultsWhenAbsent() throws {
+        let state = try decode("{}")
+        XCTAssertEqual(state.masks, [])
+    }
+
+    func testMasksArrayDecodesWhenPresent() throws {
+        let json = """
+        {
+            "masks": [{
+                "centerX": 0.3, "centerY": 0.4,
+                "radiusX": 0.2, "radiusY": 0.15,
+                "rotationDegrees": 10, "feather": 0.4,
+                "exposureEV": 0.5, "contrast": 0.1, "highlights": -0.2, "shadows": 0.2,
+                "clarity": 0.25, "saturation": 0.3, "temperature": 200, "tint": -10
+            }]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].centerX, 0.3)
+        XCTAssertEqual(state.masks[0].exposureEV, 0.5)
+        XCTAssertEqual(state.masks[0].tint, -10)
+    }
+
+    /// The genuinely new coverage this slice adds: `Mask` needs its OWN
+    /// schema-tolerant decoding one level down from `EditState`'s (see
+    /// `Mask.swift`'s own doc comment) — a mask JSON missing most of its
+    /// keys (as a future slice's field additions would produce for an
+    /// older saved mask) must decode to each field's declared default, not
+    /// throw.
+    func testMaskWithMissingParamKeysDecodesToItsDeclaredDefaults() throws {
+        let json = """
+        { "masks": [{ "centerX": 0.7 }] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 1)
+        let mask = state.masks[0]
+        XCTAssertEqual(mask.centerX, 0.7)
+        XCTAssertEqual(mask.centerY, 0.5)
+        XCTAssertEqual(mask.radiusX, 0.25)
+        XCTAssertEqual(mask.radiusY, 0.25)
+        XCTAssertEqual(mask.rotationDegrees, 0)
+        XCTAssertEqual(mask.feather, 0.5)
+        XCTAssertEqual(mask.exposureEV, 0)
+        XCTAssertEqual(mask.contrast, 0)
+        XCTAssertEqual(mask.highlights, 0)
+        XCTAssertEqual(mask.shadows, 0)
+        XCTAssertEqual(mask.clarity, 0)
+        XCTAssertEqual(mask.saturation, 0)
+        XCTAssertEqual(mask.temperature, 0)
+        XCTAssertEqual(mask.tint, 0)
+        XCTAssertTrue(mask.isIdentity)
+    }
+
+    func testMaskIDRoundTripsThroughCodable() throws {
+        let id = UUID()
+        let mask = Mask(id: id, centerX: 0.5, centerY: 0.5, radiusX: 0.2, radiusY: 0.2)
+        var state = EditState()
+        state.masks = [mask]
+
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(EditState.self, from: data)
+
+        XCTAssertEqual(decoded.masks[0].id, id)
+    }
+
+    func testMaskUnknownExtraKeyIsIgnoredNotAnError() throws {
+        let json = """
+        { "masks": [{ "centerX": 0.6, "someFutureMaskFieldThatDoesNotExistYet": 42 }] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks[0].centerX, 0.6)
+    }
+
+    /// The deliberate asymmetry `Mask.isIdentity`'s own doc comment
+    /// describes: a mask that is placed (real geometry) but has every
+    /// adjustment param at 0 renders byte-identical to no mask, yet the
+    /// STATE holding it is not `isEffectivelyIdentity` — mirroring
+    /// `redEyePoints`' existing behavior (a placed point with strength 0
+    /// still counts as an edit).
+    func testStateWithAnIdentityParamMaskIsNotEffectivelyIdentity() {
+        var state = EditState.identity
+        state.masks = [Mask(centerX: 0.5, centerY: 0.5, radiusX: 0.25, radiusY: 0.25)]
+        XCTAssertTrue(state.masks[0].isIdentity, "sanity check: the mask itself has every param at identity")
+        XCTAssertFalse(state.isEffectivelyIdentity)
     }
 
     func testFullyPopulatedJSONStillDecodesCorrectly() throws {

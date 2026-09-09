@@ -14,9 +14,15 @@ struct EditHistory {
     private var past: [EditState] = []
     private var future: [EditState] = []
 
-    /// Caps how many past states are retained, bounding memory — the only
-    /// unbounded `EditState` field is `redEyePoints`, so a cap here is
-    /// prudent, not just cosmetic, for a long editing session.
+    /// Caps how many past states are retained, bounding memory. Two
+    /// `EditState` fields are unbounded: `redEyePoints` and, since Phase 7
+    /// slice 2, `masks` — each `Mask` is ~14 `Double`s + a `UUID` (roughly
+    /// 128 bytes), so even a worst-case 100-snapshot cap × 10 masks is only
+    /// ~128 KB, and Swift arrays are copy-on-write besides (a snapshot that
+    /// didn't touch `masks` shares the same buffer as its neighbor, so only
+    /// commits that actually changed a mask allocate at all). No change to
+    /// `limit`'s own default is warranted by `masks`' existence — noting
+    /// that explicitly so a future reader doesn't "fix" it unnecessarily.
     let limit: Int
 
     var canUndo: Bool { !past.isEmpty }

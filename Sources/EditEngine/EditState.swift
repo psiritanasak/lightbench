@@ -360,6 +360,34 @@ struct EditState: Equatable, Codable {
     /// non-zero default has no effect until at least one point exists.
     var redEyeStrength: Double = 0.7
 
+    // MARK: - Local Adjustments (Masks)
+
+    /// Per-photo local adjustments — Phase 7 slice 2. Each `Mask` is a
+    /// radial (ellipse) region carrying its OWN full curated parameter set,
+    /// applied SEQUENTIALLY in array order (later masks' effects stack on
+    /// top of earlier ones' where they overlap — unlike `redEyePoints`,
+    /// which union their masks so overlapping corrections apply exactly
+    /// once; see `EditPipeline.applyMasks`'s own doc comment for why the
+    /// two are deliberately different).
+    ///
+    /// The SECOND variable-length field in this struct, after
+    /// `redEyePoints` — and a bigger step up than that precedent: red-eye
+    /// is N points sharing ONE shared param pair (`redEyeSize`/
+    /// `redEyeStrength`), whereas each mask owns a full independent
+    /// parameter set. Same underlying justification as `redEyePoints`
+    /// (above): masks are inherently unbounded (0 to N per photo, wherever
+    /// the user drags one), so the flat-named-field convention this struct
+    /// otherwise follows genuinely doesn't fit.
+    ///
+    /// NOT included in `requiresRawRedecode` — masks are an `EditPipeline`
+    /// stage, not a `CIRAWFilter` setting, so adding them there would fire
+    /// a spurious multi-second RAW re-decode on every mask drag. CLEARED by
+    /// `comparisonOriginal()` (masks are retouching/stylization, same as
+    /// `redEyePoints`) but NOT copied by `applyingPreset(onto:)` (a mask's
+    /// placement is specific to ONE photo's composition, never part of a
+    /// reusable look) — see both methods' own doc comments.
+    var masks: [Mask] = []
+
     // MARK: - Vignette
 
     /// Radial vignette strength, -1...1, 0 is identity. Positive DARKENS the
@@ -960,6 +988,14 @@ struct EditState: Equatable, Codable {
         s.redEyeSize = 0.5
         s.redEyeStrength = 0.7
         s.redEyePoints.removeAll()
+        // masks: retouching/stylization, same reasoning as redEyePoints
+        // just above — a non-identity mask is unconditionally active (no
+        // non-zero-default subtlety to argue, unlike red-eye), so leaving
+        // it would obviously break this method's "zero retouching" contract.
+        // Safe to clear without touching extent: `applyMasks` is
+        // extent-preserving, which is exactly what this method's own
+        // pixel-alignment guarantee (see the doc comment above) depends on.
+        s.masks.removeAll()
         // geometry (cropInset*, straightenAngle, verticalPerspective,
         // horizontalPerspective, flipHorizontal, flipVertical) is left
         // untouched — inherited from `self` via `var s = self` above.
@@ -1027,9 +1063,11 @@ struct EditState: Equatable, Codable {
         result.redEyeSize = redEyeSize
         result.redEyeStrength = redEyeStrength
         // geometry (cropInset*, straightenAngle, verticalPerspective,
-        // horizontalPerspective, flipHorizontal, flipVertical) and
-        // redEyePoints are NOT copied — they stay `target`'s own via
-        // `var result = target` above.
+        // horizontalPerspective, flipHorizontal, flipVertical),
+        // redEyePoints, AND masks are NOT copied — they stay `target`'s
+        // own via `var result = target` above. `masks` joins `redEyePoints`
+        // here for the identical reason: an ellipse placed on THIS photo's
+        // subject is meaningless dropped onto another photo's target.
         // `boostAmount`/`rawExposureEV`/`shadowBoostScale`/
         // `rawWhiteBalanceNeutralPoints`/`rawLuminanceNoiseReductionAdjust`/
         // `rawColorNoiseReductionScale`/`rawSharpnessScale`/
@@ -1096,6 +1134,7 @@ extension EditState {
         case flipHorizontal, flipVertical
         case cropInsetTop, cropInsetBottom, cropInsetLeft, cropInsetRight
         case redEyePoints, redEyeSize, redEyeStrength
+        case masks
         case vignetteStrength, vignetteRadius
         case definition
         case noiseReduction
@@ -1162,6 +1201,7 @@ extension EditState {
         redEyePoints = try container.decodeIfPresent([RedEyePoint].self, forKey: .redEyePoints) ?? []
         redEyeSize = try container.decodeIfPresent(Double.self, forKey: .redEyeSize) ?? 0.5
         redEyeStrength = try container.decodeIfPresent(Double.self, forKey: .redEyeStrength) ?? 0.7
+        masks = try container.decodeIfPresent([Mask].self, forKey: .masks) ?? []
         vignetteStrength = try container.decodeIfPresent(Double.self, forKey: .vignetteStrength) ?? 0
         vignetteRadius = try container.decodeIfPresent(Double.self, forKey: .vignetteRadius) ?? 0.5
         definition = try container.decodeIfPresent(Double.self, forKey: .definition) ?? 0

@@ -56,6 +56,15 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.redEyeSize = 0.8
         s.redEyeStrength = 0.9
         s.redEyePoints = [RedEyePoint(x: 0.3, y: 0.4), RedEyePoint(x: 0.6, y: 0.5)]
+        // masks
+        s.masks = [
+            Mask(
+                centerX: 0.3, centerY: 0.6, radiusX: 0.2, radiusY: 0.15,
+                rotationDegrees: 10, feather: 0.4,
+                exposureEV: 0.5, contrast: 0.1, highlights: -0.2, shadows: 0.2,
+                clarity: 0.25, saturation: 0.3, temperature: 200, tint: -10
+            )
+        ]
         // geometry
         s.straightenAngle = 12
         s.verticalPerspective = 0.2
@@ -118,6 +127,16 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         let edited = fullyEditedState()
         XCTAssertFalse(edited.redEyePoints.isEmpty, "test fixture should start with points placed")
         XCTAssertTrue(edited.comparisonOriginal().redEyePoints.isEmpty)
+    }
+
+    /// Masks are retouching/stylization, same as red-eye points just above
+    /// — a non-identity mask is unconditionally active, so leaving it
+    /// populated would obviously break this method's "zero retouching"
+    /// contract for the "original" side.
+    func testMasksAreCleared() {
+        let edited = fullyEditedState()
+        XCTAssertFalse(edited.masks.isEmpty, "test fixture should start with a mask placed")
+        XCTAssertTrue(edited.comparisonOriginal().masks.isEmpty)
     }
 
     func testGeometryFieldsAreLeftByteIdenticalToTheInput() {

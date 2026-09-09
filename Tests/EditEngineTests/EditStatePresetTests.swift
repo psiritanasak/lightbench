@@ -52,6 +52,15 @@ final class EditStatePresetTests: XCTestCase {
         s.redEyeSize = 0.8
         s.redEyeStrength = 0.9
         s.redEyePoints = [RedEyePoint(x: 0.3, y: 0.4), RedEyePoint(x: 0.6, y: 0.5)]
+        // masks
+        s.masks = [
+            Mask(
+                centerX: 0.3, centerY: 0.6, radiusX: 0.2, radiusY: 0.15,
+                rotationDegrees: 10, feather: 0.4,
+                exposureEV: 0.5, contrast: 0.1, highlights: -0.2, shadows: 0.2,
+                clarity: 0.25, saturation: 0.3, temperature: 200, tint: -10
+            )
+        ]
         // geometry
         s.straightenAngle = 12
         s.verticalPerspective = 0.2
@@ -144,6 +153,23 @@ final class EditStatePresetTests: XCTestCase {
         XCTAssertNotEqual(
             result.straightenAngle, preset.straightenAngle,
             "sanity check: the preset's own geometry must NOT have leaked through"
+        )
+    }
+
+    /// Masks join `redEyePoints` in this same guard, for the identical
+    /// reason: an ellipse placed on the PRESET's own source photo is
+    /// meaningless dropped onto a different target photo.
+    func testTargetsMasksSurviveAPreset() {
+        let preset = fullyEditedState() // preset's OWN masks are non-empty too
+        var target = EditState.identity
+        target.masks = [Mask(centerX: 0.1, centerY: 0.9, radiusX: 0.1, radiusY: 0.1)]
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.masks, target.masks)
+        XCTAssertNotEqual(
+            result.masks, preset.masks,
+            "sanity check: the preset's own masks must NOT have leaked through"
         )
     }
 
@@ -276,6 +302,19 @@ final class EditStatePresetTests: XCTestCase {
         XCTAssertNotEqual(result.rawDecoderVersionPin, preset.rawDecoderVersionPin)
     }
 
+    /// Pins the real "Save Preset" mechanism (`AdjustTabView`'s Save Preset
+    /// button calls `document.editState.applyingPreset(onto: .identity)`):
+    /// a newly-created preset must never carry the SOURCE photo's masks as
+    /// inert dead data, even though the source photo's own state is
+    /// non-empty here.
+    func testASavedPresetCarriesNoMasks() {
+        let currentEditState = fullyEditedState() // masks is non-empty
+
+        let savedPreset = currentEditState.applyingPreset(onto: .identity)
+
+        XCTAssertEqual(savedPreset.masks, [])
+    }
+
     /// `applyingPreset(onto:)` and `comparisonOriginal()` draw the color/
     /// tone-vs-geometry line in exactly the same place — but they are NOT
     /// perfect complements for `redEyePoints`: `comparisonOriginal()`
@@ -286,17 +325,22 @@ final class EditStatePresetTests: XCTestCase {
     /// down explicitly rather than assuming a full round trip — the same
     /// "don't assume symmetry" discipline this project has needed before
     /// (see PROGRESS.md's Vibrance notes).
-    func testApplyingAStatesOwnColorOntoItsOwnComparisonOriginalReproducesEverythingExceptRedEyePoints() {
+    func testApplyingAStatesOwnColorOntoItsOwnComparisonOriginalReproducesEverythingExceptRedEyePointsAndMasks() {
         let state = fullyEditedState()
 
         let roundTripped = state.applyingPreset(onto: state.comparisonOriginal())
 
         var expected = state
         expected.redEyePoints = [] // comparisonOriginal() cleared these; applyingPreset never restores them
+        expected.masks = [] // same asymmetry as redEyePoints -- see both methods' own doc comments
         XCTAssertEqual(roundTripped, expected)
         XCTAssertNotEqual(
             roundTripped.redEyePoints, state.redEyePoints,
             "documents the asymmetry explicitly — not an oversight if this ever fails"
+        )
+        XCTAssertNotEqual(
+            roundTripped.masks, state.masks,
+            "documents the same asymmetry for masks — not an oversight if this ever fails"
         )
     }
 }

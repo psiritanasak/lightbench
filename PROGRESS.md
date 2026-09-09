@@ -6183,3 +6183,208 @@ confirmed passing after the revert.
 **Next step**: Phase 7 slice 2 — the real `Mask` data model and Radial
 mask UI (no combining yet), per `CLAUDE.md`'s own slicing plan. Start
 with Plan Mode per the standing workflow rule.
+
+## Phase 7 slice 2 (Mask data model + Radial mask, data model/pipeline
+## half) — ✅ COMPLETE (2026-09-09)
+
+Scoped per Plan Mode (draft plan `robust-prancing-papert.md` had left one
+open question — the per-mask parameter set — unanswered before the prior
+session ended; resumed by asking it fresh rather than assuming the
+draft's own recommendation). User confirmed: the full curated 8-param
+set (Exposure, Contrast, Highlights, Shadows, Clarity, Saturation,
+Temperature, Tint); split this slice into a data-model/pipeline session
+(this one) and a separate future UI session, given the scope was larger
+than the original draft assumed (5 new files, ~70 new tests, a
+behavior-preserving refactor, 12+ `ContentView` wiring sites for the UI
+half alone); keep Clarity in scope but measure its real N-mask cost live
+rather than deferring it; and block zoom while a mask is selected in the
+future UI (decided now so it isn't re-litigated later).
+
+**What shipped**: `Sources/EditEngine/Mask.swift` — a new
+`Identifiable, Equatable, Codable` struct: 6 geometry fields (center X/Y,
+radius X/Y, rotation, feather — all normalized fractions of the CURRENT
+post-crop extent, SAME top-left/y-DOWN convention `RedEyePoint` already
+uses) plus the 8 curated adjustment params, EVERY one of which has
+identity `0` (a deliberate property — `EditState` itself has five
+non-zero identities, each a small trap for reset/compare/preset code to
+remember; choosing per-mask Temperature as a relative Kelvin OFFSET
+rather than an absolute value is what buys this here). First nested type
+in this codebase to need HAND-WRITTEN schema-tolerant `Codable` one level
+down (`RedEyePoint`/`RawNeutralPoint` both get away with synthesized
+`Codable` — they're 2-field points with no room to grow); mirrors
+`EditState`'s own `decodeIfPresent ?? default` pattern via a private
+`CodingKeys` + `init(from:)` in a separate extension.
+
+New `Sources/EditEngine/RadialMaskGeometry.swift` — pure, `CoreGraphics`-
+only ellipse-via-affine-transform math (mirrors `CropAspectMath`'s "real
+math gets unit tests despite living near rendering" precedent).
+`CIRadialGradient` is circle-only, so an ellipse is built by generating
+the base gradient at the LARGER of the two requested pixel radii, then
+scaling the smaller axis down (never magnifying a procedural generator).
+Handles the y-down-to-y-up center flip (reusing `applyRedEye`'s own `1 -
+point.y`) and the UI-clockwise-to-CIImage-CCW rotation negation
+(verified against `applyStraighten`'s own documented convention, not
+assumed). Degenerate inputs (non-finite, zero/negative radius, a
+sub-half-pixel radius, `CGRect.infinite`/`.null`) all return `nil`,
+letting the caller skip that mask entirely — the same "guard makes
+identity byte-identical to absent" discipline every other pipeline stage
+in this file already follows.
+
+New `EditPipeline.applyMasks` stage, inserted between the existing
+Red-Eye and Vignette stages (mask geometry must map against the CURRENT
+post-crop extent, same argument the file already makes for those two;
+after Red-Eye because Red-Eye is corrective and masks are creative
+stylization — a mask over an eye should see the already-corrected pupil;
+before Vignette/Definition/NR/Sharpen because those are global stages
+that should act on the final, already-locally-stylized image). Each
+mask's Contrast/Shadows/Highlights/Saturation/Clarity are folded into
+ONE shared `encodeToPerceptual`/`decodeToLinear` round trip rather than
+each opening its own — a measured requirement, not a style choice
+(`applyPerceptualAdjustments`'s own doc comment already records that a
+scene-linear contrast pivot crushes photographic middle gray toward
+black). Shadows/Highlights reuse `applyCurves`'s exact `EffectiveTone`/
+`kCurvePointSpan` machinery, NOT `CIHighlightShadowAdjust` —
+`EditState.definition`'s own doc comment already records that filter as
+measured to be an asymmetric tone-mapper, rejected once already for the
+same reason. A small behavior-preserving refactor extracted
+`unsharpDefinition` out of the existing `applyDefinition`, so per-mask
+Clarity reuses the IDENTICAL filter construction as the global Definition
+slider (verified: every pre-existing Definition test stayed green,
+unedited, after the extraction). Overlapping masks COMPOUND
+(sequential, each applying on top of the previous mask's already-adjusted
+result) — deliberately the opposite of Red-Eye's union-then-correct-once
+design, since masks are independent user-authored adjustments meant to
+stack, matching Lightroom's own behavior and this slice's confirmed
+"multiple simultaneous masks" scope.
+
+`EditState` gained `masks: [Mask] = []` (the second variable-length
+field after `redEyePoints`, a bigger step up since each mask owns a full
+independent param set rather than sharing one). Cleared by
+`comparisonOriginal()` (masks are retouching, same as `redEyePoints`,
+with an even simpler argument — a non-identity mask is unconditionally
+active, no non-zero-default subtlety to argue). NOT copied by
+`applyingPreset(onto:)` (a mask's placement is specific to one photo's
+composition, joining `redEyePoints` as a documented exception to that
+method's own field-partition rule). Explicitly excluded from
+`requiresRawRedecode` (masks are an `EditPipeline` stage, not a
+`CIRAWFilter` setting — including them would fire a multi-second RAW
+re-decode on every mask drag). `EditHistory`'s doc comment updated to
+name both unbounded fields and do the actual memory arithmetic (~128 KB
+worst case, over-stated since Swift arrays are copy-on-write) rather than
+leave a stale "only `redEyePoints`" claim in place.
+
+**Reviewer (Opus 5): 3 rounds — FIX FIRST → APPROVE → a clean final
+APPROVE**, the most thorough pass this codebase's masking work has had.
+Round 1 caught a real correctness bug the live-testing-only verification
+plan wouldn't have caught before shipping a UI: mask Contrast/Shadows/
+Highlights/Saturation had NO clamp, unlike the global path's own
+`effectiveTone(_:)` (which clamps to -1...1 specifically so the
+downstream filters' native factors never go negative). Since this slice
+ships with no UI, a hand-authored sidecar is the only input path today,
+and nothing else bounds these values — measured on a real pixel,
+`contrast: 5` drove `CIColorControls.contrast` to 6, producing negative
+RGB channels (a hue inversion), falsifying the type's own documented
+"reads the same as the identically-named global slider" guarantee for
+any out-of-range value. Fixed by reusing the SAME `clamped(_:to:)`
+helper the global path already has. Round 1 also caught: a factually
+backwards doc comment claiming `radiusX`/`radiusY`'s different
+denominators keep "a circle a circle" (they don't — equal fractions draw
+an ellipse matching the extent's own aspect ratio, not a circle); a
+NotEqual-only order-check test (`testMasksRunBeforeVignette`) that would
+have passed even if `applyMasks` moved to run anywhere else in the
+pipeline, not just its actual shipped position; and two fully
+tautological tests asserting things already covered correctly elsewhere.
+Round 2 (after those fixes) independently re-derived the color-domain
+math from scratch, re-measured the `CIRadialGradient` finite-extent
+claim directly (confirmed: transparent `color1` → real finite extent;
+only opaque `color1` goes to `CGRect.infinite`, matching the doc
+comment), and suggested a genuine perf optimization: crop the per-mask
+`corrected` result to the ellipse's own bounding box right before the
+blend, verified BYTE-IDENTICAL (max diff 0.0, checked across 5 configs
+including a rotated 3:1 ellipse and one fully off-image) since the mask
+value is exactly 0 everywhere outside that region anyway. Also caught a
+B&W/mask interaction bug (a mask's Temperature/Tint would repaint color
+into an already-forced-desaturated B&W photo, since the global B&W
+desaturation runs BEFORE `applyMasks`) and a non-determinism gap (the
+`id` decode fallback used a fresh random `UUID()`, meaning two decodes
+of the same id-less sidecar bytes weren't `Equatable`-equal — replaced
+with a deterministic FNV-1a-style hash of the mask's own other fields).
+Round 3 re-verified every one of those fixes from first principles
+(including mutation-testing the two new/strengthened tests by
+temporarily breaking the code they guard and confirming they actually
+fail) and gave a genuine, non-rubber-stamp APPROVE; the four remaining
+non-blocking wording/coverage nits from that round were fixed anyway
+before commit (two doc-comment corrections, narrowing the
+`innerRadiusFraction` NaN guard to not mishandle `+infinity`, and a new
+test pinning the round-1 clamp itself so a future refactor dropping it
+would fail a test, not just a live-authored sidecar).
+
+**Live-measured perf (required — CLAUDE.md's own slice-1 GO was
+conditional on this exact re-check)**: 3 masks with Clarity active,
+same `CFAbsoluteTimeGetCurrent()` probe-and-fully-revert methodology as
+slice 1 (temporary logging added to `ImageRenderer.draw(in:)`, exercised
+live via synthetic `CGEventLeftMouseDragged` sequences — plain
+`CGEventMouseMoved` between a down/up pair was tried first and silently
+failed to register as a continuous drag; explicit `leftMouseDragged`
+events were required — then the instrumentation was fully reverted,
+confirmed via a clean `git diff`), on the same two real assets as slice
+1 (`IMG_6564.jpeg`, `DSC_1665.NEF`), via a hand-authored sidecar JSON
+(no UI exists yet to create masks through). Masks-off baselines were
+re-measured on each asset immediately before/after for a clean delta,
+then both sidecars were restored byte-for-byte to their pre-session
+state.
+
+| Case | Proxy frames | Full-res frames |
+|---|---|---|
+| JPEG, masks off | ~0.32–0.4ms | ~0.37–0.42ms |
+| JPEG, 3 masks + Clarity | ~5.1–6.6ms | ~3.6–8.3ms |
+| RAW, masks off | ~0.4–1.7ms (proxy rarely engaged) | ~0.4–1.7ms |
+| RAW, 3 masks + Clarity | proxy did not engage under this drag cadence | ~15–21ms |
+
+**JPEG stays comfortably under the 16ms/60fps budget at every frame
+type.** **RAW does not** — full-resolution frames measured 15–21ms,
+at/slightly over budget, a real and substantial cost (~14–19ms
+attributable to the 3 masks) that slice 1's own single-trivial-param
+probe did not anticipate, confirming the roadmap's own predicted risk
+class rather than a false alarm. Root cause: each mask's Clarity pays a
+full-image `CIUnsharpMask` pass; the ROI-cropping optimization above
+narrows the ACTUAL rendered region to each mask's own bounding box, but
+RAW's already-heavy per-frame baseline (even served from
+`RawDecoder.materialize`'s cached buffer) means 3 such passes still add
+up materially. A secondary, orthogonal finding along the way: P2's
+interactive proxy essentially never engaged for RAW under this
+measurement's synthetic drag cadence (every captured RAW frame was
+full-resolution, vs. JPEG's clean proxy/full-res split) — likely because
+RAW's own heavier per-frame cost means the settle timer fires between
+sparse frames before two CONSECUTIVE changed draws land, though this
+wasn't root-caused further since it's outside this task's scope.
+
+**Accepted as a known, documented finding for this slice, not a
+blocker**: masks are not yet reachable from any UI, so this cost is
+theoretical until Session B ships; revisit with a targeted mitigation
+(e.g. skip Clarity specifically on the interactive RAW path, or apply
+the same ROI-narrowing more aggressively) if it proves to matter once a
+real UI exists and RAW users can actually create multiple Clarity masks
+in practice.
+
+631 tests (166 new — `RadialMaskGeometryTests` new file, a new mask
+section in `EditPipelineTests`, plus additions across `EditStateCodableTests`/
+`EditStateComparisonOriginalTests`/`EditStatePresetTests`/
+`EditStateRawRedecodeTests`/`EditHistoryTests`). The mask math is almost
+entirely EQUIVALENCE-tested — a full-frame-covering mask's output
+compared directly against the identically-valued GLOBAL slider's output,
+rather than hand-derived magic numbers — a stronger, self-verifying
+guarantee that needs no external probe to calibrate; real measured
+numbers are reserved for genuinely spatial claims this file's own
+convention already treats that way (soft-edge falloff, rotation swap,
+the y-down convention, the crop-relative center), each confirmed via a
+temporary standalone Swift probe mirroring `applyMasks`' exact filter
+chain before being written into the permanent test as fixed values.
+
+**Next step**: Phase 7 slice 2's UI half (the Masks section in
+`AdjustTabView`, `MaskOverlayView`'s resize/move handles, per-array-
+element bindings) — a separate session, per its own Plan Mode entry
+(this session's plan file records the full research already done for
+it). Start with Plan Mode per the standing workflow rule; the zoom-
+blocked-while-selected and Clarity-perf-accepted decisions above are
+already made and shouldn't be re-litigated.

@@ -108,6 +108,38 @@ final class EditHistoryTests: XCTestCase {
         XCTAssertFalse(history.canRedo)
     }
 
+    /// `Mask` is the first nested type inside `EditState.masks` whose own
+    /// `Equatable` conformance this stack's no-op guard depends on — pins
+    /// that a drag that nets no actual change to a mask (same shape as
+    /// `testCommittingTheCurrentValueIsANoOp`, but exercising the new
+    /// array field specifically) still doesn't create a phantom undo step.
+    func testCommittingAnUnchangedMaskIsANoOp() {
+        var withMask = EditState.identity
+        withMask.masks = [Mask(centerX: 0.4, centerY: 0.4, radiusX: 0.2, radiusY: 0.2, exposureEV: 0.5)]
+        var history = EditHistory(withMask)
+
+        history.commit(withMask)
+
+        XCTAssertFalse(history.canUndo)
+    }
+
+    func testDistinctMasksProduceDistinctHistoryEntries() {
+        var history = EditHistory(.identity)
+        var withFirstMask = EditState.identity
+        withFirstMask.masks = [Mask(centerX: 0.3, centerY: 0.3, radiusX: 0.2, radiusY: 0.2, exposureEV: 0.5)]
+        var withSecondMask = EditState.identity
+        withSecondMask.masks = [Mask(centerX: 0.7, centerY: 0.7, radiusX: 0.2, radiusY: 0.2, exposureEV: 0.5)]
+
+        history.commit(withFirstMask)
+        history.commit(withSecondMask)
+
+        XCTAssertEqual(history.current, withSecondMask)
+        history.undo()
+        XCTAssertEqual(history.current, withFirstMask)
+        history.undo()
+        XCTAssertEqual(history.current, .identity)
+    }
+
     func testCommitBeyondTheLimitDropsTheOldestStep() {
         var history = EditHistory(.identity, limit: 2)
         history.commit(state(exposure: 1.0))

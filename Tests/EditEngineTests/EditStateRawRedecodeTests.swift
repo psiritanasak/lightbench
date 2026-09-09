@@ -141,6 +141,17 @@ final class EditStateRawRedecodeTests: XCTestCase {
         XCTAssertFalse(a.requiresRawRedecode(comparedTo: b))
     }
 
+    /// Phase 7 slice 2's regression guard: `masks` is an `EditPipeline`
+    /// stage, not a `CIRAWFilter` setting — a `true` here would fire a
+    /// multi-second RAW re-decode on every mask drag, the exact silent,
+    /// expensive failure mode this whole function exists to prevent.
+    func testFalseWhenOnlyMasksDiffers() {
+        var a = EditState.identity
+        let b = EditState.identity
+        a.masks = [Mask(centerX: 0.4, centerY: 0.4, radiusX: 0.2, radiusY: 0.2, exposureEV: 1.0)]
+        XCTAssertFalse(a.requiresRawRedecode(comparedTo: b))
+    }
+
     func testFalseComparedToItself() {
         var a = EditState.identity
         a.boostAmount = 0.6

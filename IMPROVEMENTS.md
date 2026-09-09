@@ -591,6 +591,21 @@ spatial-gesture composition — the one thing neither review round could
 confirm via static analysis or an empirical probe — caused no
 regression.
 
+### D9. Arrow-key nudge/resize for the Phase 7 mask overlay (deferred from Phase 7 slice 2 Session B)
+
+`MaskOverlayView` (Phase 7 slice 2's UI half, shipped 2026-09-09) is
+`.accessibilityHidden(true)` on the same justification D6/D8 already
+established for Crop/Red-Eye/WB: every value it lets you drag (center
+X/Y, radius X/Y, rotation, feather) is independently AT-adjustable via
+`MaskDetailView`'s 14 labeled `EditSliderRow`s, so there is a real
+keyboard/AT path to every value today — this item is about ergonomics
+(nudging the overlay directly with arrow keys, the way D8 gave the pan
+overlay arrow-key panning), not about closing an accessibility gap that
+doesn't otherwise exist. Needs its own interaction design (which handle
+is "focused" for a nudge, step size, whether Shift changes step size)
+before it can be scoped — same category of work D8 required for the pan
+overlay.
+
 ### ~~D7. Code design: split ContentView.swift (1352 lines)~~ — SHIPPED 2026-08-28
 
 It currently holds: tab state, crop/aspect logic, zoom/pan gesture math

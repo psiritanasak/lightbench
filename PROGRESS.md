@@ -6381,10 +6381,218 @@ the y-down convention, the crop-relative center), each confirmed via a
 temporary standalone Swift probe mirroring `applyMasks`' exact filter
 chain before being written into the permanent test as fixed values.
 
-**Next step**: Phase 7 slice 2's UI half (the Masks section in
-`AdjustTabView`, `MaskOverlayView`'s resize/move handles, per-array-
-element bindings) — a separate session, per its own Plan Mode entry
-(this session's plan file records the full research already done for
-it). Start with Plan Mode per the standing workflow rule; the zoom-
-blocked-while-selected and Clarity-perf-accepted decisions above are
-already made and shouldn't be re-litigated.
+**Next step (superseded — see the Session B section immediately below,
+which shipped this)**: ~~Phase 7 slice 2's UI half...~~
+
+## Phase 7 slice 2 (Mask data model + Radial mask, UI half — "Session B")
+## — ✅ COMPLETE (2026-09-09)
+
+Scoped per Plan Mode (plan file `crystalline-sauteeing-dragon.md`, built
+entirely from Session A's own already-completed research — no new
+research needed, per that plan's own framing). All line numbers in the
+plan were re-verified fresh against the current `ContentView.swift`/
+`AdjustTabView.swift` before writing any code, since D8 (keyboard paths
+for WB/Red-Eye/pan) landed after Session A's original research and
+rewrote large parts of both files.
+
+**What shipped**: five new files plus targeted edits to
+`AdjustTabView.swift`/`ContentView.swift`.
+
+`Sources/UI/MaskGeometry.swift` — pure, `CoreGraphics`-only UI-side
+geometry, the explicit INVERSE sibling `RadialMaskGeometry.swift`'s own
+doc comment reserved for this session (screen-drag math, not the forward
+render transform). `axes(rotationDegrees:)` returns the ellipse's local
+X/Y unit vectors in y-DOWN screen space for `Mask.rotationDegrees`'
+clockwise-on-screen convention — deliberately does NOT negate the angle
+the way `RadialMaskGeometry.resolve` must (that negation exists only to
+cross into `CIImage`'s y-UP space). `handlePoint` maps a handle to its
+on-screen point; `resized` projects a drag's translation onto the
+handle's own rotated axis to grow/shrink ONE radius, symmetric about a
+stationary center; `movedCenter` clamps center X/Y to `0...1` while
+deliberately NOT clamping the radii (a mask overhanging the image edge
+is normal, unlike Crop). 22 tests in
+`Tests/EditEngineTests/MaskGeometryTests.swift`, including a cross-check
+test hand-verified by the reviewer to numerically agree with
+`RadialMaskGeometry.resolve`'s own transform after accounting for the
+y-flip (at 37° rotation, extent 300×200: both sides give `(179.90,
+105.14)`).
+
+`Sources/UI/MaskBinding.swift` — `Binding<EditState>.mask(id:) ->
+Binding<Mask>?`, resolving by IDENTITY on every access (never a captured
+array index, since deletion shifts every later index). The setter
+silently no-ops if the mask was deleted mid-drag; reviewer-verified the
+getter/setter close over the parent binding so `wrappedValue` is always
+read live, not a stale snapshot.
+
+`Sources/UI/MaskDetailView.swift` — a top-level `struct` (NOT a computed
+property inside the already-large `AdjustTabView`, which has two
+existing doc comments warning about a real, already-hit type-checker
+blow-up from over-packed `@ViewBuilder` closures). 14 `EditSliderRow`s in
+three groups (tone: Exposure/Contrast/Highlights/Shadows; color:
+Clarity/Saturation/Temperature/Tint; shape: Center X/Y/Radius X/Y/
+Rotation/Feather) for the selected mask's full parameter set. These 14
+rows ARE the accessibility answer for `MaskOverlayView` being
+`.accessibilityHidden(true)` — the same reasoning `CropOverlayView`
+already established: every value the overlay lets you drag is
+independently AT-adjustable here.
+
+`Sources/UI/MaskOverlayView.swift` — renders in the PARENT's coordinate
+space (like `EditorCrosshairOverlay`), NOT self-framed to `fitRect` (unlike
+`CropOverlayView`) — a mask's ellipse can legitimately extend past the
+image edge, and a child positioned outside its own parent's frame
+wouldn't reliably receive hit-tests. 4 resize handles (one per radius,
+symmetric about a stationary center — not Crop's opposite-corner
+anchoring, since the data model is one center + two independent radii,
+not four independent edges), an interior move region, and a dashed
+feather guide reusing `RadialMaskGeometry.innerRadiusFraction(feather:)`
+directly so it can never drift from what's actually solid. Rotation is
+slider-only in v1 (no drag handle — no rotation-gesture precedent exists
+anywhere in this app), but the 4 resize handles still sit on the ROTATED
+ellipse via `MaskGeometry`, so a future rotation handle would be purely
+additive. Snapshot-baseline drag (`@State private var start: (...)?`
+seeded lazily in `onChanged`), the exact `CropOverlayView` pattern.
+
+`AdjustTabView.swift` gained `isMasksSectionExpanded`/`selectedMaskID` on
+`AdjustPanelState`, a new "Masks" `AdjustSectionContainer` between
+Red-Eye and RAW, and `masksSection`/`maskListRows`/`maskRow`/`maskDetail`/
+`addMask`/`select`/`delete` — the exact add/delete-list shape
+`presetsSection` already established: `maskListRows` is a plain read-only
+value `ForEach` over `document.editState.masks`, identical in spirit to
+`presetsSection`'s own `ForEach(catalog.presets)` (a row only reads
+`mask.id`/position, never writes). The write-back path lives one level
+down, in `maskDetail`: only the SELECTED mask's sliders need a live
+binding, obtained via `$document.editState.mask(id:)` (`MaskBinding.swift`)
+rather than a plain value. `MaskDetailView(mask: binding).id(id)`
+— the `.id(id)` is load-bearing: without it, switching the selected mask
+while `EditSliderRow`'s own click-to-type `@State` is mid-edit could
+write the typed value into the WRONG mask, since SwiftUI would reuse the
+same view identity across the switch.
+
+`ContentView.swift` gained `isEditingMask` (resolved live against
+`document.editState.masks` by ID — self-healing if Undo/Revert/
+Apply-Preset deletes the selected mask without passing through any
+disarm site), folded into `canZoom`'s existing gate, a new overlay
+branch in `pointAndZoomOverlays`, and `handleMaskKeyPress` (Escape only).
+The WB and Red-Eye arm buttons in `AdjustTabView` were each extended one
+line to clear `selectedMaskID` — the same disarm-at-arm-site pattern
+those two buttons already used on each other, now a three-way mutual
+exclusion. Compare deliberately stays ENABLED with a mask selected (only
+the overlay/detail panel clears, masks stay applied) — the best way to
+SEE what a mask did.
+
+**Reviewer (Opus 5): 2 rounds, FIX FIRST → APPROVE**, with all non-blocking
+findings from round 2 fixed anyway before commit. Round 1 caught: no
+non-finite guard on the overlay (a hand-edited/corrupt sidecar's NaN
+would reach `.position()` directly — the render side's own
+`RadialMaskGeometry.resolve` already guards this, this view didn't);
+misleading/circular geometry-test comments and a missing cross-check
+against the render-side transform; no-op writes firing on a
+click-without-movement and redundant dual-radius writes; "Add Radial
+Mask" not disabled without a loaded photo; collapsing the Masks section
+left a mode armed (fixed via a custom `Binding` that clears
+`selectedMaskID` on collapse); a missing "Mask editing" accessibility
+label; an unused `Handle: CaseIterable` conformance; a feather-threshold
+magic number duplicating `RadialMaskGeometry.minimumFeather` instead of
+reusing the constant directly — all fixed. Round 2 (after those fixes)
+caught one real, previously-invisible bug: the shared
+`onEnterPointPickingMode` callback (passed from `ContentView` into
+`AdjustTabView`, used by WB/Red-Eye/Mask select actions to reset zoom/pan
+and grab focus) only grabbed image-pane focus as a side effect of a
+NEW `.onChange(of: adjustPanel.selectedMaskID)` — but clicking an
+ALREADY-selected "Mask N" row doesn't change `selectedMaskID` at all, so
+that rising-edge-only focus grab would never fire, leaving Escape
+unreachable if focus had drifted elsewhere (e.g. after typing in a
+slider's text field). Fixed by making `onEnterPointPickingMode` itself
+grab focus unconditionally, not as a side effect of the ID changing.
+Also fixed: two sequential writes through `@Binding var panel` merged
+into one (`var next = panel; ...; panel = next`); the duplicate-UUID
+hand-off note (from `Mask.swift`'s own doc comment) re-confirmed still
+narrow/accepted since `addMask()` never creates ID-less masks; two more
+test-comment overclaim fixes (the `.plusX`-only cross-check needed an
+explanation for why `.plusY` isn't also directly asserted — the y-flip
+reverses handedness; an "must not leak into radiusY" test assertion
+was structural, not empirical evidence).
+
+653 tests (22 new, all in `MaskGeometryTests` — every other new file in
+this session is SwiftUI interaction glue with no unit-test precedent
+anywhere in this codebase, matching its own established convention that
+pure geometry gets unit tests while gesture composition gets live
+verification).
+
+**Live-verified (2026-09-09)**, with permission asked and granted via
+AskUserQuestion before any screen automation, against the user's real
+Bolivia-trip library (`IMG_6564.jpeg`, the group-jump/sky photo, and a
+portrait car-interior JPEG, both real assets — not synthetic fixtures):
+- Added multiple masks; confirmed only the currently-selected one draws
+  handles, matching the v1 design (unselected masks still apply their
+  effect, just show no overlay).
+- Dragged all 4 resize handles at rotation 0 on a LANDSCAPE image:
+  confirmed symmetric resize about a stationary center, matching the
+  design (not Crop's opposite-corner anchoring).
+- Set Rotation to +30° with unequal radii (a circle would hide any
+  rotation bug) and confirmed the drawn outline, the RENDERED soft
+  ellipse, and all 4 handles rotate together in the same direction,
+  each handle staying exactly on the rotated outline.
+- Repeated both the resize and the rotation test on a PORTRAIT photo
+  (a non-square `fitRect`, the case that would catch a scale/rotate-
+  ordering bug) — both confirmed correct.
+- Dragged the interior toward an edge and confirmed Center X clamps at
+  0% while the ellipse is free to overhang the image (the opposite of
+  Crop's own interior-drag double-bounding).
+- Swept Feather to ~90% and confirmed the dashed guide visibly shrank
+  toward the center, tracking the actually-solid region.
+- Dragged a handle then pressed ⌘Z once: confirmed the WHOLE drag
+  undoes as a single step, not one frame of it.
+- Typed into Mask 2's Exposure field without pressing Return, then
+  clicked Mask 1's row: confirmed Mask 1 showed `+0.00 EV` (no
+  cross-mask leak) and Mask 2 ALSO showed `+0.00 EV` when re-selected
+  (the uncommitted value was correctly discarded, not silently
+  committed) — the `.id(id)` view-identity fix and the click-to-type
+  seed-comparison discard (Post-Phase-5 follow-up #8's own precedent)
+  both hold under masks.
+- Confirmed switching to Crop disarms an active mask selection
+  (overlay disappears); confirmed arming the WB eyedropper does the
+  same.
+- Confirmed mask selection SURVIVES a Library round-trip (by design —
+  only Crop/WB/Red-Eye/Compare/photo-switch/tab-switch clear it,
+  per the plan's own enumerated disarm-site table) and that Escape
+  still reaches and deselects it after returning, re-enabling zoom.
+- Used Compare → Split on a masked photo and dragged the divider:
+  confirmed the "before" side shows zero mask effect (a normal-toned
+  headrest) while the "after" side shows the mask's +4 EV brightening
+  clearly confined to where the ellipse was, and that toggling Compare
+  off leaves the "after" (edited) state in place — direct visual proof
+  `comparisonOriginal()`'s existing mask-clearing (Session A) still
+  works correctly through the new UI.
+- Used Revert to Original on both test photos and confirmed a clean
+  return to "No masks yet" with normal exposure, leaving neither photo
+  with leftover test edits.
+
+**Not independently live-exercised this session** (accepted on
+code-review strength / symmetry instead, not skipped by oversight):
+literally-concurrent delete-during-drag (a single physical input device
+cannot drive two simultaneous mouse-downs, so this remains covered by
+the reviewed `MaskBinding` setter guard rather than a literal repro);
+Red-Eye's own arm-button disarm specifically (an identical one-line diff
+to the WB button, which WAS live-verified, and the automation session
+ran low on time before reaching it); a JPEG export round-trip through a
+masked photo (Session A's own research already confirmed export/Library-
+thumbnail/Revert-enablement/P2-P3-caches all flow `masks` through as a
+plain `EditState` field with no code path needing changes).
+
+**Deferred, logged in `IMPROVEMENTS.md` as D9, not an oversight**:
+arrow-key nudge/resize of the on-image mask overlay itself. The 14
+`MaskDetailView` sliders already give a full keyboard/AT path to every
+value the overlay can set, so this is an ergonomics follow-up, not a
+closed accessibility gap.
+
+Both test photos' sidecars were reverted to identity (via the app's own
+Revert to Original) before this commit — the user's photo library is
+unchanged by this session's live verification.
+
+**Phase 7 slice 2 is now fully complete** (both the data-model/pipeline
+half and the UI half). **Next step**: Phase 7 slice 3 (Linear/Graduated
+mask — second geometry type, reuses most of slice 2's plumbing; new
+interaction code is a draggable line + two parallel falloff guides, a
+genuinely new gesture with no existing precedent in this codebase) —
+per its own Plan Mode session, per the standing workflow rule.

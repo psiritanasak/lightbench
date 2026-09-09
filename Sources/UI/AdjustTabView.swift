@@ -43,6 +43,21 @@ struct AdjustPanelState {
     /// Phase 6 slice 2: whether the RAW section is expanded. Same
     /// reasoning as every other section bool above.
     var isRawSectionExpanded = false
+
+    /// Phase 7 slice 2: whether the Masks section is expanded. Same
+    /// reasoning as every other section bool above.
+    var isMasksSectionExpanded = false
+
+    /// Which mask's sliders + on-image overlay are shown.
+    /// Presentation-only, exactly like `selectedSelectiveColorBand` —
+    /// `EditState.masks` holds every mask at once, this only tracks which
+    /// one the panel is currently editing. Stored as the mask's own
+    /// `UUID`, NOT an array index: deleting an earlier mask shifts every
+    /// later index, so a stored index would silently retarget a different
+    /// mask. `ContentView` also reads this directly (for overlay gating
+    /// and `canZoom`), so unlike the purely-internal fields above, this
+    /// one is not "the panel's private business."
+    var selectedMaskID: UUID?
 }
 
 /// The Editor's Adjust tab: the six collapsible Light/Color/Selective Color/
@@ -151,6 +166,10 @@ struct AdjustTabView: View {
             ) {
                 redEyeSection
             }
+            Divider()
+            AdjustSectionContainer(icon: "circle.dashed", title: "Masks", isExpanded: masksSectionExpandedBinding) {
+                masksSection
+            }
             rawSectionContainer
             Divider()
             AdjustSectionContainer(icon: "list.star", title: "Presets", isExpanded: $panel.isPresetsSectionExpanded) {
@@ -251,6 +270,7 @@ struct AdjustTabView: View {
                 isPickingWhiteBalance.toggle()
                 if isPickingWhiteBalance {
                     isPlacingRedEyeCorrections = false
+                    panel.selectedMaskID = nil
                     onEnterPointPickingMode()
                 }
             } label: {
@@ -330,6 +350,7 @@ struct AdjustTabView: View {
                 isPlacingRedEyeCorrections.toggle()
                 if isPlacingRedEyeCorrections {
                     isPickingWhiteBalance = false
+                    panel.selectedMaskID = nil
                     onEnterPointPickingMode()
                 }
             } label: {
@@ -351,6 +372,139 @@ struct AdjustTabView: View {
                 document.editState.redEyePoints.removeAll()
             }
             .disabled(document.editState.redEyePoints.isEmpty)
+        }
+    }
+
+    /// Phase 7 slice 2: local (radial/ellipse) adjustments. Add/select/
+    /// delete chrome only — mirrors `presetsSection`'s shape (the only
+    /// other existing dynamic add/delete list in this codebase): the row
+    /// list itself (`maskListRows`) is a plain value `ForEach` over
+    /// `document.editState.masks`, identical in spirit to
+    /// `presetsSection`'s own `ForEach(catalog.presets)` — a row only
+    /// reads `mask.id`/its position, it never writes. The write-back
+    /// path lives one level down, in `maskDetail`: only the SELECTED
+    /// mask's `EditSliderRow`s need a live `Binding<Mask>`, obtained via
+    /// `$document.editState.mask(id:)` (`MaskBinding.swift`) rather than
+    /// a plain value. The 14-slider detail view for that mask is
+    /// `MaskDetailView`, a separate top-level file — see that file's own
+    /// doc comment for why it isn't inlined here.
+    /// Reviewer-caught: collapsing the section while a mask is selected
+    /// would otherwise hide the list/detail panel but leave mask-editing
+    /// mode fully armed underneath (the on-image overlay stays, `canZoom`
+    /// stays blocked) — with no visible way back in except Escape or
+    /// re-expanding. Clearing the selection on collapse closes that gap;
+    /// expanding never needs to touch it.
+    private var masksSectionExpandedBinding: Binding<Bool> {
+        Binding(
+            get: { panel.isMasksSectionExpanded },
+            set: { newValue in
+                // Reviewer-caught: ONE write through `panel`, not two
+                // sequential ones — `panel` is itself a `@Binding`, and two
+                // separate read-modify-writes through it risk the second
+                // clobbering the first if either ever observes a stale
+                // snapshot instead of the live value.
+                var next = panel
+                next.isMasksSectionExpanded = newValue
+                if !newValue { next.selectedMaskID = nil }
+                panel = next
+            }
+        )
+    }
+
+    private var masksSection: some View {
+        Group {
+            Button("Add Radial Mask") {
+                addMask()
+            }
+            .frame(maxWidth: .infinity)
+            .disabled(document.currentImage == nil)
+            if document.editState.masks.isEmpty {
+                Text("No masks yet").font(.caption).foregroundStyle(.secondary)
+            } else {
+                maskListRows
+            }
+            maskDetail
+        }
+    }
+
+    /// Re-checked per `Mask.deterministicFallbackID`'s own doc comment,
+    /// which asked this UI slice to confirm its collision reasoning still
+    /// holds: it does — this section NEVER creates an id-less mask
+    /// (`addMask()` below always goes through `Mask()`'s fresh `UUID()`
+    /// default), so the only way two masks could ever share an id here is
+    /// a hand-edited/corrupted sidecar with two id-less, field-identical
+    /// masks in it — already the documented, accepted edge case, not
+    /// something this `ForEach`/`delete(_:)` need to additionally guard
+    /// against.
+    private var maskListRows: some View {
+        ForEach(Array(document.editState.masks.enumerated()), id: \.element.id) { index, mask in
+            maskRow(number: index + 1, mask: mask)
+        }
+    }
+
+    /// Label "Mask N" comes from ARRAY POSITION, not a persisted name field
+    /// — v1 simplification matching CLAUDE.md's own "Mask 1, Mask 2…"
+    /// wording; deleting an earlier mask renumbers later ones, an accepted
+    /// tradeoff, not a bug.
+    private func maskRow(number: Int, mask: Mask) -> some View {
+        let isSelected = panel.selectedMaskID == mask.id
+        return HStack {
+            Button("Mask \(number)") {
+                select(mask)
+            }
+            .buttonStyle(.plain)
+            .fontWeight(isSelected ? .semibold : .regular)
+            Spacer()
+            Button {
+                delete(mask)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.red)
+            .accessibilityLabel("Delete Mask \(number)")
+        }
+    }
+
+    @ViewBuilder private var maskDetail: some View {
+        if let id = panel.selectedMaskID, let binding = $document.editState.mask(id: id) {
+            // `.id(id)` is LOAD-BEARING, not decoration: `EditSliderRow`
+            // holds click-to-type `@State` (`isEditingText`/`editingText`/
+            // `seedText`). Without a per-mask view identity here, switching
+            // from Mask 1 to Mask 2 while a click-to-type field is open
+            // would reuse the same view identity and could commit the
+            // typed value into Mask 2's field instead of Mask 1's.
+            MaskDetailView(mask: binding).id(id)
+        }
+    }
+
+    /// No armed "placement mode" needed, unlike Red-Eye/WB — a radial mask
+    /// has AREA, so a sensible default center/radius is immediately
+    /// visible and draggable; the on-image overlay itself is the placement
+    /// affordance.
+    private func addMask() {
+        let mask = Mask()
+        document.editState.masks.append(mask)
+        select(mask)
+    }
+
+    /// Mirrors the WB/Red-Eye buttons' own disarm shape — clears the OTHER
+    /// two "point-ish interaction" modes and resets the viewport, so all
+    /// three disarm each other by hand at three sites total (this one, and
+    /// the two extended above), matching this file's existing convention
+    /// rather than refactoring to a single mode enum (a larger, unrelated
+    /// change out of scope here).
+    private func select(_ mask: Mask) {
+        panel.selectedMaskID = mask.id
+        isPickingWhiteBalance = false
+        isPlacingRedEyeCorrections = false
+        onEnterPointPickingMode()
+    }
+
+    private func delete(_ mask: Mask) {
+        document.editState.masks.removeAll { $0.id == mask.id }
+        if panel.selectedMaskID == mask.id {
+            panel.selectedMaskID = nil
         }
     }
 
@@ -527,7 +681,11 @@ struct AdjustTabView: View {
     /// it's shown in) and does NOT clear placed Red-Eye correction points
     /// (a separate, more destructive action with its own dedicated
     /// "Clear All Red-Eye Corrections" button above) — this only resets
-    /// continuous adjustment VALUES.
+    /// continuous adjustment VALUES. `masks` (Phase 7 slice 2) follows the
+    /// identical pattern: deleting a mask is a list operation with its own
+    /// per-row trash button in `masksSection`, not something this button
+    /// touches — the omission is deliberate, mirroring `redEyePoints`, not
+    /// an oversight.
     /// Reviewer-flagged, deliberate, documented gap: this deliberately
     /// mirrors `comparisonOriginal()`'s field list, which does NOT include
     /// any of the ELEVEN RAW-native fields (`boostAmount`, `rawExposureEV`,

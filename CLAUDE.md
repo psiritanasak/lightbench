@@ -1020,8 +1020,9 @@ Edits are stored as parameter sets and rendered live on the GPU.
       speculative mitigation (caching masked layers, downscaling, throttling)
       needed before starting it — revisit only if slice 2's real N-mask
       compositing measures differently from this single-mask probe.
-   2. **Mask data model + Radial mask (no combining) ✅ COMPLETE — data
-      model/pipeline half only** (2026-09-09). Shipped a new `Mask` type
+   2. **Mask data model + Radial mask (no combining) ✅ COMPLETE — both the
+      data-model/pipeline half (Session A, 2026-09-09) and the UI half
+      (Session B, 2026-09-09).** Session A shipped a new `Mask` type
       (`Sources/EditEngine/Mask.swift`) — NOT the full `EditState` (which
       turned out to be 69 stored fields, not the roadmap's stale "59-field"
       estimate above); the curated 8-param set the user confirmed:
@@ -1043,12 +1044,8 @@ Edits are stored as parameter sets and rendered live on the GPU.
       MULTIPLE simultaneous masks per photo (sequential, compounding —
       deliberately unlike Red-Eye's union-then-correct-once), pulling that
       part of item 6 below forward; only INTERSECT/SUBTRACT boolean
-      combining semantics remain in slice 6. No UI yet (masks are only
-      reachable via unit tests and hand-authored sidecar JSON) — the list
-      UI / resize-drag handles this item originally scoped are deferred to
-      a separate Session B, still using Crop's 8-handle precedent and
-      Presets' `ForEach` add/delete precedent as planned.
-      Reviewer (Opus 5): 3 rounds — FIX FIRST → APPROVE → a clean final
+      combining semantics remain in slice 6.
+      Session A reviewer (Opus 5): 3 rounds — FIX FIRST → APPROVE → a clean final
       APPROVE after addressing every non-blocking nit too, not just the
       required fixes. Round 1 caught a real correctness bug: unclamped
       mask Contrast/Shadows/Highlights/Saturation/Tint could drive
@@ -1098,6 +1095,111 @@ Edits are stored as parameter sets and rendered live on the GPU.
       future targeted mitigation (e.g. skip Clarity specifically on the
       interactive RAW path) if this proves to matter in practice once a
       UI exists to create masks at all.
+
+      **Session B (UI half) ✅ COMPLETE** (2026-09-09). Masks are now
+      reachable from the app itself: a new "Masks" `AdjustSectionContainer`
+      (between Red-Eye and RAW) with an "Add Radial Mask" button, a
+      "Mask N" list (add/select/delete, `presetsSection`'s exact shape),
+      and a 14-slider detail view (`Sources/UI/MaskDetailView.swift`) for
+      the selected mask's 8 tone/color params plus 6 shape params (Center
+      X/Y, Radius X/Y, Rotation, Feather) — the 14 rows are the
+      accessibility answer, the same reasoning `CropOverlayView` already
+      established: they let the on-image overlay be
+      `.accessibilityHidden(true)` since every draggable value is
+      independently AT-adjustable. New `Sources/UI/MaskGeometry.swift`
+      (pure, `CoreGraphics`-only, 22 tests in
+      `Tests/EditEngineTests/MaskGeometryTests.swift`) is the UI-side
+      INVERSE-geometry sibling `RadialMaskGeometry.swift`'s own doc
+      comment reserved for this session — screen-drag math, not the
+      forward render transform — reusing `RadialMaskGeometry.resolve`'s
+      exact rotation convention (verified by a cross-check test hand-
+      confirmed by the reviewer to agree numerically across the y-flip).
+      New `Sources/UI/MaskBinding.swift` (`Binding<EditState>.mask(id:)`)
+      resolves a mask by IDENTITY on every access, never a captured array
+      index — the setter silently no-ops if the mask was deleted
+      mid-drag, exactly the same shape `CropOverlayView`'s baseline-drag
+      pattern already established. New `Sources/UI/MaskOverlayView.swift`
+      renders 4 resize handles (one per radius, symmetric about a
+      stationary center — not Crop's opposite-corner anchoring, since the
+      data model is one center + two independent radii) plus an interior
+      move region and a dashed feather guide reusing
+      `RadialMaskGeometry.innerRadiusFraction(feather:)` directly so the
+      guide can never drift from what's actually solid. Rotation is
+      slider-only in v1 (no drag handle — no rotation-gesture precedent
+      exists anywhere in this app), but the 4 resize handles still sit on
+      the ROTATED ellipse via `MaskGeometry`, so a future rotation handle
+      is purely additive.
+      `ContentView.swift` wires a new `isEditingMask` computed property
+      (resolved live against `document.editState.masks`, self-healing if
+      Undo/Revert/Apply-Preset deletes the selected mask out from under
+      any disarm site) into `canZoom`'s existing gate (Crop/WB/Red-Eye
+      precedent), a new overlay branch in `pointAndZoomOverlays`, and an
+      Escape handler; the WB and Red-Eye arm buttons in `AdjustTabView`
+      were each extended one line to also clear `selectedMaskID`, the
+      same disarm-at-arm-site pattern those two already used on each
+      other. Compare deliberately stays ENABLED with a mask selected
+      (only the overlay/detail panel clears) — the best way to see what a
+      mask actually did.
+      Reviewer (Opus 5): 2 rounds, FIX FIRST → APPROVE, both non-blocking
+      on the second pass. Round 1: no non-finite guard on the overlay (a
+      hand-edited/corrupt sidecar's NaN would hit `.position()` directly,
+      unlike the render side's own `resolve` which safely returns `nil`);
+      misleading/circular geometry-test comments and a missing render-side
+      cross-check; no-op writes on a click-without-movement and redundant
+      dual radius writes; "Add Radial Mask" not disabled without a loaded
+      photo; collapsing the Masks section left a mode armed; missing
+      mask-editing accessibility label; an unused `CaseIterable`
+      conformance; a feather-threshold magic number duplicating
+      `RadialMaskGeometry.minimumFeather` instead of reusing it — all
+      fixed. Round 2 (after those fixes) caught one real bug: the shared
+      `onEnterPointPickingMode` callback only grabbed image-pane focus
+      inside `AdjustTabView`'s WB/Red-Eye arm sites, not for Mask
+      selection, and clicking an ALREADY-selected "Mask N" row doesn't
+      change `selectedMaskID` — so the rising-edge-only
+      `.onChange(of: adjustPanel.selectedMaskID)` focus grab would never
+      fire, leaving Escape unreachable if focus had drifted elsewhere;
+      fixed by making the callback grab focus unconditionally. 653 tests
+      (22 new, all in `MaskGeometryTests`; every other new file is
+      SwiftUI interaction glue with no unit-test precedent in this
+      codebase, per its own "geometry gets tests, gesture composition
+      gets live verification" convention).
+      **Live-verified (2026-09-09)** against the user's real Bolivia-trip
+      library (`IMG_6564.jpeg`, a landscape group photo, and a separate
+      portrait car-interior JPEG, both real JPEG assets): added
+      multiple masks with only the selected one showing handles; dragged
+      all 4 resize handles confirming symmetric resize about a stationary
+      center on both a landscape AND a non-square (portrait) `fitRect`;
+      set Rotation to +30° with unequal radii and confirmed the drawn
+      outline, the RENDERED soft ellipse, and all 4 handles rotate
+      together in the same direction; dragged the interior to an edge
+      and confirmed Center X clamps at 0% while the ellipse is free to
+      overhang the image; swept Feather and confirmed the dashed guide
+      tracks the solid region; dragged a handle then ⌘Z'd and confirmed
+      the WHOLE drag undoes as one step; typed into one mask's Exposure
+      field without committing, clicked a different mask's row, and
+      confirmed neither mask absorbed the stray value (the `.id(id)`
+      view-identity fix works); confirmed Crop and the WB eyedropper both
+      disarm an active mask selection; confirmed mask selection survives
+      a Library round-trip (by design — only Crop/WB/Red-Eye/Compare/
+      photo-switch/tab-switch clear it) and that Escape still reaches and
+      deselects it afterward; used Compare → Split and confirmed the
+      "before" side shows zero mask effect while "after" shows it exactly
+      confined to the ellipse, then dragged the split divider to confirm
+      the effect appears only past it; used Revert to Original to
+      confirm it cleanly clears masks back to "No masks yet." Not
+      independently live-exercised this session (accepted on code-review
+      strength instead): literally-concurrent delete-during-drag (a
+      single input device cannot drive two simultaneous mouse-downs, so
+      this is covered by the reviewed `MaskBinding` setter guard, not a
+      literal repro); Red-Eye's own arm-button disarm (identical one-line
+      diff to the WB button, which WAS live-verified); and a JPEG export
+      round-trip through a masked photo (this app's export path already
+      flows any `EditState` field through unmodified, per Session A's own
+      confirmed-no-changes-needed research).
+      **Deferred, logged as a follow-up in IMPROVEMENTS.md, not an
+      oversight**: arrow-key nudge/resize of the on-image overlay itself.
+      Both test photos' masks/sidecars were reverted to identity before
+      this commit — the library is unchanged.
    3. **Linear (Graduated) mask** — second geometry type, reuses most of
       slice 2's plumbing; new interaction code is a draggable line + two
       parallel falloff guides (genuinely new — no existing precedent covers

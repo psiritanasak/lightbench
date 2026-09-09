@@ -85,11 +85,25 @@ struct ContentView: View {
 
     /// Whether scroll-to-zoom/click-drag-to-pan are currently armable.
     /// Compare being active does NOT block zoom (the whole point is being
-    /// able to zoom in while comparing) — only the three overlay-owning
-    /// point-interaction/crop modes do, since their overlays are
+    /// able to zoom in while comparing) — only the four overlay-owning
+    /// point-interaction/crop/mask modes do, since their overlays are
     /// positioned against `currentFitRect` assuming no zoom/pan is active.
     private var canZoom: Bool {
-        document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance && !isPlacingRedEyeCorrections
+        document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance
+            && !isPlacingRedEyeCorrections && !isEditingMask
+    }
+
+    /// Phase 7 slice 2: the mask `adjustPanel.selectedMaskID` currently
+    /// editing, RESOLVED against the LIVE array on every read — never
+    /// trust `adjustPanel.selectedMaskID` raw. Undo, Revert to Original,
+    /// and Apply Preset can all delete the selected mask WITHOUT passing
+    /// through any of this file's own disarm sites, which would otherwise
+    /// leave `canZoom`/the overlay gate stuck pointing at a mask that no
+    /// longer exists. Same "compute the truth, don't trust every call
+    /// site" shape as `EditState.isEffectivelyIdentity`.
+    private var isEditingMask: Bool {
+        guard let id = adjustPanel.selectedMaskID else { return false }
+        return document.editState.masks.contains { $0.id == id }
     }
 
     /// Whether a tap on the image should be captured as a WB eyedropper
@@ -258,10 +272,32 @@ struct ContentView: View {
         if !isCroppingActive, isPickingWhiteBalance || isPlacingRedEyeCorrections {
             return handlePointPlacementKeyPress(keyPress)
         }
+        // Phase 7 slice 2: same defensive re-check discipline as the
+        // branch above — `!isCroppingActive` on top of `isEditingMask`,
+        // not trusting `.onChange(of: selectedTab)` alone.
+        if !isCroppingActive, isEditingMask {
+            return handleMaskKeyPress(keyPress)
+        }
         if canZoom, zoomScale > 1, compareMode != .split {
             return handlePanKeyPress(keyPress)
         }
         return .ignored
+    }
+
+    /// Escape deselects the currently-edited mask — matches every other
+    /// Editor mode's own Escape behavior (`handlePointPlacementKeyPress`
+    /// below), and without it there would be no keyboard way to leave
+    /// mask-editing (which, given `canZoom`'s own mask gate, means no
+    /// keyboard way to re-enable zoom either). Arrow-key nudge/resize of
+    /// the overlay itself is deliberately deferred — `MaskDetailView`'s 14
+    /// labeled sliders are this slice's accessibility answer, matching how
+    /// `CropOverlayView` covers the same bar via `CropTabView`'s sliders.
+    /// NOT `phase == .down`-gated: a repeated deselect is idempotent, the
+    /// same reasoning `handlePointPlacementKeyPress`'s own Escape case uses.
+    private func handleMaskKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        guard keyPress.key == .escape else { return .ignored }
+        adjustPanel.selectedMaskID = nil
+        return .handled
     }
 
     /// Arrow keys move `crosshairPosition`; Return commits (samples WB or
@@ -606,6 +642,7 @@ struct ContentView: View {
             customAspectRatio = nil
             isPickingWhiteBalance = false
             isPlacingRedEyeCorrections = false
+            adjustPanel.selectedMaskID = nil
             compareMode = .off
             splitOrientation = .vertical
             splitPosition = 0.5
@@ -621,6 +658,7 @@ struct ContentView: View {
             if newTab != .adjust {
                 isPickingWhiteBalance = false
                 isPlacingRedEyeCorrections = false
+                adjustPanel.selectedMaskID = nil
                 compareMode = .off
                 zoomScale = 1
                 panOffset = .zero
@@ -652,6 +690,16 @@ struct ContentView: View {
                 isImagePaneFocused = true
             }
         }
+        // Phase 7 slice 2: mirrors the two `.onChange`s above — selecting a
+        // mask (a non-nil RISING edge) grabs keyboard focus for the image
+        // pane, so Escape (routed in `handleImagePaneKeyPress` below) works
+        // immediately with no extra click needed. No crosshair to reset
+        // here (masks have no point-placement crosshair).
+        .onChange(of: adjustPanel.selectedMaskID) { _, newID in
+            if newID != nil {
+                isImagePaneFocused = true
+            }
+        }
         // Reviewer-caught: returning to the Editor from the Library while
         // a point-placement mode is STILL armed (it survives the round
         // trip — `showLibrary` merely toggles which pane is shown, it
@@ -663,7 +711,7 @@ struct ContentView: View {
         // here on every return-to-Editor closes that gap; harmless when
         // neither mode is armed (nothing reads `isImagePaneFocused` then).
         .onChange(of: showLibrary) { _, isShowingLibrary in
-            if !isShowingLibrary, isPickingWhiteBalance || isPlacingRedEyeCorrections {
+            if !isShowingLibrary, isPickingWhiteBalance || isPlacingRedEyeCorrections || isEditingMask {
                 isImagePaneFocused = true
             }
         }
@@ -814,6 +862,12 @@ struct ContentView: View {
                 if newMode != .off {
                     isPickingWhiteBalance = false
                     isPlacingRedEyeCorrections = false
+                    // Deliberately does NOT disable the Compare menu itself
+                    // above (masks stay APPLIED — Compare is the best way
+                    // to see what a mask did) — this only clears the
+                    // overlay/detail-panel SELECTION, matching WB/Red-Eye's
+                    // own clear right above.
+                    adjustPanel.selectedMaskID = nil
                 }
             }
         }
@@ -968,7 +1022,8 @@ struct ContentView: View {
                     .accessibilityElement(children: .contain)
                     .accessibilityLabel(
                         isPickingWhiteBalance ? "White balance picker"
-                            : isPlacingRedEyeCorrections ? "Red-eye placement" : "Image"
+                            : isPlacingRedEyeCorrections ? "Red-eye placement"
+                            : isEditingMask ? "Mask editing" : "Image"
                     )
                 }
             }
@@ -1070,6 +1125,28 @@ struct ContentView: View {
                 onTap: { crosshairPosition = $0 }
             )
         }
+        // Phase 7 slice 2: the selected mask's resize/move handles. Gated
+        // on ALL THREE earlier modes, on top of `isEditingMask` itself only
+        // ever being armable from the Masks section — same cumulative-
+        // exclusion discipline as the Red-Eye branch above (each new mode
+        // re-checks every earlier one; earlier modes never gain a
+        // predicate about this one — mutual exclusion is enforced by
+        // disarming at the ARM site instead, see `AdjustTabView.select`/
+        // the WB/Red-Eye buttons). A capture layer, so it's placed BEFORE
+        // the keyboard crosshair below — that overlay must always draw on
+        // top of whichever capture layer is active.
+        if isEditingMask, !isCroppingActive, !isPickingWhiteBalance, !isPlacingRedEyeCorrections,
+           let id = adjustPanel.selectedMaskID,
+           let maskBinding = $document.editState.mask(id: id),
+           let fitRect = currentFitRect {
+            MaskOverlayView(
+                fitRect: fitRect,
+                centerX: maskBinding.centerX, centerY: maskBinding.centerY,
+                radiusX: maskBinding.radiusX, radiusY: maskBinding.radiusY,
+                rotationDegrees: maskBinding.wrappedValue.rotationDegrees,
+                feather: maskBinding.wrappedValue.feather
+            )
+        }
         // D8 (IMPROVEMENTS.md): the keyboard-driven crosshair itself —
         // only while a point-placement mode is armed AND the pane holds
         // keyboard focus (so it doesn't linger on screen after focus
@@ -1125,6 +1202,21 @@ struct ContentView: View {
                             compareMode = .off
                             zoomScale = 1
                             panOffset = .zero
+                            // Reviewer-caught: WB/Red-Eye arming is a bool
+                            // TOGGLE, so `.onChange(of: isPickingWhiteBalance/
+                            // isPlacingRedEyeCorrections)` always fires on a
+                            // true rising edge and grabs focus there. Mask
+                            // selection is by ID, not a toggle — clicking an
+                            // ALREADY-selected mask's row calls `select(_:)`
+                            // (which calls this closure) without changing
+                            // `selectedMaskID`, so the corresponding
+                            // `.onChange(of: adjustPanel.selectedMaskID)`
+                            // would silently NOT fire, leaving Escape
+                            // unreachable if focus had since moved to a
+                            // sidebar slider. Grabbing focus here too closes
+                            // that gap unconditionally — redundant but
+                            // harmless for WB/Red-Eye's own already-working case.
+                            isImagePaneFocused = true
                         }
                     )
                 case .crop:

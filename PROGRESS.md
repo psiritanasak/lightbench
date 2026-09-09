@@ -5978,7 +5978,7 @@ fix); the search field is unaffected by digit/`.`/`f` keys; window
 resize grows AND shrinks the column count freely (the `.adaptive`→
 `.flexible` switch, the specific direction round 2 caught breaking).
 
-### D8: Keyboard paths for the Editor's three mouse-only spatial overlays (complete, pending live verification 2026-09-09)
+### D8: Keyboard paths for the Editor's three mouse-only spatial overlays (complete, live-verified 2026-09-09)
 
 `IMPROVEMENTS.md`'s D8 entry, opened during D6's accessibility pass:
 the WB eyedropper (tap-to-pick), Red-Eye placement (tap-to-place/tap-to-
@@ -6077,24 +6077,21 @@ No tests for the key-dispatch methods, focus wiring, or the gesture
 composition itself — plain SwiftUI interaction glue, matching this
 codebase's standing convention; verified live instead (below).
 
-**NOT yet live-verified by the user** — per the standing screen-
-automation permission rule, this session did not drive the app via
-AppleScript/Accessibility APIs (D6's live AX-tree pass and D4's
-verification were both done at the CODE level plus the user's own manual
-check; this session likewise leaves the interactive pass to the user).
-Needs a manual walkthrough, in particular the ONE thing neither review
-round could confirm statically or empirically: arm WB pick, confirm
-arrow keys move a white "+" and Return samples/disarms, Escape disarms
-without sampling; arm Red-Eye, confirm arrow keys move a yellow "+",
-Return adds/removes a point, Escape disarms; click to place a point with
-the MOUSE then immediately press an arrow key and confirm the crosshair
-continues from that clicked point; zoom in, confirm arrow keys pan and
-`"0"` resets; confirm ALL of the above still work identically via mouse
-only (no regression) — especially `PanOverlay`'s own double-tap-to-reset
-gesture, the single riskiest case for the new parent/child gesture
-composition; and an Editor→Library→Editor round trip with a
-point-placement mode still armed shows the crosshair again without
-requiring a click first.
+**Live-verified by the user (2026-09-09).** Manual walkthrough (not
+AX-driven — see D4's own section above for why synthetic keyboard events
+don't reach the app in this environment) confirmed: WB pick's arrow keys
+move a white "+", Return samples and disarms, Escape disarms without
+sampling; Red-Eye's arrow keys move a yellow "+", Return adds/removes a
+point, Escape disarms; clicking to place a point with the MOUSE then
+immediately pressing an arrow correctly continues from that clicked
+point rather than jumping to center; zoomed-in arrow-key panning and
+`"0"`-resets both work; and — the ONE thing neither review round could
+confirm statically or empirically — the new parent-`TapGesture`
+(focus-reclaim) coexisting with the child `SpatialTapGesture`s/
+`DragGesture` caused no regression: mouse-only WB/Red-Eye placement,
+click-drag-to-pan, and `PanOverlay`'s own double-tap-to-reset gesture
+(the single riskiest case for that composition) all still work
+identically to before this session.
 
 **Next step**: nothing else queued from `IMPROVEMENTS.md` — with D8
 shipped, that backlog file is down to just **P6** (minor,

@@ -953,22 +953,19 @@ Edits are stored as parameter sets and rendered live on the GPU.
    apply one effect, composite by mask" and should be studied directly before
    designing the general case.
 
-   **Hazard 2 — zero per-frame caching exists anywhere in the render path
-   today**, worse than assumed before this research pass: `EditPipeline.apply`
-   reruns its entire ~12-stage filter graph from scratch on EVERY `draw(in:)`
-   frame (every slider tweak), synchronously on the main thread, with no
-   memoization even for non-RAW images (`RawDecoder.materialize`/`RenderGate`
-   solve a DIFFERENT problem — RAW decode cost — not this). Compare mode
-   already proves N-way compositing works architecturally (it runs
-   `EditPipeline.apply` TWICE per frame today, composited via the same lazy
-   `CIImage` graph, `ImageRenderer.swift:114`+`:165`), so masking's rendering
-   model is not new — but N masks means N additional full pipeline passes with
-   NOTHING throttling per-frame cost, unlike literally everything else RAW-
-   related this app has needed to build (`RenderGate`, debounced re-decode,
-   the histogram debounce). This is a genuine performance-viability question,
-   not just an engineering detail — **slice 1 below exists specifically to
-   answer it with a measurement, before any UI gets built on top of an answer
-   that might be "no."**
+   **Hazard 2 — corrected 2026-09-08, was stale.** This paragraph originally
+   (2026-09-03) claimed "zero per-frame caching exists anywhere in the render
+   path." That's no longer true: P3 (an `EditState`-keyed pipeline-output
+   cache, `ImageRenderer.swift`'s `cachedEditState`/`cachedEdited`/
+   `cachedOriginalState`/`cachedOriginal`, shipped 2026-09-04) and P2 (an
+   interactive downscaled proxy that engages on the 2nd+ consecutive
+   `editState` change during a drag, shipped 2026-09-07) both landed after
+   this hazard was written, and the paragraph's own `ImageRenderer.swift:114`/
+   `:165` line-number citations now land inside unrelated comment text. The
+   real remaining unknown was narrower than originally framed: not "does any
+   caching exist" but "what does one additional mask-composite pass cost ON
+   TOP OF the P3 cache and P2 proxy that already exist." Slice 1 (below)
+   answered this with a live measurement rather than further analysis.
 
    **Slicing** (each its own Plan Mode session; stop and reassess after slice 1
    if the numbers are bad):
@@ -983,6 +980,46 @@ Edits are stored as parameter sets and rendered live on the GPU.
       unchanged masked layers between frames, downscaling live preview,
       throttling to a lower live-preview quality with full-quality only at
       export) — decide then, don't pre-solve a problem not yet confirmed real.
+      **✅ COMPLETE (2026-09-08) — GO.** Live-measured on real hardware
+      following this codebase's own established `CFAbsoluteTimeGetCurrent()`
+      probe-and-fully-revert methodology (P2/P3/P4/P5's precedent) — a
+      temporary `applyMaskProbe` stage (structurally identical to
+      `applyRedEye`'s mask-then-composite shape, reusing the existing
+      `exposureEV` field as its one "adjustable parameter" so the P3 cache
+      key stayed valid) was added to `EditPipeline.apply`, exercised live via
+      synthetic mouse drags on the real Exposure `ThinSlider` (user-authorized
+      for this one task), then fully removed — confirmed via a clean
+      `git diff` — before this doc-only commit. Two real assets: a 20.7MP
+      JPEG (`IMG_6564.jpeg`) and a 24MP Nikon D610 RAW (`DSC_1665.NEF`,
+      `RawDecoder.materialize`'s cached buffer), same 2268×1385 drawable both
+      times. Measured per-frame `draw(in:)` cost, mask ON vs. OFF:
+        - **Interactive proxy frames (P2 engaged, 2nd+ consecutive drag
+          step):** ~0.33–0.4ms baseline on both assets; ~0.34–0.65ms with the
+          mask composite added. Delta near the noise floor — the downscaled
+          proxy makes one extra composite pass essentially free.
+        - **Full-resolution frames (first/last drag step, or any isolated
+          non-consecutive edit — P2 does NOT engage):** JPEG baseline
+          ~0.35–0.65ms vs. ~1.07–1.59ms with the mask (delta ~0.6–1.0ms). RAW
+          baseline ~0.89–1.38ms vs. ~0.98–1.38ms with the mask (delta near
+          the noise floor — RAW's own already-heavier per-frame cost, even
+          from the cached materialized buffer, appears to dwarf one added
+          composite pass at this resolution). A key architectural finding
+          along the way, confirmed live rather than assumed: `CIContext`'s
+          lazy evaluation means a composite pass's cost scales with the
+          DRAWABLE/display resolution, not the source image's megapixel
+          count — the 24MP RAW and 20.7MP JPEG showed statistically
+          indistinguishable mask-pass costs at the same window size, so the
+          original "large JPEG" sizing concern is less severe than it looked
+          architecturally, for non-RAW images at least.
+      All measured numbers, including the worst case (~1.6ms for one mask on
+      a full-resolution non-proxied JPEG frame), sit far under the 16ms/60fps
+      budget P2/P3/P5 already use as this codebase's bar — even a handful of
+      simultaneous masks would need to roughly 10x this cost before becoming
+      a framerate risk. **Slice 2 (the real mask data model) is architecturally
+      cleared to proceed** on the existing P2/P3 caching foundation, with no
+      speculative mitigation (caching masked layers, downscaling, throttling)
+      needed before starting it — revisit only if slice 2's real N-mask
+      compositing measures differently from this single-mask probe.
    2. **Mask data model + Radial mask only, no combining.** A new `Mask` type
       — NOT the full 59-field `EditState`; a small curated subset matching
       Lightroom's own per-mask panel (roughly Exposure/Contrast/Highlights/

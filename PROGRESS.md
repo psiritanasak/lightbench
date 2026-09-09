@@ -6096,6 +6096,90 @@ identically to before this session.
 **Next step**: nothing else queued from `IMPROVEMENTS.md` — with D8
 shipped, that backlog file is down to just **P6** (minor,
 take-if-passing-by only, not a dedicated session). The next real
-candidate is **Phase 7** (Local Adjustments/Masking, `CLAUDE.md`'s own
+candidate was **Phase 7** (Local Adjustments/Masking, `CLAUDE.md`'s own
 roadmap item 7 — slice 1 is a performance probe). Per CLAUDE.md workflow
-rules, start it with Plan Mode.
+rules, started with Plan Mode — see the Phase 7 slice 1 write-up below.
+
+## Phase 7 slice 1 (Local Adjustments/Masking performance probe) — ✅ COMPLETE (2026-09-08)
+
+Scoped by `CLAUDE.md`'s own Phase 7 roadmap as a throwaway measurement,
+not a shipped feature: one hardcoded radial mask, one adjustable
+parameter, no UI, no persisted `EditState` field — to answer, with a
+real number, whether one additional mask-composite pass per frame is
+architecturally viable before slice 2 (the real mask data model) gets
+built on an assumption that might be "no."
+
+**Method**, matching this codebase's own exclusive performance-
+measurement convention (P2/P3/P4/P5's precedent — temporary
+`CFAbsoluteTimeGetCurrent()` instrumentation, exercised live, then fully
+reverted before commit, confirmed via a clean `git diff`): a temporary
+`applyMaskProbe` stage was added to `EditPipeline.apply` right after
+`applyRedEye` — structurally identical to that function's own
+full-extent-geometry → `CIRadialGradient` → `CIBlendWithMask` shape —
+reusing the EXISTING `exposureEV` field as the probe's one "adjustable
+parameter" so `ImageRenderer`'s P3 `EditState`-keyed pipeline-output
+cache stayed valid (a renderer-level input outside `EditState` would
+have gone stale against that cache, per its own doc comment) and so
+dragging the real Exposure slider drove a genuine continuous-drag
+measurement. `ImageRenderer.draw(in:)` got matching temporary timing
+instrumentation, logging `[P7] frame=<ms> proxy=<bool>
+drawableSize=<w>x<h>` to a file inside the sandboxed app's own container
+(`print()`'s stdout is unobservable once the sandboxed binary is
+launched normally via `open` — a raw/`script`-wrapped exec bypasses
+LaunchServices entirely and produces no window at all).
+
+**Live measurement** (user-authorized, this one task, via synthetic
+`CGEvent` mouse drags on the real Exposure `ThinSlider` — not keyboard,
+which does not reliably reach this app's SwiftUI views in this
+environment): two real assets at the same 2268×1385 drawable size, a
+20.7MP JPEG (`IMG_6564.jpeg`) and a 24MP Nikon D610 RAW (`DSC_1665.NEF`,
+via `RawDecoder.materialize`'s cached buffer). Measured with the probe
+stage ON, then with it commented out for an OFF baseline, both via a
+continuous ~3s drag (exercises P2's downscaled interactive proxy) and
+via isolated, spaced-out single-step edits (forces full-resolution,
+non-proxied frames):
+
+| Case | Proxy frames (P2 engaged) | Full-res frames |
+|---|---|---|
+| JPEG, mask OFF | ~0.33–0.4ms | ~0.35–0.65ms |
+| JPEG, mask ON | ~0.34–0.65ms | ~1.07–1.59ms |
+| RAW, mask OFF | ~0.33–0.58ms | ~0.89–1.38ms |
+| RAW, mask ON | ~0.34–0.59ms | ~0.98–1.38ms |
+
+Findings: the mask's added cost on proxy frames is near the measurement
+noise floor (P2's downscale makes one extra composite pass essentially
+free). On full-resolution frames it's a real but small ~0.6–1.0ms on
+JPEG; on RAW the delta is within noise — RAW's own already-heavier
+per-frame cost (even served from `RawDecoder.materialize`'s cached
+buffer) appears to dwarf one added composite pass at this resolution.
+A architectural finding confirmed live rather than assumed:
+`CIContext`'s lazy evaluation means a composite pass's cost scales with
+the DRAWABLE/display resolution, not the source image's megapixel
+count — the 24MP RAW and 20.7MP JPEG showed statistically
+indistinguishable mask-pass costs, so the original "large JPEG" sizing
+concern is less severe than it looked architecturally, at least for
+non-RAW images.
+
+**Go/no-go: GO.** Every measured number, including the worst case
+(~1.6ms for one mask on a full-resolution non-proxied JPEG frame), sits
+far under the 16ms/60fps budget P2/P3/P5 already use as this codebase's
+bar. Slice 2 (the real mask data model) is architecturally cleared to
+proceed on the existing P2/P3 caching foundation — no speculative
+mitigation (caching masked layers between frames, downscaling,
+throttling) needed before starting it.
+
+Also corrected as part of this session: `CLAUDE.md`'s Phase 7 "Hazard 2"
+paragraph claimed "zero per-frame caching exists anywhere in the render
+path" — true when written (2026-09-03), stale since P3's pipeline-output
+cache (2026-09-04) and P2's interactive proxy (2026-09-07) both shipped
+after. Corrected in place, along with its stale `ImageRenderer.swift`
+line-number citations.
+
+No reviewer agent pass — this slice ships no code (the final commit is
+doc-only; `EditPipeline.swift`/`ImageRenderer.swift` are back to their
+pre-session state, confirmed via `git diff`). 566 tests unchanged,
+confirmed passing after the revert.
+
+**Next step**: Phase 7 slice 2 — the real `Mask` data model and Radial
+mask UI (no combining yet), per `CLAUDE.md`'s own slicing plan. Start
+with Plan Mode per the standing workflow rule.

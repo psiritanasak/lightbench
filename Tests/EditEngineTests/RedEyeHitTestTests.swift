@@ -48,4 +48,36 @@ final class RedEyeHitTestTests: XCTestCase {
 
         XCTAssertEqual(index, 1)
     }
+
+    // MARK: - toggling(_:in:fitRect:threshold:) — D8 (IMPROVEMENTS.md): the
+    // shared add-or-remove decision reused by both `RedEyeOverlayView`'s
+    // mouse tap gesture and `ContentView`'s keyboard Return-to-commit.
+
+    func testTogglingFarFromEveryPointAppendsANewOne() {
+        let fitRect = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let result = RedEyeHitTest.toggling(
+            CGPoint(x: 0.8, y: 0.8), in: [], fitRect: fitRect, threshold: 16
+        )
+        XCTAssertEqual(result, [RedEyePoint(x: 0.8, y: 0.8)])
+    }
+
+    func testTogglingNearAnExistingPointRemovesIt() {
+        let fitRect = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let existing = [RedEyePoint(x: 0.1, y: 0.1), RedEyePoint(x: 0.9, y: 0.9)]
+        // (0.1, 0.1) in a 100x100 fitRect is screen point (10, 10); tapping
+        // (11, 12) is within the 16pt threshold of it.
+        let result = RedEyeHitTest.toggling(
+            CGPoint(x: 0.11, y: 0.12), in: existing, fitRect: fitRect, threshold: 16
+        )
+        XCTAssertEqual(result, [RedEyePoint(x: 0.9, y: 0.9)])
+    }
+
+    func testTogglingTwiceAtTheSamePositionIsAddThenRemove() {
+        let fitRect = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let added = RedEyeHitTest.toggling(CGPoint(x: 0.5, y: 0.5), in: [], fitRect: fitRect, threshold: 16)
+        XCTAssertEqual(added, [RedEyePoint(x: 0.5, y: 0.5)])
+
+        let removed = RedEyeHitTest.toggling(CGPoint(x: 0.5, y: 0.5), in: added, fitRect: fitRect, threshold: 16)
+        XCTAssertEqual(removed, [])
+    }
 }

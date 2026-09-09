@@ -49,10 +49,14 @@ struct PanOverlay: View {
                     panOffset = .zero
                 }
             )
-            // D6 (IMPROVEMENTS.md): click-drag-to-pan and double-tap-to-
-            // reset-zoom have no non-mouse equivalent yet — hidden rather
-            // than left silently present-but-unreachable. See
-            // IMPROVEMENTS.md's D8 for the actual tracked follow-up.
+            // D6 (IMPROVEMENTS.md): this `Color.clear` drag-capture surface
+            // itself is still mouse-only and vends no meaningful
+            // accessibility content of its own, so it stays hidden. D8
+            // (IMPROVEMENTS.md) has since shipped a keyboard equivalent —
+            // `ContentView.handleImagePaneKeyPress`'s arrow-keys-pan/`"0"`-
+            // resets path, reusing the SAME `ZoomPanGeometry.clampedPan`
+            // this drag gesture calls — so panning/zoom-reset is no longer
+            // mouse-only overall, just this one capture layer.
             .accessibilityHidden(true)
     }
 }

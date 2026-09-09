@@ -24,4 +24,27 @@ enum RedEyeHitTest {
         }
         return bestIndex
     }
+
+    /// D8 (IMPROVEMENTS.md): the full add-or-remove decision, pulled out
+    /// so `RedEyeOverlayView`'s mouse tap gesture and `ContentView`'s
+    /// keyboard Return-to-commit share ONE implementation instead of two
+    /// independently-maintained copies of the same normalize → hit-test →
+    /// remove-else-append sequence (reviewer-caught during D8: the two
+    /// had drifted to sharing only the threshold constant, not the logic
+    /// itself). `normalizedTap`/`points` are in the SAME normalized
+    /// 0...1/y-DOWN space `RedEyePoint` itself uses; `fitRect` is only
+    /// used to convert into screen space for the actual distance check.
+    static func toggling(
+        _ normalizedTap: CGPoint, in points: [RedEyePoint], fitRect: CGRect, threshold: CGFloat
+    ) -> [RedEyePoint] {
+        let tapScreenPoint = CGPoint(x: normalizedTap.x * fitRect.width, y: normalizedTap.y * fitRect.height)
+        let screenPoints = points.map { CGPoint(x: $0.x * fitRect.width, y: $0.y * fitRect.height) }
+        var result = points
+        if let index = nearestPointIndex(to: tapScreenPoint, in: screenPoints, threshold: threshold) {
+            result.remove(at: index)
+        } else {
+            result.append(RedEyePoint(x: normalizedTap.x, y: normalizedTap.y))
+        }
+        return result
+    }
 }

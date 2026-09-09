@@ -105,6 +105,32 @@ struct ContentView: View {
     /// toggled off or the user leaves the Adjust tab.
     @State private var isPlacingRedEyeCorrections = false
 
+    /// D8 (IMPROVEMENTS.md): the keyboard-driven crosshair's current
+    /// position — normalized 0...1, SwiftUI-local/y-DOWN, the SAME
+    /// convention `ImageDocumentModel.pickWhiteBalance`/`RedEyePoint`
+    /// already use. Shared by WB pick and Red-Eye placement (never both
+    /// at once — they're already mutually exclusive by construction, see
+    /// `isPickingWhiteBalance`'s own doc comment); meaningless while
+    /// neither mode is armed, but kept as one plain property rather than
+    /// two mode-specific ones since only one can ever be relevant.
+    /// Reset to center whenever either mode newly arms — see the
+    /// `.onChange` handlers below — and kept in sync with the MOUSE too
+    /// (the WB tap handler and `RedEyeOverlayView`'s `onTap`), the direct
+    /// analogue of a real bug D4's reviewer caught: without that sync, a
+    /// keypress after a mouse click could silently act on a stale
+    /// position instead of where the user just clicked.
+    @State private var crosshairPosition = CGPoint(x: 0.5, y: 0.5)
+
+    /// D8 (IMPROVEMENTS.md): whether the image pane itself (as opposed to
+    /// a sidebar slider, the search field, or nothing) currently holds
+    /// keyboard focus — required for `.onKeyPress` below to fire at all.
+    /// This is the Editor's FIRST use of `.focusable()`/`.onKeyPress`
+    /// anywhere; deliberately not the `NSEvent` scroll-wheel monitor
+    /// pattern `MetalImageView` already uses for zoom, since that monitor
+    /// fires BEFORE SwiftUI's own focus dispatch — exactly wrong here, it
+    /// would steal keystrokes from any focused sidebar `TextField`.
+    @FocusState private var isImagePaneFocused: Bool
+
     /// Compare feature state — Off / Side by Side / Split (before/after).
     /// Presentation-only, same reasoning as `selectedTab`/`selectedAspect`:
     /// `EditState`/`EditPipeline` are untouched, this only controls what
@@ -204,6 +230,134 @@ struct ContentView: View {
         )
         zoomScale = newZoom
         panOffset = ZoomPanGeometry.clampedPan(newPan, zoom: newZoom)
+    }
+
+    // MARK: - D8 (IMPROVEMENTS.md): keyboard paths for the point-placement/pan overlays
+
+    /// One dispatch point for every key the image pane handles while it
+    /// holds keyboard focus (`isImagePaneFocused`). Bails immediately
+    /// unless `keyPress.modifiers.isDisjoint(with: [.command, .option,
+    /// .control])` — the D4-final form (see that feature's own
+    /// `PROGRESS.md` write-up): subtracting an "allowed" set like
+    /// `.shift` instead would reject every arrow press outright, since
+    /// macOS tags arrow-key events with `.numericPad`/`.function`
+    /// regardless of any real modifier.
+    private func handleImagePaneKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        let semanticModifiers: EventModifiers = [.command, .option, .control]
+        guard keyPress.modifiers.isDisjoint(with: semanticModifiers) else { return .ignored }
+
+        // Reviewer-caught: the render branches in `pointAndZoomOverlays`
+        // all defensively re-check `!isCroppingActive` on top of
+        // `isPickingWhiteBalance`/`isPlacingRedEyeCorrections` (trusting
+        // `.onChange(of: selectedTab)` to have disarmed both isn't enough
+        // for THEM), so the key path matches that same discipline rather
+        // than trusting the invariant silently — if it ever breaks, this
+        // fails closed (falls through to the pan branch, or `.ignored`)
+        // instead of committing a point against a crop-mode `fitRect`
+        // with no crosshair even drawn.
+        if !isCroppingActive, isPickingWhiteBalance || isPlacingRedEyeCorrections {
+            return handlePointPlacementKeyPress(keyPress)
+        }
+        if canZoom, zoomScale > 1, compareMode != .split {
+            return handlePanKeyPress(keyPress)
+        }
+        return .ignored
+    }
+
+    /// Arrow keys move `crosshairPosition`; Return commits (samples WB or
+    /// toggles a Red-Eye point at the crosshair — see
+    /// `commitPointPlacement`); Escape disarms without committing — a
+    /// genuinely NEW capability, since today there's no way to leave
+    /// point-placement mode without a mouse click on the toolbar button
+    /// or switching tabs.
+    private func handlePointPlacementKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        switch keyPress.key {
+        case .leftArrow:
+            crosshairPosition = CrosshairGeometry.moved(crosshairPosition, dx: -CrosshairGeometry.step, dy: 0)
+        case .rightArrow:
+            crosshairPosition = CrosshairGeometry.moved(crosshairPosition, dx: CrosshairGeometry.step, dy: 0)
+        case .upArrow:
+            crosshairPosition = CrosshairGeometry.moved(crosshairPosition, dx: 0, dy: -CrosshairGeometry.step)
+        case .downArrow:
+            crosshairPosition = CrosshairGeometry.moved(crosshairPosition, dx: 0, dy: CrosshairGeometry.step)
+        case .return:
+            // Reviewer-caught: `.onKeyPress` defaults to `[.down, .repeat]`
+            // phases, and committing is NOT idempotent for Red-Eye
+            // (add-or-remove) — holding Return past the key-repeat delay
+            // would toggle the same point on/off at repeat rate, a real
+            // parity coin-flip plus a burst of spurious `editState`
+            // mutations (undo history + sidecar debounce). Only the
+            // initial press commits; repeats are swallowed (still
+            // `.handled`, not `.ignored`, so a held Return doesn't leak
+            // through to whatever's behind this pane).
+            guard keyPress.phase == .down else { return .handled }
+            commitPointPlacement()
+        case .escape:
+            isPickingWhiteBalance = false
+            isPlacingRedEyeCorrections = false
+        default:
+            return .ignored
+        }
+        return .handled
+    }
+
+    /// Commits the keyboard crosshair's current position. For WB, the
+    /// EXACT same call the mouse tap handler makes (see
+    /// `pointAndZoomOverlays`), then disarms — matching that handler's
+    /// own one-shot behavior. For Red-Eye, reuses `RedEyeHitTest.
+    /// toggling` — the SAME pure add-or-remove decision `RedEyeOverlayView.
+    /// toggle(at:)` itself calls, extracted during D8 specifically so this
+    /// and that mouse path can't silently drift apart (reviewer-caught: an
+    /// earlier version reimplemented the sequence here by hand, sharing
+    /// only the threshold constant, not the actual logic).
+    private func commitPointPlacement() {
+        guard let fitRect = currentFitRect else { return }
+        if isPickingWhiteBalance {
+            document.pickWhiteBalance(normalizedX: crosshairPosition.x, normalizedY: crosshairPosition.y)
+            isPickingWhiteBalance = false
+        } else if isPlacingRedEyeCorrections {
+            document.editState.redEyePoints = RedEyeHitTest.toggling(
+                crosshairPosition, in: document.editState.redEyePoints, fitRect: fitRect,
+                threshold: RedEyeOverlayView.hitTestThreshold
+            )
+        }
+    }
+
+    /// Arrow keys nudge `panOffset` by a fixed step (`0.05`, the same
+    /// "fraction of `fitRect`" unit `PanOverlay`'s own drag delta already
+    /// uses), through the SAME already-tested `ZoomPanGeometry.
+    /// clampedPan` the mouse drag calls — no new pan math. `"0"` resets to
+    /// identity, mirroring `PanOverlay`'s own double-tap-to-reset gesture
+    /// exactly.
+    ///
+    /// Direction, confirmed deliberate (reviewer flagged for confirmation,
+    /// not as a bug): pressing Right INCREASES `panOffset.width`, the same
+    /// sign a rightward mouse DRAG already produces (`PanOverlay.swift`'s
+    /// `dx`). That mirrors "drag the content" semantics, not the
+    /// "arrow-keys-scroll-a-document" convention (where Right usually
+    /// reveals content further right, the opposite sign) — chosen so
+    /// keyboard panning feels like the SAME action as the mouse drag this
+    /// app already has, rather than importing an external convention this
+    /// app has no other precedent for.
+    private func handlePanKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        if keyPress.key == "0" {
+            zoomScale = ZoomPanGeometry.minZoom
+            panOffset = .zero
+            return .handled
+        }
+        let step: Double = 0.05
+        let delta: CGSize
+        switch keyPress.key {
+        case .leftArrow: delta = CGSize(width: -step, height: 0)
+        case .rightArrow: delta = CGSize(width: step, height: 0)
+        case .upArrow: delta = CGSize(width: 0, height: -step)
+        case .downArrow: delta = CGSize(width: 0, height: step)
+        default: return .ignored
+        }
+        panOffset = ZoomPanGeometry.clampedPan(
+            CGSize(width: panOffset.width + delta.width, height: panOffset.height + delta.height), zoom: zoomScale
+        )
+        return .handled
     }
 
     /// Resolves `selectedAspect` to an actual width:height ratio, or `nil`
@@ -479,6 +633,40 @@ struct ContentView: View {
             zoomScale = 1
             panOffset = .zero
         }
+        // D8 (IMPROVEMENTS.md): newly arming either point-placement mode
+        // resets the keyboard crosshair to center AND grabs keyboard focus
+        // for the image pane — so right after clicking "Pick White
+        // Balance"/"Fix Red-Eye" in the sidebar, arrow keys work
+        // immediately with no extra click needed. Deliberately fires on
+        // the RISING edge only (`isArmed` true) — disarming doesn't need
+        // to touch either, the crosshair simply stops being drawn.
+        .onChange(of: isPickingWhiteBalance) { _, isArmed in
+            if isArmed {
+                crosshairPosition = CGPoint(x: 0.5, y: 0.5)
+                isImagePaneFocused = true
+            }
+        }
+        .onChange(of: isPlacingRedEyeCorrections) { _, isArmed in
+            if isArmed {
+                crosshairPosition = CGPoint(x: 0.5, y: 0.5)
+                isImagePaneFocused = true
+            }
+        }
+        // Reviewer-caught: returning to the Editor from the Library while
+        // a point-placement mode is STILL armed (it survives the round
+        // trip — `showLibrary` merely toggles which pane is shown, it
+        // doesn't reset either boolean) doesn't re-fire the two
+        // `.onChange`s above, since neither boolean itself changes across
+        // that transition — so the crosshair stayed invisible (gated on
+        // `isImagePaneFocused`, which the Library grid's own focus claim
+        // had taken) until the user clicked the image once. Re-focusing
+        // here on every return-to-Editor closes that gap; harmless when
+        // neither mode is armed (nothing reads `isImagePaneFocused` then).
+        .onChange(of: showLibrary) { _, isShowingLibrary in
+            if !isShowingLibrary, isPickingWhiteBalance || isPlacingRedEyeCorrections {
+                isImagePaneFocused = true
+            }
+        }
         .toolbar {
             libraryToolbarItems
             editHistoryToolbarItems
@@ -725,105 +913,17 @@ struct ContentView: View {
                                 .padding(24)
                                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                         }
-                        // Fit against the ACTUAL displayed extent (post-
-                        // straighten/perspective, crop-zeroed), not the raw
-                        // `image.extent`. Every feature before Straighten
-                        // preserved extent exactly, so those were equal by
-                        // coincidence; Straighten grows the extent (measured
-                        // +padding from resampling), so this distinction is
-                        // load-bearing — using the raw extent here would
-                        // misalign the overlay against a straightened photo.
-                        // (Perspective correction, added later, was verified to
-                        // preserve extent exactly since its corners only move
-                        // inward — it doesn't newly exercise this path, but
-                        // this computation still correctly reflects whatever
-                        // extent the pipeline actually produces.) Building the
-                        // filter graph to read `.extent` is cheap (Core Image
-                        // doesn't render pixels for it). `currentFitRect` is
-                        // shared with the aspect-picker action in the sidebar
-                        // (outside this GeometryReader's scope), via
-                        // `containerSize`.
-                        if isCroppingActive, let fitRect = currentFitRect {
-                            CropOverlayView(
-                                fitRect: fitRect,
-                                cropInsetTop: $document.editState.cropInsetTop,
-                                cropInsetBottom: $document.editState.cropInsetBottom,
-                                cropInsetLeft: $document.editState.cropInsetLeft,
-                                cropInsetRight: $document.editState.cropInsetRight,
-                                aspectRatio: effectiveAspectRatio
-                            )
-                        }
-                        // WB eyedropper tap-capture. Gated on `!isCroppingActive`
-                        // (on top of `isPickingWhiteBalance` itself only ever
-                        // being armable from the Adjust tab — see the
-                        // `.onChange(of: selectedTab)` below) so this and
-                        // `CropOverlayView`'s own drag gestures above can never
-                        // both be live at once.
-                        if isPickingWhiteBalance, !isCroppingActive, let fitRect = currentFitRect {
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .frame(width: fitRect.width, height: fitRect.height)
-                                .position(x: fitRect.midX, y: fitRect.midY)
-                                .onHover { inside in
-                                    if inside { NSCursor.crosshair.push() } else { NSCursor.pop() }
-                                }
-                                .gesture(
-                                    SpatialTapGesture(coordinateSpace: .local).onEnded { tap in
-                                        document.pickWhiteBalance(
-                                            normalizedX: tap.location.x / fitRect.width,
-                                            normalizedY: tap.location.y / fitRect.height
-                                        )
-                                        isPickingWhiteBalance = false
-                                    }
-                                )
-                                // D6 (IMPROVEMENTS.md): a spatial tap-anywhere-
-                                // on-the-image gesture has no non-mouse
-                                // equivalent yet — deliberately hidden rather
-                                // than left silently present-but-unreachable
-                                // in the AX tree. Genuinely fixing this needs
-                                // new interaction design (e.g. a keyboard-
-                                // driven crosshair), out of scope for this
-                                // labeling-only pass — see IMPROVEMENTS.md's
-                                // D8 for the actual tracked follow-up.
-                                .accessibilityHidden(true)
-                        }
-                        // Red-Eye correction markers/tap-capture. Gated on
-                        // `!isCroppingActive` and `!isPickingWhiteBalance`
-                        // (on top of `isPlacingRedEyeCorrections` itself only
-                        // ever being armable from the Adjust tab) so only
-                        // one of the three point-interaction modes can ever
-                        // be live at once. UNLIKE the WB eyedropper, a tap
-                        // does NOT disarm this mode — see
-                        // `isPlacingRedEyeCorrections`'s own doc comment.
-                        if isPlacingRedEyeCorrections, !isCroppingActive, !isPickingWhiteBalance,
-                           let fitRect = currentFitRect {
-                            RedEyeOverlayView(fitRect: fitRect, points: $document.editState.redEyePoints)
-                        }
-                        // Compare Split's draggable divider. `compareMode`
-                        // can only be non-`.off` on the Adjust tab with no
-                        // other point-interaction mode armed (see the
-                        // toolbar Menu's `.disabled(...)`), so this can
-                        // never overlap the three overlays above.
-                        if compareMode == .split, let fitRect = currentFitRect {
-                            CompareDividerOverlay(fitRect: fitRect, orientation: splitOrientation, position: $splitPosition)
-                        }
-                        // Click-drag-to-pan, once zoomed past fit. Not
-                        // shown in Split — the divider above already owns
-                        // click-drag there; scroll-to-zoom still works in
-                        // Split (the `NSEvent` monitor doesn't depend on
-                        // this overlay), you just can't ALSO drag to
-                        // reposition without changing zoom. In Side by
-                        // Side, TWO overlays (one per half, both bound to
-                        // the same `$zoomScale`/`$panOffset`) so dragging
-                        // either photo pans both in sync.
-                        if canZoom, zoomScale > 1 {
-                            if compareMode == .sideBySide, let (leftRect, rightRect) = sideBySideFitRects {
-                                PanOverlay(fitRect: leftRect, zoomScale: $zoomScale, panOffset: $panOffset)
-                                PanOverlay(fitRect: rightRect, zoomScale: $zoomScale, panOffset: $panOffset)
-                            } else if compareMode != .split, let fitRect = currentFitRect {
-                                PanOverlay(fitRect: fitRect, zoomScale: $zoomScale, panOffset: $panOffset)
-                            }
-                        }
+                        // D8 (IMPROVEMENTS.md): extracted out of this
+                        // `ZStack` (Crop/WB/Red-Eye/CompareDivider/Pan×1-2,
+                        // now plus the keyboard crosshair) specifically to
+                        // keep the `ZStack`'s OWN literal small — this file
+                        // has hit real Swift type-checker failures from
+                        // exactly this shape before (see `mainContent`'s
+                        // and `filmstripToolbarItem`'s own doc comments);
+                        // "extract into a named sub-property" is the
+                        // established fix here, applied proactively rather
+                        // than after a 7th branch actually broke the build.
+                        pointAndZoomOverlays
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .onAppear { containerSize = proxy.size }
@@ -833,6 +933,43 @@ struct ContentView: View {
                             ZoomPercentageHUD(zoomScale: zoomScale)
                         }
                     }
+                    // D8 (IMPROVEMENTS.md): the Editor's first
+                    // `.focusable()`/`.onKeyPress` — see
+                    // `isImagePaneFocused`'s own doc comment for why this,
+                    // not `MetalImageView`'s `NSEvent` scroll monitor, is
+                    // the right tool. `.simultaneousGesture` (not `.gesture`
+                    // or `.onTapGesture`) so a click anywhere in the pane
+                    // reclaims focus WITHOUT intercepting the
+                    // `SpatialTapGesture`/`DragGesture` already attached to
+                    // whichever overlay is conditionally present inside
+                    // `pointAndZoomOverlays` — mirrors D4's own
+                    // click-reclaims-grid-focus fix, but this is the first
+                    // time that composition is tried against SPATIAL
+                    // gestures rather than `Button` taps; live-verify this
+                    // specifically, not just review it.
+                    .focusable()
+                    .focusEffectDisabled()
+                    .focused($isImagePaneFocused)
+                    .onKeyPress { keyPress in handleImagePaneKeyPress(keyPress) }
+                    .simultaneousGesture(TapGesture().onEnded { isImagePaneFocused = true })
+                    // Reviewer-caught: a focusable view with no
+                    // accessibility label announces nothing when tabbed/
+                    // VoiceOver-navigated to — a bare "image" is still
+                    // better than silence, and names the one state
+                    // (armed point-placement) where this pane's keyboard
+                    // behavior actually changes. `children: .contain` (not
+                    // the default, which would let this label override
+                    // whatever a descendant already announces) —
+                    // reviewer-caught: `CompareDividerOverlay` builds its
+                    // OWN named, adjustable accessibility element inside
+                    // this same subtree; without `.contain`, that would
+                    // get shadowed into announcing "Image" instead of
+                    // "Compare divider".
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(
+                        isPickingWhiteBalance ? "White balance picker"
+                            : isPlacingRedEyeCorrections ? "Red-eye placement" : "Image"
+                    )
                 }
             }
             .frame(minWidth: 480, minHeight: 360)
@@ -840,6 +977,136 @@ struct ContentView: View {
 
             editControls
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
+        }
+    }
+
+    /// Extracted out of `editorSplitView`'s `ZStack` — see that call
+    /// site's own doc comment for why (this file's recurring Swift
+    /// type-checker ceiling). Behavior-preserving for the five overlays
+    /// that lived directly in the `ZStack` before D8 (Crop/WB/Red-Eye/
+    /// CompareDivider/Pan×1-2); the keyboard crosshair (D8, IMPROVEMENTS.md)
+    /// is the only genuinely new branch.
+    @ViewBuilder
+    private var pointAndZoomOverlays: some View {
+        // Fit against the ACTUAL displayed extent (post-straighten/
+        // perspective, crop-zeroed), not the raw `image.extent`. Every
+        // feature before Straighten preserved extent exactly, so those
+        // were equal by coincidence; Straighten grows the extent
+        // (measured +padding from resampling), so this distinction is
+        // load-bearing — using the raw extent here would misalign the
+        // overlay against a straightened photo. (Perspective correction,
+        // added later, was verified to preserve extent exactly since its
+        // corners only move inward — it doesn't newly exercise this path,
+        // but this computation still correctly reflects whatever extent
+        // the pipeline actually produces.) Building the filter graph to
+        // read `.extent` is cheap (Core Image doesn't render pixels for
+        // it). `currentFitRect` is shared with the aspect-picker action in
+        // the sidebar (outside the `GeometryReader`'s own scope), via
+        // `containerSize`.
+        if isCroppingActive, let fitRect = currentFitRect {
+            CropOverlayView(
+                fitRect: fitRect,
+                cropInsetTop: $document.editState.cropInsetTop,
+                cropInsetBottom: $document.editState.cropInsetBottom,
+                cropInsetLeft: $document.editState.cropInsetLeft,
+                cropInsetRight: $document.editState.cropInsetRight,
+                aspectRatio: effectiveAspectRatio
+            )
+        }
+        // WB eyedropper tap-capture. Gated on `!isCroppingActive` (on top
+        // of `isPickingWhiteBalance` itself only ever being armable from
+        // the Adjust tab — see the `.onChange(of: selectedTab)` below) so
+        // this and `CropOverlayView`'s own drag gestures above can never
+        // both be live at once.
+        if isPickingWhiteBalance, !isCroppingActive, let fitRect = currentFitRect {
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(width: fitRect.width, height: fitRect.height)
+                .position(x: fitRect.midX, y: fitRect.midY)
+                .onHover { inside in
+                    if inside { NSCursor.crosshair.push() } else { NSCursor.pop() }
+                }
+                .gesture(
+                    SpatialTapGesture(coordinateSpace: .local).onEnded { tap in
+                        let normalizedX = tap.location.x / fitRect.width
+                        let normalizedY = tap.location.y / fitRect.height
+                        document.pickWhiteBalance(normalizedX: normalizedX, normalizedY: normalizedY)
+                        // D8 (IMPROVEMENTS.md): keeps the keyboard
+                        // crosshair in sync with the mouse — see
+                        // `crosshairPosition`'s own doc comment. Harmless
+                        // that this mode disarms right below (the NEXT
+                        // arm resets to center anyway); kept for symmetry
+                        // with Red-Eye's own sync, which genuinely needs
+                        // it since that mode does NOT auto-disarm.
+                        crosshairPosition = CGPoint(x: normalizedX, y: normalizedY)
+                        isPickingWhiteBalance = false
+                    }
+                )
+                // D6 (IMPROVEMENTS.md): a spatial tap-anywhere-on-the-image
+                // gesture has no non-mouse equivalent — but UNLIKE when
+                // this comment was written, one now exists (D8's keyboard
+                // crosshair, `handleImagePaneKeyPress` below); left hidden
+                // anyway since this specific `Color.clear` capture surface
+                // itself is still mouse-only and still vends no meaningful
+                // accessibility content of its own.
+                .accessibilityHidden(true)
+        }
+        // Red-Eye correction markers/tap-capture. Gated on
+        // `!isCroppingActive` and `!isPickingWhiteBalance` (on top of
+        // `isPlacingRedEyeCorrections` itself only ever being armable from
+        // the Adjust tab) so only one of the three point-interaction modes
+        // can ever be live at once. UNLIKE the WB eyedropper, a tap does
+        // NOT disarm this mode — see `isPlacingRedEyeCorrections`'s own
+        // doc comment.
+        if isPlacingRedEyeCorrections, !isCroppingActive, !isPickingWhiteBalance,
+           let fitRect = currentFitRect {
+            RedEyeOverlayView(
+                fitRect: fitRect, points: $document.editState.redEyePoints,
+                // D8 (IMPROVEMENTS.md): see `crosshairPosition`'s own doc
+                // comment — this mode does NOT auto-disarm on tap, so
+                // staying in sync genuinely matters (switching to arrow
+                // keys after a mouse-placed point should continue from
+                // there, not snap back to center).
+                onTap: { crosshairPosition = $0 }
+            )
+        }
+        // D8 (IMPROVEMENTS.md): the keyboard-driven crosshair itself —
+        // only while a point-placement mode is armed AND the pane holds
+        // keyboard focus (so it doesn't linger on screen after focus
+        // moves to a sidebar control). Rendered ABOVE the WB/Red-Eye
+        // capture layers above (later in the `ZStack` = on top), same
+        // z-ordering `RedEyeOverlayView`'s own persistent markers use.
+        if isImagePaneFocused, let fitRect = currentFitRect {
+            if isPickingWhiteBalance, !isCroppingActive {
+                EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .white)
+            } else if isPlacingRedEyeCorrections, !isCroppingActive {
+                EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .yellow)
+            }
+        }
+        // Compare Split's draggable divider. `compareMode` can only be
+        // non-`.off` on the Adjust tab with no other point-interaction
+        // mode armed (see the toolbar Menu's `.disabled(...)`), so this
+        // can never overlap the three overlays above.
+        if compareMode == .split, let fitRect = currentFitRect {
+            CompareDividerOverlay(fitRect: fitRect, orientation: splitOrientation, position: $splitPosition)
+        }
+        // Click-drag-to-pan, once zoomed past fit. Not shown in Split —
+        // the divider above already owns click-drag there; scroll-to-zoom
+        // still works in Split (the `NSEvent` monitor doesn't depend on
+        // this overlay), you just can't ALSO drag to reposition without
+        // changing zoom. In Side by Side, TWO overlays (one per half, both
+        // bound to the same `$zoomScale`/`$panOffset`) so dragging either
+        // photo pans both in sync. D8's keyboard pan (`handleImagePaneKeyPress`
+        // below) reuses this SAME `canZoom && zoomScale > 1 && compareMode
+        // != .split` gate, so it never offers more than the mouse already
+        // does.
+        if canZoom, zoomScale > 1 {
+            if compareMode == .sideBySide, let (leftRect, rightRect) = sideBySideFitRects {
+                PanOverlay(fitRect: leftRect, zoomScale: $zoomScale, panOffset: $panOffset)
+                PanOverlay(fitRect: rightRect, zoomScale: $zoomScale, panOffset: $panOffset)
+            } else if compareMode != .split, let fitRect = currentFitRect {
+                PanOverlay(fitRect: fitRect, zoomScale: $zoomScale, panOffset: $panOffset)
+            }
         }
     }
 

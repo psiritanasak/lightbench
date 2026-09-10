@@ -14,14 +14,14 @@ import SwiftUI
 /// and it resolves the by-ID lookup (`Binding<EditState>.mask(id:)`,
 /// `MaskBinding.swift`) exactly once per view build, not 14 times.
 ///
-/// These rows ARE the accessibility answer for the on-image mask overlay
-/// (`MaskOverlayView` for `.radial`), not a nice-to-have: they're what lets
-/// that overlay be `.accessibilityHidden(true)` the same way
-/// `CropOverlayView` already is — justified there, and here, ONLY because
-/// the same values are independently AT-adjustable via labeled sliders.
-/// Without these rows, mask geometry would be the only `EditState`-backed
-/// value in the app reachable solely by mouse. This licenses a `.linear`
-/// mask's future on-image overlay too, for the same reason.
+/// These rows ARE the accessibility answer for the on-image mask overlays
+/// (`MaskOverlayView` for `.radial`, `LinearMaskOverlayView` for `.linear`),
+/// not a nice-to-have: they're what lets both overlays be
+/// `.accessibilityHidden(true)` the same way `CropOverlayView` already is —
+/// justified there, and here, ONLY because the same values are
+/// independently AT-adjustable via labeled sliders. Without these rows,
+/// mask geometry would be the only `EditState`-backed value in the app
+/// reachable solely by mouse.
 struct MaskDetailView: View {
     @Binding var mask: Mask
 
@@ -137,10 +137,17 @@ struct MaskDetailView: View {
             // The FULL guide-to-guide distance, not a half-width; 0 is a
             // legitimate hard edge (clamped to LinearMaskGeometry
             // .minimumWidth in the render), unlike a zero-radius ellipse,
-            // which is a no-op -- see Mask.width's own doc comment.
+            // which is a no-op -- see Mask.width's own doc comment. Range
+            // cites MaskGeometry.minWidth/maxWidth (Phase 7 slice 3
+            // Session B), the same "keep the two in sync, or a drag could
+            // produce a value the slider then silently clamps away"
+            // discipline that file's own doc comment already states for
+            // minRadius/maxRadius -- a plain 0...1 literal here would be
+            // a second, driftable source of truth for the same bounds
+            // LinearMaskOverlayView's own drag math already clamps to.
             EditSliderRow(
                 label: "Width", value: $mask.width,
-                range: 0...1, identity: 0.3, displayMultiplier: 100
+                range: MaskGeometry.minWidth...MaskGeometry.maxWidth, identity: 0.3, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
         }
     }

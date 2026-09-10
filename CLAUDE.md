@@ -1202,7 +1202,10 @@ Edits are stored as parameter sets and rendered live on the GPU.
       this commit — the library is unchanged.
    3. **Linear (Graduated) mask — Session A (data model, render geometry,
       pipeline, sliders) ✅ COMPLETE (2026-09-10); Session B (the on-image
-      line-drag gesture) not yet started.** Extends the SAME `Mask` struct
+      line-drag gesture) code + reviewer-APPROVED + 717 tests green
+      (2026-09-11), live-verification still pending — see PROGRESS.md's
+      own Session B section for the exact outstanding checklist.**
+      Extends the SAME `Mask` struct
       (per that struct's own doc comment reserving exactly this) with a
       new `kind: MaskKind` discriminator (`.radial`/`.linear`) and a new
       `width` field (`.linear`-only — the full guide-to-guide distance),
@@ -1258,11 +1261,38 @@ Edits are stored as parameter sets and rendered live on the GPU.
       didn't crash. Required RAW perf re-check (deferred from slice 2
       until masks were reachable): one Linear mask with Clarity on the
       user's real RAW asset measured ~0.6-1.0ms over baseline at
-      steady state, comfortably under budget. Session B (the draggable
-      center line + two draggable parallel guide handles, reusing
-      `MaskGeometry.movedCenter` verbatim for the center drag — genuinely
-      new interaction code, no existing precedent covers a rotatable
-      line-with-parallel-guides gesture) is the next slice-3 step.
+      steady state, comfortably under budget.
+      **Session B (the draggable center line + two draggable parallel
+      guide handles, reusing `MaskGeometry.movedCenter` verbatim for the
+      center drag — genuinely new interaction code, no existing
+      precedent covers a rotatable line-with-parallel-guides gesture)**
+      shipped 2026-09-11: new `Sources/UI/LinearMaskOverlayView.swift`
+      plus `MaskGeometry.linearGuidePoint`/`resizedWidth`/
+      `guideLineLength`, `ContentView.swift`'s overlay site becoming a
+      `switch mask.kind`, and deletion of the Session-A-introduced
+      `isEditingRadialMask` carve-out now that both mask kinds have their
+      own overlay (`canZoom` reverted to the simpler kind-agnostic
+      `isEditingMask` gate). **Reviewer (Opus 5): 6 rounds — the most of
+      any Phase 7 slice** — 2 rounds of genuine SwiftUI-layout bugs
+      invisible to unit tests, caught only because the reviewer started
+      ACTUALLY RENDERING the view code rather than just reading it (a
+      bare-`Path`-ignores-`.frame()` bug, and an insufficient guide-line
+      length); a documentation-accuracy bug in my own IMPROVEMENTS.md
+      (a "known issue" logged without tracing the code first, itself
+      factually wrong); and 2 more rounds on my own post-approval polish,
+      which twice introduced the same class of unverified-claim error it
+      was meant to fix, before a clean APPROVE. Full round-by-round detail
+      in PROGRESS.md's own Session B section — worth reading before
+      touching this feature again, since several of its lessons
+      (measure/render before asserting, re-verify claims after "just a
+      doc fix") aren't obvious from the code alone. 717 tests (16 new).
+      **Live-verification still outstanding** — hit the standing
+      screen-automation permission checkpoint right at this step; the
+      11-point checklist (drag center line / both guide handles at
+      0°/45° / portrait repeat / edge clamping / undo-as-one-step /
+      cross-mask isolation / zoom-blocked / Crop-WB-RedEye-Compare disarm
+      / Radial-vs-Linear selection / Revert to Original) is queued as the
+      next step, not skipped.
    4. **Brush mask** — freehand painting; the hardest UI slice, since none of
       this app's three existing overlay patterns (WB eyedropper's one-shot
       tap, Red-Eye's persistent point list, Crop's fixed-handle drag) cover a

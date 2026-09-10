@@ -6864,8 +6864,177 @@ already-verified masks-in-general Compare behavior, which is kind-agnostic
 by construction — `comparisonOriginal()` clears `masks` as a whole array,
 not per-kind).
 
-**Next step**: Phase 7 slice 3 Session B (the Linear mask's on-image
-line-drag gesture: a draggable center line + two draggable parallel
-guide handles controlling `width` symmetrically, reusing
-`MaskGeometry.movedCenter` verbatim for the center drag) — per its own
-Plan Mode session, per the standing workflow rule.
+## Phase 7 slice 3 — Linear (Graduated) mask, Session B (on-image
+line-drag gesture) — 2026-09-10/11
+
+Ships the piece Session A's own write-up deferred: a draggable center
+line (moves the mask, reusing `MaskGeometry.movedCenter` VERBATIM — no
+new function) and two draggable parallel guide handles (resize `width`
+symmetrically about the stationary center) — the mirror image of the
+Radial mask's own `MaskOverlayView` (slice 2 Session B), reusing its
+established conventions line-for-line where the different geometry
+allows: snapshot-baseline drag, parent-coordinate-space rendering,
+value-changed write guards so a bare click doesn't fire a phantom
+sidecar save, `.accessibilityHidden(true)` licensed by
+`MaskDetailView`'s already-shipped 12 Linear-mask slider rows.
+
+New pure math in `Sources/UI/MaskGeometry.swift` (`minWidth`/`maxWidth`,
+`LinearHandle`, `linearGuidePoint`, `resizedWidth`, plus
+`guideLineLength` added later — see below): `linearGuidePoint` is
+re-derived from `LinearMaskGeometry.resolve`'s own render-side formula by
+converting its `point0`/`point1` back through the same y-flip the
+center mapping already uses, landing on `center ∓
+axes(rotationDegrees).y · halfWidthPoints` — the SAME rotated-axis
+formula `handlePoint` already uses for the ellipse, just offset along
+`yAxis` only. `halfWidthPoints` comes from calling the EXISTING
+render-side `LinearMaskGeometry.widthInPixels(width:extent:)` directly
+with `fitRect` standing in for `extent` — valid because that function
+is a pure fraction-of-`min(width,height)` scaling and `AspectFit`
+preserves the ratio between `fitRect` and the real render extent, so the
+drawn guide can never drift from the render's own `minimumWidth` clamp.
+`resizedWidth` projects a drag's translation onto the rotated
+perpendicular axis, divides by `min(fitRect.width, fitRect.height)`, and
+DOUBLES the result — `width` is the FULL guide-to-guide distance while
+each handle sits only HALF that from a stationary center, so moving one
+guide out by `d` grows `width` by `2d`. New
+`Sources/UI/LinearMaskOverlayView.swift` draws three parallel lines
+(solid center, two dashed guides reusing the Radial feather guide's own
+"dashed = falloff boundary" visual language) plus an invisible ~44pt
+rotated drag band along the center line (there's no enclosed "interior"
+the way an ellipse has one) and two 30×30 circular handles.
+`ContentView.swift`'s overlay-instantiation site became a
+`switch maskBinding.wrappedValue.kind`; `isEditingRadialMask` (a
+Session-A-introduced, Linear-had-no-overlay-yet carve-out) was deleted
+entirely and `canZoom` reverted to the simpler, kind-agnostic
+`isEditingMask` gate now that both kinds have their own
+`currentFitRect`-positioned overlay. `MaskDetailView`'s Width row now
+cites `MaskGeometry.minWidth...MaskGeometry.maxWidth` instead of a
+`0...1` literal, matching Radius X/Y's own precedent.
+
+**Reviewer (Opus 5): 6 full rounds — by far the most of any Phase 7
+slice** — FIX FIRST ×2 (rounds 1-2, both genuine SwiftUI-layout bugs
+invisible to unit tests) → APPROVE (round 3) → FIX FIRST (round 3 itself
+flagged a documentation-accuracy bug in my own IMPROVEMENTS.md entry,
+treated as blocking) → FIX FIRST (round 5, on my own post-approval
+polish) → APPROVE (round 6). Detail:
+- **Round 1, BLOCKING**: a bare, literal `Path` (fixed absolute
+  coordinates) conforms to `Shape` via a trivial
+  `path(in _: CGRect) -> Path { self }` that IGNORES whatever rect
+  layout gives it — so with no `.frame()` at all, the view took on the
+  full PROPOSED size of the parent overlay (effectively the whole image
+  pane), and `.position(center)` placed the line off-frame entirely.
+  Caught by the reviewer ACTUALLY RENDERING the view (not just reading
+  the code) and measuring — this session's methodology shift, see below.
+  Fixed with a real `Shape`-conforming `HorizontalLine` type
+  (`path(in rect:)` genuinely uses `rect`) plus an explicit
+  `.frame(width: lineLength, height: 3)` before rotation/position.
+- **Round 2, BLOCKING**: `lineLength`'s original `hypot(...) * 1.5`
+  multiplier was too short — measured live via rendering to visibly
+  terminate mid-image for any `centerX` outside roughly `[0.1, 0.9]` at
+  rotation 0. Fixed to `* 3.0`, with a derivation proving sufficiency:
+  required half-length is `D + 0.5·min(w,h)` (full diagonal for a corner
+  anchor, plus a guide's own offset), and `1.5·D` already covers that
+  since `D ≥ min(w,h)` always — so `3·D` (twice that sufficient
+  half-length) has margin to spare. Verified correct by round 3 via a
+  750-config empirical re-render sweep plus a negative control
+  reproducing the old bug in the same harness.
+- **Round 3, non-blocking → became blocking on inspection**: a
+  `resizedWidth` doc comment understated the `width≈0` dead-zone
+  magnitude as "~1-2pt" without deriving it; the actual floor is
+  `LinearMaskGeometry.minimumWidth (0.01) · min(fitRect.width,
+  fitRect.height) / 2`, which SCALES with the pane (≈1.0pt at a 200pt
+  minimum dimension, ≈3.0pt at 600pt, ≈6.0pt at 1200pt) — fixed with the
+  correct formula and scaling examples. Also suggested (non-blocking,
+  done anyway): extracting `lineLength` into a testable
+  `MaskGeometry.guideLineLength(fitRect:)` with its own sufficiency-proof
+  doc comment and two new unit tests. **The one genuinely BLOCKING
+  round-3 finding**: my own `IMPROVEMENTS.md` "D10" entry (written after
+  round 2 to log the `lineLength` investigation's side-discovery) claimed
+  a `CompareDividerOverlay`-vs-mask-drag z-order conflict was "real and
+  reachable today" — round 3 traced the actual code
+  (`AdjustTabView.select(_:)` → `onEnterPointPickingMode()` sets
+  `compareMode = .off`; `compareToolbarItem`'s own
+  `.onChange(of: compareMode)` clears `selectedMaskID` whenever compare
+  goes non-`.off`) and found the two states are already mutually
+  exclusive by construction — the entry was factually wrong. Fixed by
+  rewriting D10 as an honest "latent/currently-unreachable, matters only
+  if the mutual-disarm logic is ever relaxed" note. A real lesson from
+  this round: writing a "known issue" doc entry without tracing the
+  actual code paths first can itself introduce the same class of error
+  the review process exists to catch.
+- **Round 4**: APPROVE — independently re-verified the D10 rewrite
+  against the actual `AdjustTabView`/`ContentView` code, re-derived the
+  `resizedWidth` dead-zone formula from `LinearMaskGeometry.minimumWidth`
+  directly, and confirmed `guideLineLength`'s extraction was
+  behavior-identical with no leftovers. Five NON-blocking notes,
+  addressed anyway before commit rather than left open: (1) a
+  now-adjacent comment near the Compare-divider overlay still cited a
+  nonexistent "toolbar Menu `.disabled(...)`" as the reason masks can't
+  overlap Compare's divider — the Menu genuinely doesn't gate on
+  `isEditingMask`, only on WB/Red-Eye; (2) the new `guideLineLength`
+  negative-control test re-derived its bound inline instead of calling
+  the shipped function, weakening its own discriminating power; (3) a
+  stale doc-comment mention of the deleted `isEditingRadialMask` symbol;
+  (4) a live-verification gap flagged for the next step (dragging the
+  center line at ~45° specifically, since the drag gesture attaches
+  OUTSIDE the `.rotationEffect`/`.position` modifiers, the same shape the
+  shipped Radial `MaskOverlayView` already uses but which CLAUDE.md notes
+  was only ever live-verified at rotation 0 for that view too); (5) this
+  PROGRESS.md section not existing yet (expected — doc/commit is its own
+  separate step in this project's convention, not a diff defect).
+- **Round 5, on my own post-approval polish attempting to fix findings
+  1-3 above**: FIX FIRST — ironically, two of the three fixes themselves
+  introduced NEW factual errors of the same kind they were meant to
+  remove. The Compare-divider comment rewrite over-corrected, now falsely
+  claiming the Menu "doesn't gate on [WB/Red-Eye] at all" (it does — the
+  round-4 note was narrowly about masks, not WB/Red-Eye) and pointed a
+  "below" reference at an `.onChange(of: compareMode)` site that was
+  actually above it (and the wrong one of two candidates). The
+  `guideLineLength` test hardening also went from ONE inline copy of the
+  sufficiency-bound formula to TWO, directly contradicting its own new
+  doc comment claiming otherwise, and included a redundant assertion.
+  Also caught: both edits were sitting unstaged, not staged — a plain
+  commit at that point would have shipped the pre-fix wording. Fixed by
+  correctly scoping the Menu-gate claim to WB/Red-Eye specifically (masks
+  are the one exclusion NOT covered by it), naming `compareToolbarItem`
+  explicitly instead of a dangling "below", and factoring the
+  sufficiency-bound formula into one shared `requiredHalfLength(for:)`
+  test helper both `guideLineLength` tests call, so the bound has a
+  single source of truth.
+- **Round 6**: APPROVE — independently re-traced the Menu's `.disabled`
+  modifier, confirmed `compareToolbarItem` is genuinely the one holding
+  the mask-clearing `.onChange`, and confirmed the test file's shared
+  `requiredHalfLength` helper eliminated the duplication. One optional,
+  non-blocking wording nit (`guideLineLength`'s own doc comment
+  conflated "twice the sufficient half-length" with "twice the required
+  half-length" — the math was right, only the phrasing was loose) fixed
+  before commit.
+- **Reviewer methodology note, carried forward from this slice**:
+  starting in round 1, the reviewer began ACTUALLY RENDERING the SwiftUI
+  view code (not just reading it) — sampling along expected lines,
+  measuring coverage — which is what caught both blocking bugs; neither
+  was visible to unit tests, since `MaskGeometry`'s own pure math was
+  correct in both cases. Reinforces this codebase's established
+  "geometry gets tests, gesture/view composition gets live/rendered
+  verification" convention.
+
+717 tests (16 new: 14 for `linearGuidePoint`/`resizedWidth` — including
+the render-side y-flip cross-check and a translation round-trip test
+that doesn't depend on knowing the doubling multiplier in advance — plus
+2 for `guideLineLength`'s sufficiency bound and its negative control).
+
+**Not yet live-verified as of this write-up** — the standing
+per-session convention of pausing for explicit screen-automation
+permission before driving the app was hit right at this step; the user
+asked to save progress first instead. The plan's own 11-point live
+checklist (drag center line / drag both guide handles at 0°/45° /
+portrait-photo repeat / edge-clamping / undo-as-one-step /
+cross-mask-text-field isolation / zoom-now-blocked check /
+Crop-WB-RedEye-Compare disarm / Radial-vs-Linear overlay selection /
+Revert to Original) is still outstanding, including round 4's own
+flagged 45°-center-line-drag check.
+
+**Next step**: get explicit go-ahead for screen automation, then run
+the 11-point live-verification checklist above. Once verified (or if any
+issue surfaces and is fixed + re-reviewed), commit. This closes Phase 7
+slice 3 entirely — Brush mask (slice 4) is next on the roadmap.

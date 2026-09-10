@@ -606,6 +606,34 @@ is "focused" for a nudge, step size, whether Shift changes step size)
 before it can be scoped — same category of work D8 required for the pan
 overlay.
 
+### D10. Compare Split's divider overlay vs. mask-drag gestures — a LATENT z-order hazard, currently unreachable (found, then corrected, live-reviewing Phase 7 slice 3 Session B)
+
+`CompareDividerOverlay` is added AFTER both mask overlays
+(`MaskOverlayView`/`LinearMaskOverlayView`) in `ContentView.swift`'s
+`pointAndZoomOverlays`, and its own background layer is a full-`fitRect`
+`Color.clear.contentShape(Rectangle())` capturing a jump-to-tap gesture
+— later in the `ZStack` wins hit-testing ties, so IF a mask were ever
+selected while `compareMode == .split`, every mask drag would be
+swallowed by the divider's own gesture instead of reaching the mask
+overlay underneath.
+
+**Reviewer-corrected (this entry's own first draft got this wrong):**
+that precondition cannot currently occur, so this is NOT a live bug.
+`AdjustTabView.select(_:)` (the only path to a non-nil
+`selectedMaskID`) calls `onEnterPointPickingMode()`, which sets
+`compareMode = .off`; and `ContentView`'s own
+`.onChange(of: compareMode)` clears `adjustPanel.selectedMaskID` the
+moment `compareMode` becomes non-`.off`. Together these make
+`isEditingMask && compareMode == .split` unreachable today — the two
+states are already mutually exclusive by construction, the same
+disarm-at-arm-site discipline every other mode pair in this file uses.
+The z-order hazard above is real only as a LATENT risk: it would become
+reachable the moment anyone relaxes that mutual disarm (e.g. to let a
+user compare while a mask stays selected), and whoever does that should
+either reorder the overlays or narrow the divider's hit-region at the
+same time, not discover this the hard way. Logged here as a heads-up
+for that future change, not as an open bug to fix now.
+
 ### ~~D7. Code design: split ContentView.swift (1352 lines)~~ — SHIPPED 2026-08-28
 
 It currently holds: tab state, crop/aspect logic, zoom/pan gesture math

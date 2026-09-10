@@ -1,16 +1,32 @@
 import Foundation
 
-/// One radial (ellipse) local adjustment — Phase 7 slice 2's first mask
-/// geometry type. Lives in its own file, not inside `EditState.swift`
-/// (already 1000+ lines), following `EditHistory.swift`'s precedent for a
-/// standalone `EditEngine` type.
+/// Which geometry a `Mask` uses. `.radial` (an ellipse, Phase 7 slice 2)
+/// reads `radiusX`/`radiusY`/`feather`; `.linear` (a graduated band, slice
+/// 3) reads `width` instead — the OTHER kind's geometry fields sit inert
+/// at their defaults, never read by `EditPipeline.applyMasks`'s matching
+/// branch. Both kinds share `centerX`/`centerY` (the anchor point) and
+/// `rotationDegrees` (the mask's own local +X axis direction — see that
+/// field's own doc comment for what "+X axis" means per kind).
+enum MaskKind: String, Codable {
+    case radial
+    case linear
+}
+
+/// One local adjustment, radial (ellipse) or linear (graduated band) per
+/// `kind` — Phase 7 slices 2/3's mask geometry types. Lives in its own
+/// file, not inside `EditState.swift` (already 1000+ lines), following
+/// `EditHistory.swift`'s precedent for a standalone `EditEngine` type.
 ///
 /// Unlike `RedEyePoint`/`RawNeutralPoint` (both trivial 2-`Double` points
 /// with SYNTHESIZED `Codable`), `Mask` needs its OWN hand-written
 /// schema-tolerant decoding — see the `extension Mask` below — because
-/// slices 3-6 will add new geometry variants and combining flags to THIS
+/// slices 4-6 will add new geometry variants and combining flags to THIS
 /// struct, so a mask written today must still decode after those land, the
-/// same reasoning `EditState` itself already applies one level up.
+/// same reasoning `EditState` itself already applies one level up. This is
+/// also why `kind`/geometry live as FLAT fields on one struct rather than
+/// an enum-with-associated-values: an associated-value variant would break
+/// both the flat `CodingKeys` list below and `deterministicFallbackID`'s
+/// fixed-arity parameter list.
 ///
 /// All geometry is a normalized FRACTION of the mask's photo's CURRENT
 /// (post-crop) extent — never an absolute pixel value. This is not a style
@@ -26,6 +42,12 @@ struct Mask: Identifiable, Equatable, Codable {
     /// and lets UI bind to a specific mask by id rather than array position
     /// (array position shifts whenever an earlier mask is deleted).
     var id: UUID = UUID()
+
+    /// `.radial` by default so every existing pre-slice-3 sidecar/preset
+    /// keeps decoding to the same mask it always did (see the schema-
+    /// tolerant decode below for how an UNRECOGNIZED future kind string
+    /// also falls back here, safely).
+    var kind: MaskKind = .radial
 
     // MARK: - Geometry
 
@@ -49,29 +71,62 @@ struct Mask: Identifiable, Equatable, Codable {
     /// a 1500 px circle). A future UI that wants an on-screen circle must
     /// compute `radiusY = radiusX * (extent.width / extent.height)` itself
     /// — this struct does not, and structurally cannot, do that for it.
+    /// `.radial` only — inert (never read) on a `.linear` mask.
     var radiusX: Double = 0.25
     var radiusY: Double = 0.25
 
     /// Degrees, CLOCKWISE-positive as drawn on screen (SwiftUI y-down
-    /// space). `RadialMaskGeometry.resolve` negates this internally to
-    /// match `CGAffineTransform(rotationAngle:)`'s CCW-positive convention
-    /// in `CIImage`'s y-up space — see that function's own doc comment;
-    /// this field itself stores the UI-facing, on-screen sign. CAUTION for
-    /// whoever builds the mask-handle drag UI: this is the OPPOSITE
-    /// on-screen sense from this struct's sibling `EditState.straightenAngle`
-    /// (CCW-positive, `EditPipeline.applyStraighten`'s own doc comment) —
-    /// two degree-valued rotation fields in this codebase with opposite
-    /// screen senses is exactly the kind of mismatch that has caused real
-    /// sign bugs here before (the Metal y-flip, the Compare split
-    /// inversion) — do not assume the two share a convention.
+    /// space) — the mask's own local +X axis direction, per `kind`: for
+    /// `.radial` that's the ellipse's own X axis (as before); for
+    /// `.linear` (added slice 3) it's the direction of the graduated
+    /// line ITSELF, with the falloff running along local +Y (0° = a
+    /// horizontal line, dividing top/bottom — the classic graduated-ND
+    /// default). One shared field/convention across both kinds rather
+    /// than two, so there's only ever ONE rotation sign rule to remember
+    /// in this struct. `RadialMaskGeometry.resolve` negates this
+    /// internally to match `CGAffineTransform(rotationAngle:)`'s
+    /// CCW-positive convention in `CIImage`'s y-up space (see that
+    /// function's own doc comment) — `LinearMaskGeometry.resolve` instead
+    /// flips each of its two computed guide POINTS individually (the
+    /// same `1 - y` formula this struct's `centerY` already goes through
+    /// on the render side), which is mathematically EQUIVALENT to
+    /// negating the angle for this same quantity (independently
+    /// re-derived and confirmed, not merely asserted — see that file's
+    /// own doc comment), used only so that file has a single flip idiom
+    /// rather than mixing two for the same purpose. This field itself
+    /// always stores the UI-facing, on-screen sign, regardless of kind.
+    /// CAUTION for whoever builds the mask-
+    /// handle drag UI: this is the OPPOSITE on-screen sense from this
+    /// struct's sibling `EditState.straightenAngle` (CCW-positive,
+    /// `EditPipeline.applyStraighten`'s own doc comment) — two degree-
+    /// valued rotation fields in this codebase with opposite screen
+    /// senses is exactly the kind of mismatch that has caused real sign
+    /// bugs here before (the Metal y-flip, the Compare split inversion)
+    /// — do not assume the two share a convention.
     var rotationDegrees: Double = 0
 
     /// 0 = hard edge, 1 = falloff begins at the center (fully soft).
     /// `RadialMaskGeometry.innerRadiusFraction(feather:)` is the single
     /// source of truth for turning this into an actual inner radius, shared
-    /// by the render stage and (once it ships) the mask overlay's feather
-    /// guide, so the two can never drift apart.
+    /// by the render stage and the mask overlay's feather guide, so the
+    /// two can never drift apart. `.radial` only — inert on `.linear`.
     var feather: Double = 0.5
+
+    /// `.linear` only — inert on `.radial`. The FULL guide-to-guide
+    /// distance (not a half-width), as a fraction of
+    /// `min(extent.width, extent.height)` — the same non-axis-specific
+    /// denominator Definition/Sharpen's own radii use, chosen for the
+    /// same reason: it keeps the band's on-screen THICKNESS constant as
+    /// `rotationDegrees` sweeps, which an axis-specific fraction would
+    /// not. `LinearMaskGeometry.minimumWidth` is the single source of
+    /// truth for the render-side clamp — unlike `radiusX`/`radiusY`,
+    /// where a sub-half-pixel value means "covers nothing" and the mask
+    /// is skipped, `width == 0` is a legitimate, deliberate HARD EDGE
+    /// (a half-plane split with no feather at all), not "no mask" — so
+    /// `LinearMaskGeometry.resolve` clamps this up to its minimum rather
+    /// than returning `nil` the way `RadialMaskGeometry.resolve` does
+    /// for a too-small radius.
+    var width: Double = 0.3
 
     // MARK: - Adjustments
 
@@ -126,11 +181,12 @@ struct Mask: Identifiable, Equatable, Codable {
     /// `true` when every adjustment param is at its identity (0) —
     /// geometry-only. `EditPipeline.applyMasks` skips a mask entirely when
     /// this is `true`, which is what makes a geometry-only mask render
-    /// BYTE-IDENTICAL to no mask at all. Deliberately excludes geometry:
-    /// a mask can be `isIdentity` yet still a real, undo-worthy edit (the
-    /// user placed it), mirroring `redEyePoints`' own existing behavior
-    /// (a placed point with strength 0 renders identically but still
-    /// counts as an edit) — see `EditState.isEffectivelyIdentity`.
+    /// BYTE-IDENTICAL to no mask at all. Deliberately excludes geometry —
+    /// including `kind`/`width` (added slice 3): a mask can be
+    /// `isIdentity` yet still a real, undo-worthy edit (the user placed
+    /// it), mirroring `redEyePoints`' own existing behavior (a placed
+    /// point with strength 0 renders identically but still counts as an
+    /// edit) — see `EditState.isEffectivelyIdentity`.
     var isIdentity: Bool {
         exposureEV == 0 && contrast == 0 && highlights == 0 && shadows == 0
             && clarity == 0 && saturation == 0 && temperature == 0 && tint == 0
@@ -149,20 +205,47 @@ extension Mask {
     /// is never ambiguous, so Swift still synthesizes `Encodable` on its
     /// own.
     private enum CodingKeys: String, CodingKey {
-        case id
-        case centerX, centerY, radiusX, radiusY, rotationDegrees, feather
+        case id, kind
+        case centerX, centerY, radiusX, radiusY, rotationDegrees, feather, width
         case exposureEV, contrast, highlights, shadows
         case clarity, saturation, temperature, tint
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        // `MaskKind` is a String-raw-value enum: decoding it directly via
+        // `decodeIfPresent(MaskKind.self, forKey:)` THROWS on an
+        // unrecognized raw value (`decodeIfPresent` only returns `nil` for
+        // an ABSENT key, never for a present-but-invalid one). `EditState`
+        // decodes `masks` inside its own container, and BOTH places that
+        // read a sidecar wrap the whole decode in `try?`
+        // (`ImageDocumentModel.load(from:)`, `PhotoExporter`'s own sidecar
+        // read) — so a future slice's unrecognized kind string (say,
+        // slice 4's `"brush"`) would silently discard the ENTIRE sidecar,
+        // every global edit on that photo included, not just this one
+        // mask. Decode the raw String ourselves and map it, falling back
+        // to `.radial` on anything unrecognized — an accepted, logged
+        // limitation: if the user then edits and the sidecar re-saves,
+        // the unrecognized kind is silently rewritten as `.radial`. No
+        // third kind exists yet, so this can't fire today; revisit the
+        // moment one does.
+        // Reviewer-caught: `try` alone still lets a TYPE mismatch (e.g. a
+        // hand-authored sidecar encoding `"kind": 2`, a number, instead of
+        // a string) throw and discard the whole sidecar — the exact
+        // failure mode this whole fallback exists to close, just from a
+        // different malformed input than an unrecognized string value.
+        // `try?` makes the "never throws" guarantee unconditional on ANY
+        // decode failure for this one key, not just an unrecognized-but-
+        // well-typed value.
+        let rawKind = (try? container.decodeIfPresent(String.self, forKey: .kind)) ?? nil
+        kind = rawKind.flatMap(MaskKind.init(rawValue:)) ?? .radial
         centerX = try container.decodeIfPresent(Double.self, forKey: .centerX) ?? 0.5
         centerY = try container.decodeIfPresent(Double.self, forKey: .centerY) ?? 0.5
         radiusX = try container.decodeIfPresent(Double.self, forKey: .radiusX) ?? 0.25
         radiusY = try container.decodeIfPresent(Double.self, forKey: .radiusY) ?? 0.25
         rotationDegrees = try container.decodeIfPresent(Double.self, forKey: .rotationDegrees) ?? 0
         feather = try container.decodeIfPresent(Double.self, forKey: .feather) ?? 0.5
+        width = try container.decodeIfPresent(Double.self, forKey: .width) ?? 0.3
         exposureEV = try container.decodeIfPresent(Double.self, forKey: .exposureEV) ?? 0
         contrast = try container.decodeIfPresent(Double.self, forKey: .contrast) ?? 0
         highlights = try container.decodeIfPresent(Double.self, forKey: .highlights) ?? 0
@@ -184,8 +267,8 @@ extension Mask {
             id = decodedID
         } else {
             id = Mask.deterministicFallbackID(
-                centerX: centerX, centerY: centerY, radiusX: radiusX, radiusY: radiusY,
-                rotationDegrees: rotationDegrees, feather: feather,
+                kind: kind, centerX: centerX, centerY: centerY, radiusX: radiusX, radiusY: radiusY,
+                rotationDegrees: rotationDegrees, feather: feather, width: width,
                 exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
                 clarity: clarity, saturation: saturation, temperature: temperature, tint: tint
             )
@@ -206,19 +289,39 @@ extension Mask {
     /// if two DISTINCT, deliberately-authored masks ever collided here —
     /// re-check this reasoning still holds before shipping a UI that lets
     /// a user hand-author or import id-less mask JSON.
+    ///
+    /// Slice 3 note: `kind` now feeds this hash too (mixed in FIRST,
+    /// before the field loop below) — omitting it would let a default
+    /// id-less `.radial` mask and a default id-less `.linear` mask in the
+    /// same hand-edited sidecar collide on the SAME id, which (unlike the
+    /// accepted collision case above, where two field-identical masks are
+    /// already visually identical) breaks `ForEach`/`delete(_:)` identity
+    /// for two masks that are visibly DIFFERENT. Mixed in via a fixed,
+    /// explicit `switch` rather than `MaskKind.hashValue` — Swift's
+    /// `Hasher` is seeded per-process, so `.hashValue` would reintroduce
+    /// exactly the non-determinism this whole function exists to avoid.
+    /// Adding `kind` to this hash changes the ids previously produced for
+    /// id-less sidecars — harmless: the only property being preserved is
+    /// "the same bytes always decode to the same id," never cross-version
+    /// id stability.
     private static func deterministicFallbackID(
-        centerX: Double, centerY: Double, radiusX: Double, radiusY: Double,
-        rotationDegrees: Double, feather: Double,
+        kind: MaskKind, centerX: Double, centerY: Double, radiusX: Double, radiusY: Double,
+        rotationDegrees: Double, feather: Double, width: Double,
         exposureEV: Double, contrast: Double, highlights: Double, shadows: Double,
         clarity: Double, saturation: Double, temperature: Double, tint: Double
     ) -> UUID {
         let values = [
-            centerX, centerY, radiusX, radiusY, rotationDegrees, feather,
+            centerX, centerY, radiusX, radiusY, rotationDegrees, feather, width,
             exposureEV, contrast, highlights, shadows, clarity, saturation, temperature, tint
         ]
+        let kindSeed: UInt64
+        switch kind {
+        case .radial: kindSeed = 0x9e3779b97f4a7c15
+        case .linear: kindSeed = 0x517cc1b727220a95
+        }
         let prime: UInt64 = 0x100000001b3
-        var laneA: UInt64 = 0xcbf29ce484222325
-        var laneB: UInt64 = 0x9e3779b97f4a7c15
+        var laneA: UInt64 = (0xcbf29ce484222325 ^ kindSeed) &* prime
+        var laneB: UInt64 = (0x9e3779b97f4a7c15 ^ kindSeed.byteSwapped) &* prime
         for value in values {
             let bits = value.bitPattern
             laneA = (laneA ^ bits) &* prime

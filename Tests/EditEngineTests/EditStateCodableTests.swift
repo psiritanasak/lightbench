@@ -192,6 +192,7 @@ final class EditStateCodableTests: XCTestCase {
         let json = """
         {
             "masks": [{
+                "kind": "linear", "width": 0.4,
                 "centerX": 0.3, "centerY": 0.4,
                 "radiusX": 0.2, "radiusY": 0.15,
                 "rotationDegrees": 10, "feather": 0.4,
@@ -202,9 +203,102 @@ final class EditStateCodableTests: XCTestCase {
         """
         let state = try decode(json)
         XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].kind, .linear)
+        XCTAssertEqual(state.masks[0].width, 0.4)
         XCTAssertEqual(state.masks[0].centerX, 0.3)
         XCTAssertEqual(state.masks[0].exposureEV, 0.5)
         XCTAssertEqual(state.masks[0].tint, -10)
+    }
+
+    /// Slice 3: a `kind`/`width`-less mask JSON is exactly what every
+    /// slice-2-era sidecar looks like on disk today — it MUST still
+    /// decode to a `.radial` mask with `width` at its declared default,
+    /// not throw, not silently become `.linear`.
+    func testMaskKindAndWidthDefaultWhenAbsent() throws {
+        let json = """
+        { "masks": [{ "centerX": 0.3, "centerY": 0.4, "radiusX": 0.2, "radiusY": 0.15 }] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks[0].kind, .radial)
+        XCTAssertEqual(state.masks[0].width, 0.3)
+    }
+
+    /// The highest-severity hazard slice 3 introduces: `MaskKind` is a
+    /// String-raw-value enum, so decoding it via
+    /// `decodeIfPresent(MaskKind.self, forKey:)` would THROW on an
+    /// unrecognized value (it only returns `nil` for an ABSENT key). Both
+    /// sidecar readers in this app wrap the whole `EditState` decode in
+    /// `try?`, so an uncaught throw here wouldn't just skip this one
+    /// mask — it would discard the ENTIRE sidecar, every global edit on
+    /// the photo included. Assert the fix directly: a sidecar with an
+    /// unrecognized future kind string (`"brush"`, standing in for a
+    /// hypothetical slice-4 kind) PLUS a non-default GLOBAL field must
+    /// still decode successfully, with the global field intact — proving
+    /// the whole-sidecar-loss hazard is actually closed, not just
+    /// theorized.
+    func testUnknownMaskKindDecodesToRadialWithoutDiscardingTheSidecar() throws {
+        let json = """
+        {
+            "exposureEV": 1.5,
+            "masks": [{ "kind": "brush", "centerX": 0.6 }]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.exposureEV, 1.5, "an unrecognized mask kind must not discard the rest of the sidecar")
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].kind, .radial)
+        XCTAssertEqual(state.masks[0].centerX, 0.6)
+    }
+
+    /// Reviewer-caught (round 2): the sibling test above only covers an
+    /// unrecognized but WELL-TYPED string. A hand-authored sidecar could
+    /// just as easily encode `kind` as the wrong JSON TYPE entirely (a
+    /// number here, standing in for any type mismatch) — decoding that
+    /// via a bare `try container.decodeIfPresent(String.self, forKey:)`
+    /// throws a `DecodingError` just as readily as an unrecognized value
+    /// would, and would discard the whole sidecar the same way. This is
+    /// the case that motivated wrapping that decode in `try?`.
+    func testMaskKindWithWrongJSONTypeDecodesToRadialWithoutDiscardingTheSidecar() throws {
+        let json = """
+        {
+            "contrast": 0.4,
+            "masks": [{ "kind": 2, "centerX": 0.6 }]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.contrast, 0.4, "a type-mismatched mask kind must not discard the rest of the sidecar")
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].kind, .radial)
+        XCTAssertEqual(state.masks[0].centerX, 0.6)
+    }
+
+    /// `kind` must feed `Mask`'s deterministic id-fallback hash — omitting
+    /// it would let a default id-less `.radial` mask and a default
+    /// id-less `.linear` mask collide on the SAME id, breaking
+    /// `ForEach`/`delete(_:)` identity for two masks that are visibly
+    /// different (unlike the ALREADY-accepted collision case of two
+    /// field-identical, hence visually-identical, masks).
+    func testIdLessRadialAndLinearMasksWithIdenticalFieldsGetDifferentIds() throws {
+        let json = """
+        {
+            "masks": [
+                { "centerX": 0.4, "centerY": 0.4 },
+                { "kind": "linear", "centerX": 0.4, "centerY": 0.4 }
+            ]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 2)
+        XCTAssertNotEqual(state.masks[0].id, state.masks[1].id)
+    }
+
+    func testRepeatedDecodesOfTheSameIdLessLinearMaskAreEqual() throws {
+        let json = """
+        { "masks": [{ "kind": "linear", "centerX": 0.4, "centerY": 0.6, "width": 0.4, "rotationDegrees": 30 }] }
+        """
+        let first = try decode(json).masks[0]
+        let second = try decode(json).masks[0]
+        XCTAssertEqual(first.id, second.id)
     }
 
     /// The genuinely new coverage this slice adds: `Mask` needs its OWN
@@ -220,12 +314,14 @@ final class EditStateCodableTests: XCTestCase {
         let state = try decode(json)
         XCTAssertEqual(state.masks.count, 1)
         let mask = state.masks[0]
+        XCTAssertEqual(mask.kind, .radial)
         XCTAssertEqual(mask.centerX, 0.7)
         XCTAssertEqual(mask.centerY, 0.5)
         XCTAssertEqual(mask.radiusX, 0.25)
         XCTAssertEqual(mask.radiusY, 0.25)
         XCTAssertEqual(mask.rotationDegrees, 0)
         XCTAssertEqual(mask.feather, 0.5)
+        XCTAssertEqual(mask.width, 0.3)
         XCTAssertEqual(mask.exposureEV, 0)
         XCTAssertEqual(mask.contrast, 0)
         XCTAssertEqual(mask.highlights, 0)

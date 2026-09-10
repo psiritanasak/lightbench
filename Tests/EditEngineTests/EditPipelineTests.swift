@@ -1899,9 +1899,10 @@ final class EditPipelineTests: XCTestCase {
 
     // MARK: - Local Adjustments (Masks) math
     //
-    // Radial (ellipse) local adjustments — Phase 7 slice 2. Runs after
-    // Red-Eye, before Vignette (see `EditPipeline.applyMasks`'s own doc
-    // comment). Most assertions here are EQUIVALENCE checks against the
+    // Radial (ellipse, Phase 7 slice 2) and Linear (graduated, slice 3)
+    // local adjustments. Runs after Red-Eye, before Vignette (see
+    // `EditPipeline.applyMasks`'s own doc comment). Most assertions here
+    // are EQUIVALENCE checks against the
     // corresponding GLOBAL slider (a full-image-covering mask must produce
     // the exact same pixels as the identically-valued global field, since
     // both funnel through the same private filter functions) rather than
@@ -2400,6 +2401,235 @@ final class EditPipelineTests: XCTestCase {
             pixel(of: actualOrder, at: 40, 40).r, pixel(of: reverseOrder, at: 40, 40).r,
             "and must NOT match the reverse composition -- proves the order is load-bearing"
         )
+    }
+
+    // MARK: - Local Adjustments (Linear/graduated mask) math — Phase 7 slice 3
+    //
+    // Same equivalence-testing philosophy as the Radial section above:
+    // most assertions compare a full-covering Linear mask against the
+    // identically-valued GLOBAL slider (no new magic numbers); the
+    // genuinely spatial claims (which side gets the effect at a given
+    // angle, the ROI not clipping a diagonal corner, narrow-vs-wide
+    // falloff steepness) use real pixel comparisons instead.
+
+    /// A Linear mask whose transition band sits right at the very BOTTOM
+    /// edge (`centerY: 1.0`, `width` at the render's own minimum) — the
+    /// linear analogue of `fullyCoveringMask`'s oversized ellipse: any
+    /// sampled point away from that one edge sits deep in the fully-opaque
+    /// ("full effect") region, safe for equivalence testing against a
+    /// global slider.
+    private func fullyCoveringLinearMask(
+        exposureEV: Double = 0, contrast: Double = 0, highlights: Double = 0, shadows: Double = 0,
+        clarity: Double = 0, saturation: Double = 0, temperature: Double = 0, tint: Double = 0
+    ) -> Mask {
+        Mask(
+            kind: .linear, centerX: 0.5, centerY: 1.0, rotationDegrees: 0, width: LinearMaskGeometry.minimumWidth,
+            exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
+            clarity: clarity, saturation: saturation, temperature: temperature, tint: tint
+        )
+    }
+
+    // MARK: Guards / no-op
+
+    func testLinearIdentityParamMaskIsExactNoOp() {
+        let input = solidColorImage(r: 0.7, g: 0.3, b: 0.2, a: 1, size: 400)
+        let withMask = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .linear, centerX: 0.4, centerY: 0.6, rotationDegrees: 20, width: 0.3)]),
+            to: input
+        )
+        let withoutMask = EditPipeline.apply(EditState(), to: input)
+
+        XCTAssertEqual(pixel(of: withMask, at: 200, 200).r, pixel(of: withoutMask, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testMaskWithNonFiniteLinearGeometryIsSkippedNotCrashed() {
+        let input = solidColorImage(r: 0.7, g: 0.3, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .linear, centerX: .nan, centerY: 0.5, exposureEV: 1)]),
+            to: input
+        )
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, 0.7, accuracy: accuracy)
+    }
+
+    // MARK: Geometry / direction
+
+    func testLinearMaskFullEffectAboveCenterNoneBelowAtZeroDegrees() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .linear, centerX: 0.5, centerY: 0.5, rotationDegrees: 0, width: 0.5, exposureEV: 1)]),
+            to: input
+        )
+        XCTAssertEqual(pixel(of: output, at: 200, 350).r, 0.4, accuracy: accuracy, "well past point0 (full effect)")
+        XCTAssertEqual(pixel(of: output, at: 200, 50).r, 0.2, accuracy: accuracy, "well past point1 (no effect)")
+    }
+
+    func testLinearMaskOneHundredEightyDegreesSwapsWhichSideGetsTheEffect() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .linear, centerX: 0.5, centerY: 0.5, rotationDegrees: 180, width: 0.5, exposureEV: 1)]),
+            to: input
+        )
+        XCTAssertEqual(pixel(of: output, at: 200, 350).r, 0.2, accuracy: accuracy, "now past point1 (no effect) -- swapped from the 0-degree case")
+        XCTAssertEqual(pixel(of: output, at: 200, 50).r, 0.4, accuracy: accuracy, "now past point0 (full effect) -- swapped")
+    }
+
+    func testLinearMaskNinetyDegreesPutsFullEffectOnTheRight() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .linear, centerX: 0.5, centerY: 0.5, rotationDegrees: 90, width: 0.5, exposureEV: 1)]),
+            to: input
+        )
+        XCTAssertEqual(pixel(of: output, at: 350, 200).r, 0.4, accuracy: accuracy, "well past point0 on the right (full effect)")
+        XCTAssertEqual(pixel(of: output, at: 50, 200).r, 0.2, accuracy: accuracy, "well past point1 on the left (no effect)")
+    }
+
+    func testLinearMaskSoftEdgeFalloffIsMonotonic() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .linear, centerX: 0.5, centerY: 0.5, rotationDegrees: 0, width: 0.5, exposureEV: 1)]),
+            to: input
+        )
+        // point1 sits at y=100, point0 at y=300 (width 0.5 -> hp=100 on a
+        // 400x400 extent) -- sample a rising sequence from below point1
+        // to above point0 and confirm the falloff never reverses
+        // direction, without pinning exact intermediate values.
+        let values = [50, 120, 160, 200, 240, 280, 350].map { pixel(of: output, at: 200, $0).r }
+        for index in 1..<values.count {
+            XCTAssertGreaterThanOrEqual(values[index], values[index - 1] - accuracy, "falloff must be monotonically non-decreasing from bottom to top")
+        }
+    }
+
+    func testLinearMaskNarrowerWidthTransitionsMoreSteeplyThanWiderWidth() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let narrow = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .linear, centerX: 0.5, centerY: 0.5, rotationDegrees: 0, width: LinearMaskGeometry.minimumWidth, exposureEV: 1)]),
+            to: input
+        )
+        let wide = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .linear, centerX: 0.5, centerY: 0.5, rotationDegrees: 0, width: 1.0, exposureEV: 1)]),
+            to: input
+        )
+        let narrowDelta = abs(pixel(of: narrow, at: 200, 210).r - pixel(of: narrow, at: 200, 190).r)
+        let wideDelta = abs(pixel(of: wide, at: 200, 210).r - pixel(of: wide, at: 200, 190).r)
+        XCTAssertGreaterThan(narrowDelta, wideDelta, "a near-hard edge (minimum width) must change more over the same span than a wide, gradual band")
+    }
+
+    func testLinearMaskBrightensTheFarOpaqueCornerAtFortyFiveDegrees() {
+        // The ROI-cropping regression case this whole feature's design
+        // section exists to prevent: at a diagonal angle, the opaque
+        // side's far corner is not axis-aligned, so a naive axis-aligned
+        // band rect (instead of `LinearMaskGeometry`'s real half-plane
+        // clip) would silently clip it and leave it unbrightened.
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .linear, centerX: 0.5, centerY: 0.5, rotationDegrees: 45, width: 0.5, exposureEV: 1)]),
+            to: input
+        )
+        XCTAssertEqual(pixel(of: output, at: 390, 390).r, 0.4, accuracy: accuracy, "the far opaque corner must be brightened, not clipped by the ROI")
+    }
+
+    // MARK: Global-equivalence
+
+    func testLinearMaskExposureMatchesGlobalExposure() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 1, size: 400)
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringLinearMask(exposureEV: 1.2)]), to: input)
+        let global = EditPipeline.apply(EditState(exposureEV: 1.2), to: input)
+
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).r, pixel(of: global, at: 200, 200).r, accuracy: accuracy)
+        XCTAssertNotEqual(pixel(of: masked, at: 200, 200).r, pixel(of: input, at: 200, 200).r, "sanity: a real effect happened")
+    }
+
+    func testLinearMaskContrastMatchesGlobalContrast() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 1, size: 400)
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringLinearMask(contrast: 0.5)]), to: input)
+        let global = EditPipeline.apply(EditState(contrast: 0.5), to: input)
+
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).r, pixel(of: global, at: 200, 200).r, accuracy: accuracy)
+        XCTAssertNotEqual(pixel(of: masked, at: 200, 200).r, pixel(of: input, at: 200, 200).r, "sanity: a real effect happened")
+    }
+
+    func testLinearMaskShadowsMatchesGlobalCurvesShadows() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 1, size: 400)
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringLinearMask(shadows: 0.6)]), to: input)
+        let global = EditPipeline.apply(EditState(curvesShadows: 0.6), to: input)
+
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).r, pixel(of: global, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testLinearMaskHighlightsMatchesGlobalCurvesHighlights() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 1, size: 400)
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringLinearMask(highlights: -0.6)]), to: input)
+        let global = EditPipeline.apply(EditState(curvesHighlights: -0.6), to: input)
+
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).r, pixel(of: global, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testLinearMaskSaturationMatchesGlobalHslSaturation() {
+        let input = solidColorImage(r: 0.6, g: 0.3, b: 0.2, a: 1, size: 400)
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringLinearMask(saturation: 0.7)]), to: input)
+        let global = EditPipeline.apply(EditState(hslSaturation: 0.7), to: input)
+
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).r, pixel(of: global, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testLinearMaskTemperatureShiftMatchesGlobalTemperatureFromNeutral() {
+        let input = solidColorImage(r: 0.5, g: 0.4, b: 0.3, a: 1, size: 400)
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringLinearMask(temperature: 1500)]), to: input)
+        let global = EditPipeline.apply(EditState(whiteBalanceTemperature: 8000), to: input)
+
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).r, pixel(of: global, at: 200, 200).r, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).b, pixel(of: global, at: 200, 200).b, accuracy: accuracy)
+    }
+
+    func testLinearMaskTintMatchesGlobalTint() {
+        let input = solidColorImage(r: 0.5, g: 0.4, b: 0.3, a: 1, size: 400)
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringLinearMask(tint: 40)]), to: input)
+        let global = EditPipeline.apply(EditState(whiteBalanceTint: 40), to: input)
+
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).g, pixel(of: global, at: 200, 200).g, accuracy: accuracy)
+    }
+
+    func testLinearMaskClarityMatchesGlobalDefinition() {
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 400)
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringLinearMask(clarity: 1)]), to: input)
+        let global = EditPipeline.apply(EditState(definition: 1), to: input)
+
+        XCTAssertEqual(edgePixel(of: masked, x: 230, size: 400).r, edgePixel(of: global, x: 230, size: 400).r, accuracy: accuracy)
+    }
+
+    func testLinearMaskWhiteBalanceIsNoOpOnABlackAndWhitePhoto() {
+        let input = solidColorImage(r: 0.5, g: 0.4, b: 0.3, a: 1, size: 400)
+        let withoutMask = EditPipeline.apply(EditState(blackAndWhite: true), to: input)
+        let withMask = EditPipeline.apply(
+            EditState(blackAndWhite: true, masks: [fullyCoveringLinearMask(temperature: 1500, tint: 40)]),
+            to: input
+        )
+        XCTAssertEqual(pixel(of: withMask, at: 200, 200).r, pixel(of: withoutMask, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    // MARK: Structural
+
+    func testLinearMaskPreservesExtentExactly() {
+        let input = solidColorImage(r: 0.5, g: 0.5, b: 0.5, a: 1, size: 400)
+        let output = EditPipeline.apply(EditState(masks: [fullyCoveringLinearMask(exposureEV: 1)]), to: input)
+        XCTAssertEqual(output.extent, input.extent)
+    }
+
+    func testLinearMaskPreservesAlpha() {
+        let input = solidColorImage(r: 0.5, g: 0.5, b: 0.5, a: 0.6, size: 400)
+        let output = EditPipeline.apply(EditState(masks: [fullyCoveringLinearMask(exposureEV: 1)]), to: input)
+        XCTAssertEqual(pixel(of: output, at: 200, 200).a, 0.6, accuracy: accuracy)
+    }
+
+    func testRadialAndLinearMasksCompoundSequentiallyInTheSameArray() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let radial = Mask(centerX: 0.5, centerY: 0.5, radiusX: 2.0, radiusY: 2.0, exposureEV: 1)
+        let linear = fullyCoveringLinearMask(exposureEV: 1)
+        let output = EditPipeline.apply(EditState(masks: [radial, linear]), to: input)
+        // Both fully cover the sampled point and each applies +1EV --
+        // 0.2 * 2 * 2 = 0.8, proving the two kinds compound like any two
+        // masks do, not just two of the same kind.
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, 0.8, accuracy: accuracy)
     }
 
     // MARK: - Vignette math

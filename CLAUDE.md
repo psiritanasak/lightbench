@@ -1200,10 +1200,69 @@ Edits are stored as parameter sets and rendered live on the GPU.
       oversight**: arrow-key nudge/resize of the on-image overlay itself.
       Both test photos' masks/sidecars were reverted to identity before
       this commit — the library is unchanged.
-   3. **Linear (Graduated) mask** — second geometry type, reuses most of
-      slice 2's plumbing; new interaction code is a draggable line + two
-      parallel falloff guides (genuinely new — no existing precedent covers
-      a rotatable line-with-parallel-guides gesture).
+   3. **Linear (Graduated) mask — Session A (data model, render geometry,
+      pipeline, sliders) ✅ COMPLETE (2026-09-10); Session B (the on-image
+      line-drag gesture) not yet started.** Extends the SAME `Mask` struct
+      (per that struct's own doc comment reserving exactly this) with a
+      new `kind: MaskKind` discriminator (`.radial`/`.linear`) and a new
+      `width` field (`.linear`-only — the full guide-to-guide distance),
+      reusing `centerX`/`centerY`/`rotationDegrees` unchanged across both
+      kinds so there's one shared anchor point and ONE rotation sign
+      convention in this struct, not two. New
+      `Sources/EditEngine/LinearMaskGeometry.swift` feeds
+      `CIFilter.linearGradient()` — the y-flip/rotation-sign math is
+      handled by flipping each of the two guide POINTS individually (the
+      same `1 - y` formula the center already uses), rather than
+      negating the whole angle the way `RadialMaskGeometry` does before
+      building its rotation matrix. Reviewer-corrected mid-slice: an
+      earlier draft claimed the angle-negation trick was mathematically
+      WRONG for a bare direction vector — false; both formulations are
+      equivalent and independently re-derived to produce byte-identical
+      points. The per-point flip is used only because it mirrors the
+      center's own existing `1 - y` line-for-line, keeping ONE flip idiom
+      in this file instead of mixing it with an angle-negation idiom for
+      the same quantity — a code-clarity choice, not a correctness fix.
+      A too-small `width` CLAMPS to `LinearMaskGeometry.minimumWidth`
+      (fixed mid-slice to clamp the PIXEL half-width, not the fractional
+      input — the original clamp still let a small enough EXTENT, e.g. a
+      Library thumbnail, silently drop the whole mask) rather than
+      skipping it entirely (unlike a too-small radial radius, which does
+      skip) — a zero-width linear mask is a legitimate hard-edged
+      half-plane split, a real deliberate look, not "nothing."
+      `EditPipeline.applyMasks`'s single geometry-resolve call became a
+      `switch mask.kind`, with the `.linear` branch needing no transparent-
+      base/union step the `.radial` branch requires (MEASURED, not
+      assumed: `CILinearGradient` clamps to `color0`/`color1` beyond each
+      point rather than being undefined there, unlike a radial gradient
+      outside its own bounding disc). Fixed a real decode hazard along the
+      way: `MaskKind` is a `String`-raw-value enum, and naively decoding
+      it via `decodeIfPresent(MaskKind.self, forKey:)` throws — not
+      returns `nil` — on an unrecognized-but-present value, which (since
+      every sidecar reader in this app wraps the whole `EditState` decode
+      in `try?`) would have silently discarded an ENTIRE sidecar's worth
+      of edits the moment a future slice adds a third kind; fixed by
+      decoding the raw string by hand with a `.radial` fallback.
+      Reviewer (Opus 5): 3 rounds, FIX FIRST → FIX FIRST → APPROVE — see
+      PROGRESS.md's own slice-3 Session A section for the round-by-round
+      detail, including round 2's catch that some of round 1's own
+      documentation fixes were incomplete (a stale claim survived outside
+      the one file round 1 touched) and a real behavioral regression the
+      round-1 `canZoom` fix introduced (arrow-key pan silently broken for
+      a selected Linear mask). 701 tests (48 new). Live-verified
+      against the user's real library: the 0°/90°/180° sign checks all
+      matched the geometry's own predicted compass directions exactly
+      (this is the single highest-risk claim in the slice, given this
+      codebase's documented y-flip/sign-bug history — Metal, Compare
+      split); Width 0%→100% swept from a clean hard edge to a gradual
+      ramp with no artifacts; mask creation on a non-square portrait photo
+      didn't crash. Required RAW perf re-check (deferred from slice 2
+      until masks were reachable): one Linear mask with Clarity on the
+      user's real RAW asset measured ~0.6-1.0ms over baseline at
+      steady state, comfortably under budget. Session B (the draggable
+      center line + two draggable parallel guide handles, reusing
+      `MaskGeometry.movedCenter` verbatim for the center drag — genuinely
+      new interaction code, no existing precedent covers a rotatable
+      line-with-parallel-guides gesture) is the next slice-3 step.
    4. **Brush mask** — freehand painting; the hardest UI slice, since none of
       this app's three existing overlay patterns (WB eyedropper's one-shot
       tap, Red-Eye's persistent point list, Crop's fixed-handle drag) cover a

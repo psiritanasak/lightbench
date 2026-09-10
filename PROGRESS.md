@@ -6591,8 +6591,281 @@ Revert to Original) before this commit — the user's photo library is
 unchanged by this session's live verification.
 
 **Phase 7 slice 2 is now fully complete** (both the data-model/pipeline
-half and the UI half). **Next step**: Phase 7 slice 3 (Linear/Graduated
-mask — second geometry type, reuses most of slice 2's plumbing; new
-interaction code is a draggable line + two parallel falloff guides, a
-genuinely new gesture with no existing precedent in this codebase) —
-per its own Plan Mode session, per the standing workflow rule.
+half and the UI half).
+
+## Phase 7 slice 3 — Linear (Graduated) mask, Session A (data model,
+## geometry, pipeline, sliders) — ✅ COMPLETE (2026-09-10)
+
+Scoped per Plan Mode: a second mask geometry — a graduated band, like
+Lightroom's graduated filter — extending the SAME `Mask` struct (per its
+own doc comment reserving exactly this: "slices 3-6 will add new
+geometry variants... to THIS struct") rather than a new type or an
+enum-with-associated-values, which would have broken the flat
+`CodingKeys` list and `deterministicFallbackID`'s fixed-arity signature.
+Split into Session A (this one — data model, render geometry, pipeline
+branch, full slider control) and a future Session B (the on-image
+line-drag gesture CLAUDE.md's roadmap calls "genuinely new"), with the
+seam placed one step LATER than slice 2's own A/B split: a selected
+Linear mask is already fully usable via sliders after this session
+(create it, position/rotate/widen it, see it render), not a UI-dark
+increment verified only via a hand-authored sidecar.
+
+**What shipped**: new `MaskKind: String, Codable, CaseIterable { case
+radial, linear }` plus two new `Mask` fields — `kind: MaskKind = .radial`
+and `width: Double = 0.3` (`.linear`-only: the FULL guide-to-guide
+distance, a fraction of `min(extent.width, extent.height)`, matching
+Definition/Sharpen's own non-axis-specific radius-scaling precedent for
+the same reason — constant on-screen thickness as the angle sweeps).
+`rotationDegrees` (already existed) is REUSED, not duplicated, as the
+angle field for both kinds — for `.linear` it's the line's own
+orientation, CW-positive on screen, same convention/negation-rule as the
+ellipse's rotation — keeping ONE rotation sign rule in this struct
+instead of two. `centerX`/`centerY` are reused unchanged as the anchor
+point too, so the entire center-drag UI interaction (Session B, later)
+will need zero new code for that piece.
+
+New `Sources/EditEngine/LinearMaskGeometry.swift` — pure `CoreGraphics`
+sibling of `RadialMaskGeometry.swift`, feeding `CIFilter.linearGradient()`
+directly. **The y-flip/rotation-sign math was the highest-risk part of
+this slice, given this codebase's own documented history here (the
+Metal y-flip, the Compare-split inversion)**, and the reviewer caught a
+real error in the FIRST draft's own justification for it (not in the
+shipped math, which was already correct): the draft claimed
+`RadialMaskGeometry`'s "negate the whole stored angle before building a
+rotation matrix" trick is mathematically WRONG for a bare direction
+vector like this file's two guide points. Independently re-derived by
+the reviewer (and re-checked here): that claim is FALSE — negating the
+angle and applying the standard rotation formula to the correspondingly
+y-flipped base vector produces BYTE-IDENTICAL points to this file's
+per-point-flip approach; the two formulations are equivalent, not in
+tension. `LinearMaskGeometry.resolve` still flips each of the two guide
+POINTS individually (the identical `1 - y` formula the existing
+center-mapping already uses) rather than negating the angle, but purely
+so this file has ONE flip idiom instead of mixing it with an
+angle-negation idiom for the same quantity — a clarity choice, not a
+fix for a hazard that turned out not to exist. Hand-verified compass
+checks (0°, 90°, 45°, 180°) became the FIRST tests written, before the
+implementation existed (red, then green) — including a regression test
+asserting that substituting the naive "just negate the angle, reuse
+this SAME per-point formula" mistake (a different, genuinely wrong
+shortcut than the equivalent-matrix approach above) produces a
+different, mirrored point at a non-axis-aligned angle.
+
+A width too small to matter is CLAMPED to a new
+`LinearMaskGeometry.minimumWidth`, not treated as `nil` the way a
+sub-half-pixel radial radius is — deliberate divergence: a zero-width
+linear mask is a legitimate hard-edged half-plane split (a real,
+deliberate look covering roughly half the frame), not "no mask," unlike
+a zero-radius ellipse which truly covers nothing. **Reviewer-caught bug
+in the first draft**: the clamp was applied to the FRACTIONAL `width`
+input, not the resulting PIXEL half-width, so on any extent whose
+smaller dimension was under ~100px (e.g. a Library thumbnail, capped at
+240px) the pixel half-width still fell under the 0.5px sub-pixel floor
+and `resolve` returned `nil` anyway — silently dropping the whole mask
+in the Library grid while it still rendered in the Editor, the same
+Editor/thumbnail-divergence defect class as post-Phase-5 follow-up #4.
+Fixed by clamping the pixel half-width directly (`max(halfWidthPixels,
+0.5)`), with a new small-extent test pinning it. `Resolved` also
+carries a `regionOfInterest: CGRect` — a genuine analytic half-plane
+clip of the extent (a hand-rolled single-edge Sutherland-Hodgman
+polygon clip, not a hand-rolled axis-aligned band rect, which would
+incorrectly clip the far corner on the opaque side at a diagonal angle)
+— the linear analogue of Radial's own ROI-cropping optimization in
+`applyMasks`. Reviewer-caught along the way: the polygon-clip helper had
+the only three force-unwraps (`.min()!`/`.max()!`) in this entire
+codebase's `Sources/` tree, against CLAUDE.md's own no-force-unwrap
+convention — replaced with a manual reduce; and the "clip produced no
+points" fallback (the mask has literally zero effect anywhere in the
+extent) returned the FULL extent as the "region of interest," which is
+safe but pays the exact per-frame cost this optimization exists to
+avoid in precisely the case where the mask does nothing — now returns a
+zero-size rect instead, plus a `.isFinite` guard on every computed
+point so a pathological hand-authored sidecar can't propagate a `NaN`
+region into `corrected.cropped(to:)`.
+
+**Measured, not assumed, before writing the pipeline branch**: a
+throwaway probe (deleted before commit, same discipline as every prior
+slice's live-measurement probes) confirmed `CIFilter.linearGradient()`'s
+`outputImage.extent` is `CGRect.infinite` (a linear gradient has no
+natural bounding box, unlike a radial gradient's disc) and that it
+CLAMPS to `color0`/`color1` beyond each point rather than being
+undefined there — this is why the `.linear` branch in
+`EditPipeline.applyMasks` needs no transparent-`base`/
+`CIMaximumCompositing` union step the `.radial` branch requires (a
+radial gradient IS undefined outside its own bounding disc, which is
+exactly what that union fixes).
+
+`EditPipeline.applyMasks`'s single `RadialMaskGeometry.resolve` call
+became a `switch mask.kind` producing a local `ResolvedMaskGeometry`
+enum, still `continue`-ing past a degenerate mask BEFORE the color/tone
+work runs (the pre-existing early-exit ordering, unchanged) — every line
+from the clamps through the final `CIBlendWithMask` composite stayed
+untouched and kind-agnostic; only the geometry resolve and the
+gradient-image construction are kind-dispatched. `masksActive` and the
+pipeline's overall stage order (Red-Eye → applyMasks → Vignette) needed
+no changes.
+
+**Highest-severity fix in this slice**: `MaskKind` is a `String`-raw-value
+enum, and `decodeIfPresent(MaskKind.self, forKey:)` THROWS on an
+unrecognized-but-PRESENT raw value (it only returns `nil` for an ABSENT
+key). Both this app's sidecar readers wrap the WHOLE `EditState` decode
+in `try?` — so a future slice's unrecognized kind string (a hypothetical
+`"brush"`) would have silently discarded the ENTIRE sidecar, every
+global edit on the photo included, not just the one mask. Fixed by
+decoding the raw `String` by hand and mapping it with a `.radial`
+fallback for anything unrecognized — a new test
+(`testUnknownMaskKindDecodesToRadialWithoutDiscardingTheSidecar`) proves
+this by asserting a NON-DEFAULT GLOBAL field survives a decode alongside
+an unrecognized mask kind, not just that decode doesn't throw.
+`deterministicFallbackID` (the id-less-mask fallback hash) now mixes in
+`kind` too, via a hardcoded per-case `UInt64` seed (NOT `.hashValue`,
+which is per-process randomized) — omitting this would let a default
+id-less `.radial` mask and a default id-less `.linear` mask collide on
+the same id despite being visibly different masks, unlike the
+already-accepted collision case of two field-identical (hence visually
+identical) masks.
+
+`MaskDetailView`'s `shapeRows` split into a kind-`switch` (`
+radialShapeRows` unchanged; new `linearShapeRows`: shared Center X/Y,
+"Angle" `-180...180` — NOT the ellipse's `-90...90`, since a line has no
+180° symmetry (rotating it 180° swaps WHICH SIDE gets the effect,
+unlike an ellipse), "Width" `0...1`). `AdjustTabView`'s single "Add
+Radial Mask" button became two side-by-side buttons ("Add Radial" / "Add
+Linear," each with its own `.accessibilityLabel`) — introducing a second
+kind is exactly the moment discoverability matters more than a compact
+menu. `maskRow`'s label/icon vary by kind (`circle.dashed` vs
+`line.diagonal`), but numbering stays GLOBAL across both kinds, not
+per-kind — masks composite sequentially in array order, so per-kind
+counters would visibly disagree with compositing order the moment a
+Radial and a Linear mask overlap. `ContentView.swift`'s on-image overlay
+instantiation gained exactly one line (`maskBinding.wrappedValue.kind ==
+.radial`) — verified by reading each site, not assumed, that
+`isEditingMask`/`handleMaskKeyPress`/every `.onChange` disarm site are
+already kind-agnostic, so a selected Linear mask still grabs focus and
+still deselects on Escape; it just draws no handles yet. **`canZoom` is
+the one exception, reviewer-caught**: the first draft left it gated on
+the same kind-agnostic `isEditingMask`, which meant selecting a Linear
+mask blocked zoom for NO reason — that gate's own documented rationale
+("their overlays are positioned against `currentFitRect` assuming no
+zoom/pan") doesn't apply to a kind with no overlay at all, and Escape
+was the only (undiscoverable) way out. Fixed with a new, narrower
+`isEditingRadialMask` used ONLY by `canZoom`, leaving `isEditingMask`
+itself unchanged for every other (correctly kind-agnostic) call site.
+
+Reviewer (Opus 5): 2 rounds, FIX FIRST → APPROVE. Round 1 caught the two
+correctness bugs already folded into this section above (the width-clamp
+targeting the wrong quantity; `canZoom` blocking zoom for a kind with no
+overlay) plus three documentation-only issues: the false "angle-negation
+is wrong for a direction vector" claim (also already corrected above,
+and independently in CLAUDE.md's own slice-3 entry); the `applyMasks`
+doc-comment merge (the new `ResolvedMaskGeometry` enum's doc had been
+appended to the END of the pre-existing ~100-line `applyMasks` doc with
+no separating blank line, leaving `applyMasks` itself with no doc
+comment at all, and the merged block's stale opening line still read
+"Radial (ellipse) local adjustments — Phase 7 slice 2" — fixed by moving
+the enum's doc above the block and retitling the block's own opening
+line to name both kinds); and the only three force-unwraps in this
+codebase's entire `Sources/` tree (`clippedRegionOfInterest`'s
+`.min()!`/`.max()!`), against CLAUDE.md's own explicit no-force-unwrap
+convention — replaced with a manual reduce. Also flagged, fixed as
+"should-fix" rather than blocking: `Mask.init(from:)`'s `kind` decode
+still threw on a TYPE mismatch (e.g. a hand-authored `"kind": 2`), not
+just an unrecognized-but-well-typed string — the exact class of hazard
+the fix was supposed to close, from a different malformed input;
+widened to `try?` so it's unconditional. `clippedRegionOfInterest`'s
+"clip produced nothing" fallback returned the full `extent` (safe, but
+paying the ROI-optimization's own avoided cost in exactly the case
+where the mask does nothing) — now returns a zero-size rect, with an
+added `.isFinite` guard on every computed point so a pathological
+sidecar can't propagate `NaN` into the final crop. **Round 2 (re-run on
+the fixed diff): FIX FIRST again** — every code-level fix from round 1
+verified genuinely correct (independently re-derived the rotation math,
+probed `CIBlendWithMask`'s actual behavior with an empty foreground
+image, probed `try?`'s actual suppression of a JSON type-mismatch
+`DecodingError`), but three of round 1's own DOCUMENTATION fixes were
+incomplete: the same disproven "angle-negation is wrong for a direction
+vector" claim survived verbatim in `Mask.swift`'s own `rotationDegrees`
+doc comment and in `LinearMaskGeometryTests.swift`'s file header (both
+outside the one file round 1's fix actually touched); and a NEW
+`ContentView.swift` comment introduced BY the `canZoom` fix directly
+contradicted that same fix ("isEditingMask/canZoom/... are all already
+kind-agnostic... a selected Linear mask still blocks zoom" — false the
+moment `canZoom` became `.radial`-only). Round 2 also caught one genuine
+NEW behavioral regression introduced by the `canZoom` fix itself:
+`handleImagePaneKeyPress` unconditionally routed every key press to
+`handleMaskKeyPress` whenever ANY mask was selected, which used to be
+harmless (a selected mask always forced `canZoom == false` before this
+slice, so the pan branch below it was already unreachable) but now
+silently broke arrow-key panning for a selected `.linear` mask, which
+`canZoom` deliberately keeps enabled. Fixed by only short-circuiting on
+Escape (`handleMaskKeyPress`'s only real case), falling through to the
+pan branch otherwise. All three stale-doc-comment sites corrected to
+match the file `LinearMaskGeometry.swift` already had right; a small
+`widthInPixels`/`resolve` inconsistency the round-1 fix introduced (the
+0.5px floor lived a second time in `resolve` instead of solely inside
+`widthInPixels`, the function documented as this value's single source
+of truth) was folded into `widthInPixels` itself; the unused
+`MaskKind: CaseIterable` conformance (a repeat of a nit slice 2's own
+reviewer already raised once) was dropped; and a new
+`testMaskKindWithWrongJSONTypeDecodesToRadialWithoutDiscardingTheSidecar`
+test was added to directly exercise the JSON-type-mismatch case that
+motivated the `try?` fix (the existing test only covered an
+unrecognized-but-well-typed string). Re-reviewed after all of the above:
+**APPROVE**.
+
+701 tests (48 new): `LinearMaskGeometryTests` (23, following the exact
+section structure and rigor of `RadialMaskGeometryTests` — hand-derived
+closed-form values, not probed constants, for every y-flip/rotation/
+width claim), 20 new cases in `EditPipelineTests` (equivalence against
+the identically-valued GLOBAL slider for every adjustment param, the
+0°/90°/180° sign checks, the width-0-vs-width-1 steepness comparison, the
+diagonal-angle far-corner-not-clipped regression, and a radial+linear
+same-array compounding test), and 5 new cases in `EditStateCodableTests`
+(kind/width defaulting, the unknown-kind-string and wrong-JSON-type
+whole-sidecar-survival proofs, and the cross-kind deterministic-id pair).
+
+**Live-verified (2026-09-10)** against the user's real Bolivia-trip
+library (`IMG_6564.jpeg`, the same group-jump/sky photo Session B used,
+plus a quick portrait photo for the non-square-extent case): added a
+Linear mask, set Exposure to +3 EV, and confirmed the sky (top half)
+brightened while the ground (bottom half) stayed untouched at the
+default Angle 0° — the single most important real-app check in this
+slice; swept Angle to +90° and confirmed the effect moved to the RIGHT
+half with the left untouched, matching the geometry's own predicted
+compass direction exactly; swept Angle to +180° and confirmed an EXACT
+swap from the 0° case (now the ground brightens, the sky doesn't),
+proving `-180...180` is real travel, not duplicate travel the way the
+ellipse's own `-90...90` deliberately is; swept Width from 0% (a clean
+hard edge, no rendering artifacts, no crash) to 100% (a visibly more
+gradual ramp); created a Linear mask on a non-square, letterboxed
+portrait photo with no crash or visible distortion; used Revert to
+Original on both test photos afterward, confirming a clean return to
+"No masks yet." **Required RAW perf re-check** (this exact re-measurement
+was the condition slice 2's own write-up set for revisiting once masks
+were reachable): rather than fight this session's flaky screen-automation
+environment for a UI-driven measurement, used a temporary, non-interactive
+XCTest probe (same "measure directly, delete before commit" discipline,
+just via `@testable import PhotoApp` instead of synthetic UI events) that
+loaded the user's real `DSC_1665.NEF` (6016×4016) via `RawDecoder.decode`/
+`.materialize`, then timed `EditPipeline.apply` + a forced `CIContext`
+render across repeated iterations: baseline (no mask) converged to
+~7.2ms/frame; one Linear mask with Clarity active converged to
+~7.8-8.2ms/frame — a ~0.6-1.0ms delta, comfortably under the 16ms/60fps
+budget and consistent with slice 1's own single-Radial-mask-probe
+numbers. Probe deleted before commit, confirmed via a clean `git diff`.
+
+**Not independently live-exercised this session** (lower-risk items
+covered by the automated test suite's equivalence/structural tests
+instead, given this session's unusually disruptive automation
+environment): a mixed Radial+Linear same-photo compounding render (covered
+by `testRadialAndLinearMasksCompoundSequentiallyInTheSameArray`); Compare
+→ Split specifically on a Linear-masked photo (covered by slice 2's own
+already-verified masks-in-general Compare behavior, which is kind-agnostic
+by construction — `comparisonOriginal()` clears `masks` as a whole array,
+not per-kind).
+
+**Next step**: Phase 7 slice 3 Session B (the Linear mask's on-image
+line-drag gesture: a draggable center line + two draggable parallel
+guide handles controlling `width` symmetrically, reusing
+`MaskGeometry.movedCenter` verbatim for the center drag) — per its own
+Plan Mode session, per the standing workflow rule.

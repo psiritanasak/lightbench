@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The selected mask's 14 slider rows — a top-level `struct`, deliberately
+/// The selected mask's slider rows (14 for `.radial`, 12 for `.linear`) —
+/// a top-level `struct`, deliberately
 /// NOT a computed property inside `AdjustTabView` (that file's `body`
 /// `VStack` already has 15 children, and two of its own doc comments warn
 /// of a real, already-hit Swift type-checker blow-up from over-packed
@@ -13,12 +14,14 @@ import SwiftUI
 /// and it resolves the by-ID lookup (`Binding<EditState>.mask(id:)`,
 /// `MaskBinding.swift`) exactly once per view build, not 14 times.
 ///
-/// These 14 rows ARE the accessibility answer for `MaskOverlayView`, not a
-/// nice-to-have: they're what lets that overlay be `.accessibilityHidden(true)`
-/// the same way `CropOverlayView` already is — justified there, and here,
-/// ONLY because the same values are independently AT-adjustable via labeled
-/// sliders. Without these rows, mask geometry would be the only
-/// `EditState`-backed value in the app reachable solely by mouse.
+/// These rows ARE the accessibility answer for the on-image mask overlay
+/// (`MaskOverlayView` for `.radial`), not a nice-to-have: they're what lets
+/// that overlay be `.accessibilityHidden(true)` the same way
+/// `CropOverlayView` already is — justified there, and here, ONLY because
+/// the same values are independently AT-adjustable via labeled sliders.
+/// Without these rows, mask geometry would be the only `EditState`-backed
+/// value in the app reachable solely by mouse. This licenses a `.linear`
+/// mask's future on-image overlay too, for the same reason.
 struct MaskDetailView: View {
     @Binding var mask: Mask
 
@@ -81,16 +84,21 @@ struct MaskDetailView: View {
         }
     }
 
-    private var shapeRows: some View {
+    /// Kind-switched (Phase 7 slice 3) — the shape params genuinely differ
+    /// per kind (an ellipse's radii/feather vs. a graduated band's width),
+    /// while `centerX`/`centerY` and the rotation convention are shared
+    /// (see `Mask.rotationDegrees`'s own doc comment for why there's only
+    /// ONE rotation field/sign rule across both kinds).
+    @ViewBuilder private var shapeRows: some View {
+        switch mask.kind {
+        case .radial: radialShapeRows
+        case .linear: linearShapeRows
+        }
+    }
+
+    private var radialShapeRows: some View {
         Group {
-            EditSliderRow(
-                label: "Center X", value: $mask.centerX,
-                range: 0...1, identity: 0.5, displayMultiplier: 100
-            ) { String(format: "%.0f%%", $0 * 100) }
-            EditSliderRow(
-                label: "Center Y", value: $mask.centerY,
-                range: 0...1, identity: 0.5, displayMultiplier: 100
-            ) { String(format: "%.0f%%", $0 * 100) }
+            centerRows
             EditSliderRow(
                 label: "Radius X", value: $mask.radiusX,
                 range: MaskGeometry.minRadius...MaskGeometry.maxRadius, identity: 0.25, displayMultiplier: 100
@@ -109,6 +117,45 @@ struct MaskDetailView: View {
             ) { String(format: "%+.0f°", $0) }
             EditSliderRow(
                 label: "Feather", value: $mask.feather,
+                range: 0...1, identity: 0.5, displayMultiplier: 100
+            ) { String(format: "%.0f%%", $0 * 100) }
+        }
+    }
+
+    private var linearShapeRows: some View {
+        Group {
+            centerRows
+            // -180...180, NOT the ellipse's -90...90: a LINE has no
+            // 180-degree symmetry -- flipping it 180 degrees swaps WHICH
+            // SIDE of the frame gets the effect (Mask.rotationDegrees'
+            // own doc comment), so the full range is real travel here,
+            // not duplicate travel.
+            EditSliderRow(
+                label: "Angle", value: $mask.rotationDegrees,
+                range: -180...180, identity: 0
+            ) { String(format: "%+.0f°", $0) }
+            // The FULL guide-to-guide distance, not a half-width; 0 is a
+            // legitimate hard edge (clamped to LinearMaskGeometry
+            // .minimumWidth in the render), unlike a zero-radius ellipse,
+            // which is a no-op -- see Mask.width's own doc comment.
+            EditSliderRow(
+                label: "Width", value: $mask.width,
+                range: 0...1, identity: 0.3, displayMultiplier: 100
+            ) { String(format: "%.0f%%", $0 * 100) }
+        }
+    }
+
+    /// Shared between both kinds — the mask's anchor point, same
+    /// semantics regardless of `kind` (see `Mask.centerX`/`centerY`'s own
+    /// doc comment).
+    private var centerRows: some View {
+        Group {
+            EditSliderRow(
+                label: "Center X", value: $mask.centerX,
+                range: 0...1, identity: 0.5, displayMultiplier: 100
+            ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Center Y", value: $mask.centerY,
                 range: 0...1, identity: 0.5, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
         }

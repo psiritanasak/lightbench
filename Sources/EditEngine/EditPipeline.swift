@@ -897,7 +897,19 @@ enum EditPipeline {
         state.masks.contains { !$0.isIdentity }
     }
 
-    /// Radial (ellipse) local adjustments — Phase 7 slice 2. Runs AFTER
+    /// Kind-dispatched geometry, resolved up front per mask (Phase 7
+    /// slice 3) — carries whichever `Resolved` type matches `mask.kind`
+    /// through the shared color/tone work below to the per-kind
+    /// mask-image construction near the end of the loop. A local type
+    /// (not a file-level one): used only inside `applyMasks`, exactly
+    /// like a local `struct`/closure would be.
+    private enum ResolvedMaskGeometry {
+        case radial(RadialMaskGeometry.Resolved)
+        case linear(LinearMaskGeometry.Resolved)
+    }
+
+    /// Local adjustments (Radial — Phase 7 slice 2 — and Linear/graduated
+    /// — slice 3). Runs AFTER
     /// Red-Eye, BEFORE Vignette: like Red-Eye, mask geometry is stored as
     /// fractions of the CURRENT (post-crop) extent, so it must map against
     /// the image the user actually sees and draws on — the same argument
@@ -995,25 +1007,46 @@ enum EditPipeline {
     /// encounters `CGRect.infinite` in this configuration (verified by
     /// printing the actual extent before and after the transform on a real
     /// gradient; only an OPAQUE `color1` produces the infinite-extent case
-    /// some Core Image filters are documented to have).
+    /// some Core Image filters are documented to have). The `.linear`
+    /// branch needs no such base/union at all — see that branch's own
+    /// comment below for why (`CILinearGradient` clamps rather than being
+    /// undefined outside `point0`/`point1`, measured before this shipped).
     private static func applyMasks(_ state: EditState, to image: CIImage) -> CIImage {
         guard masksActive(state) else { return image }
 
         let extent = image.extent
         // Loop-invariant: only depends on `extent`, which is fixed for the
         // whole stage (unlike Red-Eye's per-point loop, no per-mask state
-        // feeds this base).
+        // feeds this base). Radial-only (see the per-kind mask
+        // construction below for why `.linear` needs no such base).
         let base = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: extent)
         var img = image
 
         for mask in state.masks {
             guard !mask.isIdentity else { continue }
-            guard let geo = RadialMaskGeometry.resolve(
-                centerX: mask.centerX, centerY: mask.centerY,
-                radiusX: mask.radiusX, radiusY: mask.radiusY,
-                rotationDegrees: mask.rotationDegrees, feather: mask.feather,
-                extent: extent
-            ) else { continue }
+
+            // Geometry resolve, kind-dispatched — `continue` on `nil`
+            // BEFORE any of the color/tone work below, exactly preserving
+            // the pre-slice-3 early-exit ordering (a degenerate mask must
+            // never pay for a perceptual round-trip it can't use).
+            let resolvedGeometry: ResolvedMaskGeometry
+            switch mask.kind {
+            case .radial:
+                guard let geo = RadialMaskGeometry.resolve(
+                    centerX: mask.centerX, centerY: mask.centerY,
+                    radiusX: mask.radiusX, radiusY: mask.radiusY,
+                    rotationDegrees: mask.rotationDegrees, feather: mask.feather,
+                    extent: extent
+                ) else { continue }
+                resolvedGeometry = .radial(geo)
+            case .linear:
+                guard let geo = LinearMaskGeometry.resolve(
+                    centerX: mask.centerX, centerY: mask.centerY,
+                    rotationDegrees: mask.rotationDegrees, width: mask.width,
+                    extent: extent
+                ) else { continue }
+                resolvedGeometry = .linear(geo)
+            }
 
             // Reviewer-caught (Phase 7 slice 2): these four MUST clamp to
             // -1...1 like the global path's own `effectiveTone(_:)` does
@@ -1086,37 +1119,65 @@ enum EditPipeline {
             // means the mask isn't "identity," just inert THIS time).
             guard corrected !== img else { continue }
 
-            let gradient = CIFilter.radialGradient()
-            gradient.center = .zero
-            gradient.radius0 = Float(geo.innerRadius)
-            gradient.radius1 = Float(geo.gradientRadius)
-            gradient.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 1)
-            gradient.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
-            guard let disc = gradient.outputImage else { continue }
-            let placed = disc.transformed(by: geo.transform)
+            let maskImage: CIImage
+            let correctedRegion: CGRect
+            switch resolvedGeometry {
+            case .radial(let geo):
+                let gradient = CIFilter.radialGradient()
+                gradient.center = .zero
+                gradient.radius0 = Float(geo.innerRadius)
+                gradient.radius1 = Float(geo.gradientRadius)
+                gradient.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 1)
+                gradient.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
+                guard let disc = gradient.outputImage else { continue }
+                let placed = disc.transformed(by: geo.transform)
 
-            let union = CIFilter.maximumCompositing()
-            union.inputImage = placed
-            union.backgroundImage = base
-            let maskImage = (union.outputImage ?? base).cropped(to: extent)
+                let union = CIFilter.maximumCompositing()
+                union.inputImage = placed
+                union.backgroundImage = base
+                maskImage = (union.outputImage ?? base).cropped(to: extent)
 
-            // Reviewer-caught perf fix (Phase 7 slice 2, motivated by the
-            // live-measured RAW-with-3-masks cost): `color1`'s alpha is 0,
-            // so — MEASURED, not assumed — `disc`'s own extent is already
-            // FINITE (bounded to `radius1`'s circle), never
-            // `CGRect.infinite`; only an OPAQUE `color1` produces that case.
-            // So `placed.extent` is a real, usable rect, and the mask is
-            // exactly 0 everywhere outside it (that's the whole point of
-            // the transparent `base` above). Cropping `corrected` to that
-            // rect AFTER computing it (not the INPUT before computing it —
-            // Clarity's unsharp radius still needs the full image visible
-            // to its own kernel) tells Core Image's lazy evaluator it only
-            // ever needs to actually produce pixels within the ellipse's
-            // own bounding box for the blend below, not the whole extent —
-            // byte-identical output (the blend already returns `img`
-            // unchanged wherever mask is 0), but far less work per mask
-            // when the ellipse is small relative to the full frame.
-            let correctedRegion = placed.extent.intersection(extent)
+                // Reviewer-caught perf fix (Phase 7 slice 2, motivated by
+                // the live-measured RAW-with-3-masks cost): `color1`'s
+                // alpha is 0, so — MEASURED, not assumed — `disc`'s own
+                // extent is already FINITE (bounded to `radius1`'s
+                // circle), never `CGRect.infinite`; only an OPAQUE
+                // `color1` produces that case. So `placed.extent` is a
+                // real, usable rect, and the mask is exactly 0 everywhere
+                // outside it (that's the whole point of the transparent
+                // `base` above). Cropping `corrected` to that rect AFTER
+                // computing it (not the INPUT before computing it —
+                // Clarity's unsharp radius still needs the full image
+                // visible to its own kernel) tells Core Image's lazy
+                // evaluator it only ever needs to actually produce pixels
+                // within the ellipse's own bounding box for the blend
+                // below, not the whole extent — byte-identical output
+                // (the blend already returns `img` unchanged wherever
+                // mask is 0), but far less work per mask when the ellipse
+                // is small relative to the full frame.
+                correctedRegion = placed.extent.intersection(extent)
+            case .linear(let geo):
+                let gradient = CIFilter.linearGradient()
+                gradient.point0 = geo.point0
+                gradient.point1 = geo.point1
+                // Same color0/color1 pair as the radial branch above —
+                // the blend's premultiplication/alpha behavior is already
+                // validated for this exact pair, so matching it means the
+                // two kinds cannot diverge on that axis.
+                gradient.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 1)
+                gradient.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
+                guard let ramp = gradient.outputImage else { continue }
+                // NO transparent-`base` union here, unlike the radial
+                // branch: `CILinearGradient` CLAMPS to `color0`/`color1`
+                // beyond each point (MEASURED — see `LinearMaskGeometry`'s
+                // own doc comment), so it already has a defined value
+                // everywhere, unlike a radial gradient, which is
+                // UNDEFINED outside its own bounding disc and needs
+                // `base`/`CIMaximumCompositing` precisely because of that.
+                maskImage = ramp.cropped(to: extent)
+                correctedRegion = geo.regionOfInterest
+            }
+
             let blend = CIFilter.blendWithMask()
             blend.inputImage = corrected.cropped(to: correctedRegion)
             blend.backgroundImage = img

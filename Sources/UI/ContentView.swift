@@ -88,9 +88,12 @@ struct ContentView: View {
     /// able to zoom in while comparing) — only the four overlay-owning
     /// point-interaction/crop/mask modes do, since their overlays are
     /// positioned against `currentFitRect` assuming no zoom/pan is active.
+    /// Deliberately checks `isEditingRadialMask`, NOT the broader
+    /// `isEditingMask`, below — see that property's own doc comment for
+    /// why (reviewer-caught, Phase 7 slice 3).
     private var canZoom: Bool {
         document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance
-            && !isPlacingRedEyeCorrections && !isEditingMask
+            && !isPlacingRedEyeCorrections && !isEditingRadialMask
     }
 
     /// Phase 7 slice 2: the mask `adjustPanel.selectedMaskID` currently
@@ -98,12 +101,29 @@ struct ContentView: View {
     /// trust `adjustPanel.selectedMaskID` raw. Undo, Revert to Original,
     /// and Apply Preset can all delete the selected mask WITHOUT passing
     /// through any of this file's own disarm sites, which would otherwise
-    /// leave `canZoom`/the overlay gate stuck pointing at a mask that no
-    /// longer exists. Same "compute the truth, don't trust every call
-    /// site" shape as `EditState.isEffectivelyIdentity`.
+    /// leave the overlay gate / Escape routing stuck pointing at a mask
+    /// that no longer exists. Same "compute the truth, don't trust every
+    /// call site" shape as `EditState.isEffectivelyIdentity`. Kept
+    /// deliberately KIND-AGNOSTIC — Escape, the focus grab, and the
+    /// accessibility label should all still engage for a selected
+    /// `.linear` mask exactly as they do for `.radial`, even though it
+    /// has no on-image overlay yet.
     private var isEditingMask: Bool {
         guard let id = adjustPanel.selectedMaskID else { return false }
         return document.editState.masks.contains { $0.id == id }
+    }
+
+    /// Reviewer-caught (Phase 7 slice 3): `canZoom` must NOT block zoom
+    /// for a selected `.linear` mask — that kind has no on-image overlay
+    /// yet (Session B), so `canZoom`'s own stated rationale ("their
+    /// overlays are positioned against `currentFitRect` assuming no
+    /// zoom/pan") does not apply, and blocking zoom would protect
+    /// nothing while giving the user no visible reason why zoom stopped
+    /// working (Escape is the only way out, with no on-screen hint).
+    /// `.radial`-only, unlike `isEditingMask` above.
+    private var isEditingRadialMask: Bool {
+        guard let id = adjustPanel.selectedMaskID else { return false }
+        return document.editState.masks.contains { $0.id == id && $0.kind == .radial }
     }
 
     /// Whether a tap on the image should be captured as a WB eyedropper
@@ -275,8 +295,20 @@ struct ContentView: View {
         // Phase 7 slice 2: same defensive re-check discipline as the
         // branch above — `!isCroppingActive` on top of `isEditingMask`,
         // not trusting `.onChange(of: selectedTab)` alone.
+        //
+        // Reviewer-caught (Phase 7 slice 3): this used to simply `return`
+        // whatever `handleMaskKeyPress` produced, which meant ANY
+        // non-Escape key while a mask was selected short-circuited
+        // straight to `.ignored`, never reaching the pan branch below.
+        // That was harmless before this slice — a selected mask always
+        // forced `canZoom == false`, so pan could never fire anyway — but
+        // now that a selected `.linear` mask leaves `canZoom` true (see
+        // `isEditingRadialMask`), the same short-circuit silently broke
+        // arrow-key panning for it. Only intercept when `handleMaskKeyPress`
+        // actually handles the key (Escape); otherwise fall through.
         if !isCroppingActive, isEditingMask {
-            return handleMaskKeyPress(keyPress)
+            let maskResult = handleMaskKeyPress(keyPress)
+            if maskResult == .handled { return maskResult }
         }
         if canZoom, zoomScale > 1, compareMode != .split {
             return handlePanKeyPress(keyPress)
@@ -287,13 +319,18 @@ struct ContentView: View {
     /// Escape deselects the currently-edited mask — matches every other
     /// Editor mode's own Escape behavior (`handlePointPlacementKeyPress`
     /// below), and without it there would be no keyboard way to leave
-    /// mask-editing (which, given `canZoom`'s own mask gate, means no
-    /// keyboard way to re-enable zoom either). Arrow-key nudge/resize of
-    /// the overlay itself is deliberately deferred — `MaskDetailView`'s 14
-    /// labeled sliders are this slice's accessibility answer, matching how
+    /// mask-editing (which, for a `.radial` mask, is also the only way to
+    /// re-enable zoom — see `isEditingRadialMask`'s own doc comment; a
+    /// `.linear` mask selection never blocks zoom in the first place).
+    /// Arrow-key nudge/resize of the overlay itself is deliberately
+    /// deferred — `MaskDetailView`'s slider rows (14 for `.radial`, 12
+    /// for `.linear`) are this slice's accessibility answer, matching how
     /// `CropOverlayView` covers the same bar via `CropTabView`'s sliders.
     /// NOT `phase == .down`-gated: a repeated deselect is idempotent, the
-    /// same reasoning `handlePointPlacementKeyPress`'s own Escape case uses.
+    /// same reasoning `handlePointPlacementKeyPress`'s own Escape case
+    /// uses. The caller only short-circuits on `.handled` (Escape) — any
+    /// other key falls through to pan handling, see that call site's own
+    /// comment for why.
     private func handleMaskKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
         guard keyPress.key == .escape else { return .ignored }
         adjustPanel.selectedMaskID = nil
@@ -1135,9 +1172,21 @@ struct ContentView: View {
         // the WB/Red-Eye buttons). A capture layer, so it's placed BEFORE
         // the keyboard crosshair below — that overlay must always draw on
         // top of whichever capture layer is active.
+        //
+        // `maskBinding.wrappedValue.kind == .radial` (Phase 7 slice 3): a
+        // selected `.linear` mask has no on-image overlay YET — that's
+        // Session B's own scope, the "genuinely new" line-drag gesture
+        // CLAUDE.md's roadmap calls out. `isEditingMask`/`handleMaskKeyPress`/
+        // every `.onChange` disarm site are all kind-agnostic (verified
+        // by reading each one, not assumed), so a selected Linear mask
+        // still grabs focus and still deselects on Escape. `canZoom`
+        // is the ONE exception — see `isEditingRadialMask`'s own doc
+        // comment for why a Linear mask selection deliberately does NOT
+        // block zoom, unlike Radial.
         if isEditingMask, !isCroppingActive, !isPickingWhiteBalance, !isPlacingRedEyeCorrections,
            let id = adjustPanel.selectedMaskID,
            let maskBinding = $document.editState.mask(id: id),
+           maskBinding.wrappedValue.kind == .radial,
            let fitRect = currentFitRect {
             MaskOverlayView(
                 fitRect: fitRect,

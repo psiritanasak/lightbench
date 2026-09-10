@@ -375,17 +375,18 @@ struct AdjustTabView: View {
         }
     }
 
-    /// Phase 7 slice 2: local (radial/ellipse) adjustments. Add/select/
-    /// delete chrome only — mirrors `presetsSection`'s shape (the only
-    /// other existing dynamic add/delete list in this codebase): the row
-    /// list itself (`maskListRows`) is a plain value `ForEach` over
+    /// Phase 7 slices 2-3: local (radial/ellipse and linear/graduated)
+    /// adjustments. Add/select/delete chrome only — mirrors
+    /// `presetsSection`'s shape (the only other existing dynamic
+    /// add/delete list in this codebase): the row list itself
+    /// (`maskListRows`) is a plain value `ForEach` over
     /// `document.editState.masks`, identical in spirit to
     /// `presetsSection`'s own `ForEach(catalog.presets)` — a row only
     /// reads `mask.id`/its position, it never writes. The write-back
     /// path lives one level down, in `maskDetail`: only the SELECTED
     /// mask's `EditSliderRow`s need a live `Binding<Mask>`, obtained via
     /// `$document.editState.mask(id:)` (`MaskBinding.swift`) rather than
-    /// a plain value. The 14-slider detail view for that mask is
+    /// a plain value. The slider detail view for that mask is
     /// `MaskDetailView`, a separate top-level file — see that file's own
     /// doc comment for why it isn't inlined here.
     /// Reviewer-caught: collapsing the section while a mask is selected
@@ -413,10 +414,23 @@ struct AdjustTabView: View {
 
     private var masksSection: some View {
         Group {
-            Button("Add Radial Mask") {
-                addMask()
+            // Phase 7 slice 3: two side-by-side buttons, not a single
+            // button or a Menu -- introducing a second mask KIND is
+            // exactly the moment discoverability matters more than a
+            // compact control; a menu click would bury the new option
+            // right when it most needs to be seen.
+            HStack {
+                Button("Add Radial") {
+                    addMask(kind: .radial)
+                }
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel("Add Radial Mask")
+                Button("Add Linear") {
+                    addMask(kind: .linear)
+                }
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel("Add Linear Mask")
             }
-            .frame(maxWidth: .infinity)
             .disabled(document.currentImage == nil)
             if document.editState.masks.isEmpty {
                 Text("No masks yet").font(.caption).foregroundStyle(.secondary)
@@ -445,15 +459,22 @@ struct AdjustTabView: View {
     /// Label "Mask N" comes from ARRAY POSITION, not a persisted name field
     /// — v1 simplification matching CLAUDE.md's own "Mask 1, Mask 2…"
     /// wording; deleting an earlier mask renumbers later ones, an accepted
-    /// tradeoff, not a bug.
+    /// tradeoff, not a bug. Numbering stays GLOBAL across both kinds
+    /// (Phase 7 slice 3) rather than per-kind — masks composite
+    /// SEQUENTIALLY in array order (`EditPipeline.applyMasks`), so a
+    /// per-kind counter would visibly disagree with compositing order the
+    /// moment a Radial and a Linear mask overlap.
     private func maskRow(number: Int, mask: Mask) -> some View {
         let isSelected = panel.selectedMaskID == mask.id
         return HStack {
-            Button("Mask \(number)") {
+            Button {
                 select(mask)
+            } label: {
+                Label("Mask \(number)", systemImage: mask.kind == .radial ? "circle.dashed" : "line.diagonal")
             }
             .buttonStyle(.plain)
             .fontWeight(isSelected ? .semibold : .regular)
+            .accessibilityLabel("Mask \(number), \(mask.kind == .radial ? "Radial" : "Linear")")
             Spacer()
             Button {
                 delete(mask)
@@ -478,12 +499,16 @@ struct AdjustTabView: View {
         }
     }
 
-    /// No armed "placement mode" needed, unlike Red-Eye/WB — a radial mask
-    /// has AREA, so a sensible default center/radius is immediately
-    /// visible and draggable; the on-image overlay itself is the placement
-    /// affordance.
-    private func addMask() {
-        let mask = Mask()
+    /// No armed "placement mode" needed, unlike Red-Eye/WB — a mask (either
+    /// kind) has AREA, so a sensible default center/geometry is immediately
+    /// visible and adjustable via `MaskDetailView`'s sliders (and, for
+    /// `.radial`, the on-image overlay too) without a separate placement
+    /// step. Holds for `.linear` just as much as `.radial`: a graduated
+    /// band covering roughly half the frame at its default width is
+    /// exactly as immediately visible as a default-sized ellipse.
+    private func addMask(kind: MaskKind) {
+        var mask = Mask()
+        mask.kind = kind
         document.editState.masks.append(mask)
         select(mask)
     }

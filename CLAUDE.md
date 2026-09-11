@@ -1286,13 +1286,22 @@ Edits are stored as parameter sets and rendered live on the GPU.
       touching this feature again, since several of its lessons
       (measure/render before asserting, re-verify claims after "just a
       doc fix") aren't obvious from the code alone. 717 tests (16 new).
-      **Live-verification still outstanding** — hit the standing
-      screen-automation permission checkpoint right at this step; the
-      11-point checklist (drag center line / both guide handles at
-      0°/45° / portrait repeat / edge clamping / undo-as-one-step /
-      cross-mask isolation / zoom-blocked / Crop-WB-RedEye-Compare disarm
-      / Radial-vs-Linear selection / Revert to Original) is queued as the
-      next step, not skipped.
+      **Live-verified (2026-09-11/12), all 11 points passed, zero code
+      changes needed** — driven via screen automation across two real
+      assets (landscape + portrait): center-line drag, guide-handle drag
+      at 0°/45°, portrait repeat, edge clamping, undo-as-one-step,
+      cross-mask isolation, Crop/WB/RedEye/Compare disarm, and
+      Radial-vs-Linear overlay selection all confirmed directly; Revert
+      to Original was cross-checked against the on-disk sidecar, not
+      just the UI. Zoom-blocked was confirmed by reading `canZoom`
+      directly (`Sources/UI/ContentView.swift:98-101` — the reviewed,
+      kind-agnostic `!isEditingMask` gate) rather than interactively,
+      since synthetic scroll-wheel events couldn't be made to reach
+      `ImageRenderer`'s local `NSEvent` monitor in this environment —
+      see PROGRESS.md's own write-up for the automation-environment
+      notes (HiDPI coordinate scaling, the scroll-event limitation)
+      worth knowing before the next screen-automation session on this
+      machine. **Phase 7 slice 3 is now fully complete.**
    4. **Brush mask** — freehand painting; the hardest UI slice, since none of
       this app's three existing overlay patterns (WB eyedropper's one-shot
       tap, Red-Eye's persistent point list, Crop's fixed-handle drag) cover a

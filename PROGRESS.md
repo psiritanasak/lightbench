@@ -7023,18 +7023,90 @@ the render-side y-flip cross-check and a translation round-trip test
 that doesn't depend on knowing the doubling multiplier in advance — plus
 2 for `guideLineLength`'s sufficiency bound and its negative control).
 
-**Not yet live-verified as of this write-up** — the standing
-per-session convention of pausing for explicit screen-automation
-permission before driving the app was hit right at this step; the user
-asked to save progress first instead. The plan's own 11-point live
-checklist (drag center line / drag both guide handles at 0°/45° /
-portrait-photo repeat / edge-clamping / undo-as-one-step /
-cross-mask-text-field isolation / zoom-now-blocked check /
-Crop-WB-RedEye-Compare disarm / Radial-vs-Linear overlay selection /
-Revert to Original) is still outstanding, including round 4's own
-flagged 45°-center-line-drag check.
+**Live-verified (2026-09-11/12), all 11 points passed, zero code changes
+needed.** Driven via `cliclick`/`osascript` screen automation (explicit
+per-session permission granted) against a real build, on two real
+assets — `viscuna.jpg` (landscape) and `IMG_5160.HEIC` (portrait) — plus
+a second Radial mask added alongside the Linear one for the
+kind-selection/cross-mask checks:
+1. Center-line drag: translated with angle/width unchanged (confirmed
+   both visually — three parallel guide lines shifted together, equal
+   spacing preserved — and numerically: Center Y moved 50%→17%, Angle
+   and Width untouched); the Exposure effect (set to -4.35 EV for
+   visibility) moved with it.
+2. Guide-handle drag at 0°: the far guide mirrored symmetrically about a
+   stationary Center Y (confirmed numerically: Width 0%→70%, Center Y/X
+   unchanged); the rendered falloff boundary sat exactly on the dragged
+   guide line, no visible gap.
+3. Angle set to 45° (via the click-to-type numeric field, after an
+   accidental slider-track click usefully demonstrated the same thing at
+   160°): the whole three-line assembly rotated together and each handle
+   stayed on its own rotated line.
+4. Repeated 1–3 on the portrait photo (`IMG_5160.HEIC`, non-square
+   `fitRect`) — identical behavior, both numerically and visually.
+5. Center dragged to a frame edge: Center Y clamped at 0% while the
+   dragged-past guide handle extended freely into the black letterboxed
+   area above the image (confirmed a mid-test false alarm first: an
+   earlier attempt grabbed a GUIDE handle instead of the center band by
+   mistake, correctly clamping Width to 0% while leaving Center Y
+   untouched — that's `resizedWidth`'s own floor working correctly, not
+   a bug, and it's what motivated re-deriving `linearGuidePoint`'s exact
+   on-screen position before re-attempting the real center-drag).
+6. A full handle drag undid as one ⌘Z step (Center Y 0%→26% in one
+   press, not incrementally).
+7. Typed "-3.5" into Mask 1's Exposure field without pressing Enter,
+   selected Mask 2, back to Mask 1: neither mask picked up the stray
+   value — confirms the `.id(id)`-scoped `TextField` state and the
+   seed-text-comparison write guard both still hold with two masks and a
+   live overlay in the mix.
+8. Zoom-blocked: **code-verified, not interactively confirmed** — a
+   synthetic `CGEvent` scroll-wheel injection (`CGEvent
+   (scrollWheelEvent2Source:...)`, tried with both `.pixel`/`.line` units
+   and a continuous-phase flag) never triggered `ImageRenderer`'s local
+   `NSEvent` monitor at all, with or without a mask selected, so the
+   before/after comparison this checklist wanted couldn't be produced
+   this way. Read `ContentView.swift`'s `canZoom` directly instead
+   (`Sources/UI/ContentView.swift:98-101`) and confirmed it's exactly
+   the reviewed, kind-agnostic `!isEditingMask` gate the round-1/round-2
+   reviewer rounds landed on — no `.radial`-only carve-out survived.
+   Genuine automation gap, not a functional doubt; a real trackpad/mouse
+   scroll would settle it in seconds if this ever needs re-checking.
+9. Crop, "Pick White Balance", "Fix Red-Eye", and Compare → Split all
+   independently disarmed a selected Linear mask (overlay disappeared
+   the instant each was armed) — all four checked individually, not
+   just Crop as the earlier slices' precedent.
+10. Selecting Mask 2 (Radial) showed only its ellipse+handles overlay;
+    selecting Mask 1 (Linear) showed only its three-line overlay — never
+    both, never neither.
+11. Revert to Original cleared both masks back to "No masks yet" —
+    cross-checked against the on-disk sidecar afterward
+    (`IMG_5160.HEIC.photoapp.json`'s `masks` key is a genuinely empty
+    array post-revert), not just the UI state.
 
-**Next step**: get explicit go-ahead for screen automation, then run
-the 11-point live-verification checklist above. Once verified (or if any
-issue surfaces and is fixed + re-reviewed), commit. This closes Phase 7
-slice 3 entirely — Brush mask (slice 4) is next on the roadmap.
+**Automation-environment notes, worth knowing before the next
+screen-automation session on this machine**: this Mac runs a HiDPI
+scaled resolution — `cliclick`/AppleScript coordinates are in a
+1440×900 logical space, while `screencapture` output is 2880×1800 (2×)
+— get this backwards and every click silently lands off-target with no
+error. `cliclick` has no scroll-wheel command; a small ad-hoc Swift
+script posting `CGEvent(scrollWheelEvent2Source:...)` at
+`.cghidEventTap` worked for scrolling the Adjust-tab sidebar (a normal
+AppKit `NSScrollView`) but never worked for `ImageRenderer`'s local
+scroll monitor (see point 8) — two different event-delivery paths, only
+one reachable this way. Mid-session, the screen twice jumped to
+something totally unrelated to PhotoApp (several hours of real time
+appear to have elapsed between some consecutive tool calls, well beyond
+this conversation's own turn-taking) — resolved both times by
+re-querying `System Events` for actual window state rather than trusting
+the last-known layout, and once by re-locating a test photo via its
+on-disk `.photoapp.json` sidecar (`find ... -newermt ...`) rather than
+guessing from a possibly-reflowed Library grid. No PhotoApp state was
+lost or corrupted by this — the leftover test edits on `viscuna.jpg`
+were cleaned up by deleting its sidecar afterward (no code path for
+this; direct sidecar deletion is equivalent to "never edited" per this
+app's own no-sidecar-means-original model).
+
+**Phase 7 slice 3 (Linear/Graduated mask) is now fully complete** —
+data model, pipeline, sliders, on-image drag gesture, and live
+verification all shipped, zero open issues. Brush mask (slice 4) is
+next on the roadmap.

@@ -32,6 +32,32 @@ enum MaskKind: String, Codable {
     case colorRange
 }
 
+/// Phase 7 slice 6: whether — and how — a `Mask`'s own selection is
+/// modified by ANOTHER mask's shape before that mask's adjustments are
+/// applied. `.none` (the default) is BYTE-IDENTICAL to every mask kind's
+/// own pre-slice-6 behavior — this is what makes slice 6 purely additive
+/// rather than a breaking change to slices 2-5. `.intersect` narrows the
+/// selection to where BOTH masks select (`M ∧ operand`); `.subtract`
+/// removes the operand's selection from this mask's own
+/// (`M ∧ ¬operand`). See `Mask.combineWithMaskID`'s own doc comment for
+/// which mask "the operand" refers to, and `EditPipeline.applyMasks`'s
+/// own doc comment for the exact Core Image technique (`CIMinimumCompositing`
+/// for both — intersect direct, subtract against a channel-inverted
+/// operand).
+///
+/// `CaseIterable` deliberately: the UI's mode picker enumerates
+/// `.allCases` rather than a hand-written array a future fourth case
+/// could silently omit — the exact hazard `AdjustTabView`'s own
+/// `maskKindIcon`/`maskKindLabel` doc comments already record for a
+/// pre-slice-4 ternary. (Labels themselves still come from an exhaustive
+/// `switch`, which a new case DOES break at compile time — `.allCases`
+/// only protects the enumeration, not the display strings.)
+enum MaskCombineMode: String, Codable, CaseIterable {
+    case none
+    case intersect
+    case subtract
+}
+
 /// One point along a painted brush stroke. Mirrors `RedEyePoint`'s exact
 /// shape/convention: normalized 0...1 fraction of the extent, SwiftUI
 /// top-left-origin, y-DOWN (flipped the same `1 - y` way every other mask
@@ -336,6 +362,54 @@ struct Mask: Identifiable, Equatable, Codable {
     /// black & white no-op exception documented on `temperature` above.
     var tint: Double = 0
 
+    // MARK: - Combining
+
+    /// `.none` by default — every pre-slice-6 mask/sidecar decodes to
+    /// `.none` (see `CodingKeys`' decode below), which is what makes this
+    /// whole slice purely additive: a mask with `combineMode == .none`
+    /// renders BYTE-IDENTICAL to how it always has, regardless of
+    /// `combineWithMaskID`. See `MaskCombineMode`'s own doc comment for
+    /// what `.intersect`/`.subtract` mean.
+    var combineMode: MaskCombineMode = .none
+
+    /// The OTHER mask this one's selection is intersected with/subtracted
+    /// by, when `combineMode != .none`. `nil` means "no operand chosen
+    /// yet" — `EditPipeline.applyMasks` treats that (and a `combineMode`
+    /// left at `.none` regardless of this field) identically: no combine.
+    ///
+    /// Deliberately NOT transitive: if the referenced mask is ITSELF
+    /// combining with a third mask, that third mask's shape is NOT
+    /// consulted — this field always resolves against the referenced
+    /// mask's own RAW, pre-combine shape. Cycle-safe by construction (no
+    /// recursion means nothing to cycle, even for a mutual A-references-B/
+    /// B-references-A pair) and matches v1's real-world need (one mask cut
+    /// by one shape); chaining is a logged, deliberate deferral, not an
+    /// oversight — see IMPROVEMENTS.md's D15.
+    ///
+    /// FAILS OPEN in every broken-reference case, never fails closed
+    /// (skips the mask) or crashes: a self-reference
+    /// (`combineWithMaskID == id`, unreachable from the UI — the picker
+    /// excludes the mask being edited — so only reachable via a
+    /// hand-edited sidecar) and a DANGLING reference (the named mask was
+    /// deleted, or this sidecar belongs to a different photo) both render
+    /// as `combineMode == .none`. Deliberate: fail-open always degrades
+    /// toward the pre-slice-6 shipped behavior — VISIBLE (the mask grows
+    /// back to its full shape) and fixable — where fail-closed would make
+    /// the whole adjustment silently vanish, the worst outcome for a
+    /// corrupt/stale reference. `MaskDetailView`'s own combine-target
+    /// picker independently coerces the same dangling case to display
+    /// "None", so the canvas and the sidebar never disagree.
+    ///
+    /// Deleting a mask does NOT scrub other masks' references to it (no
+    /// new invariant to maintain across the several existing
+    /// delete/discard call sites) — harmless per the fail-open behavior
+    /// above, and Undo restores the relationship for free since
+    /// `EditHistory` snapshots whole `EditState`s. Also feeds
+    /// `deterministicFallbackID` (see that function's own doc comment) —
+    /// two id-less masks differing only in their combine target are
+    /// visibly different masks.
+    var combineWithMaskID: UUID? = nil
+
     /// `true` when every adjustment param is at its identity (0) —
     /// geometry-only. `EditPipeline.applyMasks` skips a mask entirely when
     /// this is `true`, which is what makes a geometry-only mask render
@@ -343,12 +417,20 @@ struct Mask: Identifiable, Equatable, Codable {
     /// including `kind`/`width`/`brushSize`/`brushPoints`/`luminanceTarget`/
     /// `luminanceRange`/`colorRangeTargetHue`/`colorRangeTargetSaturation`/
     /// `colorRangeTargetLuminance`/`colorRangeTolerance`/
-    /// `colorRangeHasTarget` (added slices 3-5): a mask can be `isIdentity` yet
-    /// still a real, undo-worthy edit (the user placed it, painted a
-    /// stroke, or tuned a tone window), mirroring `redEyePoints`' own
-    /// existing behavior (a placed point with strength 0 renders
-    /// identically but still counts as an edit) — see
-    /// `EditState.isEffectivelyIdentity`.
+    /// `colorRangeHasTarget`/`combineMode`/`combineWithMaskID` (added
+    /// slices 3-6): a mask can be `isIdentity` yet still a real,
+    /// undo-worthy edit (the user placed it, painted a stroke, tuned a
+    /// tone window, or set up a combine relationship), mirroring
+    /// `redEyePoints`' own existing behavior (a placed point with
+    /// strength 0 renders identically but still counts as an edit) — see
+    /// `EditState.isEffectivelyIdentity`. Slice 6 gives this exclusion a
+    /// SECOND real purpose beyond "still counts as an edit": an
+    /// all-zero-adjustment mask is exactly how a user creates a pure
+    /// "shape-only" mask whose only job is to be referenced as another
+    /// mask's combine operand — `EditPipeline.applyMasks` skips it as a
+    /// standalone adjustment layer (as it always has), but its geometry
+    /// is still fully resolvable when another mask names it via
+    /// `combineWithMaskID`.
     var isIdentity: Bool {
         exposureEV == 0 && contrast == 0 && highlights == 0 && shadows == 0
             && clarity == 0 && saturation == 0 && temperature == 0 && tint == 0
@@ -375,6 +457,7 @@ extension Mask {
         case colorRangeTolerance, colorRangeHasTarget
         case exposureEV, contrast, highlights, shadows
         case clarity, saturation, temperature, tint
+        case combineMode, combineWithMaskID
     }
 
     init(from decoder: Decoder) throws {
@@ -448,6 +531,25 @@ extension Mask {
         saturation = try container.decodeIfPresent(Double.self, forKey: .saturation) ?? 0
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0
         tint = try container.decodeIfPresent(Double.self, forKey: .tint) ?? 0
+        // `MaskCombineMode` is a String-raw-value enum — the exact `kind`
+        // hazard class, `try?` for the same reason: `decodeIfPresent`
+        // THROWS on a present-but-unrecognized raw value, which (wrapped
+        // in this app's `try?`-at-the-sidecar-level convention) would
+        // otherwise discard the whole sidecar over one unrecognized
+        // combine mode.
+        let rawCombineMode = (try? container.decodeIfPresent(String.self, forKey: .combineMode)) ?? nil
+        combineMode = rawCombineMode.flatMap(MaskCombineMode.init(rawValue:)) ?? .none
+        // `combineWithMaskID` LOOKS like a plain-scalar bare-`try` field
+        // (it's not a raw-value enum, not a nested array) but is NOT one:
+        // `UUID.init(from:)` throws `DecodingError.dataCorrupted` on a
+        // WELL-TYPED but unparseable string (e.g. a hand-typed
+        // `"mask-3"`) — structurally the same hazard as `kind`'s
+        // unrecognized-string throw, not the same as a type-mismatched
+        // `"centerX": "half"`. And it's MORE reachable than `kind`'s own
+        // hazard: a user hand-editing a combine reference by id is
+        // exactly the person likely to type a non-UUID there. `try?`,
+        // falling back to `nil` (== "no operand chosen").
+        combineWithMaskID = (try? container.decodeIfPresent(UUID.self, forKey: .combineWithMaskID)) ?? nil
         // Reviewer-corrected (Phase 7 slice 2): falls back to a DETERMINISTIC
         // id derived from every other decoded field, not a fresh random
         // UUID — unreachable via this app's own round-trip (every mask it
@@ -468,7 +570,8 @@ extension Mask {
                 colorRangeTargetLuminance: colorRangeTargetLuminance, colorRangeTolerance: colorRangeTolerance,
                 colorRangeHasTarget: colorRangeHasTarget,
                 exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
-                clarity: clarity, saturation: saturation, temperature: temperature, tint: tint
+                clarity: clarity, saturation: saturation, temperature: temperature, tint: tint,
+                combineMode: combineMode, combineWithMaskID: combineWithMaskID
             )
         }
     }
@@ -521,6 +624,25 @@ extension Mask {
     /// differing ONLY in "has a color been picked" are visibly different
     /// (one is inert, the other isn't) and must not collide. A fifth
     /// `kindSeed` arm covers `.colorRange`.
+    ///
+    /// Slice 6 note: `combineMode` joins the fixed-arity scalar list, via
+    /// an explicit `switch` producing `0`/`1`/`2` (never `.hashValue` —
+    /// same per-process-seeding reason `kindSeed` itself avoids it; never
+    /// `MaskCombineMode.allCases.firstIndex(of:)`, which works but is a
+    /// needless indirection over a 3-case switch). `combineWithMaskID`
+    /// gets a THIRD variable-length pass (after `brushPoints`' own),
+    /// mirroring that pass's "count/presence flag first, then the raw
+    /// data" shape: a byte count of 0 (nil) vs. 16 (present) doubles as
+    /// the presence flag, so a nil and a present-but-different-valued
+    /// reference never collide on the count alone. Unlike every
+    /// `Double.bitPattern` mixed above, `UUID.uuid` is already a raw byte
+    /// TUPLE, not a numeric value with an endianness convention to
+    /// normalize — `withUnsafeBytes` yields its 16 bytes in a fixed,
+    /// deterministic order with no `.bigEndian`/`.byteSwapped` step
+    /// needed, unlike the `laneA.bigEndian`/`laneB` output step at the
+    /// very end of this function (that asymmetry is intentional: it's
+    /// UUID bytes flowing IN as already-deterministic raw data, versus
+    /// this function's own OUTPUT lanes, which do need normalizing).
     private static func deterministicFallbackID(
         kind: MaskKind, centerX: Double, centerY: Double, radiusX: Double, radiusY: Double,
         rotationDegrees: Double, feather: Double, width: Double, brushSize: Double,
@@ -528,14 +650,22 @@ extension Mask {
         colorRangeTargetHue: Double, colorRangeTargetSaturation: Double,
         colorRangeTargetLuminance: Double, colorRangeTolerance: Double, colorRangeHasTarget: Bool,
         exposureEV: Double, contrast: Double, highlights: Double, shadows: Double,
-        clarity: Double, saturation: Double, temperature: Double, tint: Double
+        clarity: Double, saturation: Double, temperature: Double, tint: Double,
+        combineMode: MaskCombineMode, combineWithMaskID: UUID?
     ) -> UUID {
+        let combineModeSeed: Double
+        switch combineMode {
+        case .none: combineModeSeed = 0
+        case .intersect: combineModeSeed = 1
+        case .subtract: combineModeSeed = 2
+        }
         let values = [
             centerX, centerY, radiusX, radiusY, rotationDegrees, feather, width, brushSize,
             luminanceTarget, luminanceRange,
             colorRangeTargetHue, colorRangeTargetSaturation, colorRangeTargetLuminance, colorRangeTolerance,
             colorRangeHasTarget ? 1 : 0,
-            exposureEV, contrast, highlights, shadows, clarity, saturation, temperature, tint
+            exposureEV, contrast, highlights, shadows, clarity, saturation, temperature, tint,
+            combineModeSeed
         ]
         let kindSeed: UInt64
         switch kind {
@@ -558,6 +688,15 @@ extension Mask {
             let bits = value.bitPattern
             laneA = (laneA ^ bits) &* prime
             laneB = (laneB ^ bits.byteSwapped) &* prime
+        }
+        let combineIDBytes: [UInt8] = combineWithMaskID.map { id in
+            withUnsafeBytes(of: id.uuid) { Array($0) }
+        } ?? []
+        laneA = (laneA ^ UInt64(combineIDBytes.count)) &* prime
+        laneB = (laneB ^ UInt64(combineIDBytes.count).byteSwapped) &* prime
+        for byte in combineIDBytes {
+            laneA = (laneA ^ UInt64(byte)) &* prime
+            laneB = (laneB ^ UInt64(byte).byteSwapped) &* prime
         }
         var bytes = [UInt8]()
         bytes.reserveCapacity(16)

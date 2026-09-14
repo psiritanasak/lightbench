@@ -526,6 +526,151 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(first.id, second.id)
     }
 
+    // MARK: - Combining (Phase 7 slice 6)
+
+    /// `combineMode`/`combineWithMaskID` default when absent, the same
+    /// schema-tolerance every other `Mask` field already has (a
+    /// pre-slice-6 sidecar has neither key at all). `.none`/`nil` is what
+    /// makes slice 6 purely additive — a pre-slice-6 mask renders exactly
+    /// as it always has.
+    func testCombineFieldsDefaultWhenAbsent() throws {
+        let json = """
+        { "masks": [{ "kind": "radial" }] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].combineMode, .none)
+        XCTAssertNil(state.masks[0].combineWithMaskID)
+    }
+
+    /// A mask's combine mode/target must survive an encode/decode
+    /// round-trip, the same guarantee already exercised for every other
+    /// kind's own fields.
+    func testCombineFieldsRoundTripThroughCodable() throws {
+        let targetID = UUID()
+        let original = Mask(kind: .radial, combineMode: .subtract, combineWithMaskID: targetID)
+        let data = try JSONEncoder().encode(EditState(masks: [original]))
+        let decoded = try JSONDecoder().decode(EditState.self, from: data)
+        XCTAssertEqual(decoded.masks.count, 1)
+        XCTAssertEqual(decoded.masks[0].combineMode, .subtract)
+        XCTAssertEqual(decoded.masks[0].combineWithMaskID, targetID)
+        XCTAssertEqual(decoded.masks[0].id, original.id)
+    }
+
+    /// `MaskCombineMode` is a String-raw-value enum — the exact `kind`
+    /// hazard: `decodeIfPresent` THROWS on a present-but-unrecognized raw
+    /// value (it only returns `nil` for an ABSENT key). Both sidecar
+    /// readers in this app wrap the whole `EditState` decode in `try?`, so
+    /// an uncaught throw here would discard the ENTIRE sidecar, not just
+    /// this one mask's combine setting.
+    func testUnknownCombineModeDecodesToNoneWithoutDiscardingTheSidecar() throws {
+        let json = """
+        {
+            "exposureEV": 1.5,
+            "masks": [{ "kind": "radial", "combineMode": "xor" }]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.exposureEV, 1.5, "an unrecognized combine mode must not discard the rest of the sidecar")
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].combineMode, .none)
+    }
+
+    func testCombineModeWithWrongJSONTypeDecodesToNoneWithoutDiscardingTheSidecar() throws {
+        let json = """
+        {
+            "contrast": 0.4,
+            "masks": [{ "kind": "radial", "combineMode": 2 }]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.contrast, 0.4, "a type-mismatched combine mode must not discard the rest of the sidecar")
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].combineMode, .none)
+    }
+
+    /// `combineWithMaskID` looks like a plain-scalar field but isn't one:
+    /// `UUID.init(from:)` throws on a well-typed-but-unparseable string
+    /// (e.g. a hand-typed `"mask-3"`) — the same hazard class as
+    /// `combineMode`'s own unrecognized-value throw, and more reachable
+    /// (a user hand-editing a combine reference by id is exactly the
+    /// person likely to type a non-UUID there). This is the test that
+    /// justifies the `try?` choice for this field in `Mask.init(from:)`.
+    func testMalformedCombineWithMaskIDDoesNotDiscardTheSidecar() throws {
+        let json = """
+        {
+            "exposureEV": -0.5,
+            "masks": [{ "kind": "radial", "combineWithMaskID": "mask-3" }]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.exposureEV, -0.5, "a malformed combine target must not discard the rest of the sidecar")
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertNil(state.masks[0].combineWithMaskID)
+    }
+
+    func testCombineWithMaskIDWithWrongJSONTypeDoesNotDiscardTheSidecar() throws {
+        let json = """
+        {
+            "hslSaturation": 0.2,
+            "masks": [{ "kind": "radial", "combineWithMaskID": 42 }]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(
+            state.hslSaturation, 0.2, "a type-mismatched combine target must not discard the rest of the sidecar"
+        )
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertNil(state.masks[0].combineWithMaskID)
+    }
+
+    /// `deterministicFallbackID` mixes `combineMode` in as a fixed-arity
+    /// scalar (`0`/`1`/`2`) — an id-less mask differing only in combine
+    /// mode must not collide with an otherwise-identical id-less mask at
+    /// the default `.none`.
+    func testIdLessMasksDifferingOnlyInCombineModeGetDifferentIds() throws {
+        let json = """
+        { "masks": [
+            { "kind": "radial", "combineMode": "intersect" },
+            { "kind": "radial" }
+        ] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 2)
+        XCTAssertNotEqual(state.masks[0].id, state.masks[1].id)
+    }
+
+    /// `deterministicFallbackID` mixes `combineWithMaskID` in as a THIRD
+    /// variable-length pass (after `brushPoints`' own) — an id-less mask
+    /// differing only in combine TARGET must not collide with one that has
+    /// no target at all, or with one targeting a different mask.
+    func testIdLessMasksDifferingOnlyInCombineTargetGetDifferentIds() throws {
+        let targetA = UUID()
+        let targetB = UUID()
+        let json = """
+        { "masks": [
+            { "kind": "radial", "combineMode": "intersect" },
+            { "kind": "radial", "combineMode": "intersect", "combineWithMaskID": "\(targetA.uuidString)" },
+            { "kind": "radial", "combineMode": "intersect", "combineWithMaskID": "\(targetB.uuidString)" }
+        ] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 3)
+        XCTAssertNotEqual(state.masks[0].id, state.masks[1].id)
+        XCTAssertNotEqual(state.masks[0].id, state.masks[2].id)
+        XCTAssertNotEqual(state.masks[1].id, state.masks[2].id)
+    }
+
+    func testRepeatedDecodesOfTheSameIdLessCombiningMaskAreEqual() throws {
+        let targetID = UUID()
+        let json = """
+        { "masks": [{ "kind": "radial", "combineMode": "subtract", "combineWithMaskID": "\(targetID.uuidString)" }] }
+        """
+        let first = try decode(json).masks[0]
+        let second = try decode(json).masks[0]
+        XCTAssertEqual(first.id, second.id)
+    }
+
     /// The genuinely new coverage this slice adds: `Mask` needs its OWN
     /// schema-tolerant decoding one level down from `EditState`'s (see
     /// `Mask.swift`'s own doc comment) — a mask JSON missing most of its

@@ -107,8 +107,14 @@ struct ContentView: View {
         // overlay (`.luminanceRange`) has no reason to block zoom/pan,
         // since this restriction exists ONLY because an overlay is
         // positioned against an un-zoomed `currentFitRect`.
+        // Phase 7 slice 5 (second half): `!isPickingColorRange` is its own
+        // term, NOT routed through `isEditingOverlayMask` — different
+        // concern: `hasOnImageOverlay(.colorRange)` is `false` (nothing to
+        // draw), but the eyedropper TAP's own `location -> image fraction`
+        // math still assumes an un-zoomed `currentFitRect`, same as the WB
+        // eyedropper's own capture layer.
         document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance
-            && !isPlacingRedEyeCorrections && !isEditingOverlayMask && !isPaintingBrush
+            && !isPlacingRedEyeCorrections && !isEditingOverlayMask && !isPaintingBrush && !isPickingColorRange
     }
 
     /// Phase 7 slice 2: the mask `adjustPanel.selectedMaskID` currently
@@ -136,7 +142,11 @@ struct ContentView: View {
     private func hasOnImageOverlay(_ kind: MaskKind) -> Bool {
         switch kind {
         case .radial, .linear, .brush: return true
-        case .luminanceRange: return false
+        // `.colorRange`: a one-shot eyedropper tap is not a persistent
+        // draggable shape — `isEditingOverlayMask` (which this feeds) is
+        // NOT the gate for the pick capture layer, `colorPickingMaskID`
+        // is (see `pointAndZoomOverlays`'s own new branch).
+        case .luminanceRange, .colorRange: return false
         }
     }
 
@@ -178,6 +188,17 @@ struct ContentView: View {
     /// than relied on.
     @State private var brushPaintingMaskID: UUID?
     private var isPaintingBrush: Bool { brushPaintingMaskID != nil }
+
+    /// Phase 7 slice 5 (second half): which mask (if any) currently has
+    /// the Color Range eyedropper armed — `UUID?`, not `Bool`, same F4
+    /// reasoning as `brushPaintingMaskID` (a future falling-edge cleanup
+    /// would need to name the OLD id). UNLIKE `brushPaintingMaskID`, this
+    /// kind has no on-image overlay at all (`hasOnImageOverlay(.colorRange)`
+    /// is `false`) — this state exists purely to gate the tap-capture
+    /// layer in `pointAndZoomOverlays` and `canZoom`'s own
+    /// `isPickingColorRange` term, not to draw anything.
+    @State private var colorPickingMaskID: UUID?
+    private var isPickingColorRange: Bool { colorPickingMaskID != nil }
 
     /// Whether a tap on the image should be captured as a WB eyedropper
     /// sample. Its own overlay only exists while this is true AND cropping
@@ -400,6 +421,15 @@ struct ContentView: View {
             brushPaintingMaskID = nil
             return .handled
         }
+        // Phase 7 slice 5 (second half): same two-stage shape — Escape
+        // disarms the eyedropper ONLY (the mask stays selected; a never-
+        // picked mask is discarded by `discardUnpickedColorRangeMask` via
+        // the falling-edge `.onChange` below), matching `.brush`'s own
+        // "one Escape per stage" behavior.
+        if isPickingColorRange {
+            colorPickingMaskID = nil
+            return .handled
+        }
         adjustPanel.selectedMaskID = nil
         return .handled
     }
@@ -437,6 +467,24 @@ struct ContentView: View {
     private func discardUnpaintedBrushMask(_ id: UUID?) {
         guard let id, let mask = document.editState.masks.first(where: { $0.id == id }) else { return }
         guard mask.kind == .brush, mask.brushPoints.isEmpty, mask.isIdentity else { return }
+        document.editState.masks.removeAll { $0.id == id }
+        if adjustPanel.selectedMaskID == id {
+            adjustPanel.selectedMaskID = nil
+        }
+    }
+
+    /// Phase 7 slice 5 (second half): the `.colorRange` analogue of
+    /// `discardUnpaintedBrushMask` — deletes `id` iff it's a `.colorRange`
+    /// mask that was armed for the eyedropper and NEVER PICKED (no
+    /// `colorRangeHasTarget`, geometry-only/identity adjustments), i.e.
+    /// exactly the "Add Color, then Escape/switch away without tapping"
+    /// case. Wired to `colorPickingMaskID`'s change the same way, and
+    /// inherits that mechanism's own documented photo-switch gap (see
+    /// `discardUnpaintedBrushMask`'s own doc comment and IMPROVEMENTS.md's
+    /// D13 — not re-litigated here, same root cause, same accepted scope).
+    private func discardUnpickedColorRangeMask(_ id: UUID?) {
+        guard let id, let mask = document.editState.masks.first(where: { $0.id == id }) else { return }
+        guard mask.kind == .colorRange, !mask.colorRangeHasTarget, mask.isIdentity else { return }
         document.editState.masks.removeAll { $0.id == id }
         if adjustPanel.selectedMaskID == id {
             adjustPanel.selectedMaskID = nil
@@ -668,7 +716,12 @@ struct ContentView: View {
                 Text(message)
             }
             .alert(
-                "White Balance",
+                // Reviewer-caught (Phase 7 slice 5, second half): this
+                // alert is shared by `pickWhiteBalance`/`fixColorCast`
+                // AND (as of this slice) `pickColorRangeTarget` — a
+                // hardcoded "White Balance" title read as misleading for
+                // the latter two callers. "Color Sample" covers all three.
+                "Color Sample",
                 isPresented: Binding(
                     get: { document.whiteBalanceSampleMessage != nil },
                     set: { isPresented in
@@ -787,6 +840,7 @@ struct ContentView: View {
             isPlacingRedEyeCorrections = false
             adjustPanel.selectedMaskID = nil
             brushPaintingMaskID = nil
+            colorPickingMaskID = nil
             compareMode = .off
             splitOrientation = .vertical
             splitPosition = 0.5
@@ -804,6 +858,7 @@ struct ContentView: View {
                 isPlacingRedEyeCorrections = false
                 adjustPanel.selectedMaskID = nil
                 brushPaintingMaskID = nil
+                colorPickingMaskID = nil
                 compareMode = .off
                 zoomScale = 1
                 panOffset = .zero
@@ -884,6 +939,17 @@ struct ContentView: View {
                 isImagePaneFocused = true
             }
         }
+        // Phase 7 slice 5 (second half): the `.colorRange` analogue of the
+        // `brushPaintingMaskID` `.onChange` above — same `oldID != newID`
+        // (not falling-edge-to-nil) form, the exact coalescing bug slice
+        // 4's reviewer caught: `addMask -> select -> beginColorPick` is
+        // one synchronous action SwiftUI collapses into a single
+        // `.onChange` call that would never observe an intermediate `nil`.
+        .onChange(of: colorPickingMaskID) { oldID, newID in
+            if oldID != newID {
+                discardUnpickedColorRangeMask(oldID)
+            }
+        }
         // Closes the same hazard `isEditingMask`'s own doc comment already
         // names one level up: Undo, Revert to Original, and Apply Preset
         // can all delete the selected mask WITHOUT passing through any
@@ -893,9 +959,12 @@ struct ContentView: View {
         // mask that no longer exists: `canZoom` stays wrongly blocked, and
         // `BrushMaskOverlayView`'s binding into the (now-vanished) mask's
         // `brushPoints` silently no-ops on every further drag callback.
+        // `colorPickingMaskID` gets the identical treatment for the
+        // identical reason.
         .onChange(of: isEditingMask) { _, stillEditing in
             if !stillEditing {
                 brushPaintingMaskID = nil
+                colorPickingMaskID = nil
             }
         }
         // Reviewer-caught: returning to the Editor from the Library while
@@ -909,7 +978,9 @@ struct ContentView: View {
         // here on every return-to-Editor closes that gap; harmless when
         // neither mode is armed (nothing reads `isImagePaneFocused` then).
         .onChange(of: showLibrary) { _, isShowingLibrary in
-            if !isShowingLibrary, isPickingWhiteBalance || isPlacingRedEyeCorrections || isEditingOverlayMask || isPaintingBrush {
+            if !isShowingLibrary,
+               isPickingWhiteBalance || isPlacingRedEyeCorrections || isEditingOverlayMask
+                || isPaintingBrush || isPickingColorRange {
                 isImagePaneFocused = true
             }
         }
@@ -1052,7 +1123,7 @@ struct ContentView: View {
             // own `.disabled`/mutual-disarm below).
             .disabled(
                 document.currentImage == nil || isCroppingActive
-                    || isPickingWhiteBalance || isPlacingRedEyeCorrections
+                    || isPickingWhiteBalance || isPlacingRedEyeCorrections || isPickingColorRange
             )
             .tint(compareMode != .off ? .yellow : nil)
             .accessibilityAddTraits(compareMode != .off ? [.isSelected] : [])
@@ -1067,6 +1138,7 @@ struct ContentView: View {
                     // own clear right above.
                     adjustPanel.selectedMaskID = nil
                     brushPaintingMaskID = nil
+                    colorPickingMaskID = nil
                 }
             }
         }
@@ -1223,6 +1295,7 @@ struct ContentView: View {
                         isPickingWhiteBalance ? "White balance picker"
                             : isPlacingRedEyeCorrections ? "Red-eye placement"
                             : isPaintingBrush ? "Brush painting"
+                            : isPickingColorRange ? "Color range picker"
                             // Phase 7 slice 5: narrowed to overlay-owning
                             // kinds — with no overlay, nothing about the
                             // PANE itself changed, so announcing "Mask
@@ -1391,17 +1464,50 @@ struct ContentView: View {
                         onStrokeEnded: { brushPaintingMaskID = nil }
                     )
                 }
-            case .luminanceRange:
-                // Phase 7 slice 5: no on-image overlay for this kind — see
-                // `isEditingOverlayMask`'s own doc comment. This branch is
-                // unreachable in practice (the surrounding `if` already
-                // gates on `isEditingOverlayMask`, which is false for this
-                // kind), but the switch must stay exhaustive regardless —
+            case .luminanceRange, .colorRange:
+                // Phase 7 slice 5: no on-image overlay for either kind —
+                // see `isEditingOverlayMask`'s own doc comment. This branch
+                // is unreachable in practice (the surrounding `if` already
+                // gates on `isEditingOverlayMask`, which is false for both
+                // kinds), but the switch must stay exhaustive regardless —
                 // the same compile-time tripwire `maskKindIcon`/
                 // `maskKindLabel` already rely on to catch a FUTURE kind
                 // silently falling through.
                 EmptyView()
             }
+        }
+        // Phase 7 slice 5 (second half): the Color Range eyedropper's
+        // tap-capture layer — mirrors the WB eyedropper's own capture
+        // layer above almost exactly (same `Color.clear`/crosshair-cursor/
+        // `SpatialTapGesture` shape), gated on the same cumulative-
+        // exclusion discipline every later mode in this function already
+        // follows. One structural difference from WB: this resolves the
+        // target mask by IDENTITY at commit time (mirrors `MaskBinding`'s
+        // own discipline — Undo/Revert/Apply-Preset could delete the mask
+        // mid-pick) and writes into that SPECIFIC mask via
+        // `document.pickColorRangeTarget(maskID:normalizedX:normalizedY:)`,
+        // rather than a shared global field. No keyboard crosshair sync —
+        // UNLIKE WB, this mode has no keyboard equivalent at all yet (see
+        // `MaskDetailView`'s own doc comment on this gap, IMPROVEMENTS.md's
+        // D14).
+        if isPickingColorRange, !isCroppingActive, !isPickingWhiteBalance, !isPlacingRedEyeCorrections,
+           !isPaintingBrush, let maskID = colorPickingMaskID, let fitRect = currentFitRect {
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(width: fitRect.width, height: fitRect.height)
+                .position(x: fitRect.midX, y: fitRect.midY)
+                .onHover { inside in
+                    if inside { NSCursor.crosshair.push() } else { NSCursor.pop() }
+                }
+                .gesture(
+                    SpatialTapGesture(coordinateSpace: .local).onEnded { tap in
+                        let normalizedX = tap.location.x / fitRect.width
+                        let normalizedY = tap.location.y / fitRect.height
+                        document.pickColorRangeTarget(maskID: maskID, normalizedX: normalizedX, normalizedY: normalizedY)
+                        colorPickingMaskID = nil
+                    }
+                )
+                .accessibilityHidden(true)
         }
         // D8 (IMPROVEMENTS.md): the keyboard-driven crosshair itself —
         // only while a point-placement mode is armed AND the pane holds
@@ -1489,6 +1595,7 @@ struct ContentView: View {
                         isPickingWhiteBalance: $isPickingWhiteBalance,
                         isPlacingRedEyeCorrections: $isPlacingRedEyeCorrections,
                         brushPaintingMaskID: $brushPaintingMaskID,
+                        colorPickingMaskID: $colorPickingMaskID,
                         onEnterPointPickingMode: {
                             compareMode = .off
                             zoomScale = 1

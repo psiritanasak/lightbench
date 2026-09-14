@@ -7542,3 +7542,93 @@ behavior; Compare's `selectedMaskID` clear becoming kind-aware; any ROI
 optimization for Luminance Range (structurally impossible — the mask's
 extent is the whole image by construction); a custom `.cikernel` (the
 built-in filter chain measured sufficient).
+
+## Phase 7 slice 5 (second half): Color Range mask — ✅ COMPLETE (2026-09-14)
+
+Closes out CLAUDE.md roadmap item 5: pick an exact color via eyedropper,
+select pixels similar to it jointly across hue/saturation/luminance in
+scene-linear light. Full design/implementation detail lives in CLAUDE.md's
+own roadmap item 5 write-up (kept there rather than duplicated here, per
+this file's own recent convention for Phase 7 slices) — this section
+records the session mechanics: sequencing, the reviewer rounds, and the
+live-verification session itself, including one real environment hazard
+hit along the way.
+
+**Sequencing followed the plan's own tripwire-cascade discipline**
+(`Mask.swift`'s new case/fields first, stubbed with `continue`/`EmptyView()`
+at each of the ~9 exhaustive switches it breaks, green before moving on):
+`ColorRangeSelection.swift` + its 32 tests (pure math, no kernel/pipeline
+involved) → `ColorRange.cikernel` + a throwaway `TempColorRangeProbeTests.swift`
+(6 tests: kernel compiles, solid-patch selection, hue wraparound, headroom
+selection, a 12-color Swift/GLSL agreement sweep, output-extent finiteness
+— all passed on the FIRST attempt, no kernel bugs found) → `EditPipeline.swift`
+wiring + 19 new `EditPipelineTests` (also all passed first attempt) → UI in
+dependency order (`AdjustTabView` -> `MaskDetailView` -> `ContentView` ->
+`ImageDocumentModel`) → live verification + reviewer → probe deleted,
+docs updated, commit.
+
+**Reviewer (Opus 5): 2 rounds, FIX FIRST -> APPROVE** — full detail in
+CLAUDE.md's own write-up; briefly, round 1 found 3 blocking issues (a real
+crash from an unguarded `Int(...)` cast on deliberately-unclamped tone
+math, a NaN-propagation gap in the swatch-reconstruction function with no
+guard AND no hue wrap unlike its own `resolve` sibling, and a doc comment
+citing a test outside that test's own actual regime) plus several
+non-blocking ones, most also fixed same-round (a silently-deleted-mask UX
+gap, a missing mutual-exclusion guard, a format-specifier nit). Round 2
+independently re-derived all three blocking fixes' math by hand rather
+than trusting the round-1 description, confirmed the new regression tests
+weren't vacuous (traced the actual RGB branch the hue-wrap fix changes),
+and re-verified the whole diff holistically before APPROVE. One more
+trivial fix (a shared alert's hardcoded "White Balance" title, now "Color
+Sample" — this slice made it a 3rd caller) taken directly from round 2's
+own non-blocking notes without a third round, matching this codebase's
+own established precedent for genuinely cosmetic post-approval polish.
+
+**Live verification (2026-09-14)** used this machine's now-standard
+AX-driven approach (`AXPress` on buttons, `AXIncrement` on sliders,
+direct `AXScrollBar` value-setting to scroll a `.scrollIndicators(.hidden)`
+`ScrollView` that has no visible thumb to drag) plus exactly ONE real
+user click for the eyedropper tap itself — the plan's own predicted
+exception, confirmed true in practice: a bare `SpatialTapGesture` capture
+layer has no AX affordance, unlike every button/slider elsewhere in this
+feature. Photo used: the user's real `IMG_6414.jpeg` (Bolivia trip, a
+roof-loading scene with a large clear-blue-sky region — chosen live from
+the Library grid specifically for its color variety, not pre-selected).
+
+One real hazard hit mid-session, diagnosed rather than dismissed: driving
+the app via `open`-ing a `PhotoApp.app` bundle picked by "most recently
+modified DerivedData folder" initially launched a STALE build (from an
+earlier, unrelated `xcodebuild` invocation under a different DerivedData
+hash) — the Masks section was simply absent from the Adjust sidebar,
+which briefly looked like a real regression. Root-caused via
+`xcodebuild -showBuildSettings`'s own `TARGET_BUILD_DIR` (the authoritative
+answer for "which DerivedData folder does THIS scheme's THIS build
+actually target"), not by guessing from mtimes; relaunching the correct
+bundle immediately showed the Masks section correctly. Worth remembering
+for the next live-verification session on this machine: `ls -dt` over
+`DerivedData/PhotoApp-*` is NOT a reliable way to find "the app you just
+built" when multiple stale DerivedData folders exist from earlier
+sessions.
+
+A second, separate hazard: the first live pick attempt appeared to fail
+(the newly-added mask vanished, reading as "No masks yet" after the real
+click) — traced to a large real-world time gap (the user's confirmation
+of "I clicked" arrived roughly 90 minutes after the pick was armed) during
+which SOMETHING (most likely simple idle time, possibly other
+interaction) disarmed `colorPickingMaskID` without a completed pick,
+correctly triggering `discardUnpickedColorRangeMask`'s own designed
+cleanup — not a bug, but indistinguishable from one without checking the
+mechanism. Retried immediately (arm -> ask -> click -> check, all within
+under a minute) and it worked correctly the first time: the mask
+persisted, `colorRangeHasTarget` was set, and the readout/swatch rendered
+correctly (see CLAUDE.md's own write-up for the exact measured values and
+the +5EV confirmation). This confirms `discardUnpickedColorRangeMask` is
+doing exactly its documented job — a genuinely abandoned pick IS
+supposed to clean itself up — and is a real, if incidental, live
+confirmation of that safety net, not just its unit-tested logic.
+
+The test photo (`IMG_6414.jpeg`) was reverted to identity before this
+write-up via the app's own "Revert to Original" — the library is
+unchanged; the `IMG_6414.jpeg.photoapp.json` sidecar this session created
+is the one artifact left behind, and it was read directly off disk and
+confirmed `"masks": []` after the final revert.

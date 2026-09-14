@@ -909,6 +909,7 @@ enum EditPipeline {
         case linear(LinearMaskGeometry.Resolved)
         case brush(BrushMaskGeometry.Resolved)
         case luminanceRange(LuminanceRangeSelection.Resolved)
+        case colorRange(ColorRangeSelection.Resolved)
     }
 
     /// Local adjustments (Radial — Phase 7 slice 2 — Linear/graduated —
@@ -1033,7 +1034,13 @@ enum EditPipeline {
     /// that chain's forced-opaque alpha bias, not by `CIColorMatrix` in
     /// general (see `luminanceRangeMaskImage`'s own comment for the full
     /// measured detail) — so that crop is load-bearing here, not
-    /// belt-and-braces.
+    /// belt-and-braces. This does NOT generalize to the OTHER
+    /// content-derived kind, `.colorRange` (slice 5 second half): its
+    /// custom-kernel chain has no `CIColorMatrix` forced-alpha-bias stage
+    /// at all, and its output extent was separately MEASURED (the same
+    /// throwaway-probe discipline) to be exactly the requested `extent:`,
+    /// genuinely finite — see `colorRangeMaskImage`'s own comment for why
+    /// its own crop is structural consistency only, not load-bearing.
     private static func applyMasks(_ state: EditState, to image: CIImage) -> CIImage {
         guard masksActive(state) else { return image }
 
@@ -1081,6 +1088,14 @@ enum EditPipeline {
                     feather: mask.feather, extent: extent
                 ) else { continue }
                 resolvedGeometry = .luminanceRange(sel)
+            case .colorRange:
+                guard let sel = ColorRangeSelection.resolve(
+                    hasTarget: mask.colorRangeHasTarget,
+                    targetHue: mask.colorRangeTargetHue, targetSaturation: mask.colorRangeTargetSaturation,
+                    targetLuminance: mask.colorRangeTargetLuminance, tolerance: mask.colorRangeTolerance,
+                    feather: mask.feather, extent: extent
+                ) else { continue }
+                resolvedGeometry = .colorRange(sel)
             }
 
             // Reviewer-caught (Phase 7 slice 2): these four MUST clamp to
@@ -1242,6 +1257,18 @@ enum EditPipeline {
                 // target tone can be anywhere in frame, so `corrected`
                 // must be produced everywhere. A deliberate, measured cost
                 // (see `luminanceRangeMaskImage`'s own doc comment).
+                correctedRegion = sel.regionOfInterest
+            case .colorRange(let sel):
+                // Same "reads `img`, not `image`" reasoning as the
+                // `.luminanceRange` branch above — masks compound
+                // sequentially, so "select pixels like THIS color" means
+                // as they currently look on screen, after any earlier
+                // mask's own adjustments.
+                guard let selection = colorRangeMaskImage(img, sel) else { continue }
+                maskImage = selection
+                // ALWAYS the whole extent, same reasoning as
+                // `.luminanceRange` — a pixel matching the target color
+                // can be anywhere in frame, structurally no ROI-crop win.
                 correctedRegion = sel.regionOfInterest
             }
 
@@ -1575,6 +1602,51 @@ enum EditPipeline {
         clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
         clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
         return clamp.outputImage
+    }
+
+    // MARK: - Color Range mask
+
+    /// The second custom Core Image kernel in this codebase (after
+    /// `selectiveColorKernel` above) — mirrors that property's exact load
+    /// shape (bundled source, lazy, fails soft to `nil`). No built-in
+    /// Core Image filter exposes per-pixel hue, and none can express a
+    /// joint 3-axis (hue/saturation/luminance) color distance — see
+    /// `Sources/Rendering/Shaders/ColorRange.cikernel`'s own header for
+    /// the exact per-pixel math, and `ColorRangeSelection`'s own doc
+    /// comment for the Swift-side twin the kernel MUST agree with
+    /// (measured via a throwaway probe before this shipped — a 12-color
+    /// Swift/GLSL agreement sweep, hue wraparound, headroom selection,
+    /// and output-extent finiteness all confirmed live before commit).
+    private static let colorRangeKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "ColorRange", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
+    /// Colocated with `colorRangeKernel` above (its only caller), not near
+    /// `selectiveColorKernel`/`applySelectiveColor` — matches
+    /// `luminanceRangeMaskImage`'s own placement precedent one section up.
+    ///
+    /// UNLIKE `luminanceRangeMaskImage`, the `.cropped(to:)` below is NOT
+    /// load-bearing — MEASURED via the same throwaway probe referenced
+    /// above: a `CIColorKernel`'s output extent is exactly the `extent:`
+    /// passed to `apply`, genuinely finite, with none of
+    /// `luminanceRangeMaskImage`'s forced-opaque-alpha-bias infinite-extent
+    /// trap (that trap is specific to `CIColorMatrix`'s alpha bias, not
+    /// inherent to any scene-linear chain — see that function's own doc
+    /// comment). Kept anyway for structural consistency with every other
+    /// per-kind mask-image builder, and so a future caller can't be the
+    /// one place that forgets a real requirement if this kernel is ever
+    /// rewritten to no longer emit its own `vec4(w,w,w,w)` directly.
+    private static func colorRangeMaskImage(_ img: CIImage, _ sel: ColorRangeSelection.Resolved) -> CIImage? {
+        guard let kernel = colorRangeKernel else { return nil }
+        let target = CIVector(x: sel.targetHue, y: sel.targetSaturation, z: sel.targetLuminance, w: 0)
+        let window = CIVector(
+            x: sel.hueWindowDegrees, y: sel.saturationWindow, z: sel.lowerLuminanceSpan, w: sel.upperLuminanceSpan
+        )
+        let arguments: [Any] = [img, target, window, NSNumber(value: sel.falloffWidth)]
+        return kernel.apply(extent: sel.regionOfInterest, arguments: arguments)?.cropped(to: sel.regionOfInterest)
     }
 
     // MARK: - Vignette

@@ -1474,11 +1474,177 @@ Edits are stored as parameter sets and rendered live on the GPU.
       clears cleanly, cross-checked against the on-disk sidecar. See
       PROGRESS.md's own "Phase 7 slice 5" section for full detail,
       including the one test-only bug (not a pipeline bug) found and
-      fixed along the way. **Color Range half still not started** — needs
-      a new `.cikernel` and an eyedropper-style armed UI, deferred to its
-      own future session; `EditStateCodableTests`'
-      `"colorRange"`-as-unrecognized-kind stand-in now points at this
-      remaining half specifically.
+      fixed along the way.
+
+      **Color Range half ✅ COMPLETE (2026-09-14).** Pick an exact color
+      via eyedropper, generate a soft selection matching pixels similar
+      to it (hue + saturation + luminance JOINTLY, in scene-linear
+      light — a darker/lighter or more/less saturated version of the
+      picked color is treated as less similar), selected via the
+      curated 8-param Mask adjustments same as every other kind. One
+      combined Tolerance slider (0...1, interpolating all three axes'
+      windows together — mirrors `EditState.selectiveColorRange`'s own
+      "one slider, many windows" shape), not three per-axis sliders;
+      `feather` reused a FOURTH time (after `.radial`/`.brush`/
+      `.luminanceRange`), here as the falloff ramp's width directly in
+      normalized-distance units rather than a plateau/tent split.
+
+      The project's SECOND custom Core Image kernel
+      (`Sources/Rendering/Shaders/ColorRange.cikernel`, after
+      `SelectiveColor.cikernel`) — built-ins genuinely can't express a
+      joint 3-axis per-pixel color distance. New
+      `Sources/EditEngine/ColorRangeSelection.swift` is both the
+      tolerance-window resolver (mirrors `LuminanceRangeSelection`'s own
+      contract) AND the Swift-side twin of the kernel's per-pixel HSL/
+      luma conversion — the single highest-risk correctness surface in
+      this slice, since Swift and GLSL must agree bit-for-bit in intent.
+      Two corrections baked in over `SelectiveColor.cikernel` (the
+      kernel this one's HSL math was modeled on): negative channels
+      clamped to 0 BEFORE headroom-normalizing (that older kernel never
+      clamps negatives — logged as its own follow-up, not touched here),
+      and a FLOORED modulo (not Swift's symmetric `truncatingRemainder`)
+      on the max-red hue branch — GLSL's `mod()` is floored, and without
+      correcting this every magenta-side red pixel would disagree
+      between the two implementations. Measured, not assumed: a
+      throwaway probe (`TempColorRangeProbeTests.swift`, deleted before
+      commit — the established `TempLuminanceRangeProbeTests.swift`
+      precedent) confirmed the kernel compiles, solid-patch selection at/
+      away from target, hue wraparound, headroom selection, and a
+      12-color Swift/GLSL agreement sweep (worst measured delta 1.73e-7,
+      re-confirmed at 16 colors during reviewer re-verification) — and
+      that unlike `.luminanceRange`'s own forced-opaque-alpha-bias
+      infinite-extent trap, this kernel's output extent is genuinely
+      finite and exactly the requested `extent:`, so its own
+      `.cropped(to:)` is structural consistency only, not load-bearing.
+
+      `ImageDocumentModel.pickColorRangeTarget(maskID:normalizedX:normalizedY:)`
+      is architecturally distinct from `pickWhiteBalance`: no RAW fast
+      path (no decoder-level equivalent for a per-mask target), no
+      `Task.detached`/solver (one closed-form HSL conversion,
+      microseconds), and — the one genuinely novel piece — it samples
+      the image `ColorRange.cikernel` will ACTUALLY compare against
+      inside `applyMasks`, not the naive fully-edited display: zeroes
+      `vignetteStrength`/`definition`/`noiseReduction`/`sharpness` (the
+      four stages that run AFTER `applyMasks` in the fixed pipeline
+      order) and truncates `masks` to only those BEFORE the target mask,
+      then renders exactly that truncated state — structurally
+      guaranteed correct (both the sampler and `applyMasks`'s own loop
+      read the identical array prefix through the identical earlier
+      stages), independently re-derived and confirmed by the reviewer,
+      not just asserted.
+
+      UI: `AdjustTabView`'s 2x2 mask-kind grid gained a third row (one
+      half-width "Color" button + an explicit empty cell, not a bare
+      full-width button — matches that section's own "would read as a
+      different class of action" convention); `ContentView` gained a
+      `colorPickingMaskID: UUID?` state (mirrors `brushPaintingMaskID`'s
+      `UUID?`-not-`Bool` shape) driving a new eyedropper tap-capture
+      layer (byte-for-byte the same `Color.clear`/crosshair-cursor/
+      `SpatialTapGesture` shape as the WB eyedropper's own, but resolves
+      its target mask by IDENTITY at commit time, mirroring
+      `MaskBinding`'s own discipline) and a `discardUnpickedColorRangeMask`
+      falling-edge cleanup (the `.brush`/F4 pattern: `oldID != newID`,
+      not falling-edge-to-`nil`, to survive the same
+      `addMask -> select -> beginColorPick` SwiftUI-coalescing hazard
+      slice 4's reviewer caught once already). This is the 5th
+      hand-rolled mutual-exclusion site (after WB/Red-Eye/`select(_:)`/
+      `beginBrushStroke`) — logged in IMPROVEMENTS.md's D14 that a
+      shared mode enum is now genuinely worth it, not built this slice.
+      `MaskDetailView` gained a "Pick Color"/"Re-pick Color" button
+      (mirrors `.brush`'s "Paint Stroke"/"Redraw Stroke"), a swatch
+      reconstructed via `ColorRangeSelection.displaySRGB` (never a
+      redundant 4th/5th/6th stored RGB field) plus a perceptual-tone text
+      readout, and the Tolerance/Feather sliders.
+
+      Reviewer (Opus 5, per this session's standing convention): **2
+      rounds, FIX FIRST → APPROVE.** Round 1 caught 3 blocking issues,
+      all fixed: (1) `MaskDetailView`'s tone-percent `Int(...)` cast had
+      no guard against `ColorRangeSelection.tone(forLinearLuminance:)`'s
+      deliberately-unclamped output — a hand-edited sidecar's `.nan` or
+      astronomically large `colorRangeTargetLuminance` would CRASH the
+      app the moment that mask was merely selected, not just misrender
+      (the identical defect CLASS slice 2 Session B's reviewer already
+      caught once for the on-image overlay) — fixed with an `.isFinite`
+      check plus a ±1,000,000 clamp before the cast. (2)
+      `ColorRangeSelection.displaySRGB` had NO non-finite guard at all
+      (unlike `resolve`'s own `nil` return) and didn't wrap hue into
+      0..<360 the way `resolve` does — a corrupt sidecar's `.nan`
+      propagated straight into a SwiftUI `Color`, and an out-of-range
+      hue (e.g. a hand-edited `-400`) fed the unwrapped HSL→RGB
+      conversion's wrong branch, producing a swatch inconsistent with
+      the hue the kernel actually selects on — fixed with a guard + the
+      same wrap, two new regression tests added. (3) an `EditPipelineTests`
+      comment wrongly claimed a +4EV brighten mask leaves hue/saturation
+      UNCHANGED (citing a test that only demonstrates scale-invariance
+      WITHIN one headroom regime, not across the boundary this test's
+      own colors actually cross) — reviewer independently re-derived the
+      real numbers (hue fixed at 276°, saturation shifts 0.614 -> 1.0)
+      and the comment (plus a new clarifying paragraph on
+      `ColorRangeSelection.hueSaturation`'s own doc comment) was
+      corrected to match; the test's own assertion was never wrong, only
+      its stated mechanism. Also fixed from round 1's non-blocking list:
+      a silently-deleted-mask failure mode (a failed pixel sample now
+      surfaces `whiteBalanceSampleMessage`, reused rather than a new
+      property — the same message/alert `pickWhiteBalance` already
+      uses), a missing `!isPaintingBrush` guard on the tap-capture layer,
+      and a `%d`/line-length nit. Round 2 re-derived all three blocking
+      fixes' math independently (confirmed the hue-wrap test genuinely
+      distinguishes the old-vs-new branch, not vacuously) and
+      re-verified the whole diff holistically (pipeline-order claim,
+      y-flip convention, kernel/Swift agreement, deterministic-id
+      hashing, non-destructive integrity, thread safety) before
+      APPROVE — one more trivial fix (a shared alert's hardcoded "White
+      Balance" title, now "Color Sample", since this slice made a third
+      caller share it) taken directly from round 2's own non-blocking
+      notes, not re-reviewed.
+
+      **Deliberately NOT fixed, accepted, documented in code**: a
+      premultiplied-vs-unpremultiplied alpha mismatch between
+      `PixelSampler.averageColor` (returns premultiplied values) and
+      `ColorRange.cikernel` (unpremultiplies before its own math) — measured
+      real but narrow (only affects a tap on a semi-transparent region,
+      alpha in `[0.5, 1)`), and fixing it means widening `PixelSampler`'s
+      shared, already-reviewed return type that `pickWhiteBalance` also
+      uses (same latent gap there, never reported before this slice) — a
+      separate future session, not a drive-by edit; the hue axis's
+      measured weakness at low/moderate saturation (`ColorRange.cikernel`'s
+      `saturationAttenuation = min(hsl.y, target.y)` term) — a tuning
+      characteristic, live-verified acceptable on a real photo, not a bug.
+
+      865 tests (32 new in `ColorRangeSelectionTests`, 19 new in
+      `EditPipelineTests`, plus `EditStateCodableTests` additions — the
+      unrecognized-mask-kind stand-in repointed off the now-real
+      `"colorRange"` string onto `"depthRange"`).
+
+      **Fully LIVE-VERIFIED (2026-09-14)**, via AX-driven automation
+      (`AXPress`/`AXIncrement`/direct `AXScrollBar` positioning — this
+      machine's own established "synthetic clicks don't reach this app,
+      AX actions do" constraint, same as slice 5's first half) plus ONE
+      real user click for the eyedropper tap itself (no AX affordance,
+      the same accepted limitation IMPROVEMENTS.md's D14 now names): on
+      the user's real Bolivia-trip library (`IMG_6414.jpeg`, a car-
+      roof-loading scene with clear blue sky), confirmed the Masks
+      section's 2x2+1 grid renders with the new "Color" button; adding a
+      mask arms picking and shows "Pick Color"/"No color picked yet"; a
+      real click on the blue sky correctly wrote a plausible target
+      (readout "Hue 222° Sat 75% Lum 49%", swatch rendered as a matching
+      blue circle) and flipped the button to "Re-pick Color"; pushing
+      Exposure to +5EV visibly and PRECISELY confined the blowout to the
+      sky and its own reflections in the car's rear window/chrome
+      (matching color, not matching position — the car body, people, and
+      ground stayed completely untouched, a strong live confirmation of
+      genuine per-pixel color matching over any geometric proxy); Revert
+      to Original cleanly cleared the mask, cross-checked directly
+      against the on-disk sidecar (`"masks": []`) — the user's real
+      library is unchanged. One real live-testing hazard encountered and
+      resolved, not a code bug: an abandoned pick (armed, then left
+      idle ~90 minutes real-world) was correctly auto-discarded by
+      `discardUnpickedColorRangeMask` exactly as designed, confirming
+      that safety net fires correctly for a genuinely abandoned pick,
+      not just a synthetic one. **CLAUDE.md's Phase 7 roadmap item 5
+      (Color Range / Luminance Range masks) is now FULLY COMPLETE** —
+      both content-derived kinds shipped, reviewed, tested, and live-
+      verified.
    6. **Combining masks** (intersect/subtract boolean semantics between
       masks) — deliberately LAST. Corrected scope (2026-09-09): slice 2
       already shipped multiple simultaneous, independently-compounding

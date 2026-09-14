@@ -705,6 +705,108 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    // MARK: - Color Range mask eyedropper
+
+    /// Phase 7 slice 5 (second half): the `.colorRange` mask's eyedropper
+    /// — picks a color from the CURRENT render at a tapped point and
+    /// writes it into the mask identified by `maskID`'s 5 `.colorRange`
+    /// scalar fields. Three deliberate differences from `pickWhiteBalance`
+    /// above:
+    /// 1. No RAW fast path — unlike `rawWhiteBalanceNeutralPoints`, there
+    ///    is no decoder-level equivalent for a per-mask color target;
+    ///    `CIRAWFilter` has no concept of "masks" at all.
+    /// 2. No `Task.detached`/solver — converting one sampled color to hue/
+    ///    saturation/luminance is a single closed-form calculation
+    ///    (`ColorRangeSelection.hueSaturation`/`.luminance`), synchronous,
+    ///    microseconds, unlike `WhiteBalanceSolver`'s ~52-evaluation search.
+    /// 3. Samples the image `ColorRange.cikernel` will ACTUALLY compare
+    ///    against inside `EditPipeline.applyMasks`, not the naive fully-
+    ///    edited display: `applyMasks` reads the running `img` — the
+    ///    result of every EARLIER mask in the array, but BEFORE the later
+    ///    global stages (Vignette, Definition, Noise Reduction, Sharpen)
+    ///    that run AFTER it in the fixed pipeline order. Sampling the
+    ///    fully-edited image would record a color the kernel never
+    ///    actually sees there (e.g. under a vignette, a tapped dark
+    ///    corner would read darker than what the kernel measures),
+    ///    misaligning the selection. So this zeros out `vignetteStrength`/
+    ///    `definition`/`noiseReduction`/`sharpness` and truncates `masks`
+    ///    to only those BEFORE this one in the array, then renders exactly
+    ///    that truncated state — structurally guaranteed to match what
+    ///    `applyMasks`'s own loop sees at this mask's own position (both
+    ///    read the identical prefix of `editState.masks` through the
+    ///    identical earlier pipeline stages), not merely assumed to.
+    ///
+    /// Reviewer-caught: every early-return below used to fail SILENTLY —
+    /// `ContentView`'s tap handler unconditionally disarms
+    /// `colorPickingMaskID` right after calling this, and the resulting
+    /// `.onChange` then deletes the still-unpicked mask via
+    /// `discardUnpickedColorRangeMask`, with no feedback at all for why. The
+    /// direct precedent, `pickWhiteBalance`, always surfaces
+    /// `whiteBalanceSampleMessage` for its own equivalent failure — reused
+    /// here (not a new message property) for the one failure a user can
+    /// actually cause (tapping a transparent/out-of-bounds point); the
+    /// `currentImage`/`maskIndex` guards stay silent since neither is
+    /// reachable from a real tap (no image loaded means no tap-capture
+    /// layer exists at all; a vanished mask means `colorPickingMaskID`
+    /// itself would already have been cleared by `isEditingMask`'s own
+    /// `.onChange`, per `ContentView.swift`).
+    ///
+    /// Reviewer-flagged, accepted, not fixed here: `PixelSampler
+    /// .averageColor` returns PREMULTIPLIED values (verified: a 0.6-alpha
+    /// sample reads ~0.6x too low), while `ColorRange.cikernel` unpremultiplies
+    /// (`s.rgb / s.a`) before its own HSL/luma math — so a tap on a
+    /// semi-transparent region (alpha in `[minAlpha, 1)`, e.g. a corner a
+    /// straighten/perspective transform partially reveals) records a
+    /// LUMINANCE target the kernel can never exactly match. Narrow in
+    /// practice (ordinary photo content is opaque; `PixelSampler`'s own
+    /// `minAlpha: 0.5` default already excludes the fully-transparent
+    /// case) and not touched here — fixing it means widening
+    /// `PixelSampler.averageColor`'s return type to also carry alpha,
+    /// which is shared, already-reviewed code also used by
+    /// `pickWhiteBalance` (same latent gap there, never reported before
+    /// this slice) — a separate future session's change, not a drive-by
+    /// edit bundled into this one.
+    func pickColorRangeTarget(maskID: UUID, normalizedX u: Double, normalizedY v: Double) {
+        guard let currentImage else { return }
+        guard let maskIndex = editState.masks.firstIndex(where: { $0.id == maskID }) else { return }
+
+        var samplingState = editState
+        samplingState.vignetteStrength = 0
+        samplingState.definition = 0
+        samplingState.noiseReduction = 0
+        samplingState.sharpness = 0
+        samplingState.masks = Array(editState.masks[..<maskIndex])
+
+        let sampled = EditPipeline.apply(samplingState, to: currentImage)
+        let extent = sampled.extent
+        guard extent.width > 0, extent.height > 0 else { return }
+
+        // y-flip: the same `1 - v` convention `pickWhiteBalance` uses —
+        // SwiftUI-local space is top-left-origin/y-down, `CIImage`'s own
+        // space is bottom-left-origin/y-up.
+        let point = CGPoint(
+            x: extent.minX + CGFloat(u) * extent.width,
+            y: extent.minY + CGFloat(1 - v) * extent.height
+        )
+        guard let sample = PixelSampler.averageColor(in: sampled, at: point) else {
+            whiteBalanceSampleMessage = "Couldn't read a color sample at that point."
+            return
+        }
+        whiteBalanceSampleMessage = nil
+
+        let (hue, saturation) = ColorRangeSelection.hueSaturation(forLinearRGB: sample.r, sample.g, sample.b)
+        let luminance = ColorRangeSelection.luminance(forLinearRGB: sample.r, sample.g, sample.b)
+
+        // One `editState` assignment, not 4 sequential writes — each write
+        // is a candidate undo-history/sidecar-debounce entry.
+        var mask = editState.masks[maskIndex]
+        mask.colorRangeTargetHue = hue
+        mask.colorRangeTargetSaturation = saturation
+        mask.colorRangeTargetLuminance = luminance
+        mask.colorRangeHasTarget = true
+        editState.masks[maskIndex] = mask
+    }
+
     // MARK: - Color Cast
 
     /// Analyzes the WHOLE image's gray-world average color and sets

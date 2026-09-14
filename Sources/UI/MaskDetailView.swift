@@ -30,11 +30,26 @@ import SwiftUI
 /// IMPROVEMENTS.md), not covered by the same justification the other two
 /// kinds rely on.
 ///
-/// `.luminanceRange` (Phase 7 slice 5) needs NO such carve-out — it is
-/// MORE accessible than the three overlay-owning kinds, not less: every
-/// one of its parameters (Luminance, Range, Feather) is a labeled
+/// `.luminanceRange` (Phase 7 slice 5, first half) needs NO such carve-out
+/// — it is MORE accessible than the three overlay-owning kinds, not less:
+/// every one of its parameters (Luminance, Range, Feather) is a labeled
 /// `EditSliderRow` and there is no gesture at all (no drag, no paint, no
 /// on-image overlay to excuse). Nothing to log in IMPROVEMENTS.md for it.
+///
+/// `.colorRange` (Phase 7 slice 5, second half) sits BETWEEN those two
+/// extremes: Tolerance and Feather are labeled, AT-adjustable
+/// `EditSliderRow`s exactly like `.luminanceRange`'s own params — but
+/// PICKING the color itself is a mouse-only spatial tap
+/// (`ContentView.pointAndZoomOverlays`'s new capture layer, a bare
+/// `SpatialTapGesture` with no on-image overlay to excuse it either, since
+/// `hasOnImageOverlay(.colorRange)` is `false`). This is a real,
+/// logged accessibility gap (IMPROVEMENTS.md's D14) — NOT covered by
+/// `.luminanceRange`'s "nothing to log" reasoning above, since that kind
+/// has no spatial gesture at all. Unlike `.brush`'s D11 gap, this one is a
+/// cheap future win: the WB eyedropper's existing crosshair-nudge
+/// machinery (`crosshairPosition`/`handlePointPlacementKeyPress`/
+/// `commitPointPlacement`/`EditorCrosshairOverlay`) already exists and
+/// wiring it here would mostly be a routing change, not new machinery.
 struct MaskDetailView: View {
     @Binding var mask: Mask
     /// `.brush` only — called when "Paint Stroke"/"Redraw Stroke" is
@@ -42,6 +57,9 @@ struct MaskDetailView: View {
     /// `RedEyeOverlayView.onTap`'s optional-closure shape for an
     /// additive, kind-gated callback).
     var onBeginBrushStroke: (() -> Void)?
+    /// `.colorRange` only — called when "Pick Color"/"Re-pick Color" is
+    /// tapped. `nil` for every other kind, same shape as `onBeginBrushStroke`.
+    var onBeginColorPick: (() -> Void)?
 
     /// Kind-aware: calling a tone window a "Shape" would be wrong — this
     /// kind has no shape at all, only a tonal selection.
@@ -49,6 +67,7 @@ struct MaskDetailView: View {
         switch mask.kind {
         case .radial, .linear, .brush: return "Shape"
         case .luminanceRange: return "Luminance Range"
+        case .colorRange: return "Color Range"
         }
     }
 
@@ -122,6 +141,7 @@ struct MaskDetailView: View {
         case .linear: linearShapeRows
         case .brush: brushShapeRows
         case .luminanceRange: luminanceRangeShapeRows
+        case .colorRange: colorRangeShapeRows
         }
     }
 
@@ -233,11 +253,78 @@ struct MaskDetailView: View {
         }
     }
 
-    /// Shared by three of the four kinds (`.radial`, `.brush`,
-    /// `.luminanceRange` — see `Mask.feather`'s own doc comment for why
-    /// the same field/formula is reused a third time here), extracted
-    /// once so the shared-field decision is visible in the view code,
-    /// not re-typed per kind.
+    /// `.colorRange` only (Phase 7 slice 5, second half) — no `centerRows`
+    /// and no geometry rows, same reasoning as `.luminanceRange` above:
+    /// this kind selects by the image's own pixel values, not position.
+    /// "Pick Color"/"Re-pick Color" mirrors `.brush`'s "Paint Stroke"/
+    /// "Redraw Stroke" exactly, keyed off `mask.colorRangeHasTarget`
+    /// (mirrors `brushPoints.isEmpty`'s "added but not yet used"
+    /// convention). The swatch is reconstructed from the 3 stored scalars
+    /// via `ColorRangeSelection.displaySRGB` — never a 4th/5th/6th
+    /// redundant RGB field that could drift from what the kernel uses —
+    /// and is `.accessibilityHidden(true)`: the adjacent text readout,
+    /// using the PERCEPTUAL tone (`ColorRangeSelection.tone(forLinearLuminance:)`
+    /// — every other tone readout in this app is perceptual, matching
+    /// `luminanceRangeShapeRows`' own "Luminance"/"Range" percent labels
+    /// above), is the accessible answer.
+    private var colorRangeShapeRows: some View {
+        Group {
+            Button(mask.colorRangeHasTarget ? "Re-pick Color" : "Pick Color") {
+                onBeginColorPick?()
+            }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+            if mask.colorRangeHasTarget {
+                let swatch = ColorRangeSelection.displaySRGB(
+                    hue: mask.colorRangeTargetHue, saturation: mask.colorRangeTargetSaturation,
+                    luminance: mask.colorRangeTargetLuminance
+                )
+                // Reviewer-caught: `tone(forLinearLuminance:)` is
+                // deliberately unclamped (see its own doc comment) — a
+                // hand-edited/corrupt sidecar's `.nan` or astronomically
+                // large `colorRangeTargetLuminance` would otherwise trap
+                // `Int(_:)` the moment this mask is merely SELECTED, not
+                // just misrender. Clamped to a range no legitimate value
+                // (scene-linear luminance, realistically 0...a few) could
+                // ever approach, closing the same non-finite-input gap
+                // `displaySRGB` was reviewer-caught on just above.
+                let rawTonePercent = ColorRangeSelection.tone(forLinearLuminance: mask.colorRangeTargetLuminance) * 100
+                let tonePercent = rawTonePercent.isFinite
+                    ? Int(min(max(rawTonePercent, -1_000_000), 1_000_000).rounded())
+                    : 0
+                HStack {
+                    Circle()
+                        .fill(Color(red: swatch.r, green: swatch.g, blue: swatch.b))
+                        .frame(width: 20, height: 20)
+                        .overlay(Circle().stroke(Color.secondary.opacity(0.5), lineWidth: 1))
+                        .accessibilityHidden(true)
+                    Text(String(
+                        format: "Hue %.0f°  Sat %.0f%%  Lum %ld%%",
+                        mask.colorRangeTargetHue, mask.colorRangeTargetSaturation * 100, tonePercent
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("No color picked yet").font(.caption).foregroundStyle(.secondary)
+            }
+            // Cites `ColorRangeSelection.minimumTolerance/maximumTolerance`
+            // directly, never literals — the same single-source-of-truth
+            // discipline every other kind's ranges already follow.
+            EditSliderRow(
+                label: "Tolerance", value: $mask.colorRangeTolerance,
+                range: ColorRangeSelection.minimumTolerance...ColorRangeSelection.maximumTolerance,
+                identity: 0.3, displayMultiplier: 100
+            ) { String(format: "%.0f%%", $0 * 100) }
+            featherRow
+        }
+    }
+
+    /// Shared by four of the five kinds (`.radial`, `.brush`,
+    /// `.luminanceRange`, `.colorRange` — see `Mask.feather`'s own doc
+    /// comment for why the same field/formula is reused a fourth time
+    /// here), extracted once so the shared-field decision is visible in
+    /// the view code, not re-typed per kind.
     private var featherRow: some View {
         EditSliderRow(
             label: "Feather", value: $mask.feather,

@@ -1,29 +1,35 @@
 import Foundation
 
-/// Which geometry (or, for `.luminanceRange`, SELECTION) a `Mask` uses.
-/// `.radial` (an ellipse, Phase 7 slice 2) reads `radiusX`/`radiusY`/
-/// `feather`; `.linear` (a graduated band, slice 3) reads `width`
-/// instead; `.brush` (a freehand stroke, slice 4) reads `brushPoints`/
-/// `brushSize`/`feather` instead; `.luminanceRange` (slice 5) reads
-/// `luminanceTarget`/`luminanceRange`/`feather` instead — `feather` is
-/// now SHARED by THREE of the four kinds (`.radial`, `.brush`, and
-/// `.luminanceRange` — see `feather`'s own doc comment for why a tonal
+/// Which geometry (or, for `.luminanceRange`/`.colorRange`, SELECTION) a
+/// `Mask` uses. `.radial` (an ellipse, Phase 7 slice 2) reads
+/// `radiusX`/`radiusY`/`feather`; `.linear` (a graduated band, slice 3)
+/// reads `width` instead; `.brush` (a freehand stroke, slice 4) reads
+/// `brushPoints`/`brushSize`/`feather` instead; `.luminanceRange` (slice
+/// 5 first half) reads `luminanceTarget`/`luminanceRange`/`feather`
+/// instead; `.colorRange` (slice 5 second half) reads
+/// `colorRangeTargetHue`/`colorRangeTargetSaturation`/
+/// `colorRangeTargetLuminance`/`colorRangeTolerance`/
+/// `colorRangeHasTarget`/`feather` instead — `feather` is now SHARED by
+/// FOUR of the five kinds (`.radial`, `.brush`, `.luminanceRange`, and
+/// `.colorRange` — see `feather`'s own doc comment for why a tonal/color
 /// selection window's falloff reuses the exact same field/formula shape
 /// as a drawn shape's soft edge), still inert only on `.linear`. The
 /// OTHER kind(s)' geometry fields sit inert at their defaults, never read
 /// by `EditPipeline.applyMasks`'s matching branch. `.radial`/`.linear`
 /// share `centerX`/`centerY` (the anchor point) and `rotationDegrees`
 /// (the mask's own local +X axis direction — see that field's own doc
-/// comment for what "+X axis" means per kind); `.brush`/`.luminanceRange`
-/// use neither — a stroke's position lives entirely in `brushPoints`, and
-/// a Luminance Range mask has no position at all (it selects by TONE, not
-/// by location — the first kind that is genuinely content-derived rather
+/// comment for what "+X axis" means per kind); `.brush`/`.luminanceRange`/
+/// `.colorRange` use neither — a stroke's position lives entirely in
+/// `brushPoints`, and a Luminance Range or Color Range mask has no
+/// position at all (both select by the image's OWN pixel values, not by
+/// location — the two kinds that are genuinely content-derived rather
 /// than drawn).
 enum MaskKind: String, Codable {
     case radial
     case linear
     case brush
     case luminanceRange
+    case colorRange
 }
 
 /// One point along a painted brush stroke. Mirrors `RedEyePoint`'s exact
@@ -233,6 +239,53 @@ struct Mask: Identifiable, Equatable, Codable {
     /// `resolve` return `nil`.
     var luminanceRange: Double = 0.3
 
+    /// `.colorRange` only — inert on every other kind. The picked color's
+    /// hue, in degrees (0..<360), decomposed via `ColorRangeSelection
+    /// .hueSaturation(forLinearRGB:_:_:)` at pick time. Meaningless
+    /// (arbitrary leftover/default value) until `colorRangeHasTarget` is
+    /// `true` — see that field's own doc comment.
+    var colorRangeTargetHue: Double = 0
+
+    /// `.colorRange` only. The picked color's HSL saturation, 0...1 —
+    /// SCENE-LINEAR HSL (computed from the same linear-light pixel values
+    /// `EditPipeline.applyMasks` compares against), NOT a perceptual/sRGB-
+    /// encoded saturation.
+    var colorRangeTargetSaturation: Double = 0
+
+    /// `.colorRange` only. The picked color's Rec.709 luma, in SCENE-LINEAR
+    /// light (`LuminanceRangeSelection.lumaRed/lumaGreen/lumaBlue`'s own
+    /// weights, reused so both content-derived kinds can never drift on
+    /// what "luminance" means) — a MEASURED pixel value, not a slider
+    /// position, so unlike `luminanceTarget` this is NOT clamped to 0...1
+    /// and NOT in the perceptual tone domain: a picked HEADROOM pixel
+    /// (linear > 1) is a legitimate target.
+    var colorRangeTargetLuminance: Double = 0
+
+    /// `.colorRange` only. One abstract 0...1 "tightness" dial — NOT a
+    /// width in any single unit, since hue (degrees)/saturation (0...1)/
+    /// luminance (scene-linear) have no shared unit to express one width
+    /// in. `ColorRangeSelection.resolve` interpolates each axis's own
+    /// window between its own min/max constants by this one value —
+    /// mirrors `EditState.selectiveColorRange`'s identical "one slider,
+    /// many windows" shape. Default `0.3`, NOT `0` — an unpicked mask
+    /// (`colorRangeHasTarget == false`) selects nothing regardless of this
+    /// value (see that field's own doc comment), so there is no risk of a
+    /// non-zero default silently doing something before a color is picked;
+    /// once picked, a moderate starting tolerance is more useful than a
+    /// maximally-tight one.
+    var colorRangeTolerance: Double = 0.3
+
+    /// `.colorRange` only. `false` until the user picks a color via the
+    /// eyedropper (`ImageDocumentModel.pickColorRangeTarget`) — mirrors
+    /// `brushPoints.isEmpty`'s "added but not yet used" convention: an
+    /// unpicked `.colorRange` mask selects NOTHING (`ColorRangeSelection
+    /// .resolve` returns `nil` whenever this is `false`), never an
+    /// arbitrary default color. Also feeds `deterministicFallbackID` (see
+    /// that function's own doc comment) — two id-less masks differing ONLY
+    /// in "has a color been picked" are visibly different (one is inert,
+    /// the other isn't), so this flag must be mixed into the hash too.
+    var colorRangeHasTarget: Bool = false
+
     // MARK: - Adjustments
 
     /// The curated 8-parameter set (CLAUDE.md Phase 7 roadmap: "a small
@@ -288,7 +341,9 @@ struct Mask: Identifiable, Equatable, Codable {
     /// this is `true`, which is what makes a geometry-only mask render
     /// BYTE-IDENTICAL to no mask at all. Deliberately excludes geometry —
     /// including `kind`/`width`/`brushSize`/`brushPoints`/`luminanceTarget`/
-    /// `luminanceRange` (added slices 3-5): a mask can be `isIdentity` yet
+    /// `luminanceRange`/`colorRangeTargetHue`/`colorRangeTargetSaturation`/
+    /// `colorRangeTargetLuminance`/`colorRangeTolerance`/
+    /// `colorRangeHasTarget` (added slices 3-5): a mask can be `isIdentity` yet
     /// still a real, undo-worthy edit (the user placed it, painted a
     /// stroke, or tuned a tone window), mirroring `redEyePoints`' own
     /// existing behavior (a placed point with strength 0 renders
@@ -316,6 +371,8 @@ extension Mask {
         case centerX, centerY, radiusX, radiusY, rotationDegrees, feather, width
         case brushSize, brushPoints
         case luminanceTarget, luminanceRange
+        case colorRangeTargetHue, colorRangeTargetSaturation, colorRangeTargetLuminance
+        case colorRangeTolerance, colorRangeHasTarget
         case exposureEV, contrast, highlights, shadows
         case clarity, saturation, temperature, tint
     }
@@ -345,9 +402,9 @@ extension Mask {
         // different malformed input than an unrecognized string value.
         // `try?` makes the "never throws" guarantee unconditional on ANY
         // decode failure for this one key, not just an unrecognized-but-
-        // well-typed value. `.brush`/`.luminanceRange` are real as of
-        // slices 4/5; a future kind string (e.g. slice 6's eventual
-        // "Color Range") still falls back to `.radial` the same way.
+        // well-typed value. `.brush`/`.luminanceRange`/`.colorRange` are
+        // real as of slices 4/5; a future kind string still falls back to
+        // `.radial` the same way.
         let rawKind = (try? container.decodeIfPresent(String.self, forKey: .kind)) ?? nil
         kind = rawKind.flatMap(MaskKind.init(rawValue:)) ?? .radial
         centerX = try container.decodeIfPresent(Double.self, forKey: .centerX) ?? 0.5
@@ -372,6 +429,17 @@ extension Mask {
         // handled uniformly by every other scalar field's bare `try`.
         luminanceTarget = try container.decodeIfPresent(Double.self, forKey: .luminanceTarget) ?? 0.5
         luminanceRange = try container.decodeIfPresent(Double.self, forKey: .luminanceRange) ?? 0.3
+        // Same hazard class as `luminanceTarget`/`luminanceRange` above —
+        // plain scalars, bare `try`. `colorRangeHasTarget` is a plain
+        // `Bool`, not a raw-value enum, so it has none of `kind`'s
+        // unrecognized-value hazard and needs no `try?` of its own.
+        colorRangeTargetHue = try container.decodeIfPresent(Double.self, forKey: .colorRangeTargetHue) ?? 0
+        colorRangeTargetSaturation =
+            try container.decodeIfPresent(Double.self, forKey: .colorRangeTargetSaturation) ?? 0
+        colorRangeTargetLuminance =
+            try container.decodeIfPresent(Double.self, forKey: .colorRangeTargetLuminance) ?? 0
+        colorRangeTolerance = try container.decodeIfPresent(Double.self, forKey: .colorRangeTolerance) ?? 0.3
+        colorRangeHasTarget = try container.decodeIfPresent(Bool.self, forKey: .colorRangeHasTarget) ?? false
         exposureEV = try container.decodeIfPresent(Double.self, forKey: .exposureEV) ?? 0
         contrast = try container.decodeIfPresent(Double.self, forKey: .contrast) ?? 0
         highlights = try container.decodeIfPresent(Double.self, forKey: .highlights) ?? 0
@@ -396,6 +464,9 @@ extension Mask {
                 kind: kind, centerX: centerX, centerY: centerY, radiusX: radiusX, radiusY: radiusY,
                 rotationDegrees: rotationDegrees, feather: feather, width: width, brushSize: brushSize,
                 brushPoints: brushPoints, luminanceTarget: luminanceTarget, luminanceRange: luminanceRange,
+                colorRangeTargetHue: colorRangeTargetHue, colorRangeTargetSaturation: colorRangeTargetSaturation,
+                colorRangeTargetLuminance: colorRangeTargetLuminance, colorRangeTolerance: colorRangeTolerance,
+                colorRangeHasTarget: colorRangeHasTarget,
                 exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
                 clarity: clarity, saturation: saturation, temperature: temperature, tint: tint
             )
@@ -438,19 +509,32 @@ extension Mask {
     /// first (so two masks differing only in point count never collide),
     /// then each point's x/y in order.
     ///
-    /// Slice 5 note: `luminanceTarget`/`luminanceRange` join the
+    /// Slice 5 first-half note: `luminanceTarget`/`luminanceRange` join the
     /// fixed-arity scalar list (both plain `Double`s, no variable-length
     /// pass needed), plus a fourth `kindSeed` arm for `.luminanceRange`.
+    ///
+    /// Slice 5 second-half note: `colorRangeTargetHue`/
+    /// `colorRangeTargetSaturation`/`colorRangeTargetLuminance`/
+    /// `colorRangeTolerance` join the fixed-arity scalar list too, plus
+    /// `colorRangeHasTarget` mixed in as `1`/`0` — the flag MUST be mixed
+    /// in, not just the three scalars it gates: two id-less masks
+    /// differing ONLY in "has a color been picked" are visibly different
+    /// (one is inert, the other isn't) and must not collide. A fifth
+    /// `kindSeed` arm covers `.colorRange`.
     private static func deterministicFallbackID(
         kind: MaskKind, centerX: Double, centerY: Double, radiusX: Double, radiusY: Double,
         rotationDegrees: Double, feather: Double, width: Double, brushSize: Double,
         brushPoints: [BrushPoint], luminanceTarget: Double, luminanceRange: Double,
+        colorRangeTargetHue: Double, colorRangeTargetSaturation: Double,
+        colorRangeTargetLuminance: Double, colorRangeTolerance: Double, colorRangeHasTarget: Bool,
         exposureEV: Double, contrast: Double, highlights: Double, shadows: Double,
         clarity: Double, saturation: Double, temperature: Double, tint: Double
     ) -> UUID {
         let values = [
             centerX, centerY, radiusX, radiusY, rotationDegrees, feather, width, brushSize,
             luminanceTarget, luminanceRange,
+            colorRangeTargetHue, colorRangeTargetSaturation, colorRangeTargetLuminance, colorRangeTolerance,
+            colorRangeHasTarget ? 1 : 0,
             exposureEV, contrast, highlights, shadows, clarity, saturation, temperature, tint
         ]
         let kindSeed: UInt64
@@ -459,6 +543,7 @@ extension Mask {
         case .linear: kindSeed = 0x517cc1b727220a95
         case .brush: kindSeed = 0x2545f4914f6cdd1d
         case .luminanceRange: kindSeed = 0xbf58476d1ce4e5b9
+        case .colorRange: kindSeed = 0x1b873593cc9e2d51
         }
         let prime: UInt64 = 0x100000001b3
         var laneA: UInt64 = (0xcbf29ce484222325 ^ kindSeed) &* prime

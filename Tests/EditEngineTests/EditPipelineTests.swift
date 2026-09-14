@@ -3114,6 +3114,418 @@ final class EditPipelineTests: XCTestCase {
         )
     }
 
+    // MARK: - Color Range mask (Phase 7 slice 5, second half)
+    //
+    // The second CONTENT-DERIVED mask kind: selects pixels by their own
+    // color (hue + saturation + luminance JOINTLY), not drawn geometry or
+    // tone alone. `ColorRangeSelection`'s own tests already cover the
+    // tolerance-window/tone-mapping math and the Swift twin of
+    // `ColorRange.cikernel`'s per-pixel conversion in isolation; these
+    // tests exercise the actual `EditPipeline` integration — the custom
+    // kernel filter chain and the shared adjustment plumbing.
+
+    private func colorRangeTargetScalars(forLinearRGB rgb: (r: Double, g: Double, b: Double)) -> (hue: Double, sat: Double, lum: Double) {
+        let (hue, sat) = ColorRangeSelection.hueSaturation(forLinearRGB: rgb.r, rgb.g, rgb.b)
+        let lum = ColorRangeSelection.luminance(forLinearRGB: rgb.r, rgb.g, rgb.b)
+        return (hue, sat, lum)
+    }
+
+    private func colorRangeMask(
+        targetHue: Double, targetSaturation: Double, targetLuminance: Double,
+        tolerance: Double = 0.3, feather: Double = 0.5, hasTarget: Bool = true,
+        exposureEV: Double = 0, contrast: Double = 0, highlights: Double = 0, shadows: Double = 0,
+        clarity: Double = 0, saturation: Double = 0, temperature: Double = 0, tint: Double = 0
+    ) -> Mask {
+        Mask(
+            kind: .colorRange, feather: feather,
+            colorRangeTargetHue: targetHue, colorRangeTargetSaturation: targetSaturation,
+            colorRangeTargetLuminance: targetLuminance, colorRangeTolerance: tolerance, colorRangeHasTarget: hasTarget,
+            exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
+            clarity: clarity, saturation: saturation, temperature: temperature, tint: tint
+        )
+    }
+
+    /// A fixed saturated purple, the Color Range analogue of
+    /// `middleGrayLinear` — every equivalence test below builds its mask's
+    /// target directly FROM this triple's own computed hue/sat/luminance,
+    /// so a solid image of this exact color always sits at distance 0
+    /// (full weight) regardless of tolerance/feather.
+    private let colorRangeTargetRGB: (r: Double, g: Double, b: Double) = (0.32, 0.11, 0.46)
+
+    private func fullyCoveringColorRangeMask(
+        exposureEV: Double = 0, contrast: Double = 0, highlights: Double = 0, shadows: Double = 0,
+        clarity: Double = 0, saturation: Double = 0, temperature: Double = 0, tint: Double = 0
+    ) -> Mask {
+        let scalars = colorRangeTargetScalars(forLinearRGB: colorRangeTargetRGB)
+        return colorRangeMask(
+            targetHue: scalars.hue, targetSaturation: scalars.sat, targetLuminance: scalars.lum,
+            tolerance: 0.3, feather: 0.5,
+            exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
+            clarity: clarity, saturation: saturation, temperature: temperature, tint: tint
+        )
+    }
+
+    private func colorRangeTargetImage(size: Int = 400) -> CIImage {
+        solidColorImage(r: colorRangeTargetRGB.r, g: colorRangeTargetRGB.g, b: colorRangeTargetRGB.b, a: 1, size: size)
+    }
+
+    private func colorStepEdgeImage(
+        loRGB: (r: Double, g: Double, b: Double), hiRGB: (r: Double, g: Double, b: Double), size: Int
+    ) -> CIImage {
+        let left = CIColor(red: loRGB.r, green: loRGB.g, blue: loRGB.b, colorSpace: linearSpace)!
+        let right = CIColor(red: hiRGB.r, green: hiRGB.g, blue: hiRGB.b, colorSpace: linearSpace)!
+        let leftHalf = CIImage(color: left).cropped(to: CGRect(x: 0, y: 0, width: size / 2, height: size))
+        let rightHalf = CIImage(color: right).cropped(to: CGRect(x: size / 2, y: 0, width: size / 2, height: size))
+        return leftHalf.composited(over: rightHalf)
+    }
+
+    /// The "added but unpicked selects nothing" contract, WITH a non-zero
+    /// exposure to prove it — mirrors `.brush`'s own empty-`brushPoints`
+    /// no-op test.
+    func testColorRangeNoTargetIsExactNoOp() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 1, size: 400)
+        let withMask = EditPipeline.apply(
+            EditState(masks: [colorRangeMask(
+                targetHue: 30, targetSaturation: 0.5, targetLuminance: 0.2, hasTarget: false, exposureEV: 2
+            )]),
+            to: input
+        )
+        let withoutMask = EditPipeline.apply(EditState(), to: input)
+        XCTAssertEqual(
+            pixel(of: withMask, at: 200, 200).r, pixel(of: withoutMask, at: 200, 200).r, accuracy: accuracy,
+            "an un-picked mask must select nothing, even with a large exposure adjustment"
+        )
+    }
+
+    func testColorRangeIdentityParamMaskIsExactNoOp() {
+        let input = colorRangeTargetImage()
+        let withMask = EditPipeline.apply(EditState(masks: [fullyCoveringColorRangeMask()]), to: input)
+        let withoutMask = EditPipeline.apply(EditState(), to: input)
+        XCTAssertEqual(pixel(of: withMask, at: 200, 200).r, pixel(of: withoutMask, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testColorRangeHueSelectivityAtEqualLuma() {
+        // Two colors with the SAME saturation/lightness in HSL, 150 degrees
+        // apart in hue — far outside a moderate tolerance's hue window, so
+        // only the exact-hue match should be selected.
+        let matchRGB = ColorRangeSelection.rgb(forHue: 40, saturation: 0.8, lightness: 0.4)
+        let farRGB = ColorRangeSelection.rgb(forHue: 190, saturation: 0.8, lightness: 0.4)
+        let scalars = colorRangeTargetScalars(forLinearRGB: matchRGB)
+        let mask = colorRangeMask(
+            targetHue: scalars.hue, targetSaturation: scalars.sat, targetLuminance: scalars.lum,
+            tolerance: 0.3, feather: 0.5, exposureEV: 1
+        )
+        let matchOutput = EditPipeline.apply(
+            EditState(masks: [mask]), to: solidColorImage(r: matchRGB.r, g: matchRGB.g, b: matchRGB.b, a: 1, size: 8)
+        )
+        let farOutput = EditPipeline.apply(
+            EditState(masks: [mask]), to: solidColorImage(r: farRGB.r, g: farRGB.g, b: farRGB.b, a: 1, size: 8)
+        )
+        XCTAssertEqual(linearPixel(of: matchOutput).r, Float(matchRGB.r * 2), accuracy: accuracy, "the exact-hue match must be fully selected")
+        XCTAssertEqual(linearPixel(of: farOutput).r, Float(farRGB.r), accuracy: accuracy, "a far hue must be untouched")
+    }
+
+    /// The defining test for the "3 axes jointly" decision — fails for any
+    /// hue-only implementation.
+    func testColorRangeDistinguishesSameHueDifferentLuminance() {
+        let matchRGB = ColorRangeSelection.rgb(forHue: 100, saturation: 0.6, lightness: 0.5)
+        let darkRGB = ColorRangeSelection.rgb(forHue: 100, saturation: 0.6, lightness: 0.1)
+        let scalars = colorRangeTargetScalars(forLinearRGB: matchRGB)
+        let mask = colorRangeMask(
+            targetHue: scalars.hue, targetSaturation: scalars.sat, targetLuminance: scalars.lum,
+            tolerance: 0.2, feather: 0.5, exposureEV: 1
+        )
+        let matchOutput = EditPipeline.apply(
+            EditState(masks: [mask]), to: solidColorImage(r: matchRGB.r, g: matchRGB.g, b: matchRGB.b, a: 1, size: 8)
+        )
+        let darkOutput = EditPipeline.apply(
+            EditState(masks: [mask]), to: solidColorImage(r: darkRGB.r, g: darkRGB.g, b: darkRGB.b, a: 1, size: 8)
+        )
+        XCTAssertEqual(linearPixel(of: matchOutput).r, Float(matchRGB.r * 2), accuracy: accuracy)
+        XCTAssertEqual(linearPixel(of: darkOutput).r, Float(darkRGB.r), accuracy: accuracy, "same hue but far luminance must be untouched")
+    }
+
+    func testColorRangeDistinguishesSameHueDifferentSaturation() {
+        let matchRGB = ColorRangeSelection.rgb(forHue: 260, saturation: 0.9, lightness: 0.45)
+        let mutedRGB = ColorRangeSelection.rgb(forHue: 260, saturation: 0.05, lightness: 0.45)
+        let scalars = colorRangeTargetScalars(forLinearRGB: matchRGB)
+        let mask = colorRangeMask(
+            targetHue: scalars.hue, targetSaturation: scalars.sat, targetLuminance: scalars.lum,
+            tolerance: 0.2, feather: 0.5, exposureEV: 1
+        )
+        let matchOutput = EditPipeline.apply(
+            EditState(masks: [mask]), to: solidColorImage(r: matchRGB.r, g: matchRGB.g, b: matchRGB.b, a: 1, size: 8)
+        )
+        let mutedOutput = EditPipeline.apply(
+            EditState(masks: [mask]), to: solidColorImage(r: mutedRGB.r, g: mutedRGB.g, b: mutedRGB.b, a: 1, size: 8)
+        )
+        XCTAssertEqual(linearPixel(of: matchOutput).r, Float(matchRGB.r * 2), accuracy: accuracy)
+        XCTAssertEqual(linearPixel(of: mutedOutput).r, Float(mutedRGB.r), accuracy: accuracy, "same hue but far saturation must be untouched")
+    }
+
+    func testColorRangeNeutralTargetDoesNotSelectSaturated() {
+        let grayLinear = 0.3
+        let scalars = colorRangeTargetScalars(forLinearRGB: (grayLinear, grayLinear, grayLinear))
+        let mask = colorRangeMask(
+            targetHue: scalars.hue, targetSaturation: scalars.sat, targetLuminance: scalars.lum,
+            tolerance: 0.2, feather: 0.5, exposureEV: 1
+        )
+        let saturatedRGB = ColorRangeSelection.rgb(forHue: 30, saturation: 0.9, lightness: 0.4)
+        let output = EditPipeline.apply(
+            EditState(masks: [mask]), to: solidColorImage(r: saturatedRGB.r, g: saturatedRGB.g, b: saturatedRGB.b, a: 1, size: 8)
+        )
+        XCTAssertEqual(linearPixel(of: output).r, Float(saturatedRGB.r), accuracy: accuracy, "a neutral target must not select a saturated pixel")
+    }
+
+    func testColorRangeSaturatedTargetDoesNotSelectNeutral() {
+        let targetRGB = ColorRangeSelection.rgb(forHue: 30, saturation: 0.9, lightness: 0.4)
+        let scalars = colorRangeTargetScalars(forLinearRGB: targetRGB)
+        let mask = colorRangeMask(
+            targetHue: scalars.hue, targetSaturation: scalars.sat, targetLuminance: scalars.lum,
+            tolerance: 0.2, feather: 0.5, exposureEV: 1
+        )
+        let grayLinear = 0.3
+        let output = EditPipeline.apply(EditState(masks: [mask]), to: solidColorImage(grayLinear, size: 8))
+        XCTAssertEqual(linearPixel(of: output).r, Float(grayLinear), accuracy: accuracy, "a saturated target must not select a neutral pixel")
+    }
+
+    /// Derives the expected weight from `ColorRangeSelection.resolve`
+    /// directly (the exact formula `ColorRange.cikernel` implements,
+    /// re-derived here in Swift) — the reviewer-mandated pattern from
+    /// slice 5's first half: a genuine cross-check that the Core Image
+    /// render chain and the Swift threshold math agree, not a tautology.
+    func testColorRangeExactWeightAtAPartialMatchMatchesTheAnalyticFormula() {
+        let targetRGB = ColorRangeSelection.rgb(forHue: 210, saturation: 0.8, lightness: 0.4)
+        let target = colorRangeTargetScalars(forLinearRGB: targetRGB)
+        let tolerance = 0.4
+        let feather = 0.6
+        let extent = CGRect(x: 0, y: 0, width: 8, height: 8)
+        let sel = ColorRangeSelection.resolve(
+            hasTarget: true, targetHue: target.hue, targetSaturation: target.sat, targetLuminance: target.lum,
+            tolerance: tolerance, feather: feather, extent: extent
+        )!
+
+        let testRGB = ColorRangeSelection.rgb(forHue: 225, saturation: 0.55, lightness: 0.3)
+        let testScalars = colorRangeTargetScalars(forLinearRGB: testRGB)
+
+        var hueDist = abs(testScalars.hue - target.hue)
+        hueDist = min(hueDist, 360 - hueDist)
+        let saturationAttenuation = min(testScalars.sat, target.sat)
+        let dHue = (hueDist / sel.hueWindowDegrees) * saturationAttenuation
+        let dSat = abs(testScalars.sat - target.sat) / sel.saturationWindow
+        let dLum: Double
+        if testScalars.lum < target.lum {
+            dLum = (target.lum - testScalars.lum) / sel.lowerLuminanceSpan
+        } else {
+            dLum = (testScalars.lum - target.lum) / sel.upperLuminanceSpan
+        }
+        let d = (dHue * dHue + dSat * dSat + dLum * dLum).squareRoot()
+        let expectedWeight = min(max((1 - d) / sel.falloffWidth, 0), 1)
+
+        let mask = colorRangeMask(
+            targetHue: target.hue, targetSaturation: target.sat, targetLuminance: target.lum,
+            tolerance: tolerance, feather: feather, exposureEV: 1
+        )
+        let output = EditPipeline.apply(
+            EditState(masks: [mask]), to: solidColorImage(r: testRGB.r, g: testRGB.g, b: testRGB.b, a: 1, size: 8)
+        )
+        // +1 EV doubles the fully-selected value; `CIBlendWithMask`
+        // linearly interpolates by weight, so a partial weight `w` reads
+        // `input * (1 + w)` — the same reconstruction
+        // `testLuminanceRangeExactWeightAtAPartialToneMatchesTheAnalyticFormula` uses.
+        let actualWeight = Double(linearPixel(of: output).r) / testRGB.r - 1
+        XCTAssertEqual(actualWeight, expectedWeight, accuracy: 0.01)
+    }
+
+    func testColorRangeWiderToleranceSelectsMore() {
+        let targetRGB = ColorRangeSelection.rgb(forHue: 150, saturation: 0.7, lightness: 0.4)
+        let scalars = colorRangeTargetScalars(forLinearRGB: targetRGB)
+        let farRGB = ColorRangeSelection.rgb(forHue: 190, saturation: 0.7, lightness: 0.4)
+        func exposedValue(tolerance: Double) -> Float {
+            let mask = colorRangeMask(
+                targetHue: scalars.hue, targetSaturation: scalars.sat, targetLuminance: scalars.lum,
+                tolerance: tolerance, feather: 0.5, exposureEV: 1
+            )
+            let output = EditPipeline.apply(
+                EditState(masks: [mask]), to: solidColorImage(r: farRGB.r, g: farRGB.g, b: farRGB.b, a: 1, size: 8)
+            )
+            return linearPixel(of: output).r
+        }
+        let narrow = exposedValue(tolerance: ColorRangeSelection.minimumTolerance)
+        let wide = exposedValue(tolerance: ColorRangeSelection.maximumTolerance)
+        XCTAssertGreaterThan(wide, narrow, "a wider tolerance must select this off-target hue more than a narrow one")
+    }
+
+    /// UNLIKE `.luminanceRange`'s plateau/tent split, `feather` here is
+    /// used DIRECTLY as the falloff ramp's width in normalized-distance
+    /// units — a distance of exactly 1 always reads zero regardless of
+    /// feather; only the SHAPE of the ramp between 0 and 1 changes. A
+    /// small feather (steep ramp) reads near-full-strength well past the
+    /// halfway point; feather 1 (a linear ramp from center to edge) reads
+    /// meaningfully less at the same distance.
+    func testColorRangeFeatherTradesSteepRampForGentlerShoulder() {
+        let targetRGB = ColorRangeSelection.rgb(forHue: 60, saturation: 0.9, lightness: 0.5)
+        let scalars = colorRangeTargetScalars(forLinearRGB: targetRGB)
+        let extent = CGRect(x: 0, y: 0, width: 8, height: 8)
+        let tolerance = 0.5
+        let sel = ColorRangeSelection.resolve(
+            hasTarget: true, targetHue: scalars.hue, targetSaturation: scalars.sat, targetLuminance: scalars.lum,
+            tolerance: tolerance, feather: 1, extent: extent
+        )!
+        let halfwayHue = scalars.hue + sel.hueWindowDegrees * 0.5
+        let halfwayRGB = ColorRangeSelection.rgb(forHue: halfwayHue, saturation: 0.9, lightness: 0.5)
+        func value(feather: Double) -> Float {
+            let mask = colorRangeMask(
+                targetHue: scalars.hue, targetSaturation: scalars.sat, targetLuminance: scalars.lum,
+                tolerance: tolerance, feather: feather, exposureEV: 1
+            )
+            let output = EditPipeline.apply(
+                EditState(masks: [mask]), to: solidColorImage(r: halfwayRGB.r, g: halfwayRGB.g, b: halfwayRGB.b, a: 1, size: 8)
+            )
+            return linearPixel(of: output).r
+        }
+        let hard = value(feather: 0)
+        let soft = value(feather: 1)
+        XCTAssertGreaterThan(hard, Float(halfwayRGB.r * 1.8), "a steep (near-zero-feather) ramp reads near-full-strength at d≈0.5")
+        XCTAssertLessThan(soft, hard, "feather 1's linear ramp reads meaningfully less at the same distance")
+    }
+
+    func testColorRangeExposureMatchesGlobalExposure() {
+        let input = colorRangeTargetImage()
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringColorRangeMask(exposureEV: 1.2)]), to: input)
+        let global = EditPipeline.apply(EditState(exposureEV: 1.2), to: input)
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).r, pixel(of: global, at: 200, 200).r, accuracy: accuracy)
+        XCTAssertNotEqual(pixel(of: masked, at: 200, 200).r, pixel(of: input, at: 200, 200).r, "sanity: a real effect happened")
+    }
+
+    func testColorRangeContrastMatchesGlobalContrast() {
+        let input = colorRangeTargetImage()
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringColorRangeMask(contrast: 0.5)]), to: input)
+        let global = EditPipeline.apply(EditState(contrast: 0.5), to: input)
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).r, pixel(of: global, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testColorRangeWhiteBalanceIsNoOpOnABlackAndWhitePhoto() {
+        // Unlike `.luminanceRange`'s own version of this test,
+        // `fullyCoveringColorRangeMask` can't be reused directly: its
+        // target is built from the ORIGINAL saturated `colorRangeTargetRGB`,
+        // but `applyPerceptualAdjustments`'s forced B&W desaturation runs
+        // BEFORE `applyMasks` — so the RUNNING image this mask's saturation
+        // axis actually sees is already desaturated, breaking "full
+        // coverage" for a saturated target. Sampling the already-desaturated
+        // render and building the target from THAT keeps this test's own
+        // premise (full coverage) valid.
+        let input = colorRangeTargetImage()
+        let withoutMask = EditPipeline.apply(EditState(blackAndWhite: true), to: input)
+        let desaturatedPixel = linearPixel(of: withoutMask)
+        let desaturatedScalars = colorRangeTargetScalars(
+            forLinearRGB: (Double(desaturatedPixel.r), Double(desaturatedPixel.g), Double(desaturatedPixel.b))
+        )
+        let mask = colorRangeMask(
+            targetHue: desaturatedScalars.hue, targetSaturation: desaturatedScalars.sat, targetLuminance: desaturatedScalars.lum,
+            tolerance: ColorRangeSelection.maximumTolerance, feather: 0.5, temperature: 1500, tint: 40
+        )
+        let withMask = EditPipeline.apply(EditState(blackAndWhite: true, masks: [mask]), to: input)
+        XCTAssertEqual(pixel(of: withMask, at: 200, 200).r, pixel(of: withoutMask, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testColorRangePreservesExtentExactly() {
+        let input = colorRangeTargetImage()
+        let output = EditPipeline.apply(EditState(masks: [fullyCoveringColorRangeMask(exposureEV: 1)]), to: input)
+        XCTAssertEqual(output.extent, input.extent)
+    }
+
+    func testColorRangePreservesAlpha() {
+        let color = CIColor(
+            red: colorRangeTargetRGB.r, green: colorRangeTargetRGB.g, blue: colorRangeTargetRGB.b,
+            alpha: 0.6, colorSpace: linearSpace
+        )!
+        let input = CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let output = EditPipeline.apply(EditState(masks: [fullyCoveringColorRangeMask(exposureEV: 1)]), to: input)
+        XCTAssertEqual(pixel(of: output, at: 200, 200).a, 0.6, accuracy: accuracy)
+    }
+
+    func testColorRangeSelectionIsResolutionIndependentAwayFromAColorEdge() {
+        let outsideRGB = ColorRangeSelection.rgb(forHue: 20, saturation: 0.8, lightness: 0.4)
+        let fullInput = colorStepEdgeImage(loRGB: outsideRGB, hiRGB: colorRangeTargetRGB, size: 400)
+        let proxyInput = colorStepEdgeImage(loRGB: outsideRGB, hiRGB: colorRangeTargetRGB, size: 40)
+        let state = EditState(masks: [fullyCoveringColorRangeMask(exposureEV: 1)])
+        let full = EditPipeline.apply(state, to: fullInput)
+        let proxy = EditPipeline.apply(state, to: proxyInput)
+        XCTAssertEqual(pixel(of: full, at: 350, 200).r, pixel(of: proxy, at: 35, 20).r, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: full, at: 350, 200).r, Float(colorRangeTargetRGB.r * 2), accuracy: accuracy)
+    }
+
+    func testColorRangeCompoundsSequentiallyWithARadialMask() {
+        let input = colorRangeTargetImage()
+        let radial = Mask(centerX: 0.5, centerY: 0.5, radiusX: 2.0, radiusY: 2.0, exposureEV: 1)
+        let output = EditPipeline.apply(EditState(masks: [fullyCoveringColorRangeMask(exposureEV: 1), radial]), to: input)
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, Float(colorRangeTargetRGB.r * 4), accuracy: accuracy)
+    }
+
+    func testColorRangeSelectionFollowsEarlierMasksResult() {
+        // A first mask brightens this patch by +4 EV. Reviewer-corrected:
+        // this does NOT merely shift luminance while leaving hue/saturation
+        // untouched — `ColorRangeSelectionTests
+        // .testHueSaturationIsHeadroomScaleInvariant` only demonstrates
+        // scale invariance WITHIN a fixed headroom regime (both its sample
+        // colors already have `maxChannel >= 1`); `colorRangeTargetRGB`
+        // (max channel 0.46) starts BELOW that boundary, so a x16 scale
+        // crosses it — `scale = max(maxChannel, 1.0)` flips from a real
+        // division to a no-op, so measured hue stays fixed (276°) but
+        // SATURATION also shifts (0.614 -> 1.0), on top of the (much
+        // larger) luminance shift. Either alone would push this patch
+        // outside a narrow window; both are outside it here, but the
+        // point being tested is unaffected: the second mask must measure
+        // the ALREADY-brightened color, not the original, the same
+        // "reads `img`, not `image`" contract `.luminanceRange` already
+        // established.
+        let input = colorRangeTargetImage()
+        let brighten = Mask(centerX: 0.5, centerY: 0.5, radiusX: 2.0, radiusY: 2.0, exposureEV: 4)
+        let scalars = colorRangeTargetScalars(forLinearRGB: colorRangeTargetRGB)
+        let narrowAtOriginalColor = colorRangeMask(
+            targetHue: scalars.hue, targetSaturation: scalars.sat, targetLuminance: scalars.lum,
+            tolerance: ColorRangeSelection.minimumTolerance, feather: 0, exposureEV: 5
+        )
+        let output = EditPipeline.apply(EditState(masks: [brighten, narrowAtOriginalColor]), to: input)
+        let brightenOnly = EditPipeline.apply(EditState(masks: [brighten]), to: input)
+        XCTAssertEqual(
+            pixel(of: output, at: 200, 200).r, pixel(of: brightenOnly, at: 200, 200).r, accuracy: accuracy,
+            "the color-range mask must see the ALREADY-brightened color (now outside its narrow luminance window), not the original"
+        )
+    }
+
+    /// The direct `EditPipeline`-level port of `SelectiveColor.cikernel`'s
+    /// real shipped bug — the single most important test in this section:
+    /// a colored HEADROOM pixel (max channel > 1) must still be selectable
+    /// by its own hue/saturation once headroom-normalized, not silently a
+    /// no-op from an unnormalized HSL saturation denominator going negative.
+    func testColorRangeColoredHeadroomPixelSelection() {
+        let headroomRGB: (r: Double, g: Double, b: Double) = (2.4, 0.3, 0.2)
+        let scalars = colorRangeTargetScalars(forLinearRGB: headroomRGB)
+        let mask = colorRangeMask(
+            targetHue: scalars.hue, targetSaturation: scalars.sat, targetLuminance: scalars.lum,
+            tolerance: 0.2, feather: 0.5, exposureEV: 1
+        )
+        let output = EditPipeline.apply(
+            EditState(masks: [mask]), to: solidColorImage(r: headroomRGB.r, g: headroomRGB.g, b: headroomRGB.b, a: 1, size: 8)
+        )
+        XCTAssertEqual(linearPixel(of: output).r, Float(headroomRGB.r * 2), accuracy: 0.01, "a headroom-colored pixel must self-select at full weight")
+    }
+
+    func testColorRangeHeadroomPreservedOutsideSelection() {
+        let headroomRGB: (r: Double, g: Double, b: Double) = (2.4, 0.3, 0.2)
+        let farScalars = colorRangeTargetScalars(forLinearRGB: (0.1, 0.1, 0.5))
+        let mask = colorRangeMask(
+            targetHue: farScalars.hue, targetSaturation: farScalars.sat, targetLuminance: farScalars.lum,
+            tolerance: 0.1, feather: 0.5, exposureEV: 1
+        )
+        let output = EditPipeline.apply(
+            EditState(masks: [mask]), to: solidColorImage(r: headroomRGB.r, g: headroomRGB.g, b: headroomRGB.b, a: 1, size: 8)
+        )
+        XCTAssertEqual(linearPixel(of: output).r, Float(headroomRGB.r), accuracy: 0.01, "an unmatched headroom pixel must keep its headroom exactly, unclamped")
+    }
+
     // MARK: - Vignette math
     //
     // Vignette (CIVignetteEffect) is a radial darkening/brightening tied to

@@ -231,19 +231,21 @@ final class EditStateCodableTests: XCTestCase {
     /// `try?`, so an uncaught throw here wouldn't just skip this one
     /// mask — it would discard the ENTIRE sidecar, every global edit on
     /// the photo included. Assert the fix directly: a sidecar with an
-    /// unrecognized future kind string (`"colorRange"`, standing in for the
-    /// actual future Color Range mask kind — CLAUDE.md's Phase 7 roadmap
-    /// item 5, still not scheduled; `"brush"` and `"luminanceRange"` both
-    /// became REAL, recognized kinds in slices 4/5, so neither can stand
-    /// in for "unrecognized" anymore) PLUS a non-default GLOBAL field must
-    /// still decode successfully, with the global field intact — proving
-    /// the whole-sidecar-loss hazard is actually closed, not just
-    /// theorized.
+    /// unrecognized future kind string (`"depthRange"`, standing in for a
+    /// still-unbuilt future mask kind — CLAUDE.md's Phase 7 roadmap names
+    /// Depth Range as explicitly out of scope, needing its own research
+    /// spike first; `"brush"`, `"luminanceRange"`, and now `"colorRange"`
+    /// all became REAL, recognized kinds in slices 4/5, so none of them
+    /// can stand in for "unrecognized" anymore — repointed off `"colorRange"`
+    /// specifically when that slice shipped, per this test's own original
+    /// warning) PLUS a non-default GLOBAL field must still decode
+    /// successfully, with the global field intact — proving the
+    /// whole-sidecar-loss hazard is actually closed, not just theorized.
     func testUnknownMaskKindDecodesToRadialWithoutDiscardingTheSidecar() throws {
         let json = """
         {
             "exposureEV": 1.5,
-            "masks": [{ "kind": "colorRange", "centerX": 0.6 }]
+            "masks": [{ "kind": "depthRange", "centerX": 0.6 }]
         }
         """
         let state = try decode(json)
@@ -436,6 +438,88 @@ final class EditStateCodableTests: XCTestCase {
     func testRepeatedDecodesOfTheSameIdLessLuminanceRangeMaskAreEqual() throws {
         let json = """
         { "masks": [{ "kind": "luminanceRange", "luminanceTarget": 0.65, "luminanceRange": 0.2 }] }
+        """
+        let first = try decode(json).masks[0]
+        let second = try decode(json).masks[0]
+        XCTAssertEqual(first.id, second.id)
+    }
+
+    /// Phase 7 slice 5 second half: `colorRangeTargetHue`/
+    /// `colorRangeTargetSaturation`/`colorRangeTargetLuminance`/
+    /// `colorRangeTolerance`/`colorRangeHasTarget` default when absent, the
+    /// same schema-tolerance every other `Mask` field already has (a
+    /// pre-slice-5-second-half sidecar has none of these keys at all).
+    func testColorRangeFieldsDefaultWhenAbsent() throws {
+        let json = """
+        { "masks": [{ "kind": "colorRange" }] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].colorRangeTargetHue, 0, accuracy: 0.0001)
+        XCTAssertEqual(state.masks[0].colorRangeTargetSaturation, 0, accuracy: 0.0001)
+        XCTAssertEqual(state.masks[0].colorRangeTargetLuminance, 0, accuracy: 0.0001)
+        XCTAssertEqual(state.masks[0].colorRangeTolerance, 0.3, accuracy: 0.0001)
+        XCTAssertFalse(state.masks[0].colorRangeHasTarget)
+    }
+
+    /// A `.colorRange` mask's new fields must survive an encode/decode
+    /// round-trip, the same guarantee already exercised for every other
+    /// kind's own geometry/selection fields.
+    func testColorRangeMaskRoundTripsThroughCodable() throws {
+        let original = Mask(
+            kind: .colorRange, feather: 0.6,
+            colorRangeTargetHue: 210, colorRangeTargetSaturation: 0.5, colorRangeTargetLuminance: 0.22,
+            colorRangeTolerance: 0.45, colorRangeHasTarget: true,
+            exposureEV: -0.4
+        )
+        let data = try JSONEncoder().encode(EditState(masks: [original]))
+        let decoded = try JSONDecoder().decode(EditState.self, from: data)
+        XCTAssertEqual(decoded.masks.count, 1)
+        XCTAssertEqual(decoded.masks[0].kind, .colorRange)
+        XCTAssertEqual(decoded.masks[0].colorRangeTargetHue, 210, accuracy: 0.0001)
+        XCTAssertEqual(decoded.masks[0].colorRangeTargetSaturation, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(decoded.masks[0].colorRangeTargetLuminance, 0.22, accuracy: 0.0001)
+        XCTAssertEqual(decoded.masks[0].colorRangeTolerance, 0.45, accuracy: 0.0001)
+        XCTAssertTrue(decoded.masks[0].colorRangeHasTarget)
+        XCTAssertEqual(decoded.masks[0].id, original.id)
+    }
+
+    /// `deterministicFallbackID` mixes `kind` in first — an id-less
+    /// `.colorRange` mask must not collide with an id-less `.luminanceRange`
+    /// mask that happens to share every other (default) field value, the
+    /// same reasoning `testIdLessLuminanceRangeAndRadialMasksGetDifferentIds`
+    /// already established for the previous kind addition.
+    func testIdLessColorRangeAndLuminanceRangeMasksGetDifferentIds() throws {
+        let json = """
+        { "masks": [
+            { "kind": "colorRange" },
+            { "kind": "luminanceRange" }
+        ] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 2)
+        XCTAssertNotEqual(state.masks[0].id, state.masks[1].id)
+    }
+
+    /// `colorRangeHasTarget` must itself feed the hash, not just the three
+    /// scalars it gates (see that field's own doc comment) — an id-less
+    /// mask with a picked color must not collide with an otherwise-
+    /// identical id-less mask that hasn't picked one yet.
+    func testIdLessColorRangeMasksDifferingOnlyInHasTargetGetDifferentIds() throws {
+        let json = """
+        { "masks": [
+            { "kind": "colorRange", "colorRangeHasTarget": true },
+            { "kind": "colorRange", "colorRangeHasTarget": false }
+        ] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 2)
+        XCTAssertNotEqual(state.masks[0].id, state.masks[1].id)
+    }
+
+    func testRepeatedDecodesOfTheSameIdLessColorRangeMaskAreEqual() throws {
+        let json = """
+        { "masks": [{ "kind": "colorRange", "colorRangeTargetHue": 88, "colorRangeHasTarget": true }] }
         """
         let first = try decode(json).masks[0]
         let second = try decode(json).masks[0]

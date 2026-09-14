@@ -665,6 +665,56 @@ Deliberately left as a documented gap rather than rushed:
 `.onChange` call site's own comment (both in `ContentView.swift`) now
 say so explicitly instead of claiming coverage that doesn't exist.
 
+### D14. No keyboard/AT path to pick a Color Range mask's target color (Phase 7 slice 5, second half)
+
+`ColorRange` mask's Tolerance/Feather are labeled, AT-adjustable
+`EditSliderRow`s exactly like `.luminanceRange`'s own params — but
+PICKING the color itself (`ContentView.pointAndZoomOverlays`'s new
+tap-capture branch) is a bare `SpatialTapGesture` with no keyboard/AT
+path at all, the same category of gap D8 closed for the WB eyedropper
+and Red-Eye placement, and the same one `MaskDetailView`'s own class
+doc comment now names explicitly for this kind.
+
+Unlike D11 (`.brush`'s stroke shape — no slider equivalent, no obvious
+keyboard generalization), this one is a CHEAP future win: D8's
+crosshair-nudge machinery (`ContentView.crosshairPosition`/
+`handlePointPlacementKeyPress`/`commitPointPlacement`/
+`EditorCrosshairOverlay`) already exists and already handles exactly
+this shape (arrow keys move a normalized-position crosshair, Return
+commits, Escape disarms) — wiring a third "mode" into that existing
+dispatch (alongside `isPickingWhiteBalance`/`isPlacingRedEyeCorrections`)
+is mostly a routing change: extend `handleImagePaneKeyPress`'s mode
+check, extend `commitPointPlacement` with an `isPickingColorRange`
+branch calling `document.pickColorRangeTarget(maskID:normalizedX:normalizedY:)`,
+draw `EditorCrosshairOverlay` while armed. Not built this slice —
+logged as the next candidate D8-style follow-up, not forgotten.
+
+**Two smaller follow-ups noted while building this slice, neither
+built:**
+- **A shared mutual-exclusion mode enum is now genuinely worth it.**
+  `AdjustTabView` hand-rolls WB/Red-Eye/mask-selection/brush-paint/
+  color-pick mutual exclusion at 5 separate sites (`select(_:)`, the WB
+  button, the Red-Eye button, `beginBrushStroke`, `beginColorPick`) —
+  each one individually clearing the other four's armed state. A fifth
+  copy of the same pattern is the point where a `enum EditorInteractionMode
+  { case none, pickingWhiteBalance, placingRedEye, editingMask(UUID),
+  paintingBrush(UUID), pickingColorRange(UUID) }` (one piece of state
+  instead of five booleans/optionals that must always agree) would
+  measurably simplify this file — a real refactor, not a rename, so
+  scoped as its own future session rather than folded into this one.
+- **`SelectiveColor.cikernel`'s `rgb2hsl` has no negative-channel
+  clamp.** `ColorRangeSelection.hueSaturation(forLinearRGB:_:_:)`
+  (this slice) clamps negative channels to 0 before headroom-
+  normalizing, an improvement over the older `SelectiveColor.cikernel`
+  kernel it was modeled on, which normalizes headroom but never clamps
+  negatives — a real, if narrow, gap (a pixel with a negative channel,
+  e.g. from an aggressive prior color-matrix operation, could still
+  misbehave in Selective Color's own HSL math the same way the
+  positive-headroom bug once did). Not touched this slice — that file
+  is already shipped and reviewed independently; fixing it is its own
+  small future session, not a drive-by edit bundled into an unrelated
+  feature.
+
 ### D11. No keyboard/AT path to paint or adjust a Brush mask's stroke shape (Phase 7 slice 4)
 
 A REAL, named accessibility gap — unlike every other mask overlay in

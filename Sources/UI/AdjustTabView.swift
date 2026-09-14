@@ -81,6 +81,14 @@ struct AdjustTabView: View {
     /// name the OLD id, which a bare `Bool` can't supply once `select(_:)`
     /// has already repointed `selectedMaskID`.
     @Binding var brushPaintingMaskID: UUID?
+    /// Phase 7 slice 5 (second half): which mask (if any) is currently
+    /// armed for the Color Range eyedropper tap — owned by `ContentView`
+    /// for the same reason `brushPaintingMaskID` is (it gates zoom/pan via
+    /// `canZoom`'s own `isPickingColorRange` term, drives the tap-capture
+    /// overlay, and is cleared by photo/tab/Compare switches). `UUID?`,
+    /// not `Bool` (mirrors F4's own reasoning): a future falling-edge
+    /// cleanup needs to name the OLD id.
+    @Binding var colorPickingMaskID: UUID?
     /// Called when EITHER point-picking mode is entered. `ContentView` exits
     /// Compare and resets zoom/pan in response — passed as a callback so this
     /// view doesn't take bindings to three unrelated viewport states.
@@ -280,6 +288,7 @@ struct AdjustTabView: View {
                     isPlacingRedEyeCorrections = false
                     panel.selectedMaskID = nil
                     brushPaintingMaskID = nil
+                    colorPickingMaskID = nil
                     onEnterPointPickingMode()
                 }
             } label: {
@@ -361,6 +370,7 @@ struct AdjustTabView: View {
                     isPickingWhiteBalance = false
                     panel.selectedMaskID = nil
                     brushPaintingMaskID = nil
+                    colorPickingMaskID = nil
                     onEnterPointPickingMode()
                 }
             } label: {
@@ -418,7 +428,10 @@ struct AdjustTabView: View {
                 next.isMasksSectionExpanded = newValue
                 if !newValue { next.selectedMaskID = nil }
                 panel = next
-                if !newValue { brushPaintingMaskID = nil }
+                if !newValue {
+                    brushPaintingMaskID = nil
+                    colorPickingMaskID = nil
+                }
             }
         )
     }
@@ -470,6 +483,21 @@ struct AdjustTabView: View {
                     .frame(maxWidth: .infinity)
                     .accessibilityLabel("Add Luminance Range Mask")
                 }
+                // Phase 7 slice 5 second half: a third row, one new
+                // half-width "Color" button plus an explicit empty cell —
+                // NOT a bare full-width button, which "would read as a
+                // different CLASS of action" per this section's own
+                // comment above; NOT re-gridding to 3+2 either, which
+                // would move four already live-verified buttons for the
+                // sake of one new one.
+                HStack {
+                    Button("Color") {
+                        addMask(kind: .colorRange)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel("Add Color Range Mask")
+                    Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
+                }
             }
             .disabled(document.currentImage == nil)
             if document.editState.masks.isEmpty {
@@ -515,6 +543,7 @@ struct AdjustTabView: View {
         case .linear: return "line.diagonal"
         case .brush: return "paintbrush.pointed"
         case .luminanceRange: return "circle.lefthalf.filled"
+        case .colorRange: return "eyedropper"
         }
     }
 
@@ -524,6 +553,7 @@ struct AdjustTabView: View {
         case .linear: return "Linear"
         case .brush: return "Brush"
         case .luminanceRange: return "Luminance Range"
+        case .colorRange: return "Color Range"
         }
     }
 
@@ -537,7 +567,7 @@ struct AdjustTabView: View {
     private func hasOnImageOverlay(_ kind: MaskKind) -> Bool {
         switch kind {
         case .radial, .linear, .brush: return true
-        case .luminanceRange: return false
+        case .luminanceRange, .colorRange: return false
         }
     }
 
@@ -574,7 +604,8 @@ struct AdjustTabView: View {
             // typed value into Mask 2's field instead of Mask 1's.
             MaskDetailView(
                 mask: binding,
-                onBeginBrushStroke: binding.wrappedValue.kind == .brush ? { beginBrushStroke(for: id) } : nil
+                onBeginBrushStroke: binding.wrappedValue.kind == .brush ? { beginBrushStroke(for: id) } : nil,
+                onBeginColorPick: binding.wrappedValue.kind == .colorRange ? { beginColorPick(for: id) } : nil
             ).id(id)
         }
     }
@@ -605,8 +636,13 @@ struct AdjustTabView: View {
         mask.kind = kind
         document.editState.masks.append(mask)
         select(mask)
-        if kind == .brush {
+        switch kind {
+        case .brush:
             beginBrushStroke(for: mask.id)
+        case .colorRange:
+            beginColorPick(for: mask.id)
+        case .radial, .linear, .luminanceRange:
+            break
         }
     }
 
@@ -631,6 +667,7 @@ struct AdjustTabView: View {
         isPickingWhiteBalance = false
         isPlacingRedEyeCorrections = false
         brushPaintingMaskID = nil
+        colorPickingMaskID = nil
         if hasOnImageOverlay(mask.kind) {
             onEnterPointPickingMode()
         }
@@ -643,6 +680,9 @@ struct AdjustTabView: View {
         }
         if brushPaintingMaskID == mask.id {
             brushPaintingMaskID = nil
+        }
+        if colorPickingMaskID == mask.id {
+            colorPickingMaskID = nil
         }
     }
 
@@ -658,6 +698,29 @@ struct AdjustTabView: View {
         isPickingWhiteBalance = false
         isPlacingRedEyeCorrections = false
         brushPaintingMaskID = id
+        colorPickingMaskID = nil
+        onEnterPointPickingMode()
+    }
+
+    /// Arms the Color Range eyedropper for `id` — mirrors `beginBrushStroke`'s
+    /// shape (clears WB/Red-Eye/`brushPaintingMaskID`, sets its own armed-id
+    /// state), but ALSO calls `onEnterPointPickingMode()` UNCONDITIONALLY,
+    /// independent of `hasOnImageOverlay(.colorRange)` (which is `false` —
+    /// see that function's own doc comment): that gate answers "does merely
+    /// SELECTING this mask need an overlay reset," but ARMING a tap
+    /// genuinely needs the zoom/pan reset regardless of overlay ownership —
+    /// the eyedropper's own tap-capture layer is positioned against an
+    /// un-zoomed `currentFitRect`, same as WB's.
+    ///
+    /// This is the 5th hand-rolled mutual-exclusion site (after WB, Red-Eye,
+    /// `select(_:)`, `beginBrushStroke`) — logged in IMPROVEMENTS.md that a
+    /// shared mode enum is now genuinely worth it, not built this slice
+    /// (touches already-verified WB/RedEye/Brush behavior).
+    private func beginColorPick(for id: UUID) {
+        isPickingWhiteBalance = false
+        isPlacingRedEyeCorrections = false
+        brushPaintingMaskID = nil
+        colorPickingMaskID = id
         onEnterPointPickingMode()
     }
 

@@ -538,4 +538,67 @@ final class MaskGeometryTests: XCTestCase {
         let oldLength = hypot(fitRect.width, fitRect.height) * 1.5
         XCTAssertLessThan(oldLength / 2, requiredHalfLength(for: fitRect))
     }
+
+    // MARK: - Brush mask (Phase 7 slice 4)
+
+    func testNormalizedBrushPointConvertsPaneSpaceToFraction() {
+        let point = MaskGeometry.normalizedBrushPoint(CGPoint(x: 100, y: 50), fitRect: wideFitRect)
+        XCTAssertEqual(point.x, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(point.y, 0.25, accuracy: 0.0001)
+    }
+
+    func testNormalizedBrushPointClampsPastEveryEdge() {
+        let farOutside = CGPoint(x: -500, y: 9000)
+        let point = MaskGeometry.normalizedBrushPoint(farOutside, fitRect: wideFitRect)
+        XCTAssertEqual(point.x, 0)
+        XCTAssertEqual(point.y, 1)
+    }
+
+    func testNormalizedBrushPointWithZeroSizedFitRectReturnsCenterFallback() {
+        let zero = CGRect(x: 0, y: 0, width: 0, height: 200)
+        let point = MaskGeometry.normalizedBrushPoint(CGPoint(x: 10, y: 10), fitRect: zero)
+        XCTAssertEqual(point.x, 0.5)
+        XCTAssertEqual(point.y, 0.5)
+    }
+
+    func testBrushScreenPointIsTheExactInverseOfNormalizedBrushPoint() {
+        let original = CGPoint(x: 137, y: 61)
+        let normalized = MaskGeometry.normalizedBrushPoint(original, fitRect: wideFitRect)
+        let roundTripped = MaskGeometry.brushScreenPoint(normalized, fitRect: wideFitRect)
+        XCTAssertEqual(roundTripped.x, original.x, accuracy: 0.0001)
+        XCTAssertEqual(roundTripped.y, original.y, accuracy: 0.0001)
+    }
+
+    func testBrushScreenPointRespectsANonZeroFitRectOrigin() {
+        let offsetRect = CGRect(x: 50, y: 75, width: 400, height: 200)
+        let point = BrushPoint(x: 0, y: 0)
+        let screen = MaskGeometry.brushScreenPoint(point, fitRect: offsetRect)
+        XCTAssertEqual(screen.x, 50, accuracy: 0.0001)
+        XCTAssertEqual(screen.y, 75, accuracy: 0.0001)
+    }
+
+    func testShouldAppendBrushPointIsFalseUnderTheSpacingThreshold() {
+        let last = CGPoint(x: 100, y: 100)
+        let tooClose = CGPoint(x: 101, y: 100) // 1pt, under the 3pt default
+        XCTAssertFalse(MaskGeometry.shouldAppendBrushPoint(tooClose, after: last))
+    }
+
+    func testShouldAppendBrushPointIsTrueAtExactlyTheSpacingThreshold() {
+        let last = CGPoint(x: 100, y: 100)
+        let atThreshold = CGPoint(x: 103, y: 100) // exactly 3pt
+        XCTAssertTrue(MaskGeometry.shouldAppendBrushPoint(atThreshold, after: last))
+    }
+
+    func testShouldAppendBrushPointIsTrueOverTheSpacingThreshold() {
+        let last = CGPoint(x: 100, y: 100)
+        let farEnough = CGPoint(x: 200, y: 100)
+        XCTAssertTrue(MaskGeometry.shouldAppendBrushPoint(farEnough, after: last))
+    }
+
+    func testShouldAppendBrushPointHonorsACustomMinimumSpacing() {
+        let last = CGPoint(x: 100, y: 100)
+        let location = CGPoint(x: 105, y: 100) // 5pt
+        XCTAssertFalse(MaskGeometry.shouldAppendBrushPoint(location, after: last, minimumSpacing: 10))
+        XCTAssertTrue(MaskGeometry.shouldAppendBrushPoint(location, after: last, minimumSpacing: 3))
+    }
 }

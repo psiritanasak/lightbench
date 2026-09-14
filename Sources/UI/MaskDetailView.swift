@@ -15,15 +15,27 @@ import SwiftUI
 /// `MaskBinding.swift`) exactly once per view build, not 14 times.
 ///
 /// These rows ARE the accessibility answer for the on-image mask overlays
-/// (`MaskOverlayView` for `.radial`, `LinearMaskOverlayView` for `.linear`),
-/// not a nice-to-have: they're what lets both overlays be
-/// `.accessibilityHidden(true)` the same way `CropOverlayView` already is —
-/// justified there, and here, ONLY because the same values are
-/// independently AT-adjustable via labeled sliders. Without these rows,
-/// mask geometry would be the only `EditState`-backed value in the app
-/// reachable solely by mouse.
+/// (`MaskOverlayView` for `.radial`, `LinearMaskOverlayView` for `.linear`)
+/// — they're what lets both overlays be `.accessibilityHidden(true)` the
+/// same way `CropOverlayView` already is — justified there, and here, ONLY
+/// because the same values are independently AT-adjustable via labeled
+/// sliders. Without these rows, mask geometry would be the only
+/// `EditState`-backed value in the app reachable solely by mouse.
+///
+/// This claim does NOT extend to `.brush` (Phase 7 slice 4): a stroke's
+/// SHAPE (its path) has no slider equivalent the way an ellipse's/band's
+/// geometry does — `brushShapeRows` below covers Size/Feather, but painting
+/// or redrawing the stroke itself is mouse-only. This is a real, named
+/// accessibility gap (see `BrushMaskOverlayView`'s own doc comment and
+/// IMPROVEMENTS.md), not covered by the same justification the other two
+/// kinds rely on.
 struct MaskDetailView: View {
     @Binding var mask: Mask
+    /// `.brush` only — called when "Paint Stroke"/"Redraw Stroke" is
+    /// tapped. `nil` for `.radial`/`.linear` (mirrors
+    /// `RedEyeOverlayView.onTap`'s optional-closure shape for an
+    /// additive, kind-gated callback).
+    var onBeginBrushStroke: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -93,6 +105,7 @@ struct MaskDetailView: View {
         switch mask.kind {
         case .radial: radialShapeRows
         case .linear: linearShapeRows
+        case .brush: brushShapeRows
         }
     }
 
@@ -148,6 +161,36 @@ struct MaskDetailView: View {
             EditSliderRow(
                 label: "Width", value: $mask.width,
                 range: MaskGeometry.minWidth...MaskGeometry.maxWidth, identity: 0.3, displayMultiplier: 100
+            ) { String(format: "%.0f%%", $0 * 100) }
+        }
+    }
+
+    /// `.brush` only — no `centerRows`: unlike an ellipse or a band, a
+    /// stroke has no single anchor point, only its own ordered
+    /// `brushPoints`. "Paint Stroke"/"Redraw Stroke" is the ONLY way to
+    /// set/replace the stroke's shape — Size and Feather are the two
+    /// values that stay adjustable afterward without repainting.
+    private var brushShapeRows: some View {
+        Group {
+            Button(mask.brushPoints.isEmpty ? "Paint Stroke" : "Redraw Stroke") {
+                onBeginBrushStroke?()
+            }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+            Text(mask.brushPoints.isEmpty ? "No stroke painted yet" : "\(mask.brushPoints.count) points painted")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            // Range cites `BrushMaskGeometry` directly, never a literal —
+            // the same "keep the two in sync" discipline `MaskGeometry`'s
+            // own doc comments already state for Radial/Linear's ranges.
+            EditSliderRow(
+                label: "Brush Size", value: $mask.brushSize,
+                range: BrushMaskGeometry.minimumSize...BrushMaskGeometry.maximumSize, identity: 0.05,
+                displayMultiplier: 100
+            ) { String(format: "%.1f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Feather", value: $mask.feather,
+                range: 0...1, identity: 0.5, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
         }
     }

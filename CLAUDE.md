@@ -1302,11 +1302,135 @@ Edits are stored as parameter sets and rendered live on the GPU.
       notes (HiDPI coordinate scaling, the scroll-event limitation)
       worth knowing before the next screen-automation session on this
       machine. **Phase 7 slice 3 is now fully complete.**
-   4. **Brush mask** — freehand painting; the hardest UI slice, since none of
-      this app's three existing overlay patterns (WB eyedropper's one-shot
-      tap, Red-Eye's persistent point list, Crop's fixed-handle drag) cover a
-      continuous multi-point stroke gesture. Needs size/hardness/feather
-      controls matching Lightroom's own.
+   4. **Brush mask (freehand painting) ✅ COMPLETE** (2026-09-13). The
+      hardest UI slice, confirmed while scoping it: unlike Radial/Linear
+      (which ship a default-visible shape immediately adjustable via
+      sliders before any drag gesture exists), a Brush mask starts
+      completely empty, so this shipped as ONE session, gesture included
+      — no data-model/gesture split the way slice 3 had. Confirmed via
+      `AskUserQuestion`: painting is continuous drag-to-paint (a real
+      brush feel), reusing `ImageDocumentModel`'s existing ~350ms
+      undo-coalescing debounce as-is — an accepted, documented gap (a
+      stroke paused >350ms mid-drag splits into two undo steps), not
+      solved this slice.
+      `MaskKind` gains `.brush`, reading a new flat `brushPoints:
+      [BrushPoint]` (mirrors `RedEyePoint`'s shape/convention) plus
+      `brushSize` (dab radius, same non-axis-specific-fraction convention
+      `width` already established) — `feather` is REUSED from `.radial`
+      rather than adding a new field, now shared across both kinds. One
+      Brush mask is exactly one continuous stroke; painting a second area
+      means adding another Brush mask, since masks already compound
+      sequentially for free (slice 2's own scope decision). New
+      `Sources/EditEngine/BrushMaskGeometry.swift` is pure
+      `CoreGraphics`-only sizing/rect math (mirrors `RadialMaskGeometry`/
+      `LinearMaskGeometry`'s own split from `EditPipeline`) — its own
+      documented correction (F1, named after `LinearMaskGeometry`'s
+      identical real bug): a too-small brush size CLAMPS to a pixel floor
+      rather than making the mask disappear on a small extent (e.g. a
+      Library thumbnail), the same trap `width` already hit once.
+      `EditPipeline.applyMasks`'s `.brush` branch rasterizes the stroke
+      into a small, padded `CGContext` bitmap (stroked with round
+      caps/joins; a single point fills a circle instead) — sized to the
+      stroke's own bounding box, never the full extent — then softens it
+      with `CIGaussianBlur`, reusing no new Core Image filter beyond that.
+      Two corrections baked in from the start, not discovered by a
+      reviewer: no `.clampedToExtent()` before the blur (fails OPEN —
+      flooding the whole frame — if padding is ever insufficient, whereas
+      skipping it merely clips an already-negligible feather tail); the
+      rasterized bitmap loads via `CIImage(cgImage:options:
+      [.colorSpace: NSNull()])` so Core Image performs no color
+      management on it, preserving the RGB==alpha co-variance the
+      `.radial`/`.linear` branches' gradients already rely on implicitly.
+      New UI: `Sources/UI/BrushMaskOverlayView.swift` (the LIVE
+      in-progress stroke only — no on-image handles once painting ends,
+      a deliberate v1 cut) and `MaskDetailView`'s Brush shape rows
+      (Size/Feather sliders, a "Paint Stroke"/"Redraw Stroke" button —
+      label depends on whether a stroke exists yet). `AdjustTabView`'s
+      two pre-existing mask-icon/label ternaries (`.radial ? X : Y`)
+      became exhaustive `switch`es as part of this slice — they compiled
+      fine against a third case and would have silently mislabeled every
+      Brush mask as Linear. `ContentView` tracks a new
+      `brushPaintingMaskID: UUID?` (not `Bool` — the falling-edge cleanup
+      needs to name the OLD id after selection has already moved on);
+      ONE `.onChange` handler on it is the single place every disarm
+      route (Escape, natural stroke end, tab/photo switch, Compare, WB,
+      Red-Eye, selecting another mask, collapsing the Masks section)
+      funnels through to delete a never-painted mask, rather than each
+      site separately remembering to.
+      Live-measured perf (same methodology as slices 1/2): one brush mask
+      with Clarity stays comfortably under the 16ms/60fps budget on both
+      a real JPEG and the user's real RAW asset, full-res and proxied
+      (worst case ~2ms over baseline). Three simultaneous brush masks
+      with Clarity reproduce the SAME known, already-documented RAW
+      finding slice 2 recorded for Radial/Linear (full-resolution,
+      non-interactive RAW frames exceed budget under multiple
+      Clarity-bearing masks) — measured somewhat higher for Brush
+      (~34ms) than the ~15-21ms slice 2 measured for Radial/Linear,
+      plausibly because each Brush mask also pays its own CGContext
+      rasterization + blur pass on top of Clarity's cost — accepted as
+      the same documented, non-blocking limitation, not fixed this slice
+      (the interactive/proxied path, what a user actually drags against,
+      stays fast in every configuration measured).
+      Reviewer (Opus 5): 4 rounds — FIX FIRST → FIX FIRST → FIX FIRST →
+      APPROVE, the most of any Phase 7 slice, all verified empirically
+      (built, ran the suite, wrote standalone probes rendering
+      `BrushMaskOverlayView` offscreen and replaying the rasterizer)
+      rather than trusted from the diff. Round 1 caught two real bugs: an
+      `.onChange(of: brushPaintingMaskID)`-coalescing gap where "Add
+      Brush" while a DIFFERENT unpainted Brush mask was already armed
+      leaked that earlier mask forever (SwiftUI collapses two synchronous
+      writes — `nil` then the new id — into one `.onChange` call that
+      never observes the intermediate `nil`; fixed by discarding on ANY
+      id change, not just the falling edge to `nil`); and a
+      `maximumPointCount`-guard ordering bug that permanently broke
+      "Redraw Stroke" once a stroke hit the point cap. Round 2 caught a
+      THIRD real bug: switching PHOTOS while an unpainted Brush mask is
+      armed is NOT covered by the central disarm handler (`Image
+      DocumentModel.load(from:)` swaps `editState` to the incoming photo
+      before `ContentView`'s own cleanup can look up the OLD mask) —
+      deliberately left as a documented, accepted gap (`IMPROVEMENTS.md`'s
+      new D13) rather than rushing a fix that needs a different mechanism
+      shape entirely. Round 3 caught that round 2's own gap-documentation
+      had two more accuracy mistakes (an inverted summary sentence, a
+      wrong file attribution) — both fixed. Also addressed along the way:
+      a measured ~3.9ms eager-rasterization cost per call, now memoized
+      via an `NSLock`-guarded single-entry cache keyed on the already-
+      `Equatable` `BrushMaskGeometry.Resolved` (documented limitation:
+      degrades to near-zero hit rate with 2+ simultaneous brush masks,
+      not fixed this slice); a per-stroke `NSCursor` push/pop leak; a
+      `feather == 1` doc-comment overstatement (measured: a Gaussian blur
+      never reaches alpha 1.0, capping around ~86%/~95%, unlike
+      `.radial`'s gradient). 717 tests before this slice; 763 after —
+      brush-specific coverage in `BrushMaskGeometryTests` (new) plus
+      additions to `MaskGeometryTests`/`EditPipelineTests`/
+      `EditStateCodableTests` (F6: repointed an existing test's
+      unknown-mask-kind stand-in off the now-real `"brush"` string onto
+      `"colorRange"`, slice 5's own future kind; plus default-when-absent,
+      malformed-`brushPoints`, round-trip, and deterministic-id tests
+      matching slice 3's own precedent).
+      **Live-verified**: Add Brush arms immediately and the three
+      add-mask buttons don't truncate the sidebar (a real regression from
+      adding a third button, caught and fixed live — shortened to
+      "Radial"/"Linear"/"Brush" labels, full "Add ___ Mask" wording kept
+      in each button's accessibility label); a continuous drag paints a
+      smooth stroke landing exactly where painted, including the
+      y-flip/top-of-frame check on a real photo; releasing the mouse ends
+      paint mode cleanly; one continuous stroke undoes/redoes as ONE
+      step; "Add Brush" then Escape with no drag leaves no stray mask in
+      the list; switching to the Crop tab while an unpainted stroke is
+      armed cleanly discards it; Revert to Original clears masks. Two
+      items accepted on code-review + prior-slice-precedent strength
+      rather than independently live-exercised this pass: the Brush
+      Size/Feather sliders and "Redraw Stroke" button (both unmodified,
+      already-shipped `EditSliderRow`/`Button` code paths — reaching them
+      needed scrolling the Adjust sidebar past 8 tone/color rows, and
+      synthetic scroll events could not be made to reach this app's
+      `ScrollView` in this automation environment, the same class of
+      limitation slice 3 Session B already documented for scroll-wheel
+      zoom); and Compare/Split, Library-thumbnail refresh, and JPEG
+      export round-trip (all pre-existing, kind-agnostic code paths per
+      slice 2 Session A's own confirmed-no-changes-needed research, not
+      touched by this slice at all).
    5. **Color Range / Luminance Range masks** — computed from image
       statistics (pick a color/tone, auto-generate a mask from similarity),
       not manually drawn at all — closer in spirit to the existing "Fix Color

@@ -7110,3 +7110,228 @@ app's own no-sidecar-means-original model).
 data model, pipeline, sliders, on-image drag gesture, and live
 verification all shipped, zero open issues. Brush mask (slice 4) is
 next on the roadmap.
+
+## Phase 7 slice 4 (Brush mask) — PLAN MODE COMPLETE, implementation not
+started (2026-09-12)
+
+Full implementation plan written and approved-pending at
+`~/.claude/plans/purrfect-giggling-tower.md` (Plan Mode file — persists
+across sessions, not part of this repo). Two Explore agents (data model +
+pipeline; UI overlays + gesture conventions) and one Plan agent produced
+the design; the highest-risk claims (`Mask.swift`'s decode logic,
+`EditPipeline.applyMasks`'s exact structure, and an existing test that
+will need fixing) were independently re-verified by reading the real code,
+not trusted from the agent reports alone.
+
+**Key decisions locked in** (confirmed via `AskUserQuestion`, not
+assumed): painting is **continuous drag-to-paint** (not click-to-place
+dabs, not a new commit-boundary API) — reuses `ImageDocumentModel`'s
+existing ~350ms undo-coalescing debounce as-is, accepting a documented gap
+(a stroke paused >350ms mid-drag can split into two undo steps). One Brush
+mask = one continuous stroke (flat `[BrushPoint]`, not nested per-stroke
+arrays); paints a second area by adding another Brush mask (masks already
+compound sequentially, for free). Reuses the EXISTING `feather` field for
+the brush's soft edge rather than adding a new one. Rasterizes via a small
+`CGContext` bitmap (sized to the stroke's own padded bounding box, never
+the full extent) bridged through `CIImage(cgImage:)` and softened with
+`CIGaussianBlur` — no new Core Image kernel. No on-image overlay/handles
+once painting ends (v1 shows only the live in-progress path); editing a
+placed stroke afterward is Size/Feather sliders plus a "Redraw Stroke"
+button that replaces it entirely.
+
+**Seven design corrections found and folded into the plan during review**
+(not left for the reviewer agent to catch during implementation): clamp
+(don't `nil`-skip) a too-small brush size, mirroring a real bug
+`LinearMaskGeometry` already hit once; no `.clampedToExtent()` before the
+blur (fails open on insufficient padding, whereas skipping it merely
+clips the feather tail); the rasterized mask bitmap must be loaded via
+`CIImage(cgImage:options: [.colorSpace: NSNull()])` to keep RGB==alpha,
+matching what `CIBlendWithMask`'s two existing call sites already assume;
+paint-mode state must be `UUID?` not `Bool` (a falling-edge cleanup needs
+the OLD id, which a bool can't supply once `select(_:)` has already
+repointed selection); "Redraw Stroke" must not clear the stroke until the
+FIRST point of the new drag, so an Escape right after clicking it doesn't
+destroy the original; an existing test
+(`EditStateCodableTests.testUnknownMaskKindDecodesToRadialWithoutDiscardingTheSidecar`,
+line 239) hardcodes the literal string `"brush"` as its unknown-kind
+stand-in and needs repointing to a genuinely-future kind name; `brushPoints`
+must decode via `(try?) ?? nil`, not a bare `try`, for the same
+whole-sidecar-loss reason `Mask`'s existing `kind` decode already uses
+that idiom.
+
+**Explicitly deferred, logged for the plan's own doc-update step**:
+multi-stroke-per-mask, erase/subtract within one brush mask,
+reposition/resize of an already-painted stroke, per-point variable size
+(pressure), and — flagged as a REAL, named accessibility gap unlike
+Radial/Linear's slider-justified `.accessibilityHidden(true)` — no
+keyboard/AT path to paint or adjust a stroke's shape at all.
+
+## Phase 7 slice 4 (Brush mask) — implementation, perf, and live
+verification COMPLETE (2026-09-13); reviewer pass + commit next
+
+Followed the plan's 10-step sequencing
+(`~/.claude/plans/purrfect-giggling-tower.md`) end to end: data model →
+`BrushMaskGeometry` + tests → `EditPipeline` wiring + tests (y-flip test
+written and checked FIRST, per the plan) → UI non-interactive
+(`MaskGeometry` additions, `MaskDetailView`, `AdjustTabView`) → UI
+interactive (`BrushMaskOverlayView`, `ContentView`) → live verification →
+perf probe → docs (this section + CLAUDE.md + IMPROVEMENTS.md). Reviewer
+pass and commit are the two remaining steps. Build green and full test
+suite green (758 tests, up from 717) after every step.
+
+**Live verification, in detail** (screen automation, user-authorized
+per-task as this session's standing convention):
+- **A real, live-caught regression, fixed on the spot**: the plan's own
+  masks-section comment optimistically asserted the three add-mask
+  buttons wouldn't truncate at the sidebar's default width — live
+  screenshots showed "Add Radial"/"Add Linear"/"Add Brush" actually
+  rendering as "Add Ra…"/"Add Lin…"/"Add Bru…" the moment a third button
+  was added. Fixed by dropping the shared "Add" prefix from all three
+  visible labels ("Radial"/"Linear"/"Brush"), keeping the full "Add ___
+  Mask" wording in each button's own `accessibilityLabel` — confirmed
+  live afterward that all three fit cleanly.
+- Confirmed end to end on a real photo (a viscuna against plain blue
+  sky, chosen specifically so both brightening and darkening would be
+  clearly visible): "Add Brush" arms painting immediately; a slow,
+  multi-point synthetic drag paints a continuous, gapless stroke;
+  releasing the mouse ends paint mode (the live overlay disappears,
+  zoom/pan become available again); the RENDERED stroke lands exactly
+  along the drag path once the mask's own Exposure is set to a
+  non-identity value (masks with all-zero adjustments correctly render
+  as a total no-op, confirmed separately — see the false-alarm
+  investigation below); the stroke's edges are properly soft (default
+  feather 0.5) with rounded caps, not hard-edged.
+- ⌘Z/⇧⌘Z: one continuous stroke undoes and redoes as exactly ONE step
+  (confirmed via a 3-deep undo chain — Exposure edit, then the whole
+  paint stroke, then "Add Brush" itself, each a separate step, exactly
+  as the ~350ms coalescing window predicts for actions that far apart)
+  — NOT one step per appended point.
+- "Add Brush" then Escape with no drag leaves no stray mask in the list
+  ("No masks yet" restored) — confirms `discardUnpaintedBrushMask`'s
+  `.onChange(of: brushPaintingMaskID)` falling-edge cleanup.
+- Switching to the Crop tab while an unpainted brush stroke was still
+  armed cleanly discarded the mask on return to Adjust — one of the
+  several disarm routes the single `.onChange` handler covers, confirmed
+  live rather than only by reading the code.
+- Revert to Original cleanly cleared the mask back to "No masks yet."
+- **A real false alarm, investigated and resolved, not dismissed**: an
+  earlier test photo (a chart PNG) briefly showed what looked like a
+  thin, dark double-line artifact instead of the expected wide soft
+  glow after setting Exposure — initially suspected as a real
+  rasterization bug (wrong line width, wrong sign). Root-caused by
+  retesting cleanly on a fresh photo with no intervening stray clicks:
+  the wide, soft, correctly-positioned dab rendered exactly as
+  expected (confirmed both brightening at +3 EV and darkening at -3 EV
+  against a plain sky background). The original artifact is now
+  believed to be a side effect of this session's own automation
+  confusion (a stray click likely nudged the Brush Size slider to a
+  tiny value during a long sequence of miscalculated coordinates while
+  hunting for a way to scroll the sidebar — see below) rather than a
+  product defect; not reproducible on a clean run.
+- **Environment limitation, logged not worked around**: this session
+  could not find a way to make synthetic input scroll the Adjust
+  sidebar's `ScrollView` — neither `cliclick`'s drag, a JXA
+  `CGEventCreateScrollWheelEvent`, Tab-to-focus, nor Page Down moved it,
+  and `AppleShowScrollBars=Always` didn't surface a draggable scroller
+  either (tried, then reverted). This blocked live-exercising the Brush
+  Size/Feather sliders and the "Paint Stroke"/"Redraw Stroke" button
+  directly, since they sit below 8 tone/color rows in `MaskDetailView`.
+  Accepted on code-review + prior-slice-precedent strength instead
+  (identical, unmodified `EditSliderRow`/`Button` code already
+  live-verified for Radial/Linear in slices 2-3) — the same category of
+  accepted gap slice 3 Session B logged for scroll-wheel zoom in this
+  same environment. Worth trying a real trackpad/mouse device (not
+  synthetic events) if this matters for a future session on this
+  machine.
+- Compare/Split, Library-thumbnail refresh, and JPEG export were NOT
+  independently live-exercised this pass (time-boxed after the above) —
+  accepted on the strength of slice 2 Session A's own confirmed
+  no-changes-needed research (`PhotoExporter`/`ThumbnailGenerator`/
+  `CatalogModel` all already flow any `EditState.masks` value through
+  unmodified, kind-agnostic).
+
+**Perf, live-measured** (same `CFAbsoluteTimeGetCurrent()`
+measure-then-fully-revert methodology as every prior Phase 7 perf
+check — a temporary `TempBrushPerfProbeTests.swift`, deleted before
+commit, confirmed via a clean `git status`): rendered into a fixed
+2268×1385 buffer (matching slice 1/2's own established drawable size)
+on the user's real 20.7MP JPEG (`IMG_6564.jpeg`) and real 24MP D610 RAW
+(`DSC_1665.NEF`, via `RawDecoder.materialize`):
+- One brush mask with Clarity: JPEG full-res 7.4ms→9.5ms baseline→masked
+  (+2.1ms), JPEG proxy 7.0ms→7.4ms (+0.4ms); RAW full-res
+  7.7ms→7.7ms (near noise floor), RAW proxy 7.7ms→8.6ms (+0.9ms) — every
+  configuration comfortably under the 16ms/60fps budget.
+- Three brush masks with Clarity (the same stress case slice 2 used):
+  JPEG full-res 11.0ms (+3.6ms), JPEG proxy 7.5ms (+0.5ms) — both fine.
+  RAW proxy 8.2ms — fine. **RAW full-res: 33.7ms — over budget**,
+  reproducing the SAME known, already-documented finding CLAUDE.md
+  records for slice 2's Radial/Linear masks (that case measured
+  ~15-21ms) — measured notably higher for Brush, plausibly because each
+  Brush mask also pays its own `CGContext` rasterization + Gaussian
+  blur pass on top of Clarity's own cost, compounding with RAW's
+  already-heavy per-frame baseline. Accepted as the same documented,
+  non-blocking limitation slice 2 already established the precedent
+  for — the interactive/proxied path (what a user actually drags
+  against while editing) stays fast in every configuration measured;
+  only an isolated, non-interactive full-resolution RAW frame with 3+
+  Clarity-bearing masks is affected.
+
+**Reviewer** (Opus 5, per this session's standing convention): 4 rounds —
+FIX FIRST → FIX FIRST → FIX FIRST → APPROVE, the most of any Phase 7
+slice. All four rounds verified claims empirically (built the project,
+ran the suite, wrote standalone probes rendering `BrushMaskOverlayView`
+offscreen and replaying `brushStrokeMaskImage`) rather than trusting the
+diff or doc comments. Round 1 caught two real, blocking bugs: (1) an
+`.onChange(of: brushPaintingMaskID)`-coalescing gap — `AdjustTabView
+.addMask(.brush)` writes `brushPaintingMaskID` to `nil` then immediately
+to the new mask's id in one synchronous action, which SwiftUI collapses
+into a single `.onChange` call (`old = A, new = B`) that never observes
+the intermediate `nil` — so "Add Brush" while a DIFFERENT unpainted
+Brush mask was already armed leaked that earlier mask forever; fixed by
+discarding whenever the id changes at all, not only on the falling edge
+to `nil`. (2) `BrushMaskOverlayView`'s `maximumPointCount` guard ran
+BEFORE the "first callback of a new gesture replaces the array"
+branch, so a maxed-out stroke could never be redrawn, only deleted;
+fixed by reordering. Round 1 also flagged (non-blocking, all addressed):
+a measured ~3.9ms-per-call eager-rasterization cost with no memoization
+(fixed with an `NSLock`-guarded single-entry `BrushStrokeImageCache`,
+keyed on the already-`Equatable` `BrushMaskGeometry.Resolved`); a
+per-stroke `NSCursor` push/pop leak (the overlay tears itself down via
+`onStrokeEnded` while the pointer is still inside, so `.onHover(false)`
+never fires — fixed with an `.onDisappear` pop guarded by a tracked
+hover flag); a `feather == 1` doc-comment overstatement (a Gaussian
+blur, unlike `.radial`'s gradient, never reaches alpha 1.0 — measured
+and documented as a real, accepted ~86%/~95% cap, not "fixed"); several
+stale pre-slice-4 doc comments (Mask.swift/EditPipeline.swift/
+ContentView.swift only mentioning radial/linear); and missing
+`Codable` test coverage matching slice 3's own precedent (default-
+when-absent, malformed-`brushPoints`-doesn't-discard-the-sidecar,
+round-trip, deterministic-fallback-id-with-points, all added). Round 2
+caught a THIRD real bug the fixes-so-far had missed: switching PHOTOS
+while an unpainted Brush mask is armed is NOT actually covered by the
+central disarm handler, despite that handler's own doc comment
+claiming otherwise — `ImageDocumentModel.load(from:)` swaps
+`currentURL`/`editState` to the incoming photo synchronously, before
+`ContentView`'s `.onChange(of: document.currentURL)` fires, so the
+cleanup looks the old mask up in the WRONG (new) photo's `masks` array
+and no-ops, while the outgoing photo's phantom empty mask has already
+been flushed to ITS sidecar. Deliberately NOT fixed behaviorally this
+slice (would need cleanup to run before `load(from:)`, at every
+photo-switch call site or via a model-level hook — a different shape
+than this slice's `ContentView`-only mechanism) — instead honestly
+documented as a real, accepted gap in both the code's own doc comments
+and a new `IMPROVEMENTS.md` D13 entry. Round 3 caught that the FIRST
+attempt at documenting round 2's gap was itself two more doc-accuracy
+mistakes (an inverted summary sentence that read as claiming the exact
+opposite of what round 2 required, and a doc-comment file
+misattribution) — both fixed. Round 4: APPROVE, no remaining issues in
+image math, non-destructive integrity, GPU/texture lifecycle, thread
+safety, or catalog/DB.
+
+763 tests (up from 717 pre-slice — 46 new, across
+`BrushMaskGeometryTests` (new), `MaskGeometryTests`, `EditPipelineTests`,
+and `EditStateCodableTests`). Test photos' sidecars confirmed clean
+(`viscuna.jpg`/the chart PNG were already reverted during live
+verification; `IMG_9804.jpg`'s leftover test sidecar, missed at the
+time, was found and deleted during this doc pass — no sidecar means
+original, this app's own established convention). Ready to commit.

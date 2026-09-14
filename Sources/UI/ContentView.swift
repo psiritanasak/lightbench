@@ -96,8 +96,15 @@ struct ContentView: View {
     /// against `currentFitRect` with the same no-zoom/pan assumption, so
     /// both kinds share this one kind-agnostic gate again.
     private var canZoom: Bool {
+        // `!isPaintingBrush` is currently implied by `!isEditingMask` (the
+        // painted mask is always also the selected one — see
+        // `isPaintingBrush`'s own doc comment) but spelled out explicitly
+        // rather than relied on, matching this property's own documented
+        // history of NOT assuming one mode implies another (Session A's
+        // now-deleted `isEditingRadialMask` carve-out was exactly that kind
+        // of implicit coupling).
         document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance
-            && !isPlacingRedEyeCorrections && !isEditingMask
+            && !isPlacingRedEyeCorrections && !isEditingMask && !isPaintingBrush
     }
 
     /// Phase 7 slice 2: the mask `adjustPanel.selectedMaskID` currently
@@ -116,6 +123,19 @@ struct ContentView: View {
         guard let id = adjustPanel.selectedMaskID else { return false }
         return document.editState.masks.contains { $0.id == id }
     }
+
+    /// Phase 7 slice 4: which mask (if any) currently has live brush-paint
+    /// mode armed — `UUID?`, not `Bool` (F4), so the falling-edge cleanup
+    /// (`discardUnpaintedBrushMask`, wired via the `.onChange` below) can
+    /// name the OLD id even after `AdjustTabView.select`/`beginBrushStroke`
+    /// has already repointed `adjustPanel.selectedMaskID`. Always set
+    /// TOGETHER with `adjustPanel.selectedMaskID` (`AdjustTabView.addMask`/
+    /// `beginBrushStroke` both do), so `isPaintingBrush` implies
+    /// `isEditingMask` in practice — see `canZoom`'s own doc comment for
+    /// why that implication is still spelled out explicitly there rather
+    /// than relied on.
+    @State private var brushPaintingMaskID: UUID?
+    private var isPaintingBrush: Bool { brushPaintingMaskID != nil }
 
     /// Whether a tap on the image should be captured as a WB eyedropper
     /// sample. Its own overlay only exists while this is true AND cropping
@@ -316,15 +336,69 @@ struct ContentView: View {
     /// either overlay itself is deliberately deferred — `MaskDetailView`'s
     /// slider rows (14 for `.radial`, 12 for `.linear`) are this slice's
     /// accessibility answer, matching how `CropOverlayView` covers the
-    /// same bar via `CropTabView`'s sliders. NOT `phase == .down`-gated: a
+    /// same bar via `CropTabView`'s sliders. `.brush` (Phase 7 slice 4) is
+    /// the one kind this reasoning does NOT extend to — a stroke's own
+    /// shape has no slider equivalent; see `IMPROVEMENTS.md`'s D11 for
+    /// that gap. NOT `phase == .down`-gated: a
     /// repeated deselect is idempotent, the same reasoning
     /// `handlePointPlacementKeyPress`'s own Escape case uses. The caller
     /// only short-circuits on `.handled` (Escape) — any other key falls
     /// through to pan handling, see that call site's own comment for why.
     private func handleMaskKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
         guard keyPress.key == .escape else { return .ignored }
+        // Phase 7 slice 4: two-stage, mirroring `handlePointPlacementKeyPress`'s
+        // own Escape-disarms-without-committing shape. While actively
+        // painting, Escape disarms paint mode ONLY (whatever's already
+        // painted survives, or the never-painted mask is discarded by
+        // `discardUnpaintedBrushMask` via the falling-edge `.onChange`
+        // below) — the mask stays selected, so a SECOND Escape is still
+        // needed to deselect, matching every other mode's "one Escape per
+        // stage" shape.
+        if isPaintingBrush {
+            brushPaintingMaskID = nil
+            return .handled
+        }
         adjustPanel.selectedMaskID = nil
         return .handled
+    }
+
+    /// F5: deletes `id` iff it's a `.brush` mask that was armed for
+    /// painting and NEVER PAINTED (no points, geometry-only/identity
+    /// adjustments) — i.e. exactly the "Add Brush, then Escape/switch away
+    /// without drawing" case. Wired to `brushPaintingMaskID`'s change (see
+    /// the `.onChange` below), which covers every disarm route EXCEPT
+    /// PHOTO SWITCH (Escape, natural stroke end via `onStrokeEnded`, tab
+    /// switch, Compare, WB, Red-Eye, selecting another mask, collapsing
+    /// the Masks section ARE all covered — confirmed, not just claimed,
+    /// via a reviewer trace) in ONE place, rather than needing each disarm
+    /// site to separately remember this cleanup. Never fires for "Redraw
+    /// Stroke" on an already-painted mask: that mask has real points (F5
+    /// also mandates `BrushMaskOverlayView`'s `onChanged` never clears
+    /// `brushPoints` before the new gesture's first point), so
+    /// `brushPoints.isEmpty` is false the whole time.
+    ///
+    /// Reviewer-caught (real, not fixed this slice — see IMPROVEMENTS.md's
+    /// D13): switching PHOTOS while an unpainted brush mask is armed is
+    /// NOT actually covered, despite this doc comment previously claiming
+    /// otherwise. `ImageDocumentModel.load(from:)` sets `currentURL` and
+    /// `editState` to the INCOMING photo synchronously, in the same block
+    /// — by the time `.onChange(of: document.currentURL)` below fires and
+    /// clears `brushPaintingMaskID`, `document.editState.masks` is
+    /// already the new photo's array, so `discardUnpaintedBrushMask`
+    /// looks the old id up in the WRONG photo and silently no-ops, while
+    /// the outgoing photo's phantom empty mask has already been flushed
+    /// to its own sidecar. Fixing this properly needs the cleanup to run
+    /// BEFORE `load(from:)` swaps state, at every photo-switch call site
+    /// (filmstrip, Library grid, ⌘←/⌘→) or via a hook inside
+    /// `ImageDocumentModel` itself — out of scope for this slice's own
+    /// `ContentView`-only disarm mechanism.
+    private func discardUnpaintedBrushMask(_ id: UUID?) {
+        guard let id, let mask = document.editState.masks.first(where: { $0.id == id }) else { return }
+        guard mask.kind == .brush, mask.brushPoints.isEmpty, mask.isIdentity else { return }
+        document.editState.masks.removeAll { $0.id == id }
+        if adjustPanel.selectedMaskID == id {
+            adjustPanel.selectedMaskID = nil
+        }
     }
 
     /// Arrow keys move `crosshairPosition`; Return commits (samples WB or
@@ -670,6 +744,7 @@ struct ContentView: View {
             isPickingWhiteBalance = false
             isPlacingRedEyeCorrections = false
             adjustPanel.selectedMaskID = nil
+            brushPaintingMaskID = nil
             compareMode = .off
             splitOrientation = .vertical
             splitPosition = 0.5
@@ -686,6 +761,7 @@ struct ContentView: View {
                 isPickingWhiteBalance = false
                 isPlacingRedEyeCorrections = false
                 adjustPanel.selectedMaskID = nil
+                brushPaintingMaskID = nil
                 compareMode = .off
                 zoomScale = 1
                 panOffset = .zero
@@ -727,6 +803,53 @@ struct ContentView: View {
                 isImagePaneFocused = true
             }
         }
+        // Phase 7 slice 4: rising edge grabs focus (same reasoning as the
+        // `selectedMaskID` `.onChange` above); every other transition is
+        // the ONE place every disarm route EXCEPT photo switch (Escape,
+        // natural stroke end via `onStrokeEnded`, tab switch, Compare, WB,
+        // Red-Eye, selecting another mask, collapsing the Masks section)
+        // funnels through, so none of those sites individually needs to
+        // remember `discardUnpaintedBrushMask` — F4's whole reason for
+        // `UUID?` instead of `Bool`: this closure captures `oldID`, the
+        // mask that was JUST disarmed, which a bare boolean couldn't name
+        // once `adjustPanel.selectedMaskID` may already point elsewhere.
+        // Photo switch is a REAL, documented gap, not covered here — see
+        // `discardUnpaintedBrushMask`'s own doc comment and
+        // IMPROVEMENTS.md's D13 for why.
+        //
+        // Reviewer-caught: `AdjustTabView.addMask(kind: .brush)` calls
+        // `select(mask)` (which writes `brushPaintingMaskID = nil`) and
+        // then `beginBrushStroke(for:)` (which writes the NEW id) in one
+        // synchronous action — SwiftUI coalesces both writes into a SINGLE
+        // `.onChange` invocation with `old = <previous mask>, new = <new
+        // mask>`, so the intermediate `nil` is never observed and an
+        // `else` branch keyed on `newID == nil` never fires. "Add Brush"
+        // while a different unpainted Brush mask was already armed used to
+        // leak that earlier mask forever. Fixed by discarding whenever the
+        // id CHANGES at all (a no-op when `oldID` is already `nil`), not
+        // only on the falling edge to `nil`.
+        .onChange(of: brushPaintingMaskID) { oldID, newID in
+            if oldID != newID {
+                discardUnpaintedBrushMask(oldID)
+            }
+            if newID != nil {
+                isImagePaneFocused = true
+            }
+        }
+        // Closes the same hazard `isEditingMask`'s own doc comment already
+        // names one level up: Undo, Revert to Original, and Apply Preset
+        // can all delete the selected mask WITHOUT passing through any
+        // disarm site above — more likely to matter here than for a quick
+        // handle drag, since a brush stroke can run for several seconds.
+        // Without this, `brushPaintingMaskID` would keep pointing at a
+        // mask that no longer exists: `canZoom` stays wrongly blocked, and
+        // `BrushMaskOverlayView`'s binding into the (now-vanished) mask's
+        // `brushPoints` silently no-ops on every further drag callback.
+        .onChange(of: isEditingMask) { _, stillEditing in
+            if !stillEditing {
+                brushPaintingMaskID = nil
+            }
+        }
         // Reviewer-caught: returning to the Editor from the Library while
         // a point-placement mode is STILL armed (it survives the round
         // trip — `showLibrary` merely toggles which pane is shown, it
@@ -738,7 +861,7 @@ struct ContentView: View {
         // here on every return-to-Editor closes that gap; harmless when
         // neither mode is armed (nothing reads `isImagePaneFocused` then).
         .onChange(of: showLibrary) { _, isShowingLibrary in
-            if !isShowingLibrary, isPickingWhiteBalance || isPlacingRedEyeCorrections || isEditingMask {
+            if !isShowingLibrary, isPickingWhiteBalance || isPlacingRedEyeCorrections || isEditingMask || isPaintingBrush {
                 isImagePaneFocused = true
             }
         }
@@ -895,6 +1018,7 @@ struct ContentView: View {
                     // overlay/detail-panel SELECTION, matching WB/Red-Eye's
                     // own clear right above.
                     adjustPanel.selectedMaskID = nil
+                    brushPaintingMaskID = nil
                 }
             }
         }
@@ -1050,6 +1174,7 @@ struct ContentView: View {
                     .accessibilityLabel(
                         isPickingWhiteBalance ? "White balance picker"
                             : isPlacingRedEyeCorrections ? "Red-eye placement"
+                            : isPaintingBrush ? "Brush painting"
                             : isEditingMask ? "Mask editing" : "Image"
                     )
                 }
@@ -1191,6 +1316,21 @@ struct ContentView: View {
                     width: maskBinding.width,
                     rotationDegrees: maskBinding.wrappedValue.rotationDegrees
                 )
+            case .brush:
+                // Phase 7 slice 4: unlike the two branches above, this
+                // overlay ALSO gates on `brushPaintingMaskID == id` — a
+                // placed Brush stroke has NO persistent editing overlay
+                // (no handles once painting ends, see `Mask.brushPoints`'s
+                // own doc comment), so there's nothing to draw here for a
+                // merely-selected-but-not-currently-painting Brush mask.
+                if brushPaintingMaskID == id {
+                    BrushMaskOverlayView(
+                        fitRect: fitRect,
+                        points: maskBinding.brushPoints,
+                        brushSize: maskBinding.wrappedValue.brushSize,
+                        onStrokeEnded: { brushPaintingMaskID = nil }
+                    )
+                }
             }
         }
         // D8 (IMPROVEMENTS.md): the keyboard-driven crosshair itself —
@@ -1261,6 +1401,7 @@ struct ContentView: View {
                         panel: $adjustPanel,
                         isPickingWhiteBalance: $isPickingWhiteBalance,
                         isPlacingRedEyeCorrections: $isPlacingRedEyeCorrections,
+                        brushPaintingMaskID: $brushPaintingMaskID,
                         onEnterPointPickingMode: {
                             compareMode = .off
                             zoomScale = 1

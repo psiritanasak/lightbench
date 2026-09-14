@@ -268,4 +268,43 @@ enum MaskGeometry {
     static func guideLineLength(fitRect: CGRect) -> CGFloat {
         hypot(fitRect.width, fitRect.height) * 3.0
     }
+
+    // MARK: - Brush mask — Phase 7 slice 4
+
+    /// Minimum on-screen distance (in points) between two consecutive
+    /// appended `brushPoints` — a decimation threshold, NOT a visual
+    /// smoothing one: every `DragGesture.onChanged` firing that passes it
+    /// is a full `editState` write (and, via the undo-coalescing debounce,
+    /// contributes to that debounce window), so this bounds how fast
+    /// `brushPoints` can grow on a slow drag without being visually
+    /// detectable at any normal drag speed (SwiftUI's own drag callback
+    /// rate is already far coarser than 3pt of travel at a normal pace).
+    static let minimumBrushPointSpacing: CGFloat = 3
+
+    /// Pane-space screen point -> clamped 0...1 fraction of `fitRect`. Same
+    /// clamp-at-edge reasoning as `movedCenter`: a stroke can be dragged
+    /// with its cursor past the image edge (common near a border), and the
+    /// stored point must still resolve to a valid, on-image fraction.
+    static func normalizedBrushPoint(_ location: CGPoint, fitRect: CGRect) -> BrushPoint {
+        guard fitRect.width > 0, fitRect.height > 0 else { return BrushPoint(x: 0.5, y: 0.5) }
+        let x = (location.x - fitRect.minX) / fitRect.width
+        let y = (location.y - fitRect.minY) / fitRect.height
+        return BrushPoint(x: min(max(x, 0), 1), y: min(max(y, 0), 1))
+    }
+
+    /// Exact inverse of `normalizedBrushPoint` — used by the live in-progress
+    /// stroke path to draw already-appended points back in pane space.
+    static func brushScreenPoint(_ point: BrushPoint, fitRect: CGRect) -> CGPoint {
+        CGPoint(x: fitRect.minX + point.x * fitRect.width, y: fitRect.minY + point.y * fitRect.height)
+    }
+
+    /// Whether a new drag location is far enough from the last APPENDED
+    /// point (not the last raw callback location) to be worth appending —
+    /// the decimation `BrushMaskOverlayView.onChanged` applies to every
+    /// callback after the stroke's first point.
+    static func shouldAppendBrushPoint(
+        _ location: CGPoint, after last: CGPoint, minimumSpacing: CGFloat = minimumBrushPointSpacing
+    ) -> Bool {
+        hypot(location.x - last.x, location.y - last.y) >= minimumSpacing
+    }
 }

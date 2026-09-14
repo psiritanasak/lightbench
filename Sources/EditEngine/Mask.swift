@@ -2,25 +2,43 @@ import Foundation
 
 /// Which geometry a `Mask` uses. `.radial` (an ellipse, Phase 7 slice 2)
 /// reads `radiusX`/`radiusY`/`feather`; `.linear` (a graduated band, slice
-/// 3) reads `width` instead — the OTHER kind's geometry fields sit inert
-/// at their defaults, never read by `EditPipeline.applyMasks`'s matching
-/// branch. Both kinds share `centerX`/`centerY` (the anchor point) and
-/// `rotationDegrees` (the mask's own local +X axis direction — see that
-/// field's own doc comment for what "+X axis" means per kind).
+/// 3) reads `width` instead; `.brush` (a freehand stroke, slice 4) reads
+/// `brushPoints`/`brushSize`/`feather` instead — `feather` is now SHARED
+/// between `.radial` and `.brush` (both a soft-edge amount around a drawn
+/// shape), still inert only on `.linear`. The OTHER kind(s)' geometry
+/// fields sit inert at their defaults, never read by
+/// `EditPipeline.applyMasks`'s matching branch. `.radial`/`.linear` share
+/// `centerX`/`centerY` (the anchor point) and `rotationDegrees` (the
+/// mask's own local +X axis direction — see that field's own doc comment
+/// for what "+X axis" means per kind); `.brush` uses neither — a stroke's
+/// position lives entirely in `brushPoints`.
 enum MaskKind: String, Codable {
     case radial
     case linear
+    case brush
 }
 
-/// One local adjustment, radial (ellipse) or linear (graduated band) per
-/// `kind` — Phase 7 slices 2/3's mask geometry types. Lives in its own
-/// file, not inside `EditState.swift` (already 1000+ lines), following
-/// `EditHistory.swift`'s precedent for a standalone `EditEngine` type.
+/// One point along a painted brush stroke. Mirrors `RedEyePoint`'s exact
+/// shape/convention: normalized 0...1 fraction of the extent, SwiftUI
+/// top-left-origin, y-DOWN (flipped the same `1 - y` way every other mask
+/// kind's geometry already is before reaching `CIImage`'s y-up space).
+/// Lives here (mask-scoped), not on `EditState`, since a stroke belongs to
+/// exactly one `Mask`.
+struct BrushPoint: Equatable, Codable {
+    var x: Double
+    var y: Double
+}
+
+/// One local adjustment, radial (ellipse), linear (graduated band), or
+/// brush (freehand stroke) per `kind` — Phase 7 slices 2/3/4's mask
+/// geometry kinds. Lives in its own file, not inside `EditState.swift`
+/// (already 1000+ lines), following `EditHistory.swift`'s precedent for a
+/// standalone `EditEngine` type.
 ///
 /// Unlike `RedEyePoint`/`RawNeutralPoint` (both trivial 2-`Double` points
 /// with SYNTHESIZED `Codable`), `Mask` needs its OWN hand-written
 /// schema-tolerant decoding — see the `extension Mask` below — because
-/// slices 4-6 will add new geometry variants and combining flags to THIS
+/// slices 5-6 will add new geometry variants and combining flags to THIS
 /// struct, so a mask written today must still decode after those land, the
 /// same reasoning `EditState` itself already applies one level up. This is
 /// also why `kind`/geometry live as FLAT fields on one struct rather than
@@ -128,6 +146,29 @@ struct Mask: Identifiable, Equatable, Codable {
     /// for a too-small radius.
     var width: Double = 0.3
 
+    /// `.brush` only — inert on `.radial`/`.linear`. Dab radius, a fraction
+    /// of `min(extent.width, extent.height)` (the same non-axis-specific
+    /// denominator `width` above uses, for the same reason: constant
+    /// on-screen thickness regardless of the extent's aspect ratio).
+    /// `BrushMaskGeometry.radiusInPixels` is the single source of truth for
+    /// the render-side clamp: unlike `radiusX`/`radiusY` (where a too-small
+    /// value means "covers nothing" and the whole mask is skipped), a tiny
+    /// brush is a legitimate, deliberate fine-detail tool — the pixel
+    /// radius is clamped to a small floor instead of ever skipping the
+    /// mask (a real bug this struct's own history already hit once for
+    /// `.linear`'s `width`, on a small extent like a Library thumbnail).
+    var brushSize: Double = 0.05
+
+    /// `.brush` only — empty on every other kind. A FLAT, ordered list of
+    /// points along one continuous stroke (not nested per-stroke arrays —
+    /// painting a second area means adding another `.brush` `Mask`, since
+    /// masks already compound sequentially for free). Empty is a real,
+    /// valid state: a `.brush` mask that's been added but not yet painted
+    /// (or whose stroke was discarded) — `EditPipeline.applyMasks` treats
+    /// it as covering nothing, matching `redEyePoints`' own empty-means-off
+    /// convention.
+    var brushPoints: [BrushPoint] = []
+
     // MARK: - Adjustments
 
     /// The curated 8-parameter set (CLAUDE.md Phase 7 roadmap: "a small
@@ -182,11 +223,12 @@ struct Mask: Identifiable, Equatable, Codable {
     /// geometry-only. `EditPipeline.applyMasks` skips a mask entirely when
     /// this is `true`, which is what makes a geometry-only mask render
     /// BYTE-IDENTICAL to no mask at all. Deliberately excludes geometry —
-    /// including `kind`/`width` (added slice 3): a mask can be
-    /// `isIdentity` yet still a real, undo-worthy edit (the user placed
-    /// it), mirroring `redEyePoints`' own existing behavior (a placed
-    /// point with strength 0 renders identically but still counts as an
-    /// edit) — see `EditState.isEffectivelyIdentity`.
+    /// including `kind`/`width`/`brushSize`/`brushPoints` (added slices 3-4):
+    /// a mask can be `isIdentity` yet still a real, undo-worthy edit (the
+    /// user placed it or painted a stroke), mirroring `redEyePoints`' own
+    /// existing behavior (a placed point with strength 0 renders
+    /// identically but still counts as an edit) — see
+    /// `EditState.isEffectivelyIdentity`.
     var isIdentity: Bool {
         exposureEV == 0 && contrast == 0 && highlights == 0 && shadows == 0
             && clarity == 0 && saturation == 0 && temperature == 0 && tint == 0
@@ -207,6 +249,7 @@ extension Mask {
     private enum CodingKeys: String, CodingKey {
         case id, kind
         case centerX, centerY, radiusX, radiusY, rotationDegrees, feather, width
+        case brushSize, brushPoints
         case exposureEV, contrast, highlights, shadows
         case clarity, saturation, temperature, tint
     }
@@ -236,7 +279,8 @@ extension Mask {
         // different malformed input than an unrecognized string value.
         // `try?` makes the "never throws" guarantee unconditional on ANY
         // decode failure for this one key, not just an unrecognized-but-
-        // well-typed value.
+        // well-typed value. `.brush` is real as of slice 4; a future
+        // slice 5/6 kind string still falls back to `.radial` the same way.
         let rawKind = (try? container.decodeIfPresent(String.self, forKey: .kind)) ?? nil
         kind = rawKind.flatMap(MaskKind.init(rawValue:)) ?? .radial
         centerX = try container.decodeIfPresent(Double.self, forKey: .centerX) ?? 0.5
@@ -246,6 +290,11 @@ extension Mask {
         rotationDegrees = try container.decodeIfPresent(Double.self, forKey: .rotationDegrees) ?? 0
         feather = try container.decodeIfPresent(Double.self, forKey: .feather) ?? 0.5
         width = try container.decodeIfPresent(Double.self, forKey: .width) ?? 0.3
+        brushSize = try container.decodeIfPresent(Double.self, forKey: .brushSize) ?? 0.05
+        // Same reasoning as `kind` above: a malformed single point (e.g.
+        // missing `y`) must not discard the whole sidecar, so this decodes
+        // via `try?` rather than a bare `try` on the array.
+        brushPoints = (try? container.decodeIfPresent([BrushPoint].self, forKey: .brushPoints)) ?? nil ?? []
         exposureEV = try container.decodeIfPresent(Double.self, forKey: .exposureEV) ?? 0
         contrast = try container.decodeIfPresent(Double.self, forKey: .contrast) ?? 0
         highlights = try container.decodeIfPresent(Double.self, forKey: .highlights) ?? 0
@@ -268,7 +317,8 @@ extension Mask {
         } else {
             id = Mask.deterministicFallbackID(
                 kind: kind, centerX: centerX, centerY: centerY, radiusX: radiusX, radiusY: radiusY,
-                rotationDegrees: rotationDegrees, feather: feather, width: width,
+                rotationDegrees: rotationDegrees, feather: feather, width: width, brushSize: brushSize,
+                brushPoints: brushPoints,
                 exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
                 clarity: clarity, saturation: saturation, temperature: temperature, tint: tint
             )
@@ -304,25 +354,39 @@ extension Mask {
     /// id-less sidecars — harmless: the only property being preserved is
     /// "the same bytes always decode to the same id," never cross-version
     /// id stability.
+    ///
+    /// Slice 4 note: `brushSize` joins the fixed-arity scalar list;
+    /// `brushPoints` (variable-length, unlike every other field here) is
+    /// mixed in as a SECOND pass after the fixed-arity loop — its own count
+    /// first (so two masks differing only in point count never collide),
+    /// then each point's x/y in order.
     private static func deterministicFallbackID(
         kind: MaskKind, centerX: Double, centerY: Double, radiusX: Double, radiusY: Double,
-        rotationDegrees: Double, feather: Double, width: Double,
+        rotationDegrees: Double, feather: Double, width: Double, brushSize: Double,
+        brushPoints: [BrushPoint],
         exposureEV: Double, contrast: Double, highlights: Double, shadows: Double,
         clarity: Double, saturation: Double, temperature: Double, tint: Double
     ) -> UUID {
         let values = [
-            centerX, centerY, radiusX, radiusY, rotationDegrees, feather, width,
+            centerX, centerY, radiusX, radiusY, rotationDegrees, feather, width, brushSize,
             exposureEV, contrast, highlights, shadows, clarity, saturation, temperature, tint
         ]
         let kindSeed: UInt64
         switch kind {
         case .radial: kindSeed = 0x9e3779b97f4a7c15
         case .linear: kindSeed = 0x517cc1b727220a95
+        case .brush: kindSeed = 0x2545f4914f6cdd1d
         }
         let prime: UInt64 = 0x100000001b3
         var laneA: UInt64 = (0xcbf29ce484222325 ^ kindSeed) &* prime
         var laneB: UInt64 = (0x9e3779b97f4a7c15 ^ kindSeed.byteSwapped) &* prime
         for value in values {
+            let bits = value.bitPattern
+            laneA = (laneA ^ bits) &* prime
+            laneB = (laneB ^ bits.byteSwapped) &* prime
+        }
+        let pointValues = [Double(brushPoints.count)] + brushPoints.flatMap { [$0.x, $0.y] }
+        for value in pointValues {
             let bits = value.bitPattern
             laneA = (laneA ^ bits) &* prime
             laneB = (laneB ^ bits.byteSwapped) &* prime

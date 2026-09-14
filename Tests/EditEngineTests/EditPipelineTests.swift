@@ -2632,6 +2632,187 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(pixel(of: output, at: 200, 200).r, 0.8, accuracy: accuracy)
     }
 
+    // MARK: - Brush mask (Phase 7 slice 4)
+    //
+    // Freehand stroke local adjustment. Reuses `applyMasks`'s shared tone/
+    // color plumbing verbatim (already covered above for `.radial`/
+    // `.linear`) — these tests focus on what's genuinely NEW: the
+    // `BrushMaskGeometry`-driven raster/blur path, in particular the
+    // `CGBitmapContext`-y-up <-> `CIImage(cgImage:)`-row-mapping agreement
+    // `brushStrokeMaskImage`'s own doc comment flags as unverified by
+    // construction alone (this codebase's documented history of y-flip
+    // sign bugs — Metal, Compare split). Written and checked FIRST, per
+    // this slice's own plan, before any other Brush test.
+
+    func testBrushStrokeAtTopOfFrameBrightensTopOfRenderedFrame() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [
+                Mask(kind: .brush, feather: 0.3, brushSize: 0.15, brushPoints: [BrushPoint(x: 0.5, y: 0.1)], exposureEV: 1)
+            ]),
+            to: input
+        )
+        // UI y=0.1 (near the visual TOP of the frame) must flip to a HIGH
+        // y sample in CIImage's bottom-left/y-up space -- if the raster's
+        // row mapping were backwards, this would brighten the BOTTOM
+        // instead.
+        XCTAssertEqual(pixel(of: output, at: 200, 360).r, 0.4, accuracy: accuracy, "visual top (UI y=0.1) must be brightened")
+        XCTAssertEqual(pixel(of: output, at: 200, 40).r, 0.2, accuracy: accuracy, "visual bottom must be untouched")
+    }
+
+    /// A large, fully-covering single-dab brush mask for equivalence tests
+    /// against the identically-valued global slider — the Brush analog of
+    /// `fullyCoveringMask`/`fullyCoveringLinearMask` above.
+    private func fullyCoveringBrushMask(
+        exposureEV: Double = 0, contrast: Double = 0, highlights: Double = 0, shadows: Double = 0,
+        clarity: Double = 0, saturation: Double = 0, temperature: Double = 0, tint: Double = 0
+    ) -> Mask {
+        Mask(
+            kind: .brush, feather: 0.5, brushSize: BrushMaskGeometry.maximumSize,
+            brushPoints: [BrushPoint(x: 0.5, y: 0.5)],
+            exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
+            clarity: clarity, saturation: saturation, temperature: temperature, tint: tint
+        )
+    }
+
+    func testBrushMaskFarFromStrokeIsByteIdentical() {
+        let input = solidColorImage(r: 0.7, g: 0.3, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [
+                Mask(kind: .brush, feather: 0.2, brushSize: 0.05, brushPoints: [BrushPoint(x: 0.1, y: 0.1)], exposureEV: 2)
+            ]),
+            to: input
+        )
+        XCTAssertEqual(pixel(of: output, at: 380, 380).r, 0.7, accuracy: accuracy, "far corner, well outside the dab, must be untouched")
+    }
+
+    func testEmptyBrushPointsIsByteIdenticalToNoMask() {
+        let input = solidColorImage(r: 0.7, g: 0.3, b: 0.2, a: 1, size: 400)
+        let withEmptyStroke = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .brush, brushPoints: [], exposureEV: 2)]),
+            to: input
+        )
+        let withoutMask = EditPipeline.apply(EditState(), to: input)
+        XCTAssertEqual(pixel(of: withEmptyStroke, at: 200, 200).r, pixel(of: withoutMask, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testBrushMaskEdgeShowsPartialCoverageBetweenInsideAndOutsideValues() {
+        // F3's RGB==alpha co-variance check: a genuinely soft edge must
+        // read STRICTLY between the fully-inside and fully-outside values,
+        // not snap to one or the other.
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [
+                Mask(kind: .brush, feather: 0.6, brushSize: 0.15, brushPoints: [BrushPoint(x: 0.5, y: 0.5)], exposureEV: 1)
+            ]),
+            to: input
+        )
+        let inside = pixel(of: output, at: 200, 200).r
+        let edge = pixel(of: output, at: 260, 200).r
+        let outside = pixel(of: output, at: 380, 200).r
+        XCTAssertEqual(inside, 0.4, accuracy: accuracy)
+        XCTAssertEqual(outside, 0.2, accuracy: accuracy)
+        XCTAssertGreaterThan(edge, outside, "edge must read above the fully-outside value")
+        XCTAssertLessThan(edge, inside, "edge must read below the fully-inside value")
+    }
+
+    func testBrushMaskFeatherIncreaseSoftensTheTransition() {
+        // Sampled EXACTLY at the hard-edge radius (brushSize 0.15 * 400 =
+        // 60px from center): a hard edge (feather 0, no blur) cuts off
+        // completely right there (reads fully "outside", 0.2). A softer
+        // edge (feather 1) BLEEDS the effect outward past that same
+        // boundary via the Gaussian blur -- so the softer stroke must read
+        // MEASURABLY closer to the fully-inside value at this exact point,
+        // not further from it. (An earlier draft of this test asserted
+        // the opposite direction and failed -- measured, not assumed.)
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        func edgeValue(feather: Double) -> Float {
+            let output = EditPipeline.apply(
+                EditState(masks: [
+                    Mask(kind: .brush, feather: feather, brushSize: 0.15, brushPoints: [BrushPoint(x: 0.5, y: 0.5)], exposureEV: 1)
+                ]),
+                to: input
+            )
+            return pixel(of: output, at: 260, 200).r
+        }
+        let hard = edgeValue(feather: 0)
+        let soft = edgeValue(feather: 1)
+        XCTAssertEqual(hard, 0.2, accuracy: accuracy, "a hard edge has zero effect right at its own nominal boundary")
+        XCTAssertGreaterThan(soft, hard, "a softer feather must bleed measurably past the hard-edge boundary")
+    }
+
+    func testBrushMaskFalloffIsMonotonicOutwardFromTheStroke() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [
+                Mask(kind: .brush, feather: 0.8, brushSize: 0.2, brushPoints: [BrushPoint(x: 0.5, y: 0.5)], exposureEV: 1)
+            ]),
+            to: input
+        )
+        let values = [200, 230, 250, 270, 290, 320, 360].map { pixel(of: output, at: $0, 200).r }
+        for index in 1..<values.count {
+            XCTAssertLessThanOrEqual(values[index], values[index - 1] + accuracy, "must never brighten further away from the stroke")
+        }
+    }
+
+    func testSingleClickPaintsASymmetricRoundDab() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [
+                Mask(kind: .brush, feather: 0.3, brushSize: 0.15, brushPoints: [BrushPoint(x: 0.5, y: 0.5)], exposureEV: 1)
+            ]),
+            to: input
+        )
+        // Sample four points equidistant from the center along each axis --
+        // a single-point stroke must be radially symmetric.
+        let up = pixel(of: output, at: 200, 240).r
+        let down = pixel(of: output, at: 200, 160).r
+        let left = pixel(of: output, at: 160, 200).r
+        let right = pixel(of: output, at: 240, 200).r
+        XCTAssertEqual(up, down, accuracy: accuracy)
+        XCTAssertEqual(left, right, accuracy: accuracy)
+        XCTAssertEqual(up, left, accuracy: accuracy)
+    }
+
+    func testBrushMaskGeometryIsProportionalUnderDownscale() {
+        // The direct guard on ProxyScale.swift's constraint, mirroring
+        // `testMaskGeometryIsProportionalUnderDownscale`/`testLinearMask...`'s
+        // own equivalents.
+        let fullInput = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let proxyInput = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 40)
+        let state = EditState(masks: [
+            Mask(kind: .brush, feather: 0.3, brushSize: 0.15, brushPoints: [BrushPoint(x: 0.5, y: 0.5)], exposureEV: 1)
+        ])
+        let full = EditPipeline.apply(state, to: fullInput)
+        let proxy = EditPipeline.apply(state, to: proxyInput)
+        XCTAssertEqual(pixel(of: full, at: 200, 200).r, pixel(of: proxy, at: 20, 20).r, accuracy: accuracy)
+    }
+
+    func testBrushMaskExposureMatchesGlobalExposure() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 1, size: 400)
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringBrushMask(exposureEV: 1.2)]), to: input)
+        let global = EditPipeline.apply(EditState(exposureEV: 1.2), to: input)
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).r, pixel(of: global, at: 200, 200).r, accuracy: accuracy)
+        XCTAssertNotEqual(pixel(of: masked, at: 200, 200).r, pixel(of: input, at: 200, 200).r, "sanity: a real effect happened")
+    }
+
+    func testBrushMaskTemperatureOnlyOnABlackAndWhitePhotoNeverReachesTheRaster() {
+        // Behavioral proxy for the `guard corrected !== img else { continue }`
+        // perf short-circuit: a temperature/tint-only brush mask on a B&W
+        // photo has nothing to apply (the WB branch is gated off), so this
+        // must render byte-identical to no mask at all -- if the raster/
+        // blend pass ran anyway on a no-op `corrected`, it would still be a
+        // no-op pixel-wise, but this test protects the short-circuit itself
+        // from silently regressing into always-composite behavior.
+        let input = solidColorImage(r: 0.5, g: 0.4, b: 0.3, a: 1, size: 400)
+        let withoutMask = EditPipeline.apply(EditState(blackAndWhite: true), to: input)
+        let withMask = EditPipeline.apply(
+            EditState(blackAndWhite: true, masks: [fullyCoveringBrushMask(temperature: 1500, tint: 40)]),
+            to: input
+        )
+        XCTAssertEqual(pixel(of: withMask, at: 200, 200).r, pixel(of: withoutMask, at: 200, 200).r, accuracy: accuracy)
+    }
+
     // MARK: - Vignette math
     //
     // Vignette (CIVignetteEffect) is a radial darkening/brightening tied to

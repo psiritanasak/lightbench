@@ -73,6 +73,14 @@ struct AdjustTabView: View {
     /// a different photo is loaded.
     @Binding var isPickingWhiteBalance: Bool
     @Binding var isPlacingRedEyeCorrections: Bool
+    /// Phase 7 slice 4: which mask (if any) is currently in live brush-paint
+    /// mode — owned by `ContentView` for the same reason `selectedMaskID`
+    /// is (it gates `canZoom`, drives the on-image live-stroke overlay, and
+    /// is cleared by photo/tab/Compare switches). `UUID?`, not `Bool` (F4):
+    /// the falling-edge cleanup that deletes a never-painted mask needs to
+    /// name the OLD id, which a bare `Bool` can't supply once `select(_:)`
+    /// has already repointed `selectedMaskID`.
+    @Binding var brushPaintingMaskID: UUID?
     /// Called when EITHER point-picking mode is entered. `ContentView` exits
     /// Compare and resets zoom/pan in response — passed as a callback so this
     /// view doesn't take bindings to three unrelated viewport states.
@@ -271,6 +279,7 @@ struct AdjustTabView: View {
                 if isPickingWhiteBalance {
                     isPlacingRedEyeCorrections = false
                     panel.selectedMaskID = nil
+                    brushPaintingMaskID = nil
                     onEnterPointPickingMode()
                 }
             } label: {
@@ -351,6 +360,7 @@ struct AdjustTabView: View {
                 if isPlacingRedEyeCorrections {
                     isPickingWhiteBalance = false
                     panel.selectedMaskID = nil
+                    brushPaintingMaskID = nil
                     onEnterPointPickingMode()
                 }
             } label: {
@@ -408,28 +418,41 @@ struct AdjustTabView: View {
                 next.isMasksSectionExpanded = newValue
                 if !newValue { next.selectedMaskID = nil }
                 panel = next
+                if !newValue { brushPaintingMaskID = nil }
             }
         )
     }
 
     private var masksSection: some View {
         Group {
-            // Phase 7 slice 3: two side-by-side buttons, not a single
-            // button or a Menu -- introducing a second mask KIND is
-            // exactly the moment discoverability matters more than a
-            // compact control; a menu click would bury the new option
-            // right when it most needs to be seen.
+            // Phase 7 slices 3-4: three side-by-side buttons, not a single
+            // button or a Menu -- introducing a new mask KIND is exactly
+            // the moment discoverability matters more than a compact
+            // control; a menu click would bury the new option right when
+            // it most needs to be seen. Live-verified (slice 4): the
+            // ORIGINAL "Add Radial"/"Add Linear" labels, extended to a
+            // third "Add Brush" button, truncated to "Add Ra…"/"Add
+            // Lin…"/"Add Bru…" at the sidebar's default width -- the
+            // SIDEBAR itself didn't need to grow (this comment's original
+            // claim), but the labels did need to shrink; dropping the
+            // shared "Add" prefix (kept in each button's own accessibility
+            // label instead) fits all three without truncation.
             HStack {
-                Button("Add Radial") {
+                Button("Radial") {
                     addMask(kind: .radial)
                 }
                 .frame(maxWidth: .infinity)
                 .accessibilityLabel("Add Radial Mask")
-                Button("Add Linear") {
+                Button("Linear") {
                     addMask(kind: .linear)
                 }
                 .frame(maxWidth: .infinity)
                 .accessibilityLabel("Add Linear Mask")
+                Button("Brush") {
+                    addMask(kind: .brush)
+                }
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel("Add Brush Mask")
             }
             .disabled(document.currentImage == nil)
             if document.editState.masks.isEmpty {
@@ -464,17 +487,38 @@ struct AdjustTabView: View {
     /// SEQUENTIALLY in array order (`EditPipeline.applyMasks`), so a
     /// per-kind counter would visibly disagree with compositing order the
     /// moment a Radial and a Linear mask overlap.
+    /// Exhaustive `switch`, not a ternary (Phase 7 slice 4 fix): the
+    /// pre-slice-4 `mask.kind == .radial ? X : Y` ternaries compiled fine
+    /// against a third case and would have silently mislabeled every Brush
+    /// mask as Linear — closing that hazard is part of this feature, not
+    /// an afterthought.
+    private func maskKindIcon(_ kind: MaskKind) -> String {
+        switch kind {
+        case .radial: return "circle.dashed"
+        case .linear: return "line.diagonal"
+        case .brush: return "paintbrush.pointed"
+        }
+    }
+
+    private func maskKindLabel(_ kind: MaskKind) -> String {
+        switch kind {
+        case .radial: return "Radial"
+        case .linear: return "Linear"
+        case .brush: return "Brush"
+        }
+    }
+
     private func maskRow(number: Int, mask: Mask) -> some View {
         let isSelected = panel.selectedMaskID == mask.id
         return HStack {
             Button {
                 select(mask)
             } label: {
-                Label("Mask \(number)", systemImage: mask.kind == .radial ? "circle.dashed" : "line.diagonal")
+                Label("Mask \(number)", systemImage: maskKindIcon(mask.kind))
             }
             .buttonStyle(.plain)
             .fontWeight(isSelected ? .semibold : .regular)
-            .accessibilityLabel("Mask \(number), \(mask.kind == .radial ? "Radial" : "Linear")")
+            .accessibilityLabel("Mask \(number), \(maskKindLabel(mask.kind))")
             Spacer()
             Button {
                 delete(mask)
@@ -495,7 +539,10 @@ struct AdjustTabView: View {
             // from Mask 1 to Mask 2 while a click-to-type field is open
             // would reuse the same view identity and could commit the
             // typed value into Mask 2's field instead of Mask 1's.
-            MaskDetailView(mask: binding).id(id)
+            MaskDetailView(
+                mask: binding,
+                onBeginBrushStroke: binding.wrappedValue.kind == .brush ? { beginBrushStroke(for: id) } : nil
+            ).id(id)
         }
     }
 
@@ -506,11 +553,20 @@ struct AdjustTabView: View {
     /// step. Holds for `.linear` just as much as `.radial`: a graduated
     /// band covering roughly half the frame at its default width is
     /// exactly as immediately visible as a default-sized ellipse.
+    /// `.brush` arms paint mode immediately after creating + selecting the
+    /// mask (WB's "arm then auto-disarm after one interaction" shape, NOT
+    /// Red-Eye's "stays armed" shape — see `beginBrushStroke`'s own doc
+    /// comment) — a brush stroke has no useful default shape the way a
+    /// radial/linear mask's default geometry does, so there's nothing to
+    /// show until the user paints.
     private func addMask(kind: MaskKind) {
         var mask = Mask()
         mask.kind = kind
         document.editState.masks.append(mask)
         select(mask)
+        if kind == .brush {
+            beginBrushStroke(for: mask.id)
+        }
     }
 
     /// Mirrors the WB/Red-Eye buttons' own disarm shape — clears the OTHER
@@ -523,6 +579,7 @@ struct AdjustTabView: View {
         panel.selectedMaskID = mask.id
         isPickingWhiteBalance = false
         isPlacingRedEyeCorrections = false
+        brushPaintingMaskID = nil
         onEnterPointPickingMode()
     }
 
@@ -531,6 +588,24 @@ struct AdjustTabView: View {
         if panel.selectedMaskID == mask.id {
             panel.selectedMaskID = nil
         }
+        if brushPaintingMaskID == mask.id {
+            brushPaintingMaskID = nil
+        }
+    }
+
+    /// Arms live brush-paint mode for `id` — called both by `addMask` (a
+    /// freshly-created, unpainted mask) and by `MaskDetailView`'s "Paint
+    /// Stroke"/"Redraw Stroke" button (a previously-painted mask, re-armed
+    /// to replace its stroke). Deliberately does NOT clear `brushPoints`
+    /// (F5): `BrushMaskOverlayView`'s own `onChanged` replaces the array
+    /// wholesale on the new gesture's FIRST point, so pressing Escape
+    /// right after arming (before drawing) leaves an existing stroke
+    /// intact rather than discarding it early.
+    private func beginBrushStroke(for id: UUID) {
+        isPickingWhiteBalance = false
+        isPlacingRedEyeCorrections = false
+        brushPaintingMaskID = id
+        onEnterPointPickingMode()
     }
 
     /// Phase 6 slice 2: true if the currently-open photo is a RAW file.

@@ -231,16 +231,17 @@ final class EditStateCodableTests: XCTestCase {
     /// `try?`, so an uncaught throw here wouldn't just skip this one
     /// mask — it would discard the ENTIRE sidecar, every global edit on
     /// the photo included. Assert the fix directly: a sidecar with an
-    /// unrecognized future kind string (`"brush"`, standing in for a
-    /// hypothetical slice-4 kind) PLUS a non-default GLOBAL field must
-    /// still decode successfully, with the global field intact — proving
-    /// the whole-sidecar-loss hazard is actually closed, not just
-    /// theorized.
+    /// unrecognized future kind string (`"colorRange"`, standing in for a
+    /// hypothetical slice-5 kind — `"brush"` became a REAL, recognized
+    /// kind in slice 4, so it can no longer stand in for "unrecognized")
+    /// PLUS a non-default GLOBAL field must still decode successfully,
+    /// with the global field intact — proving the whole-sidecar-loss
+    /// hazard is actually closed, not just theorized.
     func testUnknownMaskKindDecodesToRadialWithoutDiscardingTheSidecar() throws {
         let json = """
         {
             "exposureEV": 1.5,
-            "masks": [{ "kind": "brush", "centerX": 0.6 }]
+            "masks": [{ "kind": "colorRange", "centerX": 0.6 }]
         }
         """
         let state = try decode(json)
@@ -272,6 +273,56 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.masks[0].centerX, 0.6)
     }
 
+    /// Phase 7 slice 4: `brushSize`/`brushPoints` default when absent, the
+    /// same schema-tolerance every other `Mask` field already has (a
+    /// pre-slice-4 sidecar has neither key at all).
+    func testBrushSizeAndBrushPointsDefaultWhenAbsent() throws {
+        let json = """
+        { "masks": [{ "kind": "brush" }] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].brushSize, 0.05, accuracy: 0.0001)
+        XCTAssertEqual(state.masks[0].brushPoints, [])
+    }
+
+    /// Same whole-sidecar-loss hazard `testMaskKindWithWrongJSONTypeDecodesToRadialWithoutDiscardingTheSidecar`
+    /// already covers for `kind`, one field over: a malformed POINT inside
+    /// `brushPoints` (missing `y`) must not throw and discard the entire
+    /// sidecar — `Mask.init(from:)` decodes this array via `try?`
+    /// specifically to close this.
+    func testMalformedBrushPointDoesNotDiscardTheSidecar() throws {
+        let json = """
+        {
+            "exposureEV": 1.5,
+            "masks": [{ "kind": "brush", "brushPoints": [{ "x": 0.1 }] }]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.exposureEV, 1.5, "a malformed brush point must not discard the rest of the sidecar")
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].kind, .brush)
+        XCTAssertEqual(state.masks[0].brushPoints, [], "the malformed array falls back to empty, not a partial/garbage decode")
+    }
+
+    /// A `.brush` mask's new fields must survive an encode/decode
+    /// round-trip, the same guarantee already exercised for `.radial`/
+    /// `.linear`'s own geometry fields.
+    func testBrushMaskRoundTripsThroughCodable() throws {
+        let original = Mask(
+            kind: .brush, feather: 0.7, brushSize: 0.12,
+            brushPoints: [BrushPoint(x: 0.1, y: 0.2), BrushPoint(x: 0.3, y: 0.4)],
+            exposureEV: 1.2
+        )
+        let data = try JSONEncoder().encode(EditState(masks: [original]))
+        let decoded = try JSONDecoder().decode(EditState.self, from: data)
+        XCTAssertEqual(decoded.masks.count, 1)
+        XCTAssertEqual(decoded.masks[0].kind, .brush)
+        XCTAssertEqual(decoded.masks[0].brushSize, 0.12, accuracy: 0.0001)
+        XCTAssertEqual(decoded.masks[0].brushPoints, original.brushPoints)
+        XCTAssertEqual(decoded.masks[0].id, original.id)
+    }
+
     /// `kind` must feed `Mask`'s deterministic id-fallback hash — omitting
     /// it would let a default id-less `.radial` mask and a default
     /// id-less `.linear` mask collide on the SAME id, breaking
@@ -295,6 +346,35 @@ final class EditStateCodableTests: XCTestCase {
     func testRepeatedDecodesOfTheSameIdLessLinearMaskAreEqual() throws {
         let json = """
         { "masks": [{ "kind": "linear", "centerX": 0.4, "centerY": 0.6, "width": 0.4, "rotationDegrees": 30 }] }
+        """
+        let first = try decode(json).masks[0]
+        let second = try decode(json).masks[0]
+        XCTAssertEqual(first.id, second.id)
+    }
+
+    /// Phase 7 slice 4: `deterministicFallbackID` mixes `brushPoints` in as
+    /// a second pass after the fixed-arity scalar fields (`Mask.swift`'s
+    /// own doc comment) — two id-less brush masks differing ONLY in their
+    /// points must not collide on the same id, the same reasoning
+    /// `testIdLessRadialAndLinearMasksWithIdenticalFieldsGetDifferentIds`
+    /// already established for `kind`.
+    func testIdLessBrushMasksWithDifferentPointsGetDifferentIds() throws {
+        let json = """
+        {
+            "masks": [
+                { "kind": "brush", "brushPoints": [{ "x": 0.1, "y": 0.1 }] },
+                { "kind": "brush", "brushPoints": [{ "x": 0.9, "y": 0.9 }] }
+            ]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 2)
+        XCTAssertNotEqual(state.masks[0].id, state.masks[1].id)
+    }
+
+    func testRepeatedDecodesOfTheSameIdLessBrushMaskAreEqual() throws {
+        let json = """
+        { "masks": [{ "kind": "brush", "brushSize": 0.2, "brushPoints": [{ "x": 0.3, "y": 0.4 }, { "x": 0.5, "y": 0.6 }] }] }
         """
         let first = try decode(json).masks[0]
         let second = try decode(json).masks[0]

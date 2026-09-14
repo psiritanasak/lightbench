@@ -1,3 +1,4 @@
+import CoreGraphics
 import CoreImage
 import CoreImage.CIFilterBuiltins
 
@@ -906,10 +907,11 @@ enum EditPipeline {
     private enum ResolvedMaskGeometry {
         case radial(RadialMaskGeometry.Resolved)
         case linear(LinearMaskGeometry.Resolved)
+        case brush(BrushMaskGeometry.Resolved)
     }
 
-    /// Local adjustments (Radial — Phase 7 slice 2 — and Linear/graduated
-    /// — slice 3). Runs AFTER
+    /// Local adjustments (Radial — Phase 7 slice 2 — Linear/graduated —
+    /// slice 3 — and Brush/freehand — slice 4). Runs AFTER
     /// Red-Eye, BEFORE Vignette: like Red-Eye, mask geometry is stored as
     /// fractions of the CURRENT (post-crop) extent, so it must map against
     /// the image the user actually sees and draws on — the same argument
@@ -1011,6 +1013,12 @@ enum EditPipeline {
     /// branch needs no such base/union at all — see that branch's own
     /// comment below for why (`CILinearGradient` clamps rather than being
     /// undefined outside `point0`/`point1`, measured before this shipped).
+    /// The `.brush` branch (slice 4) ALSO needs no such base/union — see
+    /// that branch's own comment below: a `CGImage`-backed `CIImage` has a
+    /// genuinely finite extent, so Core Image's sampling outside it is
+    /// already transparent black, matching what the `.radial` branch's
+    /// union exists to guarantee for an otherwise-undefined-outside-its-
+    /// disc procedural gradient.
     private static func applyMasks(_ state: EditState, to image: CIImage) -> CIImage {
         guard masksActive(state) else { return image }
 
@@ -1046,6 +1054,12 @@ enum EditPipeline {
                     extent: extent
                 ) else { continue }
                 resolvedGeometry = .linear(geo)
+            case .brush:
+                guard let geo = BrushMaskGeometry.resolve(
+                    points: mask.brushPoints, brushSize: mask.brushSize, feather: mask.feather,
+                    extent: extent
+                ) else { continue }
+                resolvedGeometry = .brush(geo)
             }
 
             // Reviewer-caught (Phase 7 slice 2): these four MUST clamp to
@@ -1176,6 +1190,18 @@ enum EditPipeline {
                 // `base`/`CIMaximumCompositing` precisely because of that.
                 maskImage = ramp.cropped(to: extent)
                 correctedRegion = geo.regionOfInterest
+            case .brush(let geo):
+                // Same reasoning as the `.linear` branch above, not the
+                // `.radial` one: `brushStrokeMaskImage` returns a
+                // `CGImage`-backed `CIImage`, which has a genuinely FINITE
+                // extent (the bitmap's own bounds) — Core Image's sampling
+                // outside a finite extent is transparent black, exactly
+                // what the `.radial` branch's transparent-`base` union
+                // exists to guarantee for an otherwise-undefined-outside-
+                // its-disc radial gradient. No union needed here.
+                guard let stroke = brushStrokeMaskImage(geo) else { continue }
+                maskImage = stroke.cropped(to: extent)
+                correctedRegion = geo.regionOfInterest
             }
 
             let blend = CIFilter.blendWithMask()
@@ -1186,6 +1212,150 @@ enum EditPipeline {
         }
 
         return img
+    }
+
+    /// Rasterizes one Brush mask's stroke into a soft-edged `CIImage` mask
+    /// — the `.brush` counterpart of the `.radial`/`.linear` branches'
+    /// `CIFilter.radialGradient()`/`linearGradient()` calls above, but built
+    /// from a small `CGContext` bitmap instead of a procedural gradient
+    /// (no built-in Core Image filter draws an arbitrary polyline).
+    ///
+    /// F3 (mask bitmap must be unmanaged and RGB==alpha): draws OPAQUE WHITE
+    /// on a zero-filled `premultipliedLast` RGBA8 bitmap, then loads it via
+    /// `CIImage(cgImage:options: [.colorSpace: NSNull()])` so Core Image
+    /// performs NO color management on it — this preserves the RGB==alpha
+    /// co-variance `CIBlendWithMask`'s two existing call sites (`.radial`/
+    /// `.linear` above) already rely on implicitly (their gradients are
+    /// white-to-black/transparent, so R/G/B and A carry the same value by
+    /// construction; a color-managed decode of this bitmap could otherwise
+    /// perturb R/G/B relative to A).
+    ///
+    /// F2 (no `.clampedToExtent()` before the blur): the finite bitmap is
+    /// blurred directly. Given `BrushMaskGeometry`'s own padding (sized for
+    /// the blur's tail — see that type's `padding` doc comment), skipping
+    /// `.clampedToExtent()` merely clips well under 0.3% of the Gaussian's
+    /// tail at the raster rect's edge; ADDING it would instead FAIL OPEN —
+    /// extending the stroke's opaque edge to infinity and flooding the
+    /// whole frame if the padding ever proves insufficient, a strictly
+    /// worse failure mode.
+    /// Reviewer-caught (Phase 7 slice 4): unlike the `.radial`/`.linear`
+    /// branches (pure lazy `CIImage` recipe-building — cheap to construct
+    /// repeatedly), this stage does EAGER CPU rasterization at
+    /// graph-construction time (`CGContext` alloc + stroke + `makeImage()`)
+    /// — measured ~3.9ms for a modest multi-point stroke on a large
+    /// extent. `EditPipeline.apply` runs on the main thread multiple times
+    /// per SwiftUI body pass while a mask is selected (e.g.
+    /// `ContentView.currentFitRect` re-running the whole pipeline just to
+    /// read `.extent`), so an unmemoized rasterization here could cost
+    /// several ms of main-thread work per frame. A single-entry cache
+    /// keyed on `BrushMaskGeometry.Resolved` (already `Equatable`) turns
+    /// every one of those repeat calls — same mask, same geometry — into a
+    /// cache hit; a real drag naturally invalidates it every frame since
+    /// `geo` itself changes. `NSLock`-guarded (not merely `@MainActor`-
+    /// assumed) since `EditPipeline.apply` is also called from background
+    /// contexts (`ThumbnailGenerator`, `PhotoExporter`).
+    ///
+    /// Known, accepted limitation (reviewer-flagged, not fixed this
+    /// slice): a SINGLE entry means the hit rate drops to near-zero the
+    /// moment 2+ `.brush` masks coexist on one photo (each `applyMasks`
+    /// pass evicts the previous mask's entry before it can be reused) or
+    /// the Editor's main-thread render races a background
+    /// `ThumbnailGenerator`/`PhotoExporter` pass at a different extent —
+    /// both degrade back to paying the full rasterization cost on every
+    /// call. A small fixed-size ring (or keying by `Mask.id`) would hold
+    /// the benefit across N masks; not done here since the single-mask
+    /// case this doc comment's own measurement covers is what's been
+    /// live-verified. The cached `CIImage` (up to
+    /// `BrushMaskGeometry.maximumRasterPixels` × 4 bytes ≈ 16MB) also
+    /// retains for the PROCESS lifetime, not just the current photo's —
+    /// bounded, but not cleared on photo switch/mask deletion.
+    private final class BrushStrokeImageCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lastKey: BrushMaskGeometry.Resolved?
+        private var lastValue: CIImage?
+
+        func image(for key: BrushMaskGeometry.Resolved, compute: () -> CIImage?) -> CIImage? {
+            lock.lock()
+            if let lastKey, lastKey == key {
+                let cached = lastValue
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+            let value = compute()
+            lock.lock()
+            lastKey = key
+            lastValue = value
+            lock.unlock()
+            return value
+        }
+    }
+    private static let brushStrokeImageCache = BrushStrokeImageCache()
+
+    private static func brushStrokeMaskImage(_ geo: BrushMaskGeometry.Resolved) -> CIImage? {
+        brushStrokeImageCache.image(for: geo) { computeBrushStrokeMaskImage(geo) }
+    }
+
+    private static func computeBrushStrokeMaskImage(_ geo: BrushMaskGeometry.Resolved) -> CIImage? {
+        let width = Int(geo.bitmapSize.width)
+        let height = Int(geo.bitmapSize.height)
+        guard width > 0, height > 0,
+              let context = CGContext(
+                  data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+
+        // Coordinates fed to `context` below are directly in EXTENT-pixel
+        // units (matching `geo.points`/`geo.radiusPixels`) — this scale+
+        // translate is what maps that space onto the bitmap's own
+        // (possibly downscaled) pixel grid.
+        context.scaleBy(x: geo.rasterScale, y: geo.rasterScale)
+        context.translateBy(x: -geo.rasterRect.minX, y: -geo.rasterRect.minY)
+
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        if geo.points.count == 1 {
+            // A single click has no path to stroke — fill a circle instead.
+            let point = geo.points[0]
+            let rect = CGRect(
+                x: point.x - geo.radiusPixels, y: point.y - geo.radiusPixels,
+                width: geo.radiusPixels * 2, height: geo.radiusPixels * 2
+            )
+            context.fillEllipse(in: rect)
+        } else {
+            context.setLineWidth(geo.radiusPixels * 2)
+            context.setLineCap(.round)
+            context.setLineJoin(.round)
+            let path = CGMutablePath()
+            path.move(to: geo.points[0])
+            for point in geo.points.dropFirst() {
+                path.addLine(to: point)
+            }
+            context.addPath(path)
+            context.strokePath()
+        }
+
+        guard let cgImage = context.makeImage() else { return nil }
+        var strokeImage = CIImage(cgImage: cgImage, options: [.colorSpace: NSNull()])
+
+        let scaledBlurRadius = geo.blurRadiusPixels * geo.rasterScale
+        if scaledBlurRadius >= BrushMaskGeometry.minimumBlurRadiusPixels {
+            let blur = CIFilter.gaussianBlur()
+            blur.inputImage = strokeImage
+            blur.radius = Float(scaledBlurRadius)
+            guard let blurred = blur.outputImage else { return nil }
+            strokeImage = blurred
+        }
+
+        // Transform the (possibly downscaled) bitmap back up to extent-pixel
+        // space and crop to the raster rect it was built for — the inverse
+        // of the scale+translate applied to `context` above: undo the
+        // downscale FIRST, then shift back to the raster rect's true
+        // origin (`concatenating` composes in that order).
+        let transform = CGAffineTransform(scaleX: 1 / geo.rasterScale, y: 1 / geo.rasterScale)
+            .concatenating(CGAffineTransform(translationX: geo.rasterRect.minX, y: geo.rasterRect.minY))
+        return strokeImage.transformed(by: transform).cropped(to: geo.rasterRect)
     }
 
     // MARK: - Vignette

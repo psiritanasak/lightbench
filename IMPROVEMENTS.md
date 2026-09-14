@@ -634,6 +634,80 @@ either reorder the overlays or narrow the divider's hit-region at the
 same time, not discover this the hard way. Logged here as a heads-up
 for that future change, not as an open bug to fix now.
 
+### D13. Switching photos with an unpainted Brush mask armed leaks a phantom mask (Phase 7 slice 4, reviewer-caught)
+
+`ContentView.discardUnpaintedBrushMask` is wired to fire on every
+disarm route EXCEPT photo switch, despite that function's own doc
+comment previously (wrongly) claiming full coverage — caught by the
+reviewer's second pass, not the first. Root cause:
+`ImageDocumentModel.load(from:)` sets `currentURL` and `editState` to
+the INCOMING photo synchronously, in the same block, so by the time
+`ContentView`'s `.onChange(of: document.currentURL)` fires and clears
+`brushPaintingMaskID`, `document.editState.masks` is already the NEW
+photo's array — `discardUnpaintedBrushMask` looks the OLD mask's id up
+in the wrong photo's masks and silently no-ops, while the OUTGOING
+photo's phantom empty `.brush` mask has already been flushed to its own
+sidecar by the pre-existing `flushPendingSidecarSave()` call in the same
+navigation path. User-visible effect: "Add Brush" on photo A, don't
+paint, switch to photo B — photo A's sidecar keeps a `Mask N` with no
+points and identity adjustments, and (since a placed-but-inert mask
+counts as a real edit, same as `redEyePoints`' own convention) "Revert
+to Original" reads as enabled on photo A even though nothing visibly
+changed.
+
+Properly fixing this needs the cleanup to run BEFORE `load(from:)` swaps
+state — either at every photo-switch call site (filmstrip, Library grid,
+⌘←/⌘→) or via a hook inside `ImageDocumentModel` itself — a genuinely
+different shape than `ContentView`'s existing single-`.onChange`
+mechanism, which only ever sees state AFTER it's already changed.
+Deliberately left as a documented gap rather than rushed:
+`ContentView.discardUnpaintedBrushMask`'s own doc comment and its
+`.onChange` call site's own comment (both in `ContentView.swift`) now
+say so explicitly instead of claiming coverage that doesn't exist.
+
+### D11. No keyboard/AT path to paint or adjust a Brush mask's stroke shape (Phase 7 slice 4)
+
+A REAL, named accessibility gap — unlike every other mask overlay in
+this app, NOT covered by the same "the sliders ARE the accessibility
+answer" justification D6/D9 established for Radial/Linear.
+`MaskDetailView`'s Brush rows (Size, Feather, "Paint Stroke"/"Redraw
+Stroke") cover the two SCALAR params a stroke has, but a stroke's actual
+SHAPE — the path itself — has no slider equivalent at all: there is no
+keyboard/AT-accessible way to paint a new stroke or adjust an existing
+one's shape, only mouse drag via `BrushMaskOverlayView`
+(`.accessibilityHidden(true)`, honestly documented as a real gap in that
+view's own doc comment, not the D6/D9 slider-coverage claim).
+
+Needs its own interaction design before it can be scoped — same category
+of open question D9 already has for Radial/Linear's rotation handle, but
+harder: a stroke has no fixed number of degrees of freedom (an arbitrary
+polyline), so even a "nudge with arrow keys" affordance doesn't obviously
+generalize the way it does for a handle. A discrete alternative (e.g.
+placing straight-line segments between keyboard-driven points, closer to
+Red-Eye's tap-to-place model than to a freehand drag) is one candidate
+starting point, not a decided design.
+
+### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
+
+Logged together since they're all small, independent follow-ups to the
+same shipped feature, each too small to justify its own numbered item
+until one is actually picked up:
+- **Multi-stroke-per-mask.** One Brush `Mask` is exactly one continuous
+  stroke (`Mask.brushPoints` is a flat array, not nested per-stroke
+  arrays) — painting a second area today means adding another Brush
+  mask, which already compounds for free but costs one extra row in the
+  mask list per stroke.
+- **Erase/subtract within one brush mask.** No way to paint, then remove
+  part of what was painted, short of "Redraw Stroke" (replaces the
+  WHOLE stroke) or deleting the mask outright.
+- **Reposition/resize of an already-painted stroke.** No on-image
+  handles once painting ends (`BrushMaskOverlayView` shows only the LIVE
+  in-progress path) — moving or rescaling a placed stroke means
+  redrawing it from scratch via "Redraw Stroke."
+- **Per-point variable size (pressure).** `Mask.brushSize` is one scalar
+  for the whole stroke; there's no equivalent of a pressure-sensitive
+  brush that varies width along the path.
+
 ### ~~D7. Code design: split ContentView.swift (1352 lines)~~ — SHIPPED 2026-08-28
 
 It currently holds: tab state, crop/aspect logic, zoom/pan gesture math

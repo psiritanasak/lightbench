@@ -7335,3 +7335,210 @@ and `EditStateCodableTests`). Test photos' sidecars confirmed clean
 verification; `IMG_9804.jpg`'s leftover test sidecar, missed at the
 time, was found and deleted during this doc pass — no sidecar means
 original, this app's own established convention). Ready to commit.
+
+## Phase 7 slice 5: Luminance Range mask (2026-09-14)
+
+The first CONTENT-DERIVED mask kind — `.luminanceRange` selects pixels
+by their own tone rather than by a drawn shape. Scoped via
+`AskUserQuestion` at the start of the session: Luminance Range only
+this pass (the sibling "Color Range" kind needs a new `.cikernel` and
+an eyedropper-style armed UI — deferred to its own future session,
+`"colorRange"`'s `EditStateCodableTests` stand-in re-pointed to it via
+an updated doc comment); tone judged in scene-linear light, the same
+domain `applyMasks` already operates in at that point in the loop; and
+this slice also fixes `ContentView`'s kind-agnostic `isEditingMask`/
+`canZoom` gate, since a mask kind with no on-image overlay shouldn't
+block zoom/pan or steal keyboard focus merely by being selected.
+
+**Data model** (`Sources/EditEngine/Mask.swift`): new `MaskKind
+.luminanceRange` case, plus `luminanceTarget`/`luminanceRange` fields
+(perceptual-tone-domain, `0.5`/`0.3` defaults). `feather` is reused a
+THIRD time (after `.radial`/`.brush`) — same
+`innerHalfWidth = outerHalfWidth * (1 - feather)` formula shape,
+applied to a tone window's half-width instead of an ellipse's radius,
+deliberately reused for its transferable meaning, not just to save a
+field. Schema-tolerant decode follows the established pattern (bare
+`try` for both new plain-`Double` fields — the `try?` sites in this
+file exist only for `kind`'s raw-value-enum hazard and `brushPoints`'
+nested-array hazard, neither of which applies here);
+`deterministicFallbackID` gained both fields plus a fourth `kindSeed`
+arm.
+
+**New pure type** (`Sources/EditEngine/LuminanceRangeSelection.swift`):
+`resolve(luminanceTarget:luminanceRange:feather:extent:)` maps the
+perceptual tone window through the sRGB EOTF
+(`linearLuminance(forTone:)`, unclamped beyond 0...1 for headroom) to
+four scene-linear thresholds (`lowerZero`/`lowerFull`/`upperFull`/
+`upperZero`). 25 unit tests, including the asymmetric worked example
+(target 0.5, range 0.3, feather 0.5 → lower edge 0.0506 wide, upper
+edge 0.0899 wide — tone-symmetric but linearly asymmetric, the whole
+point of doing the tone→linear mapping instead of a bare linear
+window).
+
+**`EditPipeline.applyMasks` branch**: built from a throwaway probe
+FIRST (measure-before-trusting, this codebase's own established
+discipline), not assumed — `Tests/EditEngineTests/
+TempLuminanceRangeProbeTests.swift`, deleted before commit (confirmed
+via `git status`). Chain: `CIColorMatrix` (Rec.709 luma collapse,
+forced-opaque alpha) → two clamped affine "tone ramps" (`CIColorMatrix`
+scale/bias + `CIColorClamp`, one rising across the dark edge, one
+falling across the bright edge) → `CIMinimumCompositing` (the exact
+trapezoid/tent, zero overshoot by construction) → `CIMaskToAlpha`.
+Rejected a `CIToneCurve`-based tent (the approach `applyCurves`'s own
+doc comment already flags as extrapolating past its endpoints and
+clamping its LUT to 0...1 — either would leak selection outside the
+window or collapse headroom pixels into one bucket). The probe
+confirmed, before any shipped code was written from it: RGB==alpha
+holds at every luminance tested; the mask reads ~1.0 across the
+plateau and ~0.0 well outside with nothing leaking through;
+`CIMaskToAlpha` applies no extra gamma (opaque neutral 0.5 in → alpha
+0.5 out, not 0.735 or 0.214); a pure red patch collapses to luma
+0.2126; and — the one genuinely surprising finding — `CIColorMatrix`'s
+output extent is NOT naturally finite even given a finite input
+(confirmed on both a synthetic image and the user's real 20.7MP
+`IMG_6564.jpeg`, extent reported as effectively `CGRect.infinite`
+pre-crop), unlike `.linear`/`.brush`'s naturally-finite chains — this
+is why the branch's own explicit `.cropped(to: extent)` is load-bearing
+here, not merely defensive. No `base`/union step needed (unlike
+`.radial`): every node in the chain has a genuinely finite, fully
+defined extent once cropped.
+
+**Perf, live-measured** (same probe-and-fully-revert methodology,
+2268×1385 drawable): JPEG (`IMG_6564.jpeg`) no-mask baseline 12.43ms,
+one ROI-cropped radial mask 12.59ms (+0.15ms), one luminanceRange mask
+(no ROI possible for this kind) 12.88ms (+0.45ms). RAW (`DSC_1665.NEF`,
+`RawDecoder.materialize`'s cached buffer) no-mask baseline 14.85ms,
+radial 14.53ms (within noise), luminanceRange 16.02ms (+1.18ms) — both
+deltas small relative to RAW's own already-heavy per-frame cost, well
+within the 16ms/60fps budget this codebase's prior Phase 7 perf checks
+already use as the bar.
+
+**UI**: `AdjustTabView.masksSection` became a 2×2 button grid (Radial/
+Linear row 1, Brush/Luminance Range row 2) instead of a 3-button
+`HStack` already at its live-verified width limit — gives every label
+more room, absorbs a future Color Range button as a natural third row.
+`select(_:)` gained a `hasOnImageOverlay(_:)` check so selecting a
+Luminance Range mask does NOT call `onEnterPointPickingMode()` (which
+would otherwise pointlessly reset zoom/pan/Compare for a mask kind with
+nothing to arm). `MaskDetailView` gained a kind-aware section title
+("Luminance Range" vs. "Shape") and a `luminanceRangeShapeRows` view
+(Luminance/Range sliders citing `LuminanceRangeSelection`'s own
+clamp constants, plus the extracted shared `featherRow`) — no new
+accessibility gap, since every parameter is a labeled `EditSliderRow`
+with no gesture at all.
+
+**`ContentView.swift` kind-aware zoom/focus gate**: new
+`hasOnImageOverlay(_ kind:)` (exhaustive switch, duplicated from
+`AdjustTabView`'s copy since `EditEngine` stays UI-free) and
+`isEditingOverlayMask` (narrows `isEditingMask` to overlay-owning
+kinds), swapped in at 5 sites: `canZoom`, the mask-overlay `switch`
+(which also gained a `case .luminanceRange: EmptyView()` tripwire arm),
+the rising-edge focus-grab `.onChange(of: selectedMaskID)`, the
+Library-round-trip refocus condition, and the pane's accessibility-
+label switch. Left deliberately unchanged: Escape routing (still
+kind-agnostic), `.brush`'s own selected-but-not-painting zoom block
+(a lower-value, separate improvement — logged, not folded in), and
+Compare's `selectedMaskID`-clearing `.onChange(of: compareMode)` (still
+clears for every kind, including Luminance Range — a real, separate
+follow-up, not fixed this slice). A deliberate, desirable consequence:
+selecting a Luminance Range mask no longer forces Compare off, so
+mask-selected + Compare-Split is newly reachable for this kind.
+
+**Tests**: 806 total (up from 763 pre-slice — the RAW luminance probe
+tests and their harness never shipped; net permanent additions are 25
+in `LuminanceRangeSelectionTests`, 14 in `EditPipelineTests`' new
+Luminance Range section (including one exact-weight cross-check added
+during reviewer follow-up — see below), and 4 new
+`EditStateCodableTests` default/round-trip/id-collision cases:
+25 + 14 + 4 = 43, 763 + 43 = 806). One test-only bug surfaced and
+fixed during this pass, not a pipeline bug:
+`testLuminanceRangeResponseIsMonotonicSinglePeaked`'s tone ladder
+originally started at `tone = 0.0`, whose linear luminance is exactly
+`0` — dividing the measured output by that denominator to isolate the
+mask's weight from each rung's own baseline produced `0/0 = NaN`,
+corrupting `values.max()`/`firstIndex(of:)` into a hard crash rather
+than a clean assertion failure; fixed by starting the ladder at `0.05`
+instead.
+
+**Live-verified (2026-09-14)**, screen-automation permission asked and
+granted fresh for this task: driven via `System Events`
+accessibility actions (`AXPress`/`AXIncrement`/`AXDecrement`) rather
+than synthetic mouse clicks/drags — this environment's synthetic
+`cliclick` mouse events do not reach the app at all (confirmed directly:
+an AXPress on the "Library" toolbar button switched views instantly,
+while a pixel-identical `cliclick` at the same on-screen location,
+confirmed via a cursor screenshot, did nothing), a broader version of
+the scroll-wheel-only limitation slice 3 Session B already logged for
+this machine. Confirmed on the user's real `IMG_6564.jpeg`: adding a
+Luminance Range mask shows no armed mode and no on-image overlay;
+pushing Exposure to +5EV with the default target/range visibly clipped
+only the bright salt/snow, NOT the saturated blue sky — a genuine,
+correct demonstration of luma-based (not perceived-brightness) tone
+selection, since Rec.709 luma weights blue at only 0.0722; dropping
+Luminance target to 0% (at a moderate +1.5EV) moved the visible effect
+from the snow onto the dark clothing instead, confirming real,
+reactive tone-targeting; pushing Range to 100% visibly widened the
+effect to cover the whole frame; Feather's `AXValueDescription`
+confirmed reactive (50%→0%). Regression-checked: adding a Radial mask
+afterward showed its on-image ellipse overlay as expected, and
+reselecting the Luminance Range mask correctly hid it again — the
+kind-aware overlay switch works dynamically, not just at add-time.
+Revert to Original correctly cleared both test masks back to "No masks
+yet"; the on-disk sidecar was read directly afterward and confirmed
+`"masks":[]` — the user's real photo library is unchanged. Not
+independently exercised (zoom/pan-not-blocked, keyboard-focus-not-
+stolen): the environment's mouse-click/scroll limitation above rules
+out an interactive repro; accepted on the reviewed code's own strength
+instead, same precedent as slice 3 Session B's zoom-block finding.
+
+**Reviewer** (Opus 5, per this session's standing convention): 2 rounds,
+FIX FIRST → APPROVE. Round 1 required one fix and flagged five
+non-blocking ones, all addressed: (1, required) the doc comments
+explaining the infinite-extent finding misattributed the cause to
+`CIColorMatrix` in general — independently re-measured and confirmed
+the true cause is specifically this branch's forced-opaque alpha bias
+(`luma.aVector = 0`, `luma.biasVector.w = 1`); a `CIColorMatrix` that
+passes its input's own alpha through stays finite. (2) the downscale
+test used a solid-color image, tautological for a tone-based (not
+geometric) selection — rewritten as a step-edge image sampled well
+inside the matching half at two sizes, isolating the one real
+resolution hazard (resampling blending a tone boundary) instead. (3) no
+test pinned the falloff's actual values, only its shape — added
+`testLuminanceRangeExactWeightAtAPartialToneMatchesTheAnalyticFormula`,
+deriving the expected weight from `LuminanceRangeSelection.resolve()`
+itself rather than a hand-typed magic number, so it cross-checks the
+Core Image chain against the Swift math without being circular. (4)
+`luminanceRangeMaskImage` returned an infinite-extent image and relied
+on its caller to crop — moved the crop inside the function itself,
+keyed on its own `sel.regionOfInterest`, so a future call site can't
+forget it. (5) `minimumEdgeWidth`'s doc comment didn't note the floor
+is fixed in LINEAR space and therefore NOT perceptually uniform across
+the tone range (a dark hard edge renders measurably softer than a
+bright one at the same nominal Feather) — added, with the numbers.
+(6) a `ContentView.swift` doc comment overstated that Escape routing
+"just works" for every mask kind — corrected to note it's reachable
+only when focus already sits on the image pane for a non-overlay kind,
+harmless for `.luminanceRange` specifically since `canZoom` is itself
+kind-aware, but no longer implied unconditional. Round 2 caught that
+fix (4) itself broke a DIFFERENT doc comment 65 lines away that still
+told a future maintainer the crop was the CALLER's responsibility —
+the exact same class of hazard round 1's required fix existed to
+close (a "do not remove this crop" safety comment pointing at the
+wrong code) — fixed to point at the function's own `return` statement.
+Also caught PROGRESS.md's own test-count arithmetic going stale after
+the fix round (805→806, `LuminanceRangeSelectionTests`' actual 25
+methods vs. an earlier "~19" estimate) — corrected in the paragraph
+above. Independently re-derived the exact-weight test's expected value
+by hand (weight 0.3070 at tone 0.375) and confirmed it discriminates
+against a tone-space-ramp bug (~1.5% off, well outside tolerance) and
+against full-weight (way off) — not just numerically close to two
+plausible answers. APPROVE on round 2, no further issues found in
+color-math correctness, alpha/headroom preservation, Codable safety, or
+thread safety.
+
+**Deferred, logged, not forgotten**: Color Range mask (own future
+session); combining masks (slice 6); `.brush`'s own zoom-block
+behavior; Compare's `selectedMaskID` clear becoming kind-aware; any ROI
+optimization for Luminance Range (structurally impossible — the mask's
+extent is the whole image by construction); a custom `.cikernel` (the
+built-in filter chain measured sufficient).

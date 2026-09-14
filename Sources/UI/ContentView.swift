@@ -96,15 +96,19 @@ struct ContentView: View {
     /// against `currentFitRect` with the same no-zoom/pan assumption, so
     /// both kinds share this one kind-agnostic gate again.
     private var canZoom: Bool {
-        // `!isPaintingBrush` is currently implied by `!isEditingMask` (the
-        // painted mask is always also the selected one — see
+        // `!isPaintingBrush` is currently implied by `!isEditingOverlayMask`
+        // (the painted mask is always also the selected one — see
         // `isPaintingBrush`'s own doc comment) but spelled out explicitly
         // rather than relied on, matching this property's own documented
         // history of NOT assuming one mode implies another (Session A's
         // now-deleted `isEditingRadialMask` carve-out was exactly that kind
-        // of implicit coupling).
+        // of implicit coupling). Phase 7 slice 5: `isEditingMask` narrowed
+        // to `isEditingOverlayMask` here — a mask kind with no on-image
+        // overlay (`.luminanceRange`) has no reason to block zoom/pan,
+        // since this restriction exists ONLY because an overlay is
+        // positioned against an un-zoomed `currentFitRect`.
         document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance
-            && !isPlacingRedEyeCorrections && !isEditingMask && !isPaintingBrush
+            && !isPlacingRedEyeCorrections && !isEditingOverlayMask && !isPaintingBrush
     }
 
     /// Phase 7 slice 2: the mask `adjustPanel.selectedMaskID` currently
@@ -122,6 +126,44 @@ struct ContentView: View {
     private var isEditingMask: Bool {
         guard let id = adjustPanel.selectedMaskID else { return false }
         return document.editState.masks.contains { $0.id == id }
+    }
+
+    /// Whether `kind` draws an on-image overlay positioned against
+    /// `currentFitRect`. Exhaustive on purpose, same reasoning as
+    /// `AdjustTabView`'s own copy of this switch (UI knowledge, not
+    /// `EditEngine` knowledge — deliberately duplicated rather than
+    /// shared, since `EditEngine` stays UI/rendering-API-free).
+    private func hasOnImageOverlay(_ kind: MaskKind) -> Bool {
+        switch kind {
+        case .radial, .linear, .brush: return true
+        case .luminanceRange: return false
+        }
+    }
+
+    /// Phase 7 slice 5: `isEditingMask`, narrowed to kinds that actually
+    /// own an on-image overlay. THIS — not `isEditingMask` — is what
+    /// should block zoom/pan or claim keyboard focus: those restrictions
+    /// exist only because an overlay is positioned against an un-zoomed
+    /// `currentFitRect`, so a kind with no overlay (`.luminanceRange`) has
+    /// no reason to pay them. `isEditingMask` itself is UNCHANGED and
+    /// keeps its existing jobs (the `brushPaintingMaskID` safety net
+    /// below is about the selected mask's mere existence, not about an
+    /// overlay) — but reviewer-caught: Escape's own key handler still
+    /// KEYS OFF `isEditingMask` unconditionally, it just isn't
+    /// GUARANTEED REACHABLE for `.luminanceRange` the way it is for an
+    /// overlay kind, since `select(_:)` no longer grabs image-pane focus
+    /// for it and the rising-edge `.onChange(of: selectedMaskID)` focus
+    /// grab is now gated to `hasOnImageOverlay`. Harmless for this kind
+    /// specifically (deselecting a `.luminanceRange` mask blocks nothing
+    /// now that `canZoom` is itself kind-aware, unlike an overlay kind
+    /// where losing Escape would strand the user mid-drag) — but Escape
+    /// is not unconditionally reachable the way this comment used to
+    /// imply.
+    private var isEditingOverlayMask: Bool {
+        guard let id = adjustPanel.selectedMaskID,
+              let mask = document.editState.masks.first(where: { $0.id == id })
+        else { return false }
+        return hasOnImageOverlay(mask.kind)
     }
 
     /// Phase 7 slice 4: which mask (if any) currently has live brush-paint
@@ -798,8 +840,14 @@ struct ContentView: View {
         // pane, so Escape (routed in `handleImagePaneKeyPress` below) works
         // immediately with no extra click needed. No crosshair to reset
         // here (masks have no point-placement crosshair).
+        //
+        // Phase 7 slice 5: narrowed to overlay-owning kinds only —
+        // selecting a `.luminanceRange` mask (no overlay) has nothing on
+        // the image pane to justify yanking focus away from whatever
+        // sidebar slider the user is about to drag.
         .onChange(of: adjustPanel.selectedMaskID) { _, newID in
-            if newID != nil {
+            guard let newID, let mask = document.editState.masks.first(where: { $0.id == newID }) else { return }
+            if hasOnImageOverlay(mask.kind) {
                 isImagePaneFocused = true
             }
         }
@@ -861,7 +909,7 @@ struct ContentView: View {
         // here on every return-to-Editor closes that gap; harmless when
         // neither mode is armed (nothing reads `isImagePaneFocused` then).
         .onChange(of: showLibrary) { _, isShowingLibrary in
-            if !isShowingLibrary, isPickingWhiteBalance || isPlacingRedEyeCorrections || isEditingMask || isPaintingBrush {
+            if !isShowingLibrary, isPickingWhiteBalance || isPlacingRedEyeCorrections || isEditingOverlayMask || isPaintingBrush {
                 isImagePaneFocused = true
             }
         }
@@ -1175,7 +1223,11 @@ struct ContentView: View {
                         isPickingWhiteBalance ? "White balance picker"
                             : isPlacingRedEyeCorrections ? "Red-eye placement"
                             : isPaintingBrush ? "Brush painting"
-                            : isEditingMask ? "Mask editing" : "Image"
+                            // Phase 7 slice 5: narrowed to overlay-owning
+                            // kinds — with no overlay, nothing about the
+                            // PANE itself changed, so announcing "Mask
+                            // editing" here would be inaccurate.
+                            : isEditingOverlayMask ? "Mask editing" : "Image"
                     )
                 }
             }
@@ -1296,7 +1348,15 @@ struct ContentView: View {
         // reading each one, not assumed) — both kinds now behave
         // identically for zoom-blocking, focus-grab, and Escape, since
         // both have their own `currentFitRect`-positioned overlay.
-        if isEditingMask, !isCroppingActive, !isPickingWhiteBalance, !isPlacingRedEyeCorrections,
+        //
+        // Phase 7 slice 5: gate narrowed to `isEditingOverlayMask` — a
+        // selected `.luminanceRange` mask has no overlay to draw here at
+        // all (see the required, but practically unreachable given this
+        // gate, `case .luminanceRange` arm below — a compile-time
+        // tripwire, not dead code the gate makes pointless: the switch
+        // itself must stay exhaustive so a FUTURE overlay-less kind can't
+        // silently fall through some OTHER, less careful gate).
+        if isEditingOverlayMask, !isCroppingActive, !isPickingWhiteBalance, !isPlacingRedEyeCorrections,
            let id = adjustPanel.selectedMaskID,
            let maskBinding = $document.editState.mask(id: id),
            let fitRect = currentFitRect {
@@ -1331,6 +1391,16 @@ struct ContentView: View {
                         onStrokeEnded: { brushPaintingMaskID = nil }
                     )
                 }
+            case .luminanceRange:
+                // Phase 7 slice 5: no on-image overlay for this kind — see
+                // `isEditingOverlayMask`'s own doc comment. This branch is
+                // unreachable in practice (the surrounding `if` already
+                // gates on `isEditingOverlayMask`, which is false for this
+                // kind), but the switch must stay exhaustive regardless —
+                // the same compile-time tripwire `maskKindIcon`/
+                // `maskKindLabel` already rely on to catch a FUTURE kind
+                // silently falling through.
+                EmptyView()
             }
         }
         // D8 (IMPROVEMENTS.md): the keyboard-driven crosshair itself —
@@ -1358,15 +1428,32 @@ struct ContentView: View {
         // IMPROVEMENTS.md's D10 note and slice 2 Session B's own
         // write-up — "the best way to see what a mask did"), so
         // `isEditingMask && compareMode == .split` is reachable in
-        // principle. It doesn't overlap in practice only because the
-        // OTHER direction is covered instead: selecting a mask
-        // (`AdjustTabView.select(_:)`) itself calls
-        // `onEnterPointPickingMode()`, forcing `compareMode = .off`, and
-        // `compareToolbarItem`'s own `.onChange(of: compareMode)` clears
-        // `selectedMaskID` the moment `compareMode` becomes non-`.off`
-        // again — so the two states stay mutually exclusive by
-        // construction, not because either overlay's real estate is
-        // walled off from the other.
+        // principle. For an OVERLAY-OWNING mask kind (`.radial`/`.linear`/
+        // `.brush`) it doesn't overlap in practice because the OTHER
+        // direction is covered instead: selecting one
+        // (`AdjustTabView.select(_:)`) calls `onEnterPointPickingMode()`,
+        // forcing `compareMode = .off`, and `compareToolbarItem`'s own
+        // `.onChange(of: compareMode)` clears `selectedMaskID` the moment
+        // `compareMode` becomes non-`.off` again — so the two states stay
+        // mutually exclusive by construction, not because either
+        // overlay's real estate is walled off from the other.
+        //
+        // Phase 7 slice 5 changed this to be genuinely ONE-DIRECTIONAL for
+        // `.luminanceRange` (no overlay): `select(_:)` no longer calls
+        // `onEnterPointPickingMode()` for this kind (see that function's
+        // own doc comment), so selecting a `.luminanceRange` mask no
+        // longer forces Compare off — `isEditingMask && compareMode ==
+        // .split` is now a REAL, reachable combination for this kind, not
+        // just a theoretical one. This is deliberate and safe: no overlay
+        // is drawn for this kind (see `isEditingOverlayMask`), so nothing
+        // competes with `CompareDividerOverlay` below for the same screen
+        // real estate. `compareToolbarItem`'s own `.onChange(of:
+        // compareMode)` still unconditionally clears `selectedMaskID` the
+        // other way (engaging Compare still deselects ANY mask, including
+        // this kind) — making that kind-aware too, so a `.luminanceRange`
+        // mask could stay selected THROUGH engaging Compare, would be a
+        // real further improvement, deliberately deferred (logged in
+        // PROGRESS.md, not fixed this slice).
         if compareMode == .split, let fitRect = currentFitRect {
             CompareDividerOverlay(fitRect: fitRect, orientation: splitOrientation, position: $splitPosition)
         }

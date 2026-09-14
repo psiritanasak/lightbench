@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The selected mask's slider rows (14 for `.radial`, 12 for `.linear`) —
-/// a top-level `struct`, deliberately
+/// The selected mask's slider rows (14 for `.radial`, 12 for `.linear`,
+/// 11 for `.luminanceRange`) — a top-level `struct`, deliberately
 /// NOT a computed property inside `AdjustTabView` (that file's `body`
 /// `VStack` already has 15 children, and two of its own doc comments warn
 /// of a real, already-hit Swift type-checker blow-up from over-packed
@@ -29,20 +29,35 @@ import SwiftUI
 /// accessibility gap (see `BrushMaskOverlayView`'s own doc comment and
 /// IMPROVEMENTS.md), not covered by the same justification the other two
 /// kinds rely on.
+///
+/// `.luminanceRange` (Phase 7 slice 5) needs NO such carve-out — it is
+/// MORE accessible than the three overlay-owning kinds, not less: every
+/// one of its parameters (Luminance, Range, Feather) is a labeled
+/// `EditSliderRow` and there is no gesture at all (no drag, no paint, no
+/// on-image overlay to excuse). Nothing to log in IMPROVEMENTS.md for it.
 struct MaskDetailView: View {
     @Binding var mask: Mask
     /// `.brush` only — called when "Paint Stroke"/"Redraw Stroke" is
-    /// tapped. `nil` for `.radial`/`.linear` (mirrors
+    /// tapped. `nil` for every other kind (mirrors
     /// `RedEyeOverlayView.onTap`'s optional-closure shape for an
     /// additive, kind-gated callback).
     var onBeginBrushStroke: (() -> Void)?
+
+    /// Kind-aware: calling a tone window a "Shape" would be wrong — this
+    /// kind has no shape at all, only a tonal selection.
+    private var shapeSectionTitle: String {
+        switch mask.kind {
+        case .radial, .linear, .brush: return "Shape"
+        case .luminanceRange: return "Luminance Range"
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Adjustments").font(.caption).foregroundStyle(.secondary)
             toneRows
             colorRows
-            Text("Shape").font(.caption).foregroundStyle(.secondary)
+            Text(shapeSectionTitle).font(.caption).foregroundStyle(.secondary)
             shapeRows
         }
     }
@@ -106,6 +121,7 @@ struct MaskDetailView: View {
         case .radial: radialShapeRows
         case .linear: linearShapeRows
         case .brush: brushShapeRows
+        case .luminanceRange: luminanceRangeShapeRows
         }
     }
 
@@ -128,10 +144,7 @@ struct MaskDetailView: View {
                 label: "Rotation", value: $mask.rotationDegrees,
                 range: -90...90, identity: 0
             ) { String(format: "%+.0f°", $0) }
-            EditSliderRow(
-                label: "Feather", value: $mask.feather,
-                range: 0...1, identity: 0.5, displayMultiplier: 100
-            ) { String(format: "%.0f%%", $0 * 100) }
+            featherRow
         }
     }
 
@@ -188,11 +201,48 @@ struct MaskDetailView: View {
                 range: BrushMaskGeometry.minimumSize...BrushMaskGeometry.maximumSize, identity: 0.05,
                 displayMultiplier: 100
             ) { String(format: "%.1f%%", $0 * 100) }
-            EditSliderRow(
-                label: "Feather", value: $mask.feather,
-                range: 0...1, identity: 0.5, displayMultiplier: 100
-            ) { String(format: "%.0f%%", $0 * 100) }
+            featherRow
         }
+    }
+
+    /// `.luminanceRange` only (Phase 7 slice 5) — no `centerRows` and no
+    /// geometry rows at all: this kind selects by TONE, not position, so
+    /// it has no anchor point, no size, and no rotation. Ranges cite
+    /// `LuminanceRangeSelection` directly, never literals — the same
+    /// single-source-of-truth discipline every other kind's ranges
+    /// already follow. Labels are "Luminance"/"Range", not "Target
+    /// Luminance"/"Range Width" — under the "Luminance Range" section
+    /// header both are unambiguous, and the longer forms would be an
+    /// avoidable truncation risk for zero clarity gain (this sidebar's
+    /// longest existing label, "Temperature", is 11 characters).
+    private var luminanceRangeShapeRows: some View {
+        Group {
+            EditSliderRow(
+                label: "Luminance", value: $mask.luminanceTarget,
+                range: LuminanceRangeSelection.minimumTarget...LuminanceRangeSelection.maximumTarget,
+                identity: 0.5, displayMultiplier: 100
+            ) { String(format: "%.0f%%", $0 * 100) }
+            // The FULL width of the tone window, not a half-width -- see
+            // Mask.luminanceRange's own doc comment.
+            EditSliderRow(
+                label: "Range", value: $mask.luminanceRange,
+                range: LuminanceRangeSelection.minimumRange...LuminanceRangeSelection.maximumRange,
+                identity: 0.3, displayMultiplier: 100
+            ) { String(format: "%.0f%%", $0 * 100) }
+            featherRow
+        }
+    }
+
+    /// Shared by three of the four kinds (`.radial`, `.brush`,
+    /// `.luminanceRange` — see `Mask.feather`'s own doc comment for why
+    /// the same field/formula is reused a third time here), extracted
+    /// once so the shared-field decision is visible in the view code,
+    /// not re-typed per kind.
+    private var featherRow: some View {
+        EditSliderRow(
+            label: "Feather", value: $mask.feather,
+            range: 0...1, identity: 0.5, displayMultiplier: 100
+        ) { String(format: "%.0f%%", $0 * 100) }
     }
 
     /// Shared between both kinds — the mask's anchor point, same

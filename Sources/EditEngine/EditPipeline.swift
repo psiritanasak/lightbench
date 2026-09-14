@@ -908,6 +908,7 @@ enum EditPipeline {
         case radial(RadialMaskGeometry.Resolved)
         case linear(LinearMaskGeometry.Resolved)
         case brush(BrushMaskGeometry.Resolved)
+        case luminanceRange(LuminanceRangeSelection.Resolved)
     }
 
     /// Local adjustments (Radial — Phase 7 slice 2 — Linear/graduated —
@@ -1018,7 +1019,21 @@ enum EditPipeline {
     /// genuinely finite extent, so Core Image's sampling outside it is
     /// already transparent black, matching what the `.radial` branch's
     /// union exists to guarantee for an otherwise-undefined-outside-its-
-    /// disc procedural gradient.
+    /// disc procedural gradient. The `.luminanceRange` branch (slice 5)
+    /// needs no `CIMaximumCompositing` UNION either — its VALUES are
+    /// well-defined everywhere by construction (verified: sampled far
+    /// outside the tone window on both a synthetic test image and a real
+    /// photo, values read sensibly near zero, never garbage). But it
+    /// DOES need its own explicit `.cropped(to: extent)`, for a different
+    /// and genuinely SURPRISING reason (measured, not assumed — see
+    /// `luminanceRangeMaskImage`'s own comment): unlike `.linear`/`.brush`,
+    /// whose mask images are naturally finite-extent by construction,
+    /// `.luminanceRange`'s chain reports an effectively INFINITE extent
+    /// regardless of `img`'s own finite extent — caused specifically by
+    /// that chain's forced-opaque alpha bias, not by `CIColorMatrix` in
+    /// general (see `luminanceRangeMaskImage`'s own comment for the full
+    /// measured detail) — so that crop is load-bearing here, not
+    /// belt-and-braces.
     private static func applyMasks(_ state: EditState, to image: CIImage) -> CIImage {
         guard masksActive(state) else { return image }
 
@@ -1060,6 +1075,12 @@ enum EditPipeline {
                     extent: extent
                 ) else { continue }
                 resolvedGeometry = .brush(geo)
+            case .luminanceRange:
+                guard let sel = LuminanceRangeSelection.resolve(
+                    luminanceTarget: mask.luminanceTarget, luminanceRange: mask.luminanceRange,
+                    feather: mask.feather, extent: extent
+                ) else { continue }
+                resolvedGeometry = .luminanceRange(sel)
             }
 
             // Reviewer-caught (Phase 7 slice 2): these four MUST clamp to
@@ -1202,6 +1223,26 @@ enum EditPipeline {
                 guard let stroke = brushStrokeMaskImage(geo) else { continue }
                 maskImage = stroke.cropped(to: extent)
                 correctedRegion = geo.regionOfInterest
+            case .luminanceRange(let sel):
+                // Reads `img` (the RUNNING loop variable), not `image` (the
+                // loop-invariant input) — deliberate: masks compound
+                // sequentially in this loop by design (see this function's
+                // own doc comment above), so "select the bright tones"
+                // should mean the tones as they currently look on screen —
+                // i.e. after any earlier mask's adjustments — not as they
+                // were before this loop started. Gets its own test
+                // (`testLuminanceRangeSelectionFollowsEarlierMasksResult`).
+                // `luminanceRangeMaskImage` crops to `sel.regionOfInterest`
+                // itself before returning (load-bearing — see its own doc
+                // comment) — no second crop needed here.
+                guard let selection = luminanceRangeMaskImage(img, sel) else { continue }
+                maskImage = selection
+                // ALWAYS the whole extent — unlike every other kind, there
+                // is no ROI-crop win available: a pixel matching the
+                // target tone can be anywhere in frame, so `corrected`
+                // must be produced everywhere. A deliberate, measured cost
+                // (see `luminanceRangeMaskImage`'s own doc comment).
+                correctedRegion = sel.regionOfInterest
             }
 
             let blend = CIFilter.blendWithMask()
@@ -1356,6 +1397,184 @@ enum EditPipeline {
         let transform = CGAffineTransform(scaleX: 1 / geo.rasterScale, y: 1 / geo.rasterScale)
             .concatenating(CGAffineTransform(translationX: geo.rasterRect.minX, y: geo.rasterRect.minY))
         return strokeImage.transformed(by: transform).cropped(to: geo.rasterRect)
+    }
+
+    /// Builds a `.luminanceRange` mask's per-pixel selection weight as a
+    /// premultiplied-white `CIImage` — the `.luminanceRange` counterpart of
+    /// the `.radial`/`.linear` branches' procedural gradients and the
+    /// `.brush` branch's rasterized bitmap, but built entirely from
+    /// BUILT-IN Core Image filters over the image's OWN pixels (no shape,
+    /// no custom kernel — a future Color Range kind is the natural home
+    /// for a `.cikernel`, not this one).
+    ///
+    /// MEASURED (a throwaway probe, built and run before this function was
+    /// written, then deleted — same "measure, don't assume" discipline
+    /// this file's own Red-Eye/Vignette adjacency claims already use): a
+    /// `CIToneCurve` tent (the originally-considered approach) was
+    /// rejected instead of tried in shipped code, because
+    /// `applyCurves`'s own doc comment already records two disqualifying
+    /// facts about that filter — it EXTRAPOLATES past its endpoints
+    /// rather than clamping (which would leak spurious selection outside
+    /// the tone window), and its LUT is built clamped to `0...1` the
+    /// instant it's non-identity (which would collapse every HEADROOM
+    /// pixel — linear > 1, genuinely present in this pipeline — into one
+    /// bucket, making "target the brightest tones" unable to distinguish
+    /// them). The two-ramp form below has neither problem: it is
+    /// piecewise-LINEAR, exactly zero outside `[lowerZero, upperZero]` by
+    /// construction, and its `CIColorMatrix` scale/bias math is defined
+    /// for any input, headroom included.
+    ///
+    /// The chain, in order:
+    /// 1. `CIColorMatrix` collapses `img` to Rec.709 relative luminance in
+    ///    R/G/B, with alpha forced fully OPAQUE (`biasVector.w = 1`,
+    ///    `aVector = 0`) — every downstream node is then premultiply-
+    ///    neutral (unpremultiply is the identity on an opaque image).
+    ///    MEASURED: a solid pure-red `(1,0,0)` patch collapses to
+    ///    `0.2126` in every channel, confirming the weights apply
+    ///    correctly to this (already scene-linear at this point in the
+    ///    pipeline) input.
+    /// 2/3. Two independent clamped affine ramps (`toneRamp` below) — one
+    ///    rising 0→1 across the dark edge (`lowerZero...lowerFull`), one
+    ///    falling 1→0 across the bright edge (`upperFull...upperZero`).
+    /// 4. `CIMinimumCompositing` of the two ramps is exactly the
+    ///    trapezoid/tent shape those four thresholds describe — zero
+    ///    overshoot anywhere, by construction rather than by clamping
+    ///    after the fact.
+    /// 5. `CIMaskToAlpha` turns the neutral (R==G==B) tent into a
+    ///    premultiplied-white mask image — RGB==alpha by that filter's
+    ///    own DOCUMENTED contract, not by relying on unpremultiply-then-
+    ///    matrix behavior the way a single one-shot color matrix would
+    ///    (which is provably fragile on any input with alpha < 1, e.g. a
+    ///    transparent corner `applyStraighten` can reveal before crop).
+    ///    MEASURED: an opaque neutral 0.5 fed directly to `CIMaskToAlpha`
+    ///    reads back alpha 0.5, confirming no extra gamma is applied.
+    ///
+    /// No transparent-`base`/`CIMaximumCompositing` union is needed here,
+    /// unlike the `.radial` branch: every node in this chain produces
+    /// well-defined VALUES everywhere (MEASURED: sampled far outside the
+    /// tone window, on both a synthetic solid-color test image and a real
+    /// photo — reads sensibly near zero, never garbage; a union exists
+    /// to fix genuinely UNDEFINED values, which is not this branch's
+    /// problem).
+    ///
+    /// A SURPRISING measured fact this doc comment exists specifically to
+    /// record, since it contradicts what the `.linear`/`.brush` branches'
+    /// own "no union needed" reasoning might suggest by analogy: this
+    /// chain's EXTENT is not naturally finite the way theirs is.
+    /// Reviewer-corrected: the cause is NOT `CIColorMatrix` in general
+    /// (a `CIColorMatrix` that passes its input's own alpha through
+    /// reports a finite extent, confirmed by direct measurement) — it is
+    /// specifically this function's own FORCED-OPAQUE alpha bias
+    /// (`luma.biasVector.w = 1` below, needed so every downstream node
+    /// stays premultiply-neutral). An opaque alpha bias makes Core Image
+    /// treat the output as covering the whole plane, reported as an
+    /// effectively INFINITE extent — confirmed on BOTH a synthetic
+    /// solid-color image (finite input) AND the user's real 20.7MP
+    /// JPEG — and every downstream node (`CIColorClamp`,
+    /// `CIMinimumCompositing`, `CIMaskToAlpha`) preserves rather than
+    /// fixes this. This is also WHY removing the crop would be actively
+    /// dangerous, not merely untidy: outside `img`'s own extent, its
+    /// unpremultiplied color reads as 0 (tone 0), so an uncropped
+    /// shadow-targeted mask would select the ENTIRE infinite plane at
+    /// full weight, not just leak an undefined edge. The
+    /// `.cropped(to: sel.regionOfInterest)` THIS FUNCTION ITSELF applies
+    /// before returning (see the `return` statement below) is therefore
+    /// NOT optional or belt-and-braces the way it would be for a kind
+    /// whose mask image is already finite — it is the ONLY thing that
+    /// gives the returned image a finite extent at all before
+    /// `CIBlendWithMask` uses it; `applyMasks`'s `.luminanceRange` arm
+    /// deliberately does NOT re-crop, trusting this function's own crop.
+    /// Do not remove that crop, do not remove the forced-opaque
+    /// alpha bias, and do not assume a future change to this filter
+    /// chain preserves finiteness without re-measuring — re-measure the
+    /// ALPHA BIAS specifically, not just whether `CIColorMatrix` is
+    /// still in the chain.
+    ///
+    /// No memoization, unlike `.brush`'s `BrushStrokeImageCache`: every
+    /// node here is lazy `CIImage` recipe-building with ZERO eager CPU
+    /// work (no `CGContext`, no `makeImage()`), so there is nothing
+    /// expensive to cache.
+    ///
+    /// Accepted, structural cost (measured, but smaller than the design
+    /// discussion originally assumed): unlike every other kind, this
+    /// branch has NO region-of-interest win available in principle (a
+    /// matching tone can be anywhere in frame, so `regionOfInterest` is
+    /// always the whole extent, never a small cropped rect). MEASURED on
+    /// the user's real 20.7MP JPEG and materialized 24MP RAW asset,
+    /// rendered into the same 2268x1385 drawable size this codebase's
+    /// other Phase 7 perf probes use: for a SINGLE mask, the difference
+    /// between this branch and a small ROI-cropped `.radial` mask was at
+    /// or below measurement noise on both assets (all three of no-mask/
+    /// radial/`.luminanceRange` landed within ~1-2ms of each other) —
+    /// the theoretical no-ROI cost this comment originally predicted a
+    /// clearer penalty for did not clearly materialize at this scale,
+    /// likely because Core Image's own lazy evaluation means the
+    /// per-pixel filter chain here is still cheap relative to the
+    /// drawable-resolution render cost that dominates every measurement
+    /// in this file (see `BrushStrokeImageCache`'s own doc comment on
+    /// that same "cost scales with drawable size, not source megapixels"
+    /// finding). Reported honestly rather than the larger gap
+    /// originally hypothesized; see PROGRESS.md for the exact numbers.
+    /// Still comfortably inside the 16ms/60fps budget for a single mask.
+    /// NOT re-measured for multiple simultaneous `.luminanceRange` masks
+    /// — the no-ROI cost is expected to compound linearly per mask the
+    /// way slice 2's own multi-mask RAW finding did for Clarity, so this
+    /// is worth re-checking before assuming N masks scale as cheaply as
+    /// one did here.
+    private static func luminanceRangeMaskImage(_ img: CIImage, _ sel: LuminanceRangeSelection.Resolved) -> CIImage? {
+        let lumaWeights = CIVector(
+            x: LuminanceRangeSelection.lumaRed, y: LuminanceRangeSelection.lumaGreen,
+            z: LuminanceRangeSelection.lumaBlue, w: 0
+        )
+        let luma = CIFilter.colorMatrix()
+        luma.inputImage = img
+        luma.rVector = lumaWeights
+        luma.gVector = lumaWeights
+        luma.bVector = lumaWeights
+        luma.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        luma.biasVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        guard let lumaImage = luma.outputImage else { return nil }
+
+        guard let rising = luminanceToneRamp(lumaImage, zeroAt: sel.lowerZero, fullAt: sel.lowerFull),
+              let falling = luminanceToneRamp(lumaImage, zeroAt: sel.upperZero, fullAt: sel.upperFull)
+        else { return nil }
+
+        let tent = CIFilter.minimumCompositing()
+        tent.inputImage = rising
+        tent.backgroundImage = falling
+        guard let weight = tent.outputImage else { return nil }
+
+        let toAlpha = CIFilter.maskToAlpha()
+        toAlpha.inputImage = weight
+        // Reviewer-suggested: crop HERE, inside the function that owns the
+        // forced-opaque-alpha bias responsible for the infinite extent
+        // (see this function's own doc comment above), rather than relying
+        // on the caller to remember it. Structurally impossible to misuse
+        // going forward, not merely documented as required.
+        return toAlpha.outputImage?.cropped(to: sel.regionOfInterest)
+    }
+
+    /// One clamped affine ramp from 0 (at `zeroAt`) to 1 (at `fullAt`) —
+    /// negative `scale` (when `fullAt < zeroAt`, the falling/bright-edge
+    /// case) handles both directions with the same formula, no second code
+    /// path. `fullAt != zeroAt` is guaranteed by `LuminanceRangeSelection
+    /// .minimumEdgeWidth`, so `scale` is always finite.
+    private static func luminanceToneRamp(_ image: CIImage, zeroAt: Double, fullAt: Double) -> CIImage? {
+        let scale = 1 / (fullAt - zeroAt)
+        let bias = -zeroAt * scale
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = image
+        matrix.rVector = CIVector(x: scale, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: scale, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: scale, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        matrix.biasVector = CIVector(x: bias, y: bias, z: bias, w: 0)
+        guard let scaled = matrix.outputImage else { return nil }
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = scaled
+        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+        clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+        return clamp.outputImage
     }
 
     // MARK: - Vignette

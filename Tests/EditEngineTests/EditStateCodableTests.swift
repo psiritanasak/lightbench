@@ -231,12 +231,14 @@ final class EditStateCodableTests: XCTestCase {
     /// `try?`, so an uncaught throw here wouldn't just skip this one
     /// mask — it would discard the ENTIRE sidecar, every global edit on
     /// the photo included. Assert the fix directly: a sidecar with an
-    /// unrecognized future kind string (`"colorRange"`, standing in for a
-    /// hypothetical slice-5 kind — `"brush"` became a REAL, recognized
-    /// kind in slice 4, so it can no longer stand in for "unrecognized")
-    /// PLUS a non-default GLOBAL field must still decode successfully,
-    /// with the global field intact — proving the whole-sidecar-loss
-    /// hazard is actually closed, not just theorized.
+    /// unrecognized future kind string (`"colorRange"`, standing in for the
+    /// actual future Color Range mask kind — CLAUDE.md's Phase 7 roadmap
+    /// item 5, still not scheduled; `"brush"` and `"luminanceRange"` both
+    /// became REAL, recognized kinds in slices 4/5, so neither can stand
+    /// in for "unrecognized" anymore) PLUS a non-default GLOBAL field must
+    /// still decode successfully, with the global field intact — proving
+    /// the whole-sidecar-loss hazard is actually closed, not just
+    /// theorized.
     func testUnknownMaskKindDecodesToRadialWithoutDiscardingTheSidecar() throws {
         let json = """
         {
@@ -375,6 +377,65 @@ final class EditStateCodableTests: XCTestCase {
     func testRepeatedDecodesOfTheSameIdLessBrushMaskAreEqual() throws {
         let json = """
         { "masks": [{ "kind": "brush", "brushSize": 0.2, "brushPoints": [{ "x": 0.3, "y": 0.4 }, { "x": 0.5, "y": 0.6 }] }] }
+        """
+        let first = try decode(json).masks[0]
+        let second = try decode(json).masks[0]
+        XCTAssertEqual(first.id, second.id)
+    }
+
+    /// Phase 7 slice 5: `luminanceTarget`/`luminanceRange` default when
+    /// absent, the same schema-tolerance every other `Mask` field already
+    /// has (a pre-slice-5 sidecar has neither key at all).
+    func testLuminanceTargetAndLuminanceRangeDefaultWhenAbsent() throws {
+        let json = """
+        { "masks": [{ "kind": "luminanceRange" }] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].luminanceTarget, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(state.masks[0].luminanceRange, 0.3, accuracy: 0.0001)
+    }
+
+    /// A `.luminanceRange` mask's new fields must survive an encode/decode
+    /// round-trip, the same guarantee already exercised for `.radial`/
+    /// `.linear`/`.brush`'s own geometry fields.
+    func testLuminanceRangeMaskRoundTripsThroughCodable() throws {
+        let original = Mask(
+            kind: .luminanceRange, feather: 0.7,
+            luminanceTarget: 0.72, luminanceRange: 0.18,
+            exposureEV: -0.8
+        )
+        let data = try JSONEncoder().encode(EditState(masks: [original]))
+        let decoded = try JSONDecoder().decode(EditState.self, from: data)
+        XCTAssertEqual(decoded.masks.count, 1)
+        XCTAssertEqual(decoded.masks[0].kind, .luminanceRange)
+        XCTAssertEqual(decoded.masks[0].luminanceTarget, 0.72, accuracy: 0.0001)
+        XCTAssertEqual(decoded.masks[0].luminanceRange, 0.18, accuracy: 0.0001)
+        XCTAssertEqual(decoded.masks[0].id, original.id)
+    }
+
+    /// Phase 7 slice 5: `deterministicFallbackID` mixes `luminanceTarget`/
+    /// `luminanceRange` in as fixed-arity scalars, and `.luminanceRange`
+    /// gets its own `kindSeed` — an id-less `.luminanceRange` mask must not
+    /// collide with an id-less `.radial`/`.linear`/`.brush` mask that
+    /// happens to share the same (default) adjustment values, the same
+    /// reasoning `testIdLessRadialAndLinearMasksWithIdenticalFieldsGetDifferentIds`
+    /// already established for the first two kinds.
+    func testIdLessLuminanceRangeAndRadialMasksGetDifferentIds() throws {
+        let json = """
+        { "masks": [
+            { "kind": "luminanceRange" },
+            { "kind": "radial" }
+        ] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.masks.count, 2)
+        XCTAssertNotEqual(state.masks[0].id, state.masks[1].id)
+    }
+
+    func testRepeatedDecodesOfTheSameIdLessLuminanceRangeMaskAreEqual() throws {
+        let json = """
+        { "masks": [{ "kind": "luminanceRange", "luminanceTarget": 0.65, "luminanceRange": 0.2 }] }
         """
         let first = try decode(json).masks[0]
         let second = try decode(json).masks[0]

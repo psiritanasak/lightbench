@@ -1436,6 +1436,49 @@ Edits are stored as parameter sets and rendered live on the GPU.
       not manually drawn at all — closer in spirit to the existing "Fix Color
       Cast" auto-analysis button (`ImageDocumentModel.fixColorCast()`,
       whole-image gray-world stats) than to slices 2-4's shape-drawing.
+      **Luminance Range half ✅ COMPLETE (2026-09-14)** — the first
+      CONTENT-DERIVED mask kind (`MaskKind.luminanceRange`), selecting by
+      tone rather than drawn geometry, judged in scene-linear light via a
+      new pure `LuminanceRangeSelection` type (tone→linear sRGB-EOTF
+      mapping) feeding a `CIColorMatrix`(luma)→two clamped tone-ramp
+      `CIColorMatrix`/`CIColorClamp` pairs→`CIMinimumCompositing`
+      (exact trapezoid)→`CIMaskToAlpha` chain in `EditPipeline.applyMasks`
+      — no custom kernel needed, built-ins sufficient. `feather` reused a
+      third time (after `.radial`/`.brush`) for its transferable meaning.
+      Measured, not assumed: `CIColorMatrix`'s output extent is NOT
+      naturally finite even given finite input (confirmed on a real
+      20.7MP JPEG), so this kind's explicit `.cropped(to: extent)` is
+      load-bearing, unlike `.linear`/`.brush`'s naturally-finite chains.
+      This slice also fixed `ContentView`'s kind-agnostic `isEditingMask`/
+      `canZoom` gate (a new `hasOnImageOverlay(_:)` check) so a mask kind
+      with no on-image overlay no longer blocks zoom/pan or steals focus
+      merely by being selected — `AdjustTabView`'s 3-button mask-kind row
+      became a 2×2 grid to fit a 4th button. Perf measured small
+      (JPEG +0.45ms, RAW +1.18ms vs. no-mask baseline, both well under the
+      16ms/60fps budget, no ROI-crop possible for this kind by
+      construction). Live-verified on the user's real library via
+      accessibility actions (`AXPress`/`AXIncrement`) rather than
+      synthetic mouse clicks — this automation environment's synthetic
+      `cliclick` events do not reach the app at all (confirmed directly:
+      an `AXPress` on a toolbar button worked instantly; a pixel-exact
+      `cliclick` at the same location, cursor position confirmed via
+      screenshot, did nothing) — a broader version of the scroll-wheel-
+      only limitation slice 3 Session B already logged for this machine.
+      Confirmed live: tone-targeting genuinely moved the affected region
+      (bright snow vs. dark clothing, not just a brightness change);
+      Rec.709 luma weights meant the saturated blue sky was correctly
+      UNaffected by a highlight-targeted mask despite looking bright to
+      the eye; Range/Feather reactive; Radial's on-image overlay still
+      shows and correctly hides again when reselecting the Luminance
+      Range mask (dynamic, not just at add-time); Revert to Original
+      clears cleanly, cross-checked against the on-disk sidecar. See
+      PROGRESS.md's own "Phase 7 slice 5" section for full detail,
+      including the one test-only bug (not a pipeline bug) found and
+      fixed along the way. **Color Range half still not started** — needs
+      a new `.cikernel` and an eyedropper-style armed UI, deferred to its
+      own future session; `EditStateCodableTests`'
+      `"colorRange"`-as-unrecognized-kind stand-in now points at this
+      remaining half specifically.
    6. **Combining masks** (intersect/subtract boolean semantics between
       masks) — deliberately LAST. Corrected scope (2026-09-09): slice 2
       already shipped multiple simultaneous, independently-compounding

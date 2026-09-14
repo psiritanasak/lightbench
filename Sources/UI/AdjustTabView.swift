@@ -425,34 +425,51 @@ struct AdjustTabView: View {
 
     private var masksSection: some View {
         Group {
-            // Phase 7 slices 3-4: three side-by-side buttons, not a single
-            // button or a Menu -- introducing a new mask KIND is exactly
-            // the moment discoverability matters more than a compact
-            // control; a menu click would bury the new option right when
-            // it most needs to be seen. Live-verified (slice 4): the
-            // ORIGINAL "Add Radial"/"Add Linear" labels, extended to a
-            // third "Add Brush" button, truncated to "Add Ra…"/"Add
-            // Lin…"/"Add Bru…" at the sidebar's default width -- the
-            // SIDEBAR itself didn't need to grow (this comment's original
-            // claim), but the labels did need to shrink; dropping the
-            // shared "Add" prefix (kept in each button's own accessibility
-            // label instead) fits all three without truncation.
-            HStack {
-                Button("Radial") {
-                    addMask(kind: .radial)
+            // Phase 7 slices 3-5: a 2x2 grid, not a single row or a Menu --
+            // introducing a new mask KIND is exactly the moment
+            // discoverability matters more than a compact control; a menu
+            // click would bury the new option right when it most needs to
+            // be seen. Live-verified (slice 4): the ORIGINAL "Add Radial"/
+            // "Add Linear" labels, extended to a third "Add Brush" button
+            // in one row, truncated to "Add Ra…"/"Add Lin…"/"Add Bru…" at
+            // the sidebar's default width -- the SIDEBAR itself didn't
+            // need to grow, but the labels did need to shrink; dropping
+            // the shared "Add" prefix (kept in each button's own
+            // accessibility label instead) fit all three. Adding a FOURTH
+            // kind this slice (`.luminanceRange`) switched from that
+            // single row to a 2x2 grid rather than a lone full-width
+            // fourth button: at the sidebar's 260-380pt width a half-width
+            // cell is ~115-180pt, comfortably more room per label than the
+            // row of three already proved sufficient, and a lone full-width
+            // button under three narrow ones would read as a different
+            // CLASS of action, which it isn't. Plain nested `HStack`s, not
+            // `LazyVGrid` -- this file has a documented Swift type-checker
+            // blow-up history with over-packed `@ViewBuilder` closures.
+            VStack(spacing: 8) {
+                HStack {
+                    Button("Radial") {
+                        addMask(kind: .radial)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel("Add Radial Mask")
+                    Button("Linear") {
+                        addMask(kind: .linear)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel("Add Linear Mask")
                 }
-                .frame(maxWidth: .infinity)
-                .accessibilityLabel("Add Radial Mask")
-                Button("Linear") {
-                    addMask(kind: .linear)
+                HStack {
+                    Button("Brush") {
+                        addMask(kind: .brush)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel("Add Brush Mask")
+                    Button("Luminance") {
+                        addMask(kind: .luminanceRange)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel("Add Luminance Range Mask")
                 }
-                .frame(maxWidth: .infinity)
-                .accessibilityLabel("Add Linear Mask")
-                Button("Brush") {
-                    addMask(kind: .brush)
-                }
-                .frame(maxWidth: .infinity)
-                .accessibilityLabel("Add Brush Mask")
             }
             .disabled(document.currentImage == nil)
             if document.editState.masks.isEmpty {
@@ -497,6 +514,7 @@ struct AdjustTabView: View {
         case .radial: return "circle.dashed"
         case .linear: return "line.diagonal"
         case .brush: return "paintbrush.pointed"
+        case .luminanceRange: return "circle.lefthalf.filled"
         }
     }
 
@@ -505,6 +523,21 @@ struct AdjustTabView: View {
         case .radial: return "Radial"
         case .linear: return "Linear"
         case .brush: return "Brush"
+        case .luminanceRange: return "Luminance Range"
+        }
+    }
+
+    /// Whether `kind` draws an on-image overlay positioned against
+    /// `currentFitRect`. Exhaustive on purpose — a future kind must fail
+    /// to COMPILE here rather than silently inherit either answer (the
+    /// same hazard `maskKindIcon`/`maskKindLabel`'s own history already
+    /// records for a pre-slice-4 ternary). UI knowledge, not `EditEngine`
+    /// knowledge — deliberately duplicated in `ContentView.swift` rather
+    /// than shared, since `EditEngine` stays UI/rendering-API-free.
+    private func hasOnImageOverlay(_ kind: MaskKind) -> Bool {
+        switch kind {
+        case .radial, .linear, .brush: return true
+        case .luminanceRange: return false
         }
     }
 
@@ -558,7 +591,15 @@ struct AdjustTabView: View {
     /// Red-Eye's "stays armed" shape — see `beginBrushStroke`'s own doc
     /// comment) — a brush stroke has no useful default shape the way a
     /// radial/linear mask's default geometry does, so there's nothing to
-    /// show until the user paints.
+    /// show until the user paints. `.luminanceRange` (slice 5) ALSO needs
+    /// no armed mode: its default `luminanceTarget 0.5`/`luminanceRange
+    /// 0.3`/`feather 0.5` selects a soft midtone band that exists on
+    /// essentially any photograph, immediately visible/adjustable the
+    /// moment an adjustment slider moves — the same "has a sensible
+    /// default" reasoning `.radial`/`.linear` already rely on, and
+    /// structurally the closest thing in this section to the existing
+    /// "Fix Color Cast" button: a plain click, zero overlay, zero armed
+    /// mode, immediately usable.
     private func addMask(kind: MaskKind) {
         var mask = Mask()
         mask.kind = kind
@@ -575,12 +616,24 @@ struct AdjustTabView: View {
     /// the two extended above), matching this file's existing convention
     /// rather than refactoring to a single mode enum (a larger, unrelated
     /// change out of scope here).
+    ///
+    /// Reviewer-caught during slice 5's own design (not a live bug, a
+    /// design correction before it could become one): `onEnterPointPickingMode()`
+    /// resets `compareMode`/`zoomScale`/`panOffset` and grabs keyboard
+    /// focus — all of which exist ONLY because an on-image overlay is
+    /// positioned against an UN-ZOOMED `currentFitRect`. Calling it
+    /// unconditionally would silently reset a user's zoom the moment they
+    /// select a `.luminanceRange` mask, defeating `ContentView`'s own
+    /// kind-aware `canZoom` fix (`isEditingOverlayMask`) for that exact
+    /// kind. A mask kind with no overlay has nothing to protect.
     private func select(_ mask: Mask) {
         panel.selectedMaskID = mask.id
         isPickingWhiteBalance = false
         isPlacingRedEyeCorrections = false
         brushPaintingMaskID = nil
-        onEnterPointPickingMode()
+        if hasOnImageOverlay(mask.kind) {
+            onEnterPointPickingMode()
+        }
     }
 
     private func delete(_ mask: Mask) {

@@ -1,21 +1,29 @@
 import Foundation
 
-/// Which geometry a `Mask` uses. `.radial` (an ellipse, Phase 7 slice 2)
-/// reads `radiusX`/`radiusY`/`feather`; `.linear` (a graduated band, slice
-/// 3) reads `width` instead; `.brush` (a freehand stroke, slice 4) reads
-/// `brushPoints`/`brushSize`/`feather` instead — `feather` is now SHARED
-/// between `.radial` and `.brush` (both a soft-edge amount around a drawn
-/// shape), still inert only on `.linear`. The OTHER kind(s)' geometry
-/// fields sit inert at their defaults, never read by
-/// `EditPipeline.applyMasks`'s matching branch. `.radial`/`.linear` share
-/// `centerX`/`centerY` (the anchor point) and `rotationDegrees` (the
-/// mask's own local +X axis direction — see that field's own doc comment
-/// for what "+X axis" means per kind); `.brush` uses neither — a stroke's
-/// position lives entirely in `brushPoints`.
+/// Which geometry (or, for `.luminanceRange`, SELECTION) a `Mask` uses.
+/// `.radial` (an ellipse, Phase 7 slice 2) reads `radiusX`/`radiusY`/
+/// `feather`; `.linear` (a graduated band, slice 3) reads `width`
+/// instead; `.brush` (a freehand stroke, slice 4) reads `brushPoints`/
+/// `brushSize`/`feather` instead; `.luminanceRange` (slice 5) reads
+/// `luminanceTarget`/`luminanceRange`/`feather` instead — `feather` is
+/// now SHARED by THREE of the four kinds (`.radial`, `.brush`, and
+/// `.luminanceRange` — see `feather`'s own doc comment for why a tonal
+/// selection window's falloff reuses the exact same field/formula shape
+/// as a drawn shape's soft edge), still inert only on `.linear`. The
+/// OTHER kind(s)' geometry fields sit inert at their defaults, never read
+/// by `EditPipeline.applyMasks`'s matching branch. `.radial`/`.linear`
+/// share `centerX`/`centerY` (the anchor point) and `rotationDegrees`
+/// (the mask's own local +X axis direction — see that field's own doc
+/// comment for what "+X axis" means per kind); `.brush`/`.luminanceRange`
+/// use neither — a stroke's position lives entirely in `brushPoints`, and
+/// a Luminance Range mask has no position at all (it selects by TONE, not
+/// by location — the first kind that is genuinely content-derived rather
+/// than drawn).
 enum MaskKind: String, Codable {
     case radial
     case linear
     case brush
+    case luminanceRange
 }
 
 /// One point along a painted brush stroke. Mirrors `RedEyePoint`'s exact
@@ -29,22 +37,28 @@ struct BrushPoint: Equatable, Codable {
     var y: Double
 }
 
-/// One local adjustment, radial (ellipse), linear (graduated band), or
-/// brush (freehand stroke) per `kind` — Phase 7 slices 2/3/4's mask
-/// geometry kinds. Lives in its own file, not inside `EditState.swift`
-/// (already 1000+ lines), following `EditHistory.swift`'s precedent for a
-/// standalone `EditEngine` type.
+/// One local adjustment, radial (ellipse), linear (graduated band), brush
+/// (freehand stroke), or luminance range (tonal selection) per `kind` —
+/// Phase 7 slices 2/3/4/5's mask kinds. Lives in its own file, not inside
+/// `EditState.swift` (already 1000+ lines), following `EditHistory.swift`'s
+/// precedent for a standalone `EditEngine` type.
 ///
 /// Unlike `RedEyePoint`/`RawNeutralPoint` (both trivial 2-`Double` points
 /// with SYNTHESIZED `Codable`), `Mask` needs its OWN hand-written
 /// schema-tolerant decoding — see the `extension Mask` below — because
-/// slices 5-6 will add new geometry variants and combining flags to THIS
-/// struct, so a mask written today must still decode after those land, the
-/// same reasoning `EditState` itself already applies one level up. This is
-/// also why `kind`/geometry live as FLAT fields on one struct rather than
-/// an enum-with-associated-values: an associated-value variant would break
+/// slice 6 will add combining flags to THIS struct (a future "Color
+/// Range" kind is also expected but not yet scheduled), so a mask written
+/// today must still decode after those land, the same reasoning
+/// `EditState` itself already applies one level up. This is also why
+/// `kind`/geometry live as FLAT fields on one struct rather than an
+/// enum-with-associated-values: an associated-value variant would break
 /// both the flat `CodingKeys` list below and `deterministicFallbackID`'s
 /// fixed-arity parameter list.
+///
+/// `.luminanceRange` (slice 5) is the first kind that is CONTENT-DERIVED
+/// rather than drawn — its "geometry" is a tonal window, not a shape, and
+/// it has no anchor point/position at all. See `luminanceTarget`'s own
+/// doc comment.
 ///
 /// All geometry is a normalized FRACTION of the mask's photo's CURRENT
 /// (post-crop) extent — never an absolute pixel value. This is not a style
@@ -127,7 +141,19 @@ struct Mask: Identifiable, Equatable, Codable {
     /// `RadialMaskGeometry.innerRadiusFraction(feather:)` is the single
     /// source of truth for turning this into an actual inner radius, shared
     /// by the render stage and the mask overlay's feather guide, so the
-    /// two can never drift apart. `.radial` only — inert on `.linear`.
+    /// two can never drift apart. Inert on `.linear` only.
+    ///
+    /// REUSED a third time by `.luminanceRange` (slice 5) — deliberately,
+    /// not merely to save a field: `LuminanceRangeSelection.resolve`
+    /// applies the EXACT SAME formula shape `RadialMaskGeometry` already
+    /// does (`innerHalfWidth = outerHalfWidth * (1 - feather)`), just
+    /// against a tone window's half-width instead of an ellipse's radius.
+    /// `feather == 0` gives a hard-edged tone window; `1` gives a pure
+    /// tent peaking at `luminanceTarget` with no flat plateau; `0.5` (the
+    /// identity) gives a plateau half as wide as the window. A user who
+    /// has already learned what Feather does on a Radial mask has learned
+    /// it here too — that transferable meaning is the actual argument for
+    /// reusing the field, not just a smaller `CodingKeys` list.
     var feather: Double = 0.5
 
     /// `.linear` only — inert on `.radial`. The FULL guide-to-guide
@@ -168,6 +194,44 @@ struct Mask: Identifiable, Equatable, Codable {
     /// it as covering nothing, matching `redEyePoints`' own empty-means-off
     /// convention.
     var brushPoints: [BrushPoint] = []
+
+    /// `.luminanceRange` only — inert on every other kind. The tone this
+    /// mask selects, 0 = black … 1 = white, expressed in the PERCEPTUAL
+    /// (sRGB-encoded) tone domain, NOT scene-linear — 0.5 reads as
+    /// photographic middle gray to a slider, matching how every OTHER
+    /// tone-shaped control in this app (Levels, Curves) already presents
+    /// itself to the user. `LuminanceRangeSelection.linearLuminance
+    /// (forTone:)` is the single source of truth mapping this to the
+    /// scene-linear luminance `EditPipeline.applyMasks` actually compares
+    /// pixels against — see that function's own doc comment for why the
+    /// SLIDER is perceptual while the per-pixel COMPARISON stays
+    /// scene-linear (the same domain every other per-mask adjustment
+    /// already runs in at that point in the loop).
+    ///
+    /// This is the first mask parameter whose selection depends on the
+    /// IMAGE'S OWN PIXEL VALUES rather than pure geometry — a downscaled
+    /// render (the P2 interactive proxy, a Library thumbnail, a
+    /// non-native-size export) resamples tones before this mask is
+    /// computed, so it can select marginally differently at a tone
+    /// boundary than the full-resolution render would (a fine gradient or
+    /// high-frequency detail right at the window's edge is the only case
+    /// this is visible in — a flat region is unaffected). Accepted,
+    /// same category as this app's existing Noise Reduction/Sharpen
+    /// radius caveats: resolution-independent by construction, not
+    /// bit-identical across resolutions.
+    var luminanceTarget: Double = 0.5
+
+    /// `.luminanceRange` only — inert on every other kind. The FULL width
+    /// of the selected tone window (not a half-width), in the same
+    /// PERCEPTUAL tone units as `luminanceTarget` — deliberately matching
+    /// `width`'s own full-not-half convention so this struct has ONE rule
+    /// for what a field named "width"/"range" means. `LuminanceRangeSelection
+    /// .minimumRange`/`.maximumRange` are the single source of truth for
+    /// the render-side clamp: like `.linear`'s `width` (and unlike
+    /// `.radial`'s radii), a very narrow window is a legitimate,
+    /// deliberate PRECISE selection, so it CLAMPS rather than making
+    /// `resolve` return `nil`.
+    var luminanceRange: Double = 0.3
 
     // MARK: - Adjustments
 
@@ -223,9 +287,10 @@ struct Mask: Identifiable, Equatable, Codable {
     /// geometry-only. `EditPipeline.applyMasks` skips a mask entirely when
     /// this is `true`, which is what makes a geometry-only mask render
     /// BYTE-IDENTICAL to no mask at all. Deliberately excludes geometry —
-    /// including `kind`/`width`/`brushSize`/`brushPoints` (added slices 3-4):
-    /// a mask can be `isIdentity` yet still a real, undo-worthy edit (the
-    /// user placed it or painted a stroke), mirroring `redEyePoints`' own
+    /// including `kind`/`width`/`brushSize`/`brushPoints`/`luminanceTarget`/
+    /// `luminanceRange` (added slices 3-5): a mask can be `isIdentity` yet
+    /// still a real, undo-worthy edit (the user placed it, painted a
+    /// stroke, or tuned a tone window), mirroring `redEyePoints`' own
     /// existing behavior (a placed point with strength 0 renders
     /// identically but still counts as an edit) — see
     /// `EditState.isEffectivelyIdentity`.
@@ -250,6 +315,7 @@ extension Mask {
         case id, kind
         case centerX, centerY, radiusX, radiusY, rotationDegrees, feather, width
         case brushSize, brushPoints
+        case luminanceTarget, luminanceRange
         case exposureEV, contrast, highlights, shadows
         case clarity, saturation, temperature, tint
     }
@@ -279,8 +345,9 @@ extension Mask {
         // different malformed input than an unrecognized string value.
         // `try?` makes the "never throws" guarantee unconditional on ANY
         // decode failure for this one key, not just an unrecognized-but-
-        // well-typed value. `.brush` is real as of slice 4; a future
-        // slice 5/6 kind string still falls back to `.radial` the same way.
+        // well-typed value. `.brush`/`.luminanceRange` are real as of
+        // slices 4/5; a future kind string (e.g. slice 6's eventual
+        // "Color Range") still falls back to `.radial` the same way.
         let rawKind = (try? container.decodeIfPresent(String.self, forKey: .kind)) ?? nil
         kind = rawKind.flatMap(MaskKind.init(rawValue:)) ?? .radial
         centerX = try container.decodeIfPresent(Double.self, forKey: .centerX) ?? 0.5
@@ -295,6 +362,16 @@ extension Mask {
         // missing `y`) must not discard the whole sidecar, so this decodes
         // via `try?` rather than a bare `try` on the array.
         brushPoints = (try? container.decodeIfPresent([BrushPoint].self, forKey: .brushPoints)) ?? nil ?? []
+        // Plain `Double`s, like the sixteen adjustment/geometry fields
+        // below — bare `try`, NOT `try?`. The `try?` sites in this
+        // extension exist only for two specific hazards neither of these
+        // fields has: `kind`'s raw-value-enum throw-on-unrecognized-value,
+        // and `brushPoints`' nested-array throw-on-one-malformed-element.
+        // A type-mismatched `"luminanceTarget": "half"` is the same hazard
+        // class as today's type-mismatched `"centerX": "half"`, already
+        // handled uniformly by every other scalar field's bare `try`.
+        luminanceTarget = try container.decodeIfPresent(Double.self, forKey: .luminanceTarget) ?? 0.5
+        luminanceRange = try container.decodeIfPresent(Double.self, forKey: .luminanceRange) ?? 0.3
         exposureEV = try container.decodeIfPresent(Double.self, forKey: .exposureEV) ?? 0
         contrast = try container.decodeIfPresent(Double.self, forKey: .contrast) ?? 0
         highlights = try container.decodeIfPresent(Double.self, forKey: .highlights) ?? 0
@@ -318,7 +395,7 @@ extension Mask {
             id = Mask.deterministicFallbackID(
                 kind: kind, centerX: centerX, centerY: centerY, radiusX: radiusX, radiusY: radiusY,
                 rotationDegrees: rotationDegrees, feather: feather, width: width, brushSize: brushSize,
-                brushPoints: brushPoints,
+                brushPoints: brushPoints, luminanceTarget: luminanceTarget, luminanceRange: luminanceRange,
                 exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
                 clarity: clarity, saturation: saturation, temperature: temperature, tint: tint
             )
@@ -360,15 +437,20 @@ extension Mask {
     /// mixed in as a SECOND pass after the fixed-arity loop — its own count
     /// first (so two masks differing only in point count never collide),
     /// then each point's x/y in order.
+    ///
+    /// Slice 5 note: `luminanceTarget`/`luminanceRange` join the
+    /// fixed-arity scalar list (both plain `Double`s, no variable-length
+    /// pass needed), plus a fourth `kindSeed` arm for `.luminanceRange`.
     private static func deterministicFallbackID(
         kind: MaskKind, centerX: Double, centerY: Double, radiusX: Double, radiusY: Double,
         rotationDegrees: Double, feather: Double, width: Double, brushSize: Double,
-        brushPoints: [BrushPoint],
+        brushPoints: [BrushPoint], luminanceTarget: Double, luminanceRange: Double,
         exposureEV: Double, contrast: Double, highlights: Double, shadows: Double,
         clarity: Double, saturation: Double, temperature: Double, tint: Double
     ) -> UUID {
         let values = [
             centerX, centerY, radiusX, radiusY, rotationDegrees, feather, width, brushSize,
+            luminanceTarget, luminanceRange,
             exposureEV, contrast, highlights, shadows, clarity, saturation, temperature, tint
         ]
         let kindSeed: UInt64
@@ -376,6 +458,7 @@ extension Mask {
         case .radial: kindSeed = 0x9e3779b97f4a7c15
         case .linear: kindSeed = 0x517cc1b727220a95
         case .brush: kindSeed = 0x2545f4914f6cdd1d
+        case .luminanceRange: kindSeed = 0xbf58476d1ce4e5b9
         }
         let prime: UInt64 = 0x100000001b3
         var laneA: UInt64 = (0xcbf29ce484222325 ^ kindSeed) &* prime

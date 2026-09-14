@@ -2813,6 +2813,307 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(pixel(of: withMask, at: 200, 200).r, pixel(of: withoutMask, at: 200, 200).r, accuracy: accuracy)
     }
 
+    // MARK: - Luminance Range mask (Phase 7 slice 5)
+    //
+    // The first CONTENT-DERIVED mask kind: selects pixels by their own
+    // luminance rather than by drawn geometry. `LuminanceRangeSelection`'s
+    // own tests already cover the tone->linear mapping and threshold math
+    // in isolation; these tests exercise the actual `EditPipeline`
+    // integration — the Core Image filter chain, the shared adjustment
+    // plumbing, and the "reads `img`, not `image`" decision.
+
+    /// A solid gray at EXACTLY the linear luminance a target tone of 0.5
+    /// maps to — guarantees full-strength (weight 1.0) selection
+    /// regardless of `range`/`feather` (the target tone's own linear
+    /// luminance always sits inside the plateau, even at `feather == 1`'s
+    /// single-point tent apex), the Luminance Range analogue of
+    /// `fullyCoveringMask`'s oversized radius. Unlike the other three
+    /// kinds, there is no way to cover ALL possible luminances at once —
+    /// this kind is tone-SELECTIVE by definition — so each equivalence
+    /// test uses a solid image at exactly the targeted tone instead.
+    private let middleGrayLinear = LuminanceRangeSelection.linearLuminance(forTone: 0.5)
+
+    private func fullyCoveringLuminanceRangeMask(
+        exposureEV: Double = 0, contrast: Double = 0, highlights: Double = 0, shadows: Double = 0,
+        clarity: Double = 0, saturation: Double = 0, temperature: Double = 0, tint: Double = 0
+    ) -> Mask {
+        Mask(
+            kind: .luminanceRange, feather: 0.5, luminanceTarget: 0.5, luminanceRange: 0.3,
+            exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
+            clarity: clarity, saturation: saturation, temperature: temperature, tint: tint
+        )
+    }
+
+    func testLuminanceRangeIdentityParamMaskIsExactNoOp() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 1, size: 400)
+        let withMask = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .luminanceRange, luminanceTarget: 0.7, luminanceRange: 0.2)]),
+            to: input
+        )
+        let withoutMask = EditPipeline.apply(EditState(), to: input)
+        XCTAssertEqual(pixel(of: withMask, at: 200, 200).r, pixel(of: withoutMask, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testLuminanceRangeOnlyAffectsMatchingTone() {
+        // Two side-by-side patches at DIFFERENT luminances -- only the one
+        // at the targeted tone should show the exposure boost; the other
+        // must be untouched. This is the defining property of the kind.
+        let matchingTone = middleGrayLinear
+        let farTone = LuminanceRangeSelection.linearLuminance(forTone: 0.95)
+        let left = CIColor(red: matchingTone, green: matchingTone, blue: matchingTone, colorSpace: linearSpace)!
+        let right = CIColor(red: farTone, green: farTone, blue: farTone, colorSpace: linearSpace)!
+        let leftHalf = CIImage(color: left).cropped(to: CGRect(x: 0, y: 0, width: 200, height: 400))
+        let rightHalf = CIImage(color: right).cropped(to: CGRect(x: 200, y: 0, width: 200, height: 400))
+        let input = leftHalf.composited(over: rightHalf)
+
+        let output = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .luminanceRange, luminanceTarget: 0.5, luminanceRange: 0.2, exposureEV: 1)]),
+            to: input
+        )
+        XCTAssertEqual(pixel(of: output, at: 100, 200).r, Float(matchingTone * 2), accuracy: accuracy, "matching tone must be boosted")
+        XCTAssertEqual(pixel(of: output, at: 300, 200).r, Float(farTone), accuracy: accuracy, "far tone must be untouched")
+    }
+
+    func testLuminanceRangeResponseIsMonotonicSinglePeaked() {
+        // Measures the SELECTION WEIGHT itself (output/input, since a
+        // fully-selected pixel reads `original * 2^EV` and an unselected
+        // one reads `original` unchanged -- the ratio isolates weight from
+        // each tone's own differing raw brightness, which a plain output
+        // comparison would otherwise conflate: raw output values rise
+        // with tone regardless of weight, since brighter tones start from
+        // a higher baseline -- an earlier version of this test measured
+        // that confound instead and failed to see the real single peak.
+        let target = 0.5
+        // Starts at 0.05, not 0.0 -- tone 0 maps to LINEAR luminance 0
+        // exactly, and this test's own output/input ratio would divide by
+        // zero there.
+        let tones: [Double] = [0.05, 0.2, 0.35, 0.42, 0.5, 0.58, 0.65, 0.8, 1.0]
+        var values: [Float] = []
+        for tone in tones {
+            let linear = LuminanceRangeSelection.linearLuminance(forTone: tone)
+            let input = solidColorImage(linear, size: 8)
+            let output = EditPipeline.apply(
+                EditState(masks: [Mask(kind: .luminanceRange, feather: 0.5, luminanceTarget: target, luminanceRange: 0.3, exposureEV: 1)]),
+                to: input
+            )
+            values.append(linearPixel(of: output).r / Float(linear))
+        }
+        // Rises to a single peak (around the middle, target 0.5) then falls.
+        let peakIndex = values.firstIndex(of: values.max()!)!
+        for i in 1..<peakIndex {
+            XCTAssertGreaterThanOrEqual(values[i], values[i - 1], "must rise toward the peak")
+        }
+        for i in (peakIndex + 1)..<values.count {
+            XCTAssertLessThanOrEqual(values[i], values[i - 1], "must fall away from the peak")
+        }
+    }
+
+    /// Reviewer-flagged: every other test in this section checks SHAPE
+    /// (monotonic, endpoints, one `accuracy: 0.01` sample) but none pins
+    /// the falloff's actual VALUES — swapping `CIMaskToAlpha` for a color
+    /// matrix, or `CIMinimumCompositing` for `CIDarkenBlendMode`, would
+    /// pass every existing test while silently changing the curve. This
+    /// derives its expected weight from `LuminanceRangeSelection.resolve`
+    /// directly (the same pure math the shipped branch is built from,
+    /// not a hand-typed magic decimal nobody can independently verify),
+    /// so it's a genuine cross-check that the Core Image render chain and
+    /// the Swift threshold math agree, not a tautology against itself.
+    func testLuminanceRangeExactWeightAtAPartialToneMatchesTheAnalyticFormula() {
+        let target = 0.5
+        let range = 0.3
+        let feather = 0.5
+        let partialTone = 0.375 // strictly between the lower-edge's zero and full tones (0.35...0.425)
+        let sel = LuminanceRangeSelection.resolve(
+            luminanceTarget: target, luminanceRange: range, feather: feather,
+            extent: CGRect(x: 0, y: 0, width: 400, height: 400)
+        )!
+        let inputLinear = LuminanceRangeSelection.linearLuminance(forTone: partialTone)
+        XCTAssertLessThan(sel.lowerZero, inputLinear, "test tone must sit inside the rising edge's transition zone")
+        XCTAssertLessThan(inputLinear, sel.lowerFull, "test tone must sit inside the rising edge's transition zone")
+        let expectedWeight = (inputLinear - sel.lowerZero) / (sel.lowerFull - sel.lowerZero)
+
+        let input = solidColorImage(inputLinear, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [Mask(kind: .luminanceRange, feather: feather, luminanceTarget: target, luminanceRange: range, exposureEV: 1)]),
+            to: input
+        )
+        // +1 EV doubles the fully-selected value; `CIBlendWithMask` linearly
+        // interpolates original vs. corrected by weight, so a partial
+        // weight `w` reads `input * (1 + w)`, not `input * 2`.
+        let expected = inputLinear * (1 + expectedWeight)
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, Float(expected), accuracy: accuracy)
+    }
+
+    func testLuminanceRangeExposureMatchesGlobalExposure() {
+        let input = solidColorImage(middleGrayLinear, size: 400)
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringLuminanceRangeMask(exposureEV: 1.2)]), to: input)
+        let global = EditPipeline.apply(EditState(exposureEV: 1.2), to: input)
+        XCTAssertEqual(pixel(of: masked, at: 200, 200).r, pixel(of: global, at: 200, 200).r, accuracy: accuracy)
+        XCTAssertNotEqual(pixel(of: masked, at: 200, 200).r, pixel(of: input, at: 200, 200).r, "sanity: a real effect happened")
+    }
+
+    func testLuminanceRangeContrastMatchesGlobalContrast() {
+        // Both step-edge tones (0.45/0.55) stay INSIDE the default
+        // target-0.5/range-0.3/feather-0.5 mask's fully-opaque plateau
+        // ([~0.425, ~0.575] in tone, per that geometry's own worked
+        // example) -- unlike an arbitrary raw-linear step, this
+        // guarantees BOTH sides read full-strength (weight 1.0), so the
+        // equivalence comparison is exact, not approximate.
+        let lo = LuminanceRangeSelection.linearLuminance(forTone: 0.45)
+        let hi = LuminanceRangeSelection.linearLuminance(forTone: 0.55)
+        let input = stepEdgeImage(lo: lo, hi: hi, size: 400)
+        let masked = EditPipeline.apply(EditState(masks: [fullyCoveringLuminanceRangeMask(contrast: 0.5)]), to: input)
+        let global = EditPipeline.apply(EditState(contrast: 0.5), to: input)
+        XCTAssertEqual(pixel(of: masked, at: 50, 200).r, pixel(of: global, at: 50, 200).r, accuracy: accuracy)
+    }
+
+    func testLuminanceRangeWiderRangeSelectsMoreTones() {
+        let farTone = LuminanceRangeSelection.linearLuminance(forTone: 0.75)
+        let input = solidColorImage(farTone, size: 8)
+        func exposedValue(range: Double) -> Float {
+            let output = EditPipeline.apply(
+                EditState(masks: [Mask(kind: .luminanceRange, feather: 0.5, luminanceTarget: 0.5, luminanceRange: range, exposureEV: 1)]),
+                to: input
+            )
+            return linearPixel(of: output).r
+        }
+        let narrow = exposedValue(range: LuminanceRangeSelection.minimumRange)
+        let wide = exposedValue(range: LuminanceRangeSelection.maximumRange)
+        XCTAssertGreaterThan(wide, narrow, "a wider window must select this far-from-target tone more than a narrow one")
+    }
+
+    func testLuminanceRangeFeatherTradesPlateauWidthForGentlerShoulder() {
+        // UNLIKE the Brush mask's Gaussian blur (which spreads mass PAST
+        // the nominal edge, so a softer feather reads HIGHER at the
+        // boundary), this kind's `lowerZero`/`upperZero` are the same
+        // tone regardless of feather (only `lowerFull`/`upperFull` -- the
+        // plateau's own edge -- move). So feather instead trades plateau
+        // WIDTH for a gentler shoulder: at a point partway between the
+        // target and the (feather-independent) outer edge, a HARD edge
+        // (feather 0, whose plateau extends all the way to that outer
+        // edge) reads FULL STRENGTH there, while a SOFT edge (feather 1,
+        // whose plateau has shrunk to a single point at the target) is
+        // already partway down its own shoulder -- the opposite direction
+        // from Brush, for a real, measured, kind-specific reason.
+        let target = 0.5
+        let range = 0.3
+        let outerHalf = range / 2
+        let halfwayToneOutward = target + outerHalf * 0.5
+        let sampleTone = solidColorImage(LuminanceRangeSelection.linearLuminance(forTone: halfwayToneOutward), size: 8)
+        func value(feather: Double) -> Float {
+            let output = EditPipeline.apply(
+                EditState(masks: [Mask(kind: .luminanceRange, feather: feather, luminanceTarget: target, luminanceRange: range, exposureEV: 1)]),
+                to: sampleTone
+            )
+            return linearPixel(of: output).r
+        }
+        let hard = value(feather: 0)
+        let soft = value(feather: 1)
+        let sampleLinear = LuminanceRangeSelection.linearLuminance(forTone: halfwayToneOutward)
+        XCTAssertEqual(hard, Float(sampleLinear * 2), accuracy: 0.01, "a hard edge's plateau reaches all the way to the outer edge -- full strength at the halfway point")
+        XCTAssertLessThan(soft, hard, "a softer feather's SMALLER plateau leaves this same point partway down its own shoulder")
+    }
+
+    func testLuminanceRangeWhiteBalanceIsNoOpOnABlackAndWhitePhoto() {
+        let input = solidColorImage(r: middleGrayLinear, g: middleGrayLinear * 0.8, b: middleGrayLinear * 0.6, a: 1, size: 400)
+        let withoutMask = EditPipeline.apply(EditState(blackAndWhite: true), to: input)
+        let withMask = EditPipeline.apply(
+            EditState(blackAndWhite: true, masks: [fullyCoveringLuminanceRangeMask(temperature: 1500, tint: 40)]),
+            to: input
+        )
+        XCTAssertEqual(pixel(of: withMask, at: 200, 200).r, pixel(of: withoutMask, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testLuminanceRangePreservesExtentExactly() {
+        let input = solidColorImage(middleGrayLinear, size: 400)
+        let output = EditPipeline.apply(EditState(masks: [fullyCoveringLuminanceRangeMask(exposureEV: 1)]), to: input)
+        XCTAssertEqual(output.extent, input.extent)
+    }
+
+    func testLuminanceRangePreservesAlpha() {
+        let color = CIColor(red: middleGrayLinear, green: middleGrayLinear, blue: middleGrayLinear, alpha: 0.6, colorSpace: linearSpace)!
+        let input = CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let output = EditPipeline.apply(EditState(masks: [fullyCoveringLuminanceRangeMask(exposureEV: 1)]), to: input)
+        XCTAssertEqual(pixel(of: output, at: 200, 200).a, 0.6, accuracy: accuracy)
+    }
+
+    /// Reviewer-caught: a SOLID input (the original form of this test) is
+    /// tautological for this kind — a solid color's own per-pixel
+    /// luminance is size-independent by construction, so the assertion
+    /// could not fail regardless of what the branch does with `extent`.
+    /// Unlike `.radial`/`.linear`/`.brush`, `.luminanceRange` has no
+    /// GEOMETRIC boundary that scaling could get wrong at all — its
+    /// selection depends only on each pixel's own VALUE, not its
+    /// position — so the one real resolution hazard here is the one
+    /// `Mask.luminanceTarget`'s own doc comment already documents:
+    /// resampling could blend a sharp TONE boundary into intermediate
+    /// values that fall outside the plateau. This test isolates that
+    /// case directly with a step-edge image (a tone clearly OUTSIDE the
+    /// window on one side, exactly AT the target on the other) and
+    /// samples well inside the matching half, away from the edge, at
+    /// both sizes — proving the selection is resolution-independent
+    /// AWAY from a tonal edge, the actual claim worth making here.
+    func testLuminanceRangeSelectionIsResolutionIndependentAwayFromATonalEdge() {
+        let outsideTone = LuminanceRangeSelection.linearLuminance(forTone: 0.95)
+        let matchingTone = middleGrayLinear
+        let fullInput = stepEdgeImage(lo: outsideTone, hi: matchingTone, size: 400)
+        let proxyInput = stepEdgeImage(lo: outsideTone, hi: matchingTone, size: 40)
+        let state = EditState(masks: [fullyCoveringLuminanceRangeMask(exposureEV: 1)])
+        let full = EditPipeline.apply(state, to: fullInput)
+        let proxy = EditPipeline.apply(state, to: proxyInput)
+        // Sample well inside the matching (right) half at each size's own
+        // proportional position, far enough from the center edge that
+        // downscale resampling can't blend the two tones together.
+        XCTAssertEqual(pixel(of: full, at: 350, 200).r, pixel(of: proxy, at: 35, 20).r, accuracy: accuracy)
+        // And confirm it's genuinely the boosted value, not a coincidental
+        // match at some OTHER shared value both sizes happen to produce.
+        XCTAssertEqual(pixel(of: full, at: 350, 200).r, Float(matchingTone * 2), accuracy: accuracy)
+    }
+
+    func testLuminanceRangeCompoundsSequentiallyWithARadialMask() {
+        let input = solidColorImage(middleGrayLinear, size: 400)
+        let radial = Mask(centerX: 0.5, centerY: 0.5, radiusX: 2.0, radiusY: 2.0, exposureEV: 1)
+        let luminance = fullyCoveringLuminanceRangeMask(exposureEV: 1)
+        // LUMINANCE mask FIRST, radial SECOND -- deliberately, not an
+        // arbitrary choice: the luminance mask's own selection depends on
+        // the CURRENT tone (it reads `img`, not `image` -- see
+        // `testLuminanceRangeSelectionFollowsEarlierMasksResult` below),
+        // so placing the geometric (tone-independent) radial mask FIRST
+        // would shift this patch's tone outside the luminance mask's
+        // plateau before it ever got a chance to apply, confounding this
+        // test's simple "both fully apply" expectation with the exact
+        // order-dependence that other test is designed to isolate.
+        // Ordering the tone-INDEPENDENT mask second avoids that confound.
+        let output = EditPipeline.apply(EditState(masks: [luminance, radial]), to: input)
+        // Both fully cover the sampled point and each applies +1EV --
+        // proves the two kinds compound like any two masks do.
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, Float(middleGrayLinear * 4), accuracy: accuracy)
+    }
+
+    func testLuminanceRangeSelectionFollowsEarlierMasksResult() {
+        // Reads `img` (the RUNNING loop result), not `image` (the
+        // loop-invariant input): an earlier mask's own exposure boost
+        // moves this solid patch's tone OUT of the Luminance Range mask's
+        // narrow target window -- so the SECOND mask must see zero
+        // effect, proving it measured the ALREADY-BOOSTED tone, not the
+        // original one.
+        let darkTone = LuminanceRangeSelection.linearLuminance(forTone: 0.2)
+        let input = solidColorImage(darkTone, size: 400)
+        // A first mask brightens this dark patch by +3 EV, pushing it well
+        // outside the narrow window below targeted around the ORIGINAL tone.
+        let brighten = Mask(centerX: 0.5, centerY: 0.5, radiusX: 2.0, radiusY: 2.0, exposureEV: 3)
+        let narrowAtOriginalTone = Mask(
+            kind: .luminanceRange, feather: 0.5, luminanceTarget: 0.2, luminanceRange: LuminanceRangeSelection.minimumRange,
+            exposureEV: 5
+        )
+        let output = EditPipeline.apply(EditState(masks: [brighten, narrowAtOriginalTone]), to: input)
+        let brightenOnly = EditPipeline.apply(EditState(masks: [brighten]), to: input)
+        XCTAssertEqual(
+            pixel(of: output, at: 200, 200).r, pixel(of: brightenOnly, at: 200, 200).r, accuracy: accuracy,
+            "the luminance mask must see the ALREADY-brightened tone (now outside its narrow window), not the original"
+        )
+    }
+
     // MARK: - Vignette math
     //
     // Vignette (CIVignetteEffect) is a radial darkening/brightening tied to

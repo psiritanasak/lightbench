@@ -3526,6 +3526,432 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(linearPixel(of: output).r, Float(headroomRGB.r), accuracy: 0.01, "an unmatched headroom pixel must keep its headroom exactly, unclamped")
     }
 
+    // MARK: - Combining masks (intersect/subtract) — Phase 7 slice 6
+    //
+    // A mask's own selection can additionally be narrowed (`.intersect`)
+    // or have another mask's shape removed from it (`.subtract`), via
+    // `Mask.combineWithMaskID` naming that other mask (see
+    // `EditPipeline.applyMasks`'s own doc comment for the full semantics).
+    // THE PRIMARY REGRESSION GATE FOR THIS SECTION IS NOT A NEW TEST — it
+    // is that every existing mask test above (radial/linear/brush/
+    // luminanceRange/colorRange/composition, ~90 tests) passes with ZERO
+    // edits: they all run at the default `combineMode == .none`, and the
+    // `resolveMaskGeometry`/`maskImageAndRegion` extraction plus the
+    // `if mask.combineMode != .none` guard around the new combine block
+    // are what make that a real proof of byte-identity, not an
+    // assumption. If any existing expected value ever needs to change to
+    // keep this file green, the REFACTOR is wrong — revert and
+    // re-extract, don't edit the test.
+
+    func testCombineModeNoneWithATargetSetIsByteIdenticalToNoCombineAtAll() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let operand = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0.2, radiusY: 0.2, feather: 0.5)
+        var consumer = fullyCoveringMask(exposureEV: 1)
+        consumer.combineMode = .none
+        consumer.combineWithMaskID = operand.id // set, but must be IGNORED since mode is .none
+        let withTargetSet = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
+
+        var bareConsumer = consumer
+        bareConsumer.combineWithMaskID = nil
+        let withoutTarget = EditPipeline.apply(EditState(masks: [operand, bareConsumer]), to: input)
+
+        XCTAssertEqual(pixel(of: withTargetSet, at: 200, 200).r, pixel(of: withoutTarget, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testCombineTargetNilWithIntersectModeIsByteIdenticalToNoCombineAtAll() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        var consumer = fullyCoveringMask(exposureEV: 1)
+        consumer.combineMode = .intersect
+        consumer.combineWithMaskID = nil
+        let withNilTarget = EditPipeline.apply(EditState(masks: [consumer]), to: input)
+
+        var noCombine = consumer
+        noCombine.combineMode = .none
+        let withoutCombine = EditPipeline.apply(EditState(masks: [noCombine]), to: input)
+
+        XCTAssertEqual(pixel(of: withNilTarget, at: 200, 200).r, pixel(of: withoutCombine, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testTwoMasksWithNoCombineStillCompoundSequentially() {
+        // A direct restatement of
+        // `testMasksApplySequentiallyAndCompoundInOverlappingRegions`
+        // inside THIS section — slice 2's own independent-compounding
+        // behavior must survive slice 6's `applyMasks` refactor unchanged.
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let output = EditPipeline.apply(
+            EditState(masks: [
+                Mask(centerX: 0.35, centerY: 0.5, radiusX: 0.3, radiusY: 0.3, feather: 0.02, exposureEV: 1),
+                Mask(centerX: 0.65, centerY: 0.5, radiusX: 0.3, radiusY: 0.3, feather: 0.02, exposureEV: 1)
+            ]),
+            to: input
+        )
+        XCTAssertEqual(pixel(of: output, at: 0, 200).r, 0.2, accuracy: accuracy, "far from both masks")
+        XCTAssertEqual(pixel(of: output, at: 100, 200).r, 0.4, accuracy: accuracy, "only the first mask")
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, 0.8, accuracy: accuracy, "both masks -- compounded 2x * 2x")
+    }
+
+    // MARK: Intersect/subtract equivalence (magic-number-free)
+
+    /// Intersecting a FULLY-COVERING mask (weight ~1 everywhere sampled)
+    /// against a real operand shape must match that operand's OWN
+    /// already-measured falloff exactly (`testMaskSoftEdgeFalloffIsMonotonic`'s
+    /// own six values) — `min(1, operandWeight) == operandWeight`. The
+    /// operand mask itself carries NO adjustments (`isIdentity == true`,
+    /// so `applyMasks` never applies it standalone) — this is the "pure
+    /// shape-only operand" capability `Mask.isIdentity`'s own doc comment
+    /// describes, exercised directly.
+    func testIntersectWithAFullyCoveringMaskMatchesTheOperandsOwnShape() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let operand = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0.2, radiusY: 0.2, feather: 0.5)
+        var consumer = fullyCoveringMask(exposureEV: 1)
+        consumer.combineMode = .intersect
+        consumer.combineWithMaskID = operand.id
+        let output = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, 0.4, accuracy: accuracy, "center")
+        XCTAssertEqual(pixel(of: output, at: 235, 200).r, 0.4, accuracy: accuracy, "within core")
+        XCTAssertEqual(pixel(of: output, at: 245, 200).r, 0.37249, accuracy: accuracy, "mid falloff")
+        XCTAssertEqual(pixel(of: output, at: 260, 200).r, 0.29749, accuracy: accuracy, "mid falloff")
+        XCTAssertEqual(pixel(of: output, at: 280, 200).r, 0.2, accuracy: accuracy, "at boundary")
+        XCTAssertEqual(pixel(of: output, at: 300, 200).r, 0.2, accuracy: accuracy, "beyond")
+    }
+
+    /// The exact complement of the test above — `subtract` against the
+    /// SAME operand, same fully-covering consumer. `M ∧ ¬operand` means
+    /// full effect exactly where the operand test above showed none, and
+    /// none exactly where it showed full effect.
+    func testSubtractWithAFullyCoveringMaskIsTheExactComplementOfIntersect() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let operand = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0.2, radiusY: 0.2, feather: 0.5)
+        var consumer = fullyCoveringMask(exposureEV: 1)
+        consumer.combineMode = .subtract
+        consumer.combineWithMaskID = operand.id
+        let output = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, 0.2, accuracy: accuracy, "center: fully subtracted, untouched")
+        XCTAssertEqual(pixel(of: output, at: 235, 200).r, 0.2, accuracy: accuracy, "within core: untouched")
+        XCTAssertEqual(pixel(of: output, at: 245, 200).r, 0.22751, accuracy: accuracy, "mid falloff")
+        XCTAssertEqual(pixel(of: output, at: 260, 200).r, 0.30251, accuracy: accuracy, "mid falloff")
+        XCTAssertEqual(pixel(of: output, at: 280, 200).r, 0.4, accuracy: accuracy, "at boundary: fully applied")
+        XCTAssertEqual(pixel(of: output, at: 300, 200).r, 0.4, accuracy: accuracy, "beyond: fully applied")
+    }
+
+    /// A rigorous, magic-number-free proof of the min/¬min duality: since
+    /// `CIBlendWithMask` is an EXACT lerp and Exposure is a linear-light
+    /// multiply, `intersectValue + subtractValue == baseValue +
+    /// correctedValue` at EVERY sample, including partial-weight falloff
+    /// points — not just the fully-in/fully-out extremes the two tests
+    /// above already pin.
+    func testIntersectAndSubtractAgainstTheSameOperandSumToBaseValuePlusCorrectedValue() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let operand = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0.2, radiusY: 0.2, feather: 0.5)
+        var intersectConsumer = fullyCoveringMask(exposureEV: 1)
+        intersectConsumer.combineMode = .intersect
+        intersectConsumer.combineWithMaskID = operand.id
+        var subtractConsumer = fullyCoveringMask(exposureEV: 1)
+        subtractConsumer.combineMode = .subtract
+        subtractConsumer.combineWithMaskID = operand.id
+
+        let intersectOutput = EditPipeline.apply(EditState(masks: [operand, intersectConsumer]), to: input)
+        let subtractOutput = EditPipeline.apply(EditState(masks: [operand, subtractConsumer]), to: input)
+
+        let points: [(Int, Int)] = [(200, 200), (235, 200), (245, 200), (260, 200), (280, 200), (300, 200)]
+        for (x, y) in points {
+            let intersectValue = Double(pixel(of: intersectOutput, at: x, y).r)
+            let subtractValue = Double(pixel(of: subtractOutput, at: x, y).r)
+            XCTAssertEqual(intersectValue + subtractValue, 0.2 + 0.4, accuracy: Double(accuracy) * 2, "at (\(x),\(y))")
+        }
+    }
+
+    // MARK: Geometry / boolean behavior
+
+    func testIntersectLimitsTheEffectToTheOverlapOfBothShapes() {
+        // Same geometry as `testMasksApplySequentiallyAndCompoundInOverlappingRegions`
+        // above (already-proven sample points): consumer centered left
+        // (0.35), operand centered right (0.65), each radius 0.3 --
+        // overlapping only near the middle.
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let operand = Mask(centerX: 0.65, centerY: 0.5, radiusX: 0.3, radiusY: 0.3, feather: 0.02)
+        var consumer = Mask(centerX: 0.35, centerY: 0.5, radiusX: 0.3, radiusY: 0.3, feather: 0.02, exposureEV: 1)
+        consumer.combineMode = .intersect
+        consumer.combineWithMaskID = operand.id
+        let output = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 0, 200).r, 0.2, accuracy: accuracy, "outside both shapes")
+        XCTAssertEqual(pixel(of: output, at: 100, 200).r, 0.2, accuracy: accuracy, "consumer-only region: excluded by intersect")
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, 0.4, accuracy: accuracy, "overlap: full effect")
+        XCTAssertEqual(pixel(of: output, at: 300, 200).r, 0.2, accuracy: accuracy, "operand-only region")
+    }
+
+    func testSubtractRemovesTheOperandShapeFromTheMask() {
+        // The complement of the geometry test above.
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let operand = Mask(centerX: 0.65, centerY: 0.5, radiusX: 0.3, radiusY: 0.3, feather: 0.02)
+        var consumer = Mask(centerX: 0.35, centerY: 0.5, radiusX: 0.3, radiusY: 0.3, feather: 0.02, exposureEV: 1)
+        consumer.combineMode = .subtract
+        consumer.combineWithMaskID = operand.id
+        let output = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 100, 200).r, 0.4, accuracy: accuracy, "consumer-only region: full effect, operand doesn't reach here")
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, 0.2, accuracy: accuracy, "overlap: removed by subtract")
+    }
+
+    func testIntersectWithADisjointOperandIsAnExactNoOp() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let operand = Mask(centerX: 0.1, centerY: 0.1, radiusX: 0.05, radiusY: 0.05, feather: 0.02)
+        var consumer = Mask(centerX: 0.9, centerY: 0.9, radiusX: 0.05, radiusY: 0.05, feather: 0.02, exposureEV: 1)
+        consumer.combineMode = .intersect
+        consumer.combineWithMaskID = operand.id
+        let output = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
+        let withoutMask = EditPipeline.apply(EditState(), to: input)
+
+        XCTAssertEqual(
+            pixel(of: output, at: 360, 360).r, pixel(of: withoutMask, at: 360, 360).r, accuracy: accuracy,
+            "even deep inside the consumer's own shape, a disjoint operand makes this an exact no-op"
+        )
+    }
+
+    /// RGB==alpha covariance guard: a `CIColorInvert`-style regression
+    /// (RGB inverted, alpha left untouched) would weight R/G/B differently
+    /// from alpha inside the falloff band, showing up as a colored fringe
+    /// on a neutral-gray input — sample INSIDE the band, not at a
+    /// fully-in/fully-out extreme where such a bug could hide.
+    func testSubtractInversionDoesNotTintTheMaskEdges() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 1, size: 400)
+        let operand = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0.2, radiusY: 0.2, feather: 0.5)
+        var consumer = fullyCoveringMask(exposureEV: 1)
+        consumer.combineMode = .subtract
+        consumer.combineWithMaskID = operand.id
+        let output = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
+
+        let sample = pixel(of: output, at: 245, 200)
+        XCTAssertEqual(sample.r, sample.g, accuracy: accuracy)
+        XCTAssertEqual(sample.g, sample.b, accuracy: accuracy)
+    }
+
+    func testCombinePreservesExtentExactly() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let operand = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0.2, radiusY: 0.2, feather: 0.5)
+        var consumer = fullyCoveringMask(exposureEV: 1)
+        consumer.combineMode = .intersect
+        consumer.combineWithMaskID = operand.id
+        let output = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
+        XCTAssertEqual(output.extent, input.extent)
+    }
+
+    func testCombinePreservesAlpha() {
+        let color = CIColor(red: 0.2, green: 0.2, blue: 0.2, alpha: 0.6, colorSpace: linearSpace)!
+        let input = CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let operand = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0.2, radiusY: 0.2, feather: 0.5)
+        var consumer = fullyCoveringMask(exposureEV: 1)
+        consumer.combineMode = .intersect
+        consumer.combineWithMaskID = operand.id
+        let output = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
+        XCTAssertEqual(pixel(of: output, at: 200, 200).a, 0.6, accuracy: accuracy)
+    }
+
+    // MARK: Cross-kind operands
+
+    func testCombineWithABrushOperandCutsTheStrokeShapeOut() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let operand = Mask(kind: .brush, feather: 0.3, brushSize: 0.15, brushPoints: [BrushPoint(x: 0.5, y: 0.5)])
+        var consumer = fullyCoveringMask(exposureEV: 1)
+        consumer.combineMode = .intersect
+        consumer.combineWithMaskID = operand.id
+        let output = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, 0.4, accuracy: accuracy, "at the dab's own center")
+        XCTAssertEqual(pixel(of: output, at: 10, 10).r, 0.2, accuracy: accuracy, "far from the stroke")
+    }
+
+    /// The headline "brighten only the highlights inside this area" use
+    /// case — a `.luminanceRange` operand intersected with a fully-covering
+    /// geometric consumer, direct analog of
+    /// `testLuminanceRangeOnlyAffectsMatchingTone`.
+    func testCombineWithALuminanceRangeOperandSelectsByTone() {
+        let matchingTone = LuminanceRangeSelection.linearLuminance(forTone: 0.5)
+        let farTone = LuminanceRangeSelection.linearLuminance(forTone: 0.95)
+        let left = CIColor(red: matchingTone, green: matchingTone, blue: matchingTone, colorSpace: linearSpace)!
+        let right = CIColor(red: farTone, green: farTone, blue: farTone, colorSpace: linearSpace)!
+        let leftHalf = CIImage(color: left).cropped(to: CGRect(x: 0, y: 0, width: 200, height: 400))
+        let rightHalf = CIImage(color: right).cropped(to: CGRect(x: 200, y: 0, width: 200, height: 400))
+        let input = leftHalf.composited(over: rightHalf)
+
+        let operand = Mask(kind: .luminanceRange, feather: 0.5, luminanceTarget: 0.5, luminanceRange: 0.2)
+        var consumer = fullyCoveringMask(exposureEV: 1)
+        consumer.combineMode = .intersect
+        consumer.combineWithMaskID = operand.id
+        let output = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 100, 200).r, Float(matchingTone * 2), accuracy: accuracy, "matching tone: selected")
+        XCTAssertEqual(pixel(of: output, at: 300, 200).r, Float(farTone), accuracy: accuracy, "far tone: excluded")
+    }
+
+    /// Pins the rule `EditPipeline.applyMasks`'s own doc comment states:
+    /// an operand is evaluated against the RUNNING `img` at the CONSUMING
+    /// mask's own loop position — direct analog of
+    /// `testLuminanceRangeSelectionFollowsEarlierMasksResult`. An earlier
+    /// mask brightens this patch well outside the `.luminanceRange`
+    /// operand's narrow window, so the consumer's intersect must select
+    /// NOTHING here — proving the operand measured the ALREADY-brightened
+    /// tone, not the original.
+    func testCombineOperandIsEvaluatedAgainstTheRunningImageAtTheConsumingMasksPosition() {
+        let darkTone = LuminanceRangeSelection.linearLuminance(forTone: 0.2)
+        let input = solidColorImage(darkTone, size: 400)
+        let brighten = Mask(centerX: 0.5, centerY: 0.5, radiusX: 2.0, radiusY: 2.0, exposureEV: 3)
+        let luminanceOperand = Mask(
+            kind: .luminanceRange, feather: 0.5, luminanceTarget: 0.2, luminanceRange: LuminanceRangeSelection.minimumRange
+        )
+        var consumer = fullyCoveringMask(exposureEV: 2)
+        consumer.combineMode = .intersect
+        consumer.combineWithMaskID = luminanceOperand.id
+
+        let output = EditPipeline.apply(EditState(masks: [brighten, luminanceOperand, consumer]), to: input)
+        let brightenOnly = EditPipeline.apply(EditState(masks: [brighten]), to: input)
+
+        XCTAssertEqual(
+            pixel(of: output, at: 200, 200).r, pixel(of: brightenOnly, at: 200, 200).r, accuracy: accuracy,
+            "the luminanceRange operand must see the ALREADY-brightened tone (now outside its narrow window), so the consumer's intersect selects nothing"
+        )
+    }
+
+    // MARK: Robustness (self-reference / dangling / degenerate operand)
+
+    func testSelfReferencingIntersectIsIgnored() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        var mask = fullyCoveringMask(exposureEV: 1)
+        mask.combineMode = .intersect
+        mask.combineWithMaskID = mask.id // unreachable from the UI (the picker excludes self)
+        let withSelfRef = EditPipeline.apply(EditState(masks: [mask]), to: input)
+
+        var noCombine = mask
+        noCombine.combineMode = .none
+        let withoutCombine = EditPipeline.apply(EditState(masks: [noCombine]), to: input)
+
+        XCTAssertEqual(pixel(of: withSelfRef, at: 200, 200).r, pixel(of: withoutCombine, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testSelfReferencingSubtractIsIgnored() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        var mask = fullyCoveringMask(exposureEV: 1)
+        mask.combineMode = .subtract
+        mask.combineWithMaskID = mask.id
+        let withSelfRef = EditPipeline.apply(EditState(masks: [mask]), to: input)
+
+        var noCombine = mask
+        noCombine.combineMode = .none
+        let withoutCombine = EditPipeline.apply(EditState(masks: [noCombine]), to: input)
+
+        XCTAssertEqual(pixel(of: withSelfRef, at: 200, 200).r, pixel(of: withoutCombine, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testDanglingCombineTargetIntersectIsIgnored() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        var mask = fullyCoveringMask(exposureEV: 1)
+        mask.combineMode = .intersect
+        mask.combineWithMaskID = UUID() // names no mask that exists anywhere in `state.masks`
+        let withDanglingRef = EditPipeline.apply(EditState(masks: [mask]), to: input)
+
+        var noCombine = mask
+        noCombine.combineMode = .none
+        let withoutCombine = EditPipeline.apply(EditState(masks: [noCombine]), to: input)
+
+        XCTAssertEqual(pixel(of: withDanglingRef, at: 200, 200).r, pixel(of: withoutCombine, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    func testDanglingCombineTargetSubtractIsIgnored() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        var mask = fullyCoveringMask(exposureEV: 1)
+        mask.combineMode = .subtract
+        mask.combineWithMaskID = UUID()
+        let withDanglingRef = EditPipeline.apply(EditState(masks: [mask]), to: input)
+
+        var noCombine = mask
+        noCombine.combineMode = .none
+        let withoutCombine = EditPipeline.apply(EditState(masks: [noCombine]), to: input)
+
+        XCTAssertEqual(pixel(of: withDanglingRef, at: 200, 200).r, pixel(of: withoutCombine, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    /// The operand exists but its OWN shape resolves to nothing (a
+    /// zero-radius Radial) — a genuinely different case from a dangling
+    /// reference (§5's own table): the boolean algebra has a real answer,
+    /// `M ∧ 0 = 0`, so the whole consumer mask is skipped.
+    func testIntersectWithADegenerateOperandSkipsTheMaskEntirely() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let degenerateOperand = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0, radiusY: 0.2)
+        var consumer = fullyCoveringMask(exposureEV: 1)
+        consumer.combineMode = .intersect
+        consumer.combineWithMaskID = degenerateOperand.id
+        let output = EditPipeline.apply(EditState(masks: [degenerateOperand, consumer]), to: input)
+        let withoutMask = EditPipeline.apply(EditState(), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, pixel(of: withoutMask, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    /// The dual of the test above: `M ∧ ¬0 = M` — a degenerate operand
+    /// under `.subtract` leaves the mask COMPLETELY unaffected, not skipped.
+    func testSubtractWithADegenerateOperandLeavesTheMaskFullyApplied() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let degenerateOperand = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0, radiusY: 0.2)
+        var consumer = fullyCoveringMask(exposureEV: 1)
+        consumer.combineMode = .subtract
+        consumer.combineWithMaskID = degenerateOperand.id
+        let output = EditPipeline.apply(EditState(masks: [degenerateOperand, consumer]), to: input)
+
+        var noCombine = consumer
+        noCombine.combineMode = .none
+        let withoutCombine = EditPipeline.apply(EditState(masks: [noCombine]), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, pixel(of: withoutCombine, at: 200, 200).r, accuracy: accuracy)
+    }
+
+    // MARK: Non-transitivity / cycle safety
+
+    /// A must not hang, crash, or recurse when combining with B while B
+    /// ALSO combines with A — non-transitive resolution (each resolves
+    /// the OTHER's raw shape exactly once) is cycle-safe BY CONSTRUCTION,
+    /// with no visited-set or depth cap needed. Direct proof, not just an
+    /// absence-of-crash: both masks apply fully in their overlap
+    /// (compounding, 2x * 2x), and neither reaches outside its own shape
+    /// into the other's exclusive region.
+    func testMutuallyCombiningMasksTerminateAndUseEachOthersRawShapes() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        var maskA = Mask(centerX: 0.35, centerY: 0.5, radiusX: 0.3, radiusY: 0.3, feather: 0.02, exposureEV: 1)
+        var maskB = Mask(centerX: 0.65, centerY: 0.5, radiusX: 0.3, radiusY: 0.3, feather: 0.02, exposureEV: 1)
+        maskA.combineMode = .intersect
+        maskA.combineWithMaskID = maskB.id
+        maskB.combineMode = .intersect
+        maskB.combineWithMaskID = maskA.id
+
+        let output = EditPipeline.apply(EditState(masks: [maskA, maskB]), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, 0.8, accuracy: accuracy, "overlap: both apply, compounding 2x * 2x")
+        XCTAssertEqual(pixel(of: output, at: 100, 200).r, 0.2, accuracy: accuracy, "only A's shape -- excluded by A's own intersect with B")
+    }
+
+    /// The non-transitivity proof: C intersects with B, and B ITSELF
+    /// intersects with A (a small mask). If C correctly resolves B's RAW,
+    /// pre-combine shape (as designed), C reaches the FULL extent of B's
+    /// own shape, not narrowed to A's small region too.
+    func testCombineUsesTheOperandsRawShapeNotItsOwnCombinedShape() {
+        let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
+        let maskA = Mask(centerX: 0.2, centerY: 0.5, radiusX: 0.05, radiusY: 0.3, feather: 0.02) // narrow band near x=80
+        var maskB = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0.3, radiusY: 0.3, feather: 0.02) // wide, spans ~80-320
+        maskB.combineMode = .intersect
+        maskB.combineWithMaskID = maskA.id
+        var maskC = fullyCoveringMask(exposureEV: 1)
+        maskC.combineMode = .intersect
+        maskC.combineWithMaskID = maskB.id
+
+        let output = EditPipeline.apply(EditState(masks: [maskA, maskB, maskC]), to: input)
+
+        XCTAssertEqual(
+            pixel(of: output, at: 200, 200).r, 0.4, accuracy: accuracy,
+            "C must use B's RAW shape (reaching outside A's own narrow band), not B's shape already-intersected with A"
+        )
+    }
+
     // MARK: - Vignette math
     //
     // Vignette (CIVignetteEffect) is a radial darkening/brightening tied to

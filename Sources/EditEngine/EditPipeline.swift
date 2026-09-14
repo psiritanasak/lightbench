@@ -960,6 +960,30 @@ enum EditPipeline {
     /// behavior and this slice's user-confirmed "multiple independent
     /// masks" scope.
     ///
+    /// Phase 7 slice 6: a mask's own selection can ADDITIONALLY be
+    /// narrowed (`Mask.combineMode == .intersect`) or have another mask's
+    /// shape removed from it (`.subtract`), via `Mask.combineWithMaskID`
+    /// naming that OTHER mask. This is orthogonal to, not a replacement
+    /// for, the sequential-compounding paragraph above — two UNRELATED
+    /// masks still compound exactly as they always have; combine only
+    /// changes ONE mask's own selection SHAPE before its adjustment is
+    /// blended in. The operand mask is resolved via the exact same
+    /// `resolveMaskGeometry`/`maskImageAndRegion` pair the consuming
+    /// mask's own shape is (see those functions' own doc comments), with
+    /// one deliberate rule: the operand is evaluated against the SAME
+    /// running `img` the consuming mask's own content-derived selection
+    /// would see at that loop position — i.e. an operand is not evaluated
+    /// "as it looked wherever it happens to sit in the array," it's
+    /// evaluated as it would select right now, at the point the consumer
+    /// needs it. This keeps both operands of a boolean op looking at the
+    /// same image, and it's free: the extraction already threads a
+    /// `source` image through for exactly this reason. Combine is
+    /// deliberately NON-transitive (an operand's OWN `combineMode` is
+    /// never consulted — always its raw, pre-combine shape) and FAILS
+    /// OPEN on any broken reference (self, dangling) — see
+    /// `Mask.combineWithMaskID`'s own doc comment for the full reasoning
+    /// on both.
+    ///
     /// Per mask, adjustments run through their OWN local perceptual
     /// sandwich, mirroring the shape of `applyPerceptualAdjustments`
     /// itself: White Balance and Exposure reuse the global scene-linear
@@ -1055,48 +1079,12 @@ enum EditPipeline {
         for mask in state.masks {
             guard !mask.isIdentity else { continue }
 
-            // Geometry resolve, kind-dispatched — `continue` on `nil`
-            // BEFORE any of the color/tone work below, exactly preserving
-            // the pre-slice-3 early-exit ordering (a degenerate mask must
-            // never pay for a perceptual round-trip it can't use).
-            let resolvedGeometry: ResolvedMaskGeometry
-            switch mask.kind {
-            case .radial:
-                guard let geo = RadialMaskGeometry.resolve(
-                    centerX: mask.centerX, centerY: mask.centerY,
-                    radiusX: mask.radiusX, radiusY: mask.radiusY,
-                    rotationDegrees: mask.rotationDegrees, feather: mask.feather,
-                    extent: extent
-                ) else { continue }
-                resolvedGeometry = .radial(geo)
-            case .linear:
-                guard let geo = LinearMaskGeometry.resolve(
-                    centerX: mask.centerX, centerY: mask.centerY,
-                    rotationDegrees: mask.rotationDegrees, width: mask.width,
-                    extent: extent
-                ) else { continue }
-                resolvedGeometry = .linear(geo)
-            case .brush:
-                guard let geo = BrushMaskGeometry.resolve(
-                    points: mask.brushPoints, brushSize: mask.brushSize, feather: mask.feather,
-                    extent: extent
-                ) else { continue }
-                resolvedGeometry = .brush(geo)
-            case .luminanceRange:
-                guard let sel = LuminanceRangeSelection.resolve(
-                    luminanceTarget: mask.luminanceTarget, luminanceRange: mask.luminanceRange,
-                    feather: mask.feather, extent: extent
-                ) else { continue }
-                resolvedGeometry = .luminanceRange(sel)
-            case .colorRange:
-                guard let sel = ColorRangeSelection.resolve(
-                    hasTarget: mask.colorRangeHasTarget,
-                    targetHue: mask.colorRangeTargetHue, targetSaturation: mask.colorRangeTargetSaturation,
-                    targetLuminance: mask.colorRangeTargetLuminance, tolerance: mask.colorRangeTolerance,
-                    feather: mask.feather, extent: extent
-                ) else { continue }
-                resolvedGeometry = .colorRange(sel)
-            }
+            // Geometry resolve, kind-dispatched — `nil` (via
+            // `resolveMaskGeometry`) BEFORE any of the color/tone work
+            // below, exactly preserving the pre-slice-3 early-exit
+            // ordering (a degenerate mask must never pay for a perceptual
+            // round-trip it can't use).
+            guard let resolvedGeometry = resolveMaskGeometry(mask, extent: extent) else { continue }
 
             // Reviewer-caught (Phase 7 slice 2): these four MUST clamp to
             // -1...1 like the global path's own `effectiveTone(_:)` does
@@ -1169,107 +1157,53 @@ enum EditPipeline {
             // means the mask isn't "identity," just inert THIS time).
             guard corrected !== img else { continue }
 
-            let maskImage: CIImage
-            let correctedRegion: CGRect
-            switch resolvedGeometry {
-            case .radial(let geo):
-                let gradient = CIFilter.radialGradient()
-                gradient.center = .zero
-                gradient.radius0 = Float(geo.innerRadius)
-                gradient.radius1 = Float(geo.gradientRadius)
-                gradient.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 1)
-                gradient.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
-                guard let disc = gradient.outputImage else { continue }
-                let placed = disc.transformed(by: geo.transform)
+            guard var (maskImage, correctedRegion) = maskImageAndRegion(
+                for: resolvedGeometry, extent: extent, base: base, source: img
+            ) else { continue }
 
-                let union = CIFilter.maximumCompositing()
-                union.inputImage = placed
-                union.backgroundImage = base
-                maskImage = (union.outputImage ?? base).cropped(to: extent)
-
-                // Reviewer-caught perf fix (Phase 7 slice 2, motivated by
-                // the live-measured RAW-with-3-masks cost): `color1`'s
-                // alpha is 0, so — MEASURED, not assumed — `disc`'s own
-                // extent is already FINITE (bounded to `radius1`'s
-                // circle), never `CGRect.infinite`; only an OPAQUE
-                // `color1` produces that case. So `placed.extent` is a
-                // real, usable rect, and the mask is exactly 0 everywhere
-                // outside it (that's the whole point of the transparent
-                // `base` above). Cropping `corrected` to that rect AFTER
-                // computing it (not the INPUT before computing it —
-                // Clarity's unsharp radius still needs the full image
-                // visible to its own kernel) tells Core Image's lazy
-                // evaluator it only ever needs to actually produce pixels
-                // within the ellipse's own bounding box for the blend
-                // below, not the whole extent — byte-identical output
-                // (the blend already returns `img` unchanged wherever
-                // mask is 0), but far less work per mask when the ellipse
-                // is small relative to the full frame.
-                correctedRegion = placed.extent.intersection(extent)
-            case .linear(let geo):
-                let gradient = CIFilter.linearGradient()
-                gradient.point0 = geo.point0
-                gradient.point1 = geo.point1
-                // Same color0/color1 pair as the radial branch above —
-                // the blend's premultiplication/alpha behavior is already
-                // validated for this exact pair, so matching it means the
-                // two kinds cannot diverge on that axis.
-                gradient.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 1)
-                gradient.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
-                guard let ramp = gradient.outputImage else { continue }
-                // NO transparent-`base` union here, unlike the radial
-                // branch: `CILinearGradient` CLAMPS to `color0`/`color1`
-                // beyond each point (MEASURED — see `LinearMaskGeometry`'s
-                // own doc comment), so it already has a defined value
-                // everywhere, unlike a radial gradient, which is
-                // UNDEFINED outside its own bounding disc and needs
-                // `base`/`CIMaximumCompositing` precisely because of that.
-                maskImage = ramp.cropped(to: extent)
-                correctedRegion = geo.regionOfInterest
-            case .brush(let geo):
-                // Same reasoning as the `.linear` branch above, not the
-                // `.radial` one: `brushStrokeMaskImage` returns a
-                // `CGImage`-backed `CIImage`, which has a genuinely FINITE
-                // extent (the bitmap's own bounds) — Core Image's sampling
-                // outside a finite extent is transparent black, exactly
-                // what the `.radial` branch's transparent-`base` union
-                // exists to guarantee for an otherwise-undefined-outside-
-                // its-disc radial gradient. No union needed here.
-                guard let stroke = brushStrokeMaskImage(geo) else { continue }
-                maskImage = stroke.cropped(to: extent)
-                correctedRegion = geo.regionOfInterest
-            case .luminanceRange(let sel):
-                // Reads `img` (the RUNNING loop variable), not `image` (the
-                // loop-invariant input) — deliberate: masks compound
-                // sequentially in this loop by design (see this function's
-                // own doc comment above), so "select the bright tones"
-                // should mean the tones as they currently look on screen —
-                // i.e. after any earlier mask's adjustments — not as they
-                // were before this loop started. Gets its own test
-                // (`testLuminanceRangeSelectionFollowsEarlierMasksResult`).
-                // `luminanceRangeMaskImage` crops to `sel.regionOfInterest`
-                // itself before returning (load-bearing — see its own doc
-                // comment) — no second crop needed here.
-                guard let selection = luminanceRangeMaskImage(img, sel) else { continue }
-                maskImage = selection
-                // ALWAYS the whole extent — unlike every other kind, there
-                // is no ROI-crop win available: a pixel matching the
-                // target tone can be anywhere in frame, so `corrected`
-                // must be produced everywhere. A deliberate, measured cost
-                // (see `luminanceRangeMaskImage`'s own doc comment).
-                correctedRegion = sel.regionOfInterest
-            case .colorRange(let sel):
-                // Same "reads `img`, not `image`" reasoning as the
-                // `.luminanceRange` branch above — masks compound
-                // sequentially, so "select pixels like THIS color" means
-                // as they currently look on screen, after any earlier
-                // mask's own adjustments.
-                guard let selection = colorRangeMaskImage(img, sel) else { continue }
-                maskImage = selection
-                // ALWAYS the whole extent, same reasoning as
-                // `.luminanceRange` — a pixel matching the target color
-                // can be anywhere in frame, structurally no ROI-crop win.
-                correctedRegion = sel.regionOfInterest
+            // Phase 7 slice 6: narrow (`.intersect`) or punch a hole in
+            // (`.subtract`) this mask's own selection using ANOTHER mask's
+            // shape — see this function's own doc comment above for the
+            // full semantics (non-transitive, fail-open, operand evaluated
+            // against the same `img` this mask's own content-derived
+            // selection would see).
+            if mask.combineMode != .none,
+               let operandID = mask.combineWithMaskID, operandID != mask.id,
+               let operand = state.masks.first(where: { $0.id == operandID }) {
+                let operandMask = resolveMaskGeometry(operand, extent: extent).flatMap {
+                    maskImageAndRegion(for: $0, extent: extent, base: base, source: img)
+                }
+                switch mask.combineMode {
+                case .none:
+                    break // unreachable (guarded above); exhaustive switch, no `default:`
+                case .intersect:
+                    // The operand selects NOTHING (unpicked Color Range,
+                    // zero-radius Radial, unpainted Brush) -> M ∧ 0 = 0 ->
+                    // this whole mask contributes nothing, matching the
+                    // boolean algebra exactly, not an arbitrary choice.
+                    guard let operandMask else { continue }
+                    let region = correctedRegion.intersection(operandMask.region)
+                    // Disjoint shapes -> exact no-op, and avoids handing
+                    // `CIBlendWithMask` a null/empty crop rect below.
+                    guard !region.isNull, !region.isEmpty else { continue }
+                    let meet = CIFilter.minimumCompositing()
+                    meet.inputImage = maskImage
+                    meet.backgroundImage = operandMask.image
+                    maskImage = (meet.outputImage ?? maskImage).cropped(to: extent)
+                    correctedRegion = region
+                case .subtract:
+                    // The operand selects nothing -> M ∧ ¬0 = M -> this
+                    // mask is completely UNAFFECTED, not skipped.
+                    guard let operandMask else { break }
+                    guard let inverted = invertedMaskImage(operandMask.image, extent: extent) else { break }
+                    let meet = CIFilter.minimumCompositing()
+                    meet.inputImage = maskImage
+                    meet.backgroundImage = inverted
+                    maskImage = (meet.outputImage ?? maskImage).cropped(to: extent)
+                    // `correctedRegion` deliberately UNCHANGED: punching a
+                    // hole in a shape never shrinks its own outer bound,
+                    // so there is no ROI win available here, unlike intersect.
+                }
             }
 
             let blend = CIFilter.blendWithMask()
@@ -1280,6 +1214,241 @@ enum EditPipeline {
         }
 
         return img
+    }
+
+    /// Kind-dispatched geometry resolve, extracted (Phase 7 slice 6) from
+    /// what was previously the first half of `applyMasks`'s own inline
+    /// switch, so a COMBINE OPERAND — a second, independent `Mask` named
+    /// by `Mask.combineWithMaskID` — can be resolved through the exact
+    /// same path a primary mask is, via a second call. Pure aside from
+    /// `extent`; behavior UNCHANGED from the inline switch it replaces for
+    /// every existing call site (verified: the full pre-slice-6 mask test
+    /// suite passes with ZERO test edits after this extraction — the
+    /// actual proof this is behavior-preserving, not merely intended to
+    /// be). `nil` on any kind's own degenerate-geometry case, exactly
+    /// matching the `continue` each arm used when this lived inline.
+    private static func resolveMaskGeometry(_ mask: Mask, extent: CGRect) -> ResolvedMaskGeometry? {
+        switch mask.kind {
+        case .radial:
+            guard let geo = RadialMaskGeometry.resolve(
+                centerX: mask.centerX, centerY: mask.centerY,
+                radiusX: mask.radiusX, radiusY: mask.radiusY,
+                rotationDegrees: mask.rotationDegrees, feather: mask.feather,
+                extent: extent
+            ) else { return nil }
+            return .radial(geo)
+        case .linear:
+            guard let geo = LinearMaskGeometry.resolve(
+                centerX: mask.centerX, centerY: mask.centerY,
+                rotationDegrees: mask.rotationDegrees, width: mask.width,
+                extent: extent
+            ) else { return nil }
+            return .linear(geo)
+        case .brush:
+            guard let geo = BrushMaskGeometry.resolve(
+                points: mask.brushPoints, brushSize: mask.brushSize, feather: mask.feather,
+                extent: extent
+            ) else { return nil }
+            return .brush(geo)
+        case .luminanceRange:
+            guard let sel = LuminanceRangeSelection.resolve(
+                luminanceTarget: mask.luminanceTarget, luminanceRange: mask.luminanceRange,
+                feather: mask.feather, extent: extent
+            ) else { return nil }
+            return .luminanceRange(sel)
+        case .colorRange:
+            guard let sel = ColorRangeSelection.resolve(
+                hasTarget: mask.colorRangeHasTarget,
+                targetHue: mask.colorRangeTargetHue, targetSaturation: mask.colorRangeTargetSaturation,
+                targetLuminance: mask.colorRangeTargetLuminance, tolerance: mask.colorRangeTolerance,
+                feather: mask.feather, extent: extent
+            ) else { return nil }
+            return .colorRange(sel)
+        }
+    }
+
+    /// Per-kind mask-image construction, extracted (Phase 7 slice 6) from
+    /// what was previously the second half of `applyMasks`'s own inline
+    /// switch — the same "a combine operand needs the same construction a
+    /// primary mask gets" reasoning as `resolveMaskGeometry` above.
+    /// `source` is the image content-derived kinds (`.luminanceRange`/
+    /// `.colorRange`) sample from — ALWAYS the running `img` at the call
+    /// site (never the loop-invariant `image`), whether resolving the
+    /// mask currently being applied or an operand it combines with (see
+    /// `applyMasks`'s own doc comment for why an operand is evaluated
+    /// against the SAME image the consumer's own selection would see).
+    /// `base` is the loop-invariant transparent-black image, `.radial`-only.
+    /// Behavior UNCHANGED from the inline switch this replaces for every
+    /// existing call (verified: zero test edits, same as
+    /// `resolveMaskGeometry` above) — every load-bearing crop/union/
+    /// no-union decision documented per-kind below is copied verbatim,
+    /// not re-derived.
+    private static func maskImageAndRegion(
+        for resolvedGeometry: ResolvedMaskGeometry, extent: CGRect, base: CIImage, source: CIImage
+    ) -> (image: CIImage, region: CGRect)? {
+        let maskImage: CIImage
+        let correctedRegion: CGRect
+        switch resolvedGeometry {
+        case .radial(let geo):
+            let gradient = CIFilter.radialGradient()
+            gradient.center = .zero
+            gradient.radius0 = Float(geo.innerRadius)
+            gradient.radius1 = Float(geo.gradientRadius)
+            gradient.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 1)
+            gradient.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
+            guard let disc = gradient.outputImage else { return nil }
+            let placed = disc.transformed(by: geo.transform)
+
+            let union = CIFilter.maximumCompositing()
+            union.inputImage = placed
+            union.backgroundImage = base
+            maskImage = (union.outputImage ?? base).cropped(to: extent)
+
+            // Reviewer-caught perf fix (Phase 7 slice 2, motivated by
+            // the live-measured RAW-with-3-masks cost): `color1`'s
+            // alpha is 0, so — MEASURED, not assumed — `disc`'s own
+            // extent is already FINITE (bounded to `radius1`'s
+            // circle), never `CGRect.infinite`; only an OPAQUE
+            // `color1` produces that case. So `placed.extent` is a
+            // real, usable rect, and the mask is exactly 0 everywhere
+            // outside it (that's the whole point of the transparent
+            // `base` above). Cropping `corrected` to that rect AFTER
+            // computing it (not the INPUT before computing it —
+            // Clarity's unsharp radius still needs the full image
+            // visible to its own kernel) tells Core Image's lazy
+            // evaluator it only ever needs to actually produce pixels
+            // within the ellipse's own bounding box for the blend
+            // below, not the whole extent — byte-identical output
+            // (the blend already returns `img` unchanged wherever
+            // mask is 0), but far less work per mask when the ellipse
+            // is small relative to the full frame.
+            correctedRegion = placed.extent.intersection(extent)
+        case .linear(let geo):
+            let gradient = CIFilter.linearGradient()
+            gradient.point0 = geo.point0
+            gradient.point1 = geo.point1
+            // Same color0/color1 pair as the radial branch above —
+            // the blend's premultiplication/alpha behavior is already
+            // validated for this exact pair, so matching it means the
+            // two kinds cannot diverge on that axis.
+            gradient.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 1)
+            gradient.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
+            guard let ramp = gradient.outputImage else { return nil }
+            // NO transparent-`base` union here, unlike the radial
+            // branch: `CILinearGradient` CLAMPS to `color0`/`color1`
+            // beyond each point (MEASURED — see `LinearMaskGeometry`'s
+            // own doc comment), so it already has a defined value
+            // everywhere, unlike a radial gradient, which is
+            // UNDEFINED outside its own bounding disc and needs
+            // `base`/`CIMaximumCompositing` precisely because of that.
+            maskImage = ramp.cropped(to: extent)
+            correctedRegion = geo.regionOfInterest
+        case .brush(let geo):
+            // Same reasoning as the `.linear` branch above, not the
+            // `.radial` one: `brushStrokeMaskImage` returns a
+            // `CGImage`-backed `CIImage`, which has a genuinely FINITE
+            // extent (the bitmap's own bounds) — Core Image's sampling
+            // outside a finite extent is transparent black, exactly
+            // what the `.radial` branch's transparent-`base` union
+            // exists to guarantee for an otherwise-undefined-outside-
+            // its-disc radial gradient. No union needed here.
+            guard let stroke = brushStrokeMaskImage(geo) else { return nil }
+            maskImage = stroke.cropped(to: extent)
+            correctedRegion = geo.regionOfInterest
+        case .luminanceRange(let sel):
+            // Reads `source` (the RUNNING loop `img` at the call site),
+            // not the loop-invariant `image` — deliberate: masks compound
+            // sequentially in this loop by design (see `applyMasks`'s
+            // own doc comment above), so "select the bright tones"
+            // should mean the tones as they currently look on screen —
+            // i.e. after any earlier mask's adjustments — not as they
+            // were before this loop started. Gets its own test
+            // (`testLuminanceRangeSelectionFollowsEarlierMasksResult`).
+            // `luminanceRangeMaskImage` crops to `sel.regionOfInterest`
+            // itself before returning (load-bearing — see its own doc
+            // comment) — no second crop needed here.
+            guard let selection = luminanceRangeMaskImage(source, sel) else { return nil }
+            maskImage = selection
+            // ALWAYS the whole extent — unlike every other kind, there
+            // is no ROI-crop win available: a pixel matching the
+            // target tone can be anywhere in frame, so `corrected`
+            // must be produced everywhere. A deliberate, measured cost
+            // (see `luminanceRangeMaskImage`'s own doc comment).
+            correctedRegion = sel.regionOfInterest
+        case .colorRange(let sel):
+            // Same "reads `source`, not the loop-invariant `image`"
+            // reasoning as the `.luminanceRange` branch above — masks
+            // compound sequentially, so "select pixels like THIS color"
+            // means as they currently look on screen, after any earlier
+            // mask's own adjustments.
+            guard let selection = colorRangeMaskImage(source, sel) else { return nil }
+            maskImage = selection
+            // ALWAYS the whole extent, same reasoning as
+            // `.luminanceRange` — a pixel matching the target color
+            // can be anywhere in frame, structurally no ROI-crop win.
+            correctedRegion = sel.regionOfInterest
+        }
+        return (maskImage, correctedRegion)
+    }
+
+    /// Channel-inverted (`¬`) twin of an RGB==alpha soft mask image, used
+    /// ONLY by `applyMasks`'s own `.subtract` combine branch above
+    /// (`target ∧ ¬operand`). Built from Porter-Duff SOURCE-OUT
+    /// compositing (`Src * (1 - Dst.alpha)`, applied per-channel including
+    /// alpha, since Porter-Duff operators are ALWAYS defined in
+    /// premultiplied space with no ambiguity to get wrong): `Src` is an
+    /// opaque-white, extent-sized constant image (RGB==alpha==1
+    /// UNIFORMLY, by construction — no per-pixel data to corrupt), `Dst`
+    /// is the operand's own mask image. The result is `white * (1 -
+    /// operandWeight)` everywhere — `(1-w, 1-w, 1-w, 1-w)` — RGB==alpha
+    /// covariance preserved AUTOMATICALLY, since `Src` already has it and
+    /// every output channel is `Src`'s own channel scaled by the SAME
+    /// `(1 - Dst.alpha)` factor.
+    ///
+    /// A `CIColorMatrix`-based inversion (`r' = -r + 1`, `a' = -a + 1`,
+    /// independently per channel) was the FIRST implementation shipped
+    /// here, and is WRONG — a genuinely surprising, MEASURED (not
+    /// theorized) finding via a throwaway probe, not merely "considered
+    /// and rejected" on paper. It passes at the two degenerate extremes
+    /// (`w = 0`, `w = 1` — where premultiplied and unpremultiplied
+    /// representations coincide arithmetically for an RGB==alpha value)
+    /// but silently FAILS at every PARTIAL weight: `CIColorMatrix`
+    /// unpremultiplies its input before applying the matrix, and for an
+    /// RGB==alpha pixel `(w,w,w,w)` with `w > 0`, unpremultiplied RGB is
+    /// `w/w = 1` (white) regardless of `w`'s actual value — the matrix
+    /// then computes `r' = -1 + 1 = 0` for EVERY `w > 0`, and the
+    /// filter's own re-premultiply step by the (correctly-computed)
+    /// inverted alpha still leaves `R = 0 * (1-w) = 0`, breaking
+    /// RGB==alpha for every partial-weight pixel — measured directly:
+    /// original weight `0.5248` inverted via `CIColorMatrix` gave
+    /// `R=0, A=0.4752` (should be `R=A=0.4752`), which is why the FIRST
+    /// version of `EditPipelineTests`' own soft-edge subtract tests
+    /// failed with the falloff band reading as fully-unselected instead
+    /// of a smooth partial value. `CIColorInvert` is ALSO wrong, for an
+    /// unrelated, simpler reason: it inverts RGB but leaves alpha
+    /// untouched entirely. Both false starts are recorded here so a
+    /// future maintainer doesn't re-attempt either one — Porter-Duff
+    /// Source-Out is the one construction actually measured correct
+    /// across the full `0...1` weight range, not just its endpoints (see
+    /// `EditPipelineTests`' own
+    /// `testSubtractInversionDoesNotTintTheMaskEdges`, which samples
+    /// INSIDE the falloff band specifically because that's where this
+    /// class of bug hides).
+    ///
+    /// Extent: MEASURED finite for two finite inputs (opaque white is
+    /// already extent-bounded by its own `.cropped(to: extent)` below;
+    /// the operand's own mask image is already finite by the time it
+    /// reaches here) — unlike `luminanceRangeMaskImage`'s own forced-
+    /// opaque-alpha-bias trap, Porter-Duff Source-Out never introduces an
+    /// unbounded bias term, so this function's own `.cropped(to: extent)`
+    /// is structural consistency, not load-bearing — still kept, matching
+    /// every other per-kind mask-image builder in this file.
+    private static func invertedMaskImage(_ maskImage: CIImage, extent: CGRect) -> CIImage? {
+        let opaqueWhite = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1)).cropped(to: extent)
+        let sourceOut = CIFilter.sourceOutCompositing()
+        sourceOut.inputImage = opaqueWhite
+        sourceOut.backgroundImage = maskImage
+        return sourceOut.outputImage?.cropped(to: extent)
     }
 
     /// Rasterizes one Brush mask's stroke into a soft-edged `CIImage` mask

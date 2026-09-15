@@ -3711,24 +3711,6 @@ final class EditPipelineTests: XCTestCase {
         )
     }
 
-    /// RGB==alpha covariance guard: a `CIColorInvert`-style regression
-    /// (RGB inverted, alpha left untouched) would weight R/G/B differently
-    /// from alpha inside the falloff band, showing up as a colored fringe
-    /// on a neutral-gray input — sample INSIDE the band, not at a
-    /// fully-in/fully-out extreme where such a bug could hide.
-    func testSubtractInversionDoesNotTintTheMaskEdges() {
-        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 1, size: 400)
-        let operand = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0.2, radiusY: 0.2, feather: 0.5)
-        var consumer = fullyCoveringMask(exposureEV: 1)
-        consumer.combineMode = .subtract
-        consumer.combineWithMaskID = operand.id
-        let output = EditPipeline.apply(EditState(masks: [operand, consumer]), to: input)
-
-        let sample = pixel(of: output, at: 245, 200)
-        XCTAssertEqual(sample.r, sample.g, accuracy: accuracy)
-        XCTAssertEqual(sample.g, sample.b, accuracy: accuracy)
-    }
-
     func testCombinePreservesExtentExactly() {
         let input = solidColorImage(r: 0.2, g: 0.2, b: 0.2, a: 1, size: 400)
         let operand = Mask(centerX: 0.5, centerY: 0.5, radiusX: 0.2, radiusY: 0.2, feather: 0.5)

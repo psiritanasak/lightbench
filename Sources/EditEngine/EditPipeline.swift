@@ -1074,6 +1074,10 @@ enum EditPipeline {
         // feeds this base). Radial-only (see the per-kind mask
         // construction below for why `.linear` needs no such base).
         let base = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: extent)
+        // Loop-invariant, same reasoning as `base` above: only depends on
+        // `extent`, fed to `invertedMaskImage` below for every `.subtract`
+        // combine rather than rebuilt per mask.
+        let opaqueWhite = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1)).cropped(to: extent)
         var img = image
 
         for mask in state.masks {
@@ -1166,7 +1170,18 @@ enum EditPipeline {
             // shape — see this function's own doc comment above for the
             // full semantics (non-transitive, fail-open, operand evaluated
             // against the same `img` this mask's own content-derived
-            // selection would see).
+            // selection would see). Note this block runs AFTER `corrected`
+            // (the per-mask perceptual sandwich) is already built above —
+            // an `.intersect` that resolves to a fully disjoint/degenerate
+            // region still pays for that work before this `continue`
+            // fires, a deviation from this file's usual "never pay for a
+            // round-trip it can't use" ordering. Harmless: Core Image
+            // recipes are lazy (`corrected` is an unevaluated `CIImage`
+            // graph, not rendered pixels, until something downstream
+            // forces it), and reordering to resolve combine geometry
+            // before the perceptual sandwich would need a second,
+            // duplicate geometry-resolve call ahead of the existing one —
+            // not worth it for a lazy no-op.
             if mask.combineMode != .none,
                let operandID = mask.combineWithMaskID, operandID != mask.id,
                let operand = state.masks.first(where: { $0.id == operandID }) {
@@ -1184,8 +1199,11 @@ enum EditPipeline {
                     guard let operandMask else { continue }
                     let region = correctedRegion.intersection(operandMask.region)
                     // Disjoint shapes -> exact no-op, and avoids handing
-                    // `CIBlendWithMask` a null/empty crop rect below.
-                    guard !region.isNull, !region.isEmpty else { continue }
+                    // `CIBlendWithMask` an empty crop rect below.
+                    // `CGRect.isEmpty` already covers the null rect (`.null`
+                    // is defined as having zero width/height), so a separate
+                    // `!region.isNull` check would be redundant.
+                    guard !region.isEmpty else { continue }
                     let meet = CIFilter.minimumCompositing()
                     meet.inputImage = maskImage
                     meet.backgroundImage = operandMask.image
@@ -1195,7 +1213,7 @@ enum EditPipeline {
                     // The operand selects nothing -> M ∧ ¬0 = M -> this
                     // mask is completely UNAFFECTED, not skipped.
                     guard let operandMask else { break }
-                    guard let inverted = invertedMaskImage(operandMask.image, extent: extent) else { break }
+                    guard let inverted = invertedMaskImage(operandMask.image, opaqueWhite: opaqueWhite, extent: extent) else { break }
                     let meet = CIFilter.minimumCompositing()
                     meet.inputImage = maskImage
                     meet.backgroundImage = inverted
@@ -1430,21 +1448,37 @@ enum EditPipeline {
     /// future maintainer doesn't re-attempt either one — Porter-Duff
     /// Source-Out is the one construction actually measured correct
     /// across the full `0...1` weight range, not just its endpoints (see
-    /// `EditPipelineTests`' own
-    /// `testSubtractInversionDoesNotTintTheMaskEdges`, which samples
-    /// INSIDE the falloff band specifically because that's where this
-    /// class of bug hides).
+    /// `EditPipelineTests`' own value-based
+    /// `testSubtractWithAFullyCoveringMaskIsTheExactComplementOfIntersect`
+    /// and
+    /// `testIntersectAndSubtractAgainstTheSameOperandSumToBaseValuePlusCorrectedValue`,
+    /// which sample INSIDE the falloff band and would fail under either
+    /// false start above. An earlier third test here,
+    /// `testSubtractInversionDoesNotTintTheMaskEdges`, only asserted
+    /// `sample.r == sample.g == sample.b` on a neutral-gray input — this
+    /// was reviewer-caught as TAUTOLOGICAL and deleted: `CIBlendWithMask`
+    /// applies one scalar weight uniformly to every output channel
+    /// regardless of which bug produced that weight, so R/G/B stay equal
+    /// under BOTH false starts above too, and the test could never fail
+    /// either way — confirmed by injecting each regression and observing
+    /// it still passed. The two value-based tests above are the ones that
+    /// actually caught the `CIColorMatrix` bug during development.
     ///
-    /// Extent: MEASURED finite for two finite inputs (opaque white is
-    /// already extent-bounded by its own `.cropped(to: extent)` below;
-    /// the operand's own mask image is already finite by the time it
-    /// reaches here) — unlike `luminanceRangeMaskImage`'s own forced-
-    /// opaque-alpha-bias trap, Porter-Duff Source-Out never introduces an
-    /// unbounded bias term, so this function's own `.cropped(to: extent)`
-    /// is structural consistency, not load-bearing — still kept, matching
-    /// every other per-kind mask-image builder in this file.
-    private static func invertedMaskImage(_ maskImage: CIImage, extent: CGRect) -> CIImage? {
-        let opaqueWhite = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1)).cropped(to: extent)
+    /// Extent: MEASURED finite for two finite inputs (`opaqueWhite` is
+    /// already extent-bounded by its own `.cropped(to: extent)` at its
+    /// call site; the operand's own mask image is already finite by the
+    /// time it reaches here) — unlike `luminanceRangeMaskImage`'s own
+    /// forced-opaque-alpha-bias trap, Porter-Duff Source-Out never
+    /// introduces an unbounded bias term, so this function's own
+    /// `.cropped(to: extent)` is structural consistency, not
+    /// load-bearing — still kept, matching every other per-kind
+    /// mask-image builder in this file.
+    ///
+    /// `opaqueWhite` is a parameter, not rebuilt per call, since
+    /// `applyMasks` already hoists its own extent-sized constant (`base`)
+    /// once per `apply` invocation rather than once per mask — the same
+    /// loop-invariant-hoisting discipline applies here.
+    private static func invertedMaskImage(_ maskImage: CIImage, opaqueWhite: CIImage, extent: CGRect) -> CIImage? {
         let sourceOut = CIFilter.sourceOutCompositing()
         sourceOut.inputImage = opaqueWhite
         sourceOut.backgroundImage = maskImage

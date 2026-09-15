@@ -45,13 +45,15 @@ enum MaskKind: String, Codable {
 /// for both — intersect direct, subtract against a channel-inverted
 /// operand).
 ///
-/// `CaseIterable` deliberately: the UI's mode picker enumerates
-/// `.allCases` rather than a hand-written array a future fourth case
-/// could silently omit — the exact hazard `AdjustTabView`'s own
-/// `maskKindIcon`/`maskKindLabel` doc comments already record for a
-/// pre-slice-4 ternary. (Labels themselves still come from an exhaustive
-/// `switch`, which a new case DOES break at compile time — `.allCases`
-/// only protects the enumeration, not the display strings.)
+/// `CaseIterable` deliberately, though UNUSED as of this commit (Session
+/// A: data model + pipeline only, no UI yet — see this slice's own plan).
+/// RESERVED for Session B's not-yet-built mode picker, which is intended
+/// to enumerate `.allCases` rather than a hand-written array a future
+/// fourth case could silently omit — the exact hazard `AdjustTabView`'s
+/// own `maskKindIcon`/`maskKindLabel` doc comments already record for a
+/// pre-slice-4 ternary. (Labels themselves would still come from an
+/// exhaustive `switch`, which a new case DOES break at compile time —
+/// `.allCases` only protects the enumeration, not the display strings.)
 enum MaskCombineMode: String, Codable, CaseIterable {
     case none
     case intersect
@@ -384,7 +386,8 @@ struct Mask: Identifiable, Equatable, Codable {
     /// recursion means nothing to cycle, even for a mutual A-references-B/
     /// B-references-A pair) and matches v1's real-world need (one mask cut
     /// by one shape); chaining is a logged, deliberate deferral, not an
-    /// oversight — see IMPROVEMENTS.md's D15.
+    /// oversight — see IMPROVEMENTS.md's D15 ("Combine-masks v1 scope
+    /// cuts").
     ///
     /// FAILS OPEN in every broken-reference case, never fails closed
     /// (skips the mask) or crashes: a self-reference
@@ -396,9 +399,13 @@ struct Mask: Identifiable, Equatable, Codable {
     /// toward the pre-slice-6 shipped behavior — VISIBLE (the mask grows
     /// back to its full shape) and fixable — where fail-closed would make
     /// the whole adjustment silently vanish, the worst outcome for a
-    /// corrupt/stale reference. `MaskDetailView`'s own combine-target
-    /// picker independently coerces the same dangling case to display
-    /// "None", so the canvas and the sidebar never disagree.
+    /// corrupt/stale reference. `MaskDetailView` has no UI for this yet
+    /// (Session A: data model + pipeline only — see IMPROVEMENTS.md's
+    /// D15); Session B's planned combine-target picker is intended to
+    /// independently coerce the same dangling case to display "None", so
+    /// the canvas and the sidebar can never disagree, mirroring this
+    /// codebase's own `LibraryFilter` fix for an identical class of
+    /// Optional-bound-to-Picker-selection hazard.
     ///
     /// Deleting a mask does NOT scrub other masks' references to it (no
     /// new invariant to maintain across the several existing

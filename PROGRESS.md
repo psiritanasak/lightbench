@@ -7632,3 +7632,131 @@ write-up via the app's own "Revert to Original" — the library is
 unchanged; the `IMG_6414.jpeg.photoapp.json` sidecar this session created
 is the one artifact left behind, and it was read directly off disk and
 confirmed `"masks": []` after the final revert.
+
+## Phase 7 slice 6 — Combining masks (intersect/subtract), Session A (data
+## model + pipeline) — ✅ COMPLETE (2026-09-15)
+
+Plan approved and saved at `~/.claude/plans/merry-questing-gizmo.md` — full
+design rationale (data model, non-transitivity, fail-open table, pipeline
+wiring, UI shape for Session B) lives there, not duplicated here. This is
+the LAST slice of Phase 7 (all five mask kinds already ship; this is a
+cross-cutting capability, not a sixth kind) — once Session B ships, Phase 7
+(Local Adjustments/Masking) is fully complete.
+
+Two new `Mask` fields (`Sources/EditEngine/Mask.swift`): `combineMode:
+MaskCombineMode = .none` (`.none`/`.intersect`/`.subtract`) and
+`combineWithMaskID: UUID? = nil`. `.none` is byte-identical to every
+pre-slice-6 mask/sidecar — purely additive, no migration concern. Both new
+Codable fields use `try?` (not bare `try`): `combineMode` for the same
+`String`-raw-value-enum hazard `MaskKind` already established (an
+unrecognized-but-present string throws, not returns `nil`); `combineWithMaskID`
+because `UUID.init(from:)` throws `dataCorrupted` on a well-typed-but-
+unparseable string, and a hand-edited combine reference is exactly the
+reachable scenario. `deterministicFallbackID` extended with both (an
+exhaustive 0/1/2 switch for the mode, a third variable-length hashing pass
+for the UUID's raw 16 bytes).
+
+Pipeline (`Sources/EditEngine/EditPipeline.swift`, `applyMasks`): two pure,
+behavior-preserving extractions first (`resolveMaskGeometry`,
+`maskImageAndRegion`) — gated on the FULL pre-slice-6 mask suite passing
+with ZERO test edits, the actual proof the extraction didn't change
+behavior. Then a combine block between a mask's own resolve and the final
+`CIBlendWithMask`: intersect via `CIMinimumCompositing` (direct precedent:
+`luminanceRangeMaskImage` already ANDs two ramps this way), subtract via
+`CIMinimumCompositing` against a channel-inverted operand
+(`invertedMaskImage`). All five `MaskKind`s are valid operands (no
+restriction) — an operand is resolved against the same running `img` the
+consumer's own content-derived selection would see, unlocking cases like
+"brighten only the highlights inside this drawn area." No transitive
+chaining (an operand's own combine settings are never read — cycle-safe by
+construction, not by guarding against cycles). Self-reference and dangling
+references both fail open to `.none`; a degenerate operand (unpicked Color
+Range, zero-radius Radial, unpainted Brush) follows real boolean algebra —
+intersect skips the whole mask (`M ∧ 0 = 0`), subtract is a no-op
+(`M ∧ ¬0 = M`).
+
+**A genuine, self-caught Core Image correctness bug**, found via a
+throwaway probe (`Tests/EditEngineTests/TempCombineMasksProbeTests.swift`,
+deleted before commit) before any reviewer involvement: the first
+`invertedMaskImage` implementation used `CIColorMatrix` inverting all four
+channels independently, which passes at the two degenerate extremes
+(`w=0`, `w=1`) but silently fails at every PARTIAL weight — `CIColorMatrix`
+unpremultiplies an RGB==alpha pixel `(w,w,w,w)` before applying its matrix,
+and unpremultiplied RGB is `w/w=1` regardless of `w`, zeroing RGB while
+alpha still computes correctly (measured: weight `0.5248` inverted gave
+`R=0, A=0.4752` instead of `R=A=0.4752`) — breaking the RGB==alpha
+covariance this codebase's `CIBlendWithMask`/`CIMinimumCompositing`/
+`CIMaximumCompositing` calls all depend on throughout. `CIColorInvert` is
+ALSO wrong, for an unrelated, simpler reason (inverts RGB, leaves alpha
+untouched). Fixed with Porter-Duff `CISourceOutCompositing`
+(`Src * (1 - Dst.alpha)`, always defined in premultiplied space, so RGB==
+alpha covariance is preserved automatically): `Src` is an extent-sized
+opaque-white constant, `Dst` is the operand's mask image. Verified exact
+across the full `0...1` weight range via the probe, not just the
+endpoints.
+
+**Reviewer (Opus 5): 2 rounds, FIX FIRST → APPROVE.** Round 1 found 3
+blockers — a genuinely tautological test
+(`testSubtractInversionDoesNotTintTheMaskEdges`, which only asserted
+`sample.r == sample.g == sample.b` on a neutral-gray input; proven
+tautological by fault-injecting both false-start implementations and
+confirming the test did NOT fail under either, since `CIBlendWithMask`
+weights R/G/B uniformly regardless of which bug produced the weight —
+deleted, not kept as false confidence, superseded by the two pre-existing
+value-based tests that actually caught the real bug during development), a
+dangling "IMPROVEMENTS.md's D15" citation (no such entry existed), and two
+`Mask.swift` doc comments describing not-yet-built Session B UI in present
+tense — plus 6 non-blocking nits (an unused-so-far `CaseIterable`
+conformance, a redundant `!region.isNull` check already covered by
+`!region.isEmpty`, `opaqueWhite` rebuilt per-call instead of hoisted as a
+loop-invariant like `base`, and an undocumented early-exit-after-
+perceptual-sandwich ordering deviation — harmless since Core Image recipes
+are lazy). All fixed: the tautological test deleted; a real
+`IMPROVEMENTS.md` D15 entry added (v1 scope cuts: no transitive chaining,
+one operand per mask/no union mode, no on-image indication of the combined
+shape, no reference-scrubbing on delete, `Mask.id`'s own still-bare-`try`
+decode as a candidate for a future session); both doc comments reworded to
+correctly describe Session B's UI as planned, not shipped; `opaqueWhite`
+hoisted into `applyMasks` next to the existing `base` hoist and threaded
+into `invertedMaskImage` as a parameter. Round 2 independently verified via
+two standalone Core Image probes (not just reading the diff) that
+`CIBlendWithMask` weights on the mask's premultiplied RGB — confirming both
+false starts really do collapse to a zero weight and that the two
+surviving tests genuinely catch this — and separately verified
+`CISourceOutCompositing`'s output extent is the full source extent (not
+clipped to the operand's own smaller footprint, the case only `.brush`
+produces), so subtracting against a smaller-than-extent operand correctly
+leaves the consumer untouched outside it — no fail-closed hole. One
+non-blocking nit from round 2 (the D15 citation to
+`~/.claude/plans/merry-questing-gizmo.md` should give the full path, not
+just the bare filename, matching this file's own precedent elsewhere) —
+fixed directly, no third round needed.
+
+897 tests written this session; 896 pass (one intentionally deleted as
+tautological, see above) — zero regressions in the full pre-existing mask
+suite after the `resolveMaskGeometry`/`maskImageAndRegion` extraction, the
+actual proof it's behavior-preserving.
+
+**Not done this session, by design (Session A = data model + pipeline
+only, per the approved plan's own sequencing)**: no UI at all — reachable
+only via a hand-authored sidecar until Session B; no live verification (no
+UI to verify); no perf probe (round 2's reviewer flagged the specific
+scenario Session B must actually measure: a `.colorRange`/`.luminanceRange`
+operand adds a second full-extent kernel pass per frame with no ROI crop
+available for intersect, unlike the radial/brush operands this session's
+tests use — worth prioritizing in Session B's own 4-scenario probe).
+
+**Exact next step**: Session A is done and committed. Session B —
+`MaskCombineTarget`/`combineRows`/`CombineTargetSelection` (the
+`LibraryFilter`-style coercing `Binding` fix for the combine-target
+picker) + `AdjustTabView` wiring, live verification (intersect confines to
+overlap, subtract punches a hole, delete-the-operand-mid-edit fail-open
+check on both canvas and picker, undo/redo, sidecar inspection, Revert to
+Original, reload-persistence), the 4-scenario perf probe (prioritize the
+`.colorRange`/`.luminanceRange`-operand scenario per the note above),
+reviewer pass on the UI diff, then PROGRESS.md write-up + CLAUDE.md
+roadmap item 6 marked complete (**Phase 7 fully complete**) — needs its own
+Plan Mode session, per CLAUDE.md's "ALWAYS enter Plan Mode before starting
+a new feature" rule; the approved plan file already has Session B's full
+design, so Plan Mode there can be a light confirmation pass rather than a
+from-scratch design, but still required per workflow rules.

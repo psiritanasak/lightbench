@@ -715,15 +715,18 @@ built:**
   small future session, not a drive-by edit bundled into an unrelated
   feature.
 
-### D15. Combine-masks (intersect/subtract) v1 scope cuts (Phase 7 slice 6, Session A) — deferred, not forgotten
+### D15. Combine-masks (intersect/subtract) v1 scope cuts (Phase 7 slice 6) — deferred, not forgotten
 
 Session A shipped the data model (`Mask.combineMode`/`combineWithMaskID`,
 `MaskCombineMode`) and the `EditPipeline.applyMasks` combine block
 (intersect via `CIMinimumCompositing`, subtract via `CIMinimumCompositing`
-against a Porter-Duff-inverted operand) with no UI at all — reachable only
-via a hand-authored sidecar until Session B. Known v1 scope cuts, each
-already named at its own load-bearing doc comment rather than silently
-assumed:
+against a Porter-Duff-inverted operand). Session B shipped the UI
+(`MaskCombineTarget`/`CombineTargetSelection`/`combineRows` in
+`MaskDetailView.swift`, wired from `AdjustTabView`) and live-verified all
+of it — intersect confining to the overlap, subtract punching a hole,
+undo/redo, sidecar round-trip, Revert to Original, and the fail-open path
+below. Known v1 scope cuts, each already named at its own load-bearing doc
+comment rather than silently assumed:
 
 - **No transitive chaining.** `Mask.combineWithMaskID` always resolves
   against the referenced mask's own RAW, pre-combine shape — if THAT mask
@@ -737,18 +740,28 @@ assumed:
   combined operand (each mask already compounds against the RUNNING image
   independently — see slice 2 — which covers the union-of-EFFECT case, but
   not a union-of-SHAPE used as one combine operand).
-- **No on-image indication of the clipped/combined shape.** Session B's
-  planned overlay work (see `~/.claude/plans/merry-questing-gizmo.md`) covers the mode/
-  target pickers in `MaskDetailView`, not a visual outline of the
-  resulting intersected/subtracted region on the canvas itself — a user
-  has to infer the combined shape from the rendered adjustment, the same
-  way `.luminanceRange`/`.colorRange` already have no on-image shape
-  outline of their own selection either.
+- **No on-image indication of the clipped/combined shape.** `MaskDetailView`'s
+  Mode/With pickers (Session B) cover selecting a combine relationship, not
+  a visual outline of the resulting intersected/subtracted region on the
+  canvas itself — a user has to infer the combined shape from the rendered
+  adjustment, the same way `.luminanceRange`/`.colorRange` already have no
+  on-image shape outline of their own selection either.
 - **No reference scrubbing on delete.** Deleting a mask does not clear
   other masks' `combineWithMaskID` pointing at it — left dangling on
   purpose (see `Mask.combineWithMaskID`'s own doc comment): fail-open
   renders a dangling reference as `.none`, so this is harmless by design,
-  not an oversight, and Undo restores the relationship for free.
+  not an oversight, and Undo restores the relationship for free. **Live-
+  confirmed (2026-09-15) real consequence of this, not just a theoretical
+  one**: if the only OTHER mask on the photo is the one just deleted, the
+  entire `combineRows` section hides (correctly — `combineTargets` is
+  empty, nothing to combine against), which means the stale, now-dangling
+  `combineMode`/`combineWithMaskID` on the surviving mask becomes
+  completely INVISIBLE from the UI (not just unshown while a valid target
+  exists) until a second mask is added again — at which point the picker
+  correctly resolves back to "None" (verified: `Mode` stayed `Subtract`,
+  `With` correctly re-showed as `None`, not the deleted mask). Harmless
+  per the same fail-open reasoning, but worth knowing before someone
+  "fixes" the hidden section as if it were a bug.
 - **`Mask.id`'s own decode is still bare-`try`, not `try?`.** Unrelated to
   this slice's own two new fields (both correctly `try?`, see their decode
   site's own comments) but noted here since combine references are the
@@ -758,11 +771,8 @@ assumed:
   `try?`, but a malformed `id` on the mask itself does not) — a candidate
   for a future small session, not touched here.
 
-Session B will additionally need the `LibraryFilter`-style coercing
-`Binding` fix for the combine-target picker (an `Optional<UUID>`-shaped
-`Picker` selection can silently make a "None" row unselectable once a
-real target is chosen, the same class of bug that one already fixed) —
-tracked in the slice's own plan file, not re-logged here as a separate item.
+`~/.claude/plans/merry-questing-gizmo.md` has both sessions' full design
+history, not re-duplicated here.
 
 ### D11. No keyboard/AT path to paint or adjust a Brush mask's stroke shape (Phase 7 slice 4)
 

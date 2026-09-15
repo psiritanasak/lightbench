@@ -7746,17 +7746,158 @@ operand adds a second full-extent kernel pass per frame with no ROI crop
 available for intersect, unlike the radial/brush operands this session's
 tests use — worth prioritizing in Session B's own 4-scenario probe).
 
-**Exact next step**: Session A is done and committed. Session B —
-`MaskCombineTarget`/`combineRows`/`CombineTargetSelection` (the
-`LibraryFilter`-style coercing `Binding` fix for the combine-target
-picker) + `AdjustTabView` wiring, live verification (intersect confines to
-overlap, subtract punches a hole, delete-the-operand-mid-edit fail-open
-check on both canvas and picker, undo/redo, sidecar inspection, Revert to
-Original, reload-persistence), the 4-scenario perf probe (prioritize the
-`.colorRange`/`.luminanceRange`-operand scenario per the note above),
-reviewer pass on the UI diff, then PROGRESS.md write-up + CLAUDE.md
-roadmap item 6 marked complete (**Phase 7 fully complete**) — needs its own
-Plan Mode session, per CLAUDE.md's "ALWAYS enter Plan Mode before starting
-a new feature" rule; the approved plan file already has Session B's full
-design, so Plan Mode there can be a light confirmation pass rather than a
-from-scratch design, but still required per workflow rules.
+**Exact next step (superseded — see the Session B section immediately
+below, which shipped this)**: ~~Session A is done and committed. Session
+B...~~
+
+## Phase 7 slice 6 — Combining masks (intersect/subtract), Session B (UI +
+## live verification + perf) — ✅ COMPLETE (2026-09-15)
+
+Plan Mode ran first per CLAUDE.md's standing rule — the plan file
+(`~/.claude/plans/merry-questing-gizmo.md`) was rewritten for Session B
+specifically after a fresh Explore pass confirmed the real code against
+Session A's own design (the approved plan carried forward accurately with
+two additions the exploration surfaced: a pure, testable
+`MaskCombineTarget.targets(excluding:in:)` helper instead of an inline
+`map`, and an auto-select-first-target behavior for the mode picker so
+choosing "Intersect"/"Subtract" never reads as an inert control).
+
+**Implementation.** `Sources/UI/MaskDetailView.swift` gained
+`MaskCombineTarget` (`Identifiable`, `Hashable`, `id`+`label`),
+`CombineTargetSelection` (`.none`/`.mask(UUID)` — the `LibraryFilter`
+mirror, see that type's own doc comment in `CatalogModel.swift` for the
+live-measured bug it avoids: an `Optional`-typed `Picker` selection can
+make the `nil`-tagged row silently unselectable once a real value is
+chosen), a `combineRows` view (two `Picker`s, mode and target, appended
+last in `body`, hidden entirely when `combineTargets.isEmpty`), and two
+coercing `Binding`s — `combineModeSelection` (auto-fills the first
+available target when the mode leaves `.none` with nothing chosen) and
+`combineTargetSelection` (the actual `LibraryFilter`-style fix: the getter
+maps any unresolvable stored id back to `.none`). `Sources/UI/AdjustTabView.swift`
+widened `maskKindLabel` from `private func` to `static func` (so
+`MaskCombineTarget.targets(excluding:in:)` can reuse the EXACT same label
+strings `maskListRows` shows — the picker can never disagree with the
+sidebar list) and added one argument to the existing `MaskDetailView(...)`
+call site. No mutual-exclusion changes — picking from a menu isn't a
+spatial mode, so this doesn't become a 6th hand-rolled mutual-exclusion
+site (IMPROVEMENTS.md D14's shared-mode-enum note is unaffected).
+
+`Tests/EditEngineTests/MaskCombineTargetTests.swift` (new, 7 tests) covers
+the one pure helper: numbering matches `maskListRows`' global `index + 1`
+across mixed kinds, the excluded mask is absent, numbering does NOT
+renumber around the exclusion (the specific bug a naive
+`filter`-then-`enumerate` would introduce), empty/single-mask arrays
+return `[]`, an unresolvable excluded id returns every mask, and labels
+carry the kind name. 903 tests total, zero regressions (the rest of this
+slice is SwiftUI interaction glue, live-verified per this codebase's own
+convention rather than unit-tested).
+
+**Perf probe** — see CLAUDE.md's own roadmap item 6 write-up for the full
+numbers; summary: three of the four scenarios stayed comfortably under the
+16ms/60fps budget. `.brush` ∩ `.brush` did NOT — it measured ~12.5–19ms
+full-res on JPEG, over budget on the full-resolution settle frame (the
+interactive/proxied path, ~9-10ms, stayed under budget in every scenario).
+Same `CFAbsoluteTimeGetCurrent()`-in-`ImageRenderer.draw(in:)`
+probe-and-fully-revert methodology as every prior Phase 7 slice — confirmed
+reverted via a clean `git diff` before commit. `.radial` ∩ `.luminanceRange`
+(the scenario Session A's reviewer flagged as highest-risk, a content-
+derived operand with no ROI crop available) was measured on BOTH the
+user's real JPEG and RAW assets per that flag; `.brush` ∩ `.brush` was
+confirmed to be the one real cost concern (`BrushStrokeImageCache`
+thrashing between two masks' keys), matching the prediction — not fixed
+this slice, per that cache's own already-logged remedy.
+
+**Live verification (2026-09-15)**, via AX-driven automation
+(`AXPress`/`AXIncrement`/`AXMenuItem` press — this machine's own
+established "synthetic `cliclick` doesn't reach this app, AX actions do"
+constraint held for every control including, newly confirmed this
+session, `AXPopUpButton`/its `AXMenu`) on the user's real `IMG_6564.jpeg`:
+added two radial masks, moved one via `Center X` increments to create a
+real partial overlap (a first attempt accidentally landed the two circles
+EXACTLY TANGENT — zero overlap area, a genuine "my test setup, not a
+product bug" moment caught by cropping and zooming into the render before
+concluding anything), then confirmed Intersect confines a +5EV brightening
+to precisely the round overlap region (verified via a cropped close-up:
+the blown-out area was CIRCULAR matching the smaller mask, not oval
+matching the larger one — real geometric proof, not just "something
+changed"); switched to Subtract and confirmed the exact inverse — the full
+ellipse blown out except a precise untouched hole; deleted the operand and
+confirmed fail-open on both the canvas (full uncombined effect returned)
+and the picker (independently re-derives "None"); confirmed the
+surviving mask's own `combineMode` survives a delete unchanged
+("Subtract" persisted) while only the target coerces — the exact
+documented split; re-added a mask and set a new target, then `⌘Z`/`⌘⇧Z`
+confirmed undo/redo steps the whole combine-target change as one unit;
+read the on-disk sidecar directly and confirmed real
+`combineMode`/`combineWithMaskID` UUIDs matching the picker
+(`"combineMode": "subtract", "combineWithMaskID": "7165F34E-..."`); Revert
+to Original cleanly cleared back to "No masks yet," confirmed both
+on-screen and in the sidecar (`"masks": []`) — the user's real photo is
+unchanged (`IMG_6564.jpeg.photoapp.json` verified semantically identical
+to its pre-session content, JSON key ORDER differs since `JSONEncoder`
+doesn't guarantee stable ordering, but every value round-tripped exactly;
+`DSC_1665.NEF.photoapp.json` is byte-for-byte identical, untouched during
+live verification).
+
+**One real environment hazard hit mid-session, resolved, not a code
+bug**: this Mac's screen locked itself TWICE via idle display-sleep during
+the AX-only automation (AX actions don't reset the real HID idle timer the
+way physical input does) — the second time, mid-lock, a macOS scheduled
+"Restarting Your Computer" update prompt also fired with a live countdown,
+and an attempt to dismiss it via `cliclick` mis-hit and nearly closed the
+Terminal window running this very session (a "Terminate running
+processes: claude, caffeinate, sourcekit-lsp" confirmation appeared) —
+recovered by clicking Cancel via AX on the confirming dialog, not by
+guessing coordinates again. `caffeinate -d -i -u` was started immediately
+after and prevented any further recurrence for the rest of the session.
+Worth remembering for the next long AX-automation session on this
+machine: start `caffeinate` proactively, don't wait for the first lock.
+
+**One real, live-only finding, logged (IMPROVEMENTS.md D15), not fixed
+this slice**: deleting an operand when it's the ONLY other mask on the
+photo hides the entire Combine section (correct — `combineTargets` is
+empty), which makes the surviving mask's own now-stale `combineMode`/
+`combineWithMaskID` invisible from the UI until a second mask exists
+again — at which point the picker correctly re-resolves. Harmless per the
+same fail-open design, but worth knowing before mistaking the hidden
+section for a bug.
+
+**Reviewer (Opus 5) on the Session B UI diff: 3 rounds, FIX FIRST → FIX
+FIRST → APPROVE** (unlike Session A's pipeline diff, which took 2). Round 1
+found real code/doc issues: `combineTargetSelection`'s setter now resets
+`mask.combineMode` to `.none` whenever the target is set to "None"
+(previously only `combineModeSelection`'s own auto-fill guarded the
+mode-change direction — a user could reach a live, silently-inert combine
+via the OTHER picker); the Mode/With `Picker`s gained explicit
+`.accessibilityLabel`s ("Combine Mode"/"Combine With"); a live width-check
+(a `.luminanceRange` mask — this app's longest kind label — set as a
+combine target via the real UI, `AXWindow` size compared before/after:
+1395×870 baseline vs. 1392×870, no growth) found no sidebar-width
+regression from a long target label; and this file's own "comfortably
+under budget" summary above was corrected to not contradict the
+`.brush` ∩ `.brush` number two sentences later. Round 2 caught that the
+budget-contradiction fix had only landed in CLAUDE.md, not here, plus a
+review-summary paragraph (in CLAUDE.md) that pre-asserted round 2's own
+outcome before it had run — both corrected to state only confirmed facts.
+Round 3 (doc-only) confirmed both fixes actually landed in both files and
+independently re-verified the two underlying claims (label-numbering
+parity with `maskListRows`, picker/pipeline fail-open parity) rather than
+trusting the prose. See CLAUDE.md's own roadmap item 6 write-up for the
+full round-by-round detail.
+
+`CLAUDE.md`'s Phase 7 roadmap item 7 (Local Adjustments/Masking) and item
+6 (Combining masks) are both now marked ✅ FULLY COMPLETE.
+`IMPROVEMENTS.md`'s D15 was updated in place (retitled off "Session A,"
+the live-only hidden-section finding added) rather than duplicated as a
+new entry.
+
+**Exact next step**: Phase 7 is fully complete — no open items. The next
+piece of work is a fresh pick from CLAUDE.md's own backlog: either Phase 8
+("Polish: tiled rendering for large images, perf, edge cases") or one of
+the Tier-1 **WANTED** Lightroom-gap items (Texture/Dehaze split — a
+breaking-change migration on the already-shipped `definition` field, needs
+its own careful Plan Mode session; Grain; Color Grading; Point Color;
+Chromatic Aberration removal; Manual Transform Scale/Aspect) — see
+CLAUDE.md's "Gaps vs. Adobe Lightroom Desktop" section for the full list
+and which are user-confirmed WANTED vs. just researched gaps. Ask the user
+which to pick next, same as this session's own opening question.

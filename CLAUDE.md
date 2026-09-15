@@ -929,13 +929,18 @@ Edits are stored as parameter sets and rendered live on the GPU.
    only `lensCorrectionEnabled` (measured unsupported here) and the WB
    eyedropper's beyond-identity-geometry stretch goal remain, both
    deliberately deferred pending different circumstances, not blocking.
-7. Local Adjustments (Masking) — **not started.** The single biggest capability
-   gap versus Lightroom (see the Lightroom gap-analysis subsection above, which
-   this phase supersedes/formalizes for this one item). Every adjustment in this
-   app today is global — `EditState` is one flat struct, `EditPipeline.apply` is
+7. Local Adjustments (Masking) — **✅ FULLY COMPLETE (2026-09-15).** The single
+   biggest capability gap versus Lightroom (see the Lightroom gap-analysis
+   subsection above, which this phase supersedes/formalizes for this one item)
+   is now closed: five mask kinds (`.radial`, `.linear`, `.brush`,
+   `.luminanceRange`, `.colorRange`), multiple independently-compounding masks
+   per photo, and intersect/subtract combining between any two masks — see
+   item 6 below for the final slice's own write-up. Every adjustment before
+   this phase was global — `EditState` was one flat struct, `EditPipeline.apply`
    one pure whole-image function, zero concept of a spatial mask. Scoped
    2026-09-03 from a dedicated architecture research pass (not guessed) — see
-   the two real hazards below before touching this.
+   the two real hazards below, both confirmed non-blocking by the slices that
+   followed.
 
    **Hazard 1 — several existing pipeline stages read the FULL image extent for
    their own geometry**, not just the masked region: Vignette centers on
@@ -1646,12 +1651,191 @@ Edits are stored as parameter sets and rendered live on the GPU.
       both content-derived kinds shipped, reviewed, tested, and live-
       verified.
    6. **Combining masks** (intersect/subtract boolean semantics between
-      masks) — deliberately LAST. Corrected scope (2026-09-09): slice 2
-      already shipped multiple simultaneous, independently-compounding
-      masks per photo (confirmed by the user, not drift from this
-      roadmap's original "one mask at a time" framing above) — what
-      remains here is specifically INTERSECT/SUBTRACT, i.e. one mask's
-      shape modifying another's rather than both applying independently.
+      masks) — deliberately LAST, ✅ **COMPLETE** (Session A 2026-09-15,
+      Session B same day). Corrected scope (2026-09-09): slice 2 already
+      shipped multiple simultaneous, independently-compounding masks per
+      photo (confirmed by the user, not drift from this roadmap's original
+      "one mask at a time" framing above) — what remained here was
+      specifically INTERSECT/SUBTRACT, i.e. one mask's shape modifying
+      another's rather than both applying independently.
+
+      **Session A (data model + pipeline)** shipped `Mask.combineMode`
+      (`.none`/`.intersect`/`.subtract`) and `Mask.combineWithMaskID`,
+      wired into `EditPipeline.applyMasks` between a mask's own geometry
+      resolve and its final `CIBlendWithMask`: intersect via
+      `CIMinimumCompositing` (direct precedent — `luminanceRangeMaskImage`
+      already ANDs two ramps this way), subtract via `CIMinimumCompositing`
+      against a channel-inverted operand. All five `MaskKind`s are valid
+      operands, resolved against the same running `img` the consumer's own
+      content-derived selection would see — no restriction, since the
+      extraction needed to support it (`resolveMaskGeometry`/
+      `maskImageAndRegion`) was free either way and unlocks real cases like
+      "brighten only the highlights inside this drawn area." Deliberately
+      non-transitive (an operand's own combine settings are never read —
+      cycle-safe by construction) and fail-open in every broken-reference
+      case (self-reference, dangling reference, or an operand whose own
+      shape resolves to nothing all degrade toward `.none`/a no-op, never
+      toward silently vanishing the whole adjustment).
+
+      **A genuine, self-caught Core Image bug** found via a throwaway probe
+      before any reviewer involvement: the first `invertedMaskImage`
+      (needed for subtract) used `CIColorMatrix` inverting all four
+      channels independently — passes at the two degenerate extremes but
+      silently fails at every PARTIAL weight, because `CIColorMatrix`
+      unpremultiplies an RGB==alpha pixel before applying its matrix,
+      collapsing RGB to 0 for any weight `> 0` regardless of the true
+      value. Fixed with Porter-Duff `CISourceOutCompositing`
+      (`Src * (1 - Dst.alpha)`, always premultiplied, so RGB==alpha
+      covariance is preserved automatically) — verified exact across the
+      full `0...1` weight range via the probe, not just the endpoints.
+      Reviewer (Opus 5): 2 rounds, FIX FIRST → APPROVE — round 1 caught a
+      genuinely tautological test (proven by fault-injecting both false
+      starts and confirming it didn't fail under either, since
+      `CIBlendWithMask` weights R/G/B uniformly regardless of which bug
+      produced the weight), a dangling doc-comment citation, and two doc
+      comments describing not-yet-built UI in present tense — all fixed;
+      round 2 independently re-derived the premultiplied-RGB claim and the
+      Porter-Duff extent behavior via its own standalone probes before
+      APPROVE. 903 tests (7 new — `MaskCombineTargetTests`; the pipeline
+      side added no new tests of its own beyond Session A's original
+      ~30, since the primary regression gate was the FULL pre-existing
+      mask suite passing with ZERO edits after the extraction).
+
+      **Session B (UI)** added `MaskCombineTarget`/`CombineTargetSelection`
+      to `MaskDetailView.swift` (a `combineRows` group appended last in
+      `body`, hidden when there's nothing to combine against) and one new
+      argument at `AdjustTabView.maskDetail`'s `MaskDetailView(...)` call
+      site. The target picker mirrors this codebase's own `LibraryFilter`
+      fix (`Sources/UI/CatalogModel.swift`/`CollectionSidebarView.swift`)
+      for the identical class of bug — a SwiftUI `Picker` bound directly to
+      an `Optional` selection can make the "None" row silently
+      unselectable once a real value is chosen — via a coercing computed
+      `Binding` whose getter maps any unresolvable stored id back to
+      `.none`. A new behavior not in the original Session A plan, added
+      after exploration surfaced a real dead-end state: choosing a non-
+      `.none` mode with no target yet auto-fills the first available
+      target, so the control never reads as inert. `maskKindLabel`
+      widened from `private` to `static` so `MaskCombineTarget`'s pure
+      `targets(excluding:in:)` helper (tested in
+      `MaskCombineTargetTests.swift`) can share the exact same label
+      strings `maskListRows` shows — the two can never disagree.
+
+      **Live-verified (2026-09-15)**, via AX-driven automation on the
+      user's real `IMG_6564.jpeg`: Intersect confined a +5EV brightening to
+      exactly the circular overlap between two radial masks (confirmed via
+      a cropped close-up — the blown-out region was round, matching the
+      SMALLER mask's shape, not oval like the larger one, proving genuine
+      geometric intersection); Subtract on the same two masks produced the
+      exact inverse — the full ellipse blown out except a precise
+      unaffected hole where the other mask sat; deleting the operand
+      correctly failed open on BOTH the canvas (full uncombined effect
+      returned) and the picker (independently re-derived "None," not
+      reading a stale value); the mask's own `combineMode` was confirmed
+      to survive the delete unchanged (still "Subtract") while only the
+      target coerces to "None" — exactly the documented fail-open split;
+      undo/redo correctly stepped a combine-target change as one unit;
+      the on-disk sidecar was inspected directly and showed the real
+      `combineMode`/`combineWithMaskID` UUIDs, matching the picker; Revert
+      to Original cleanly cleared back to "No masks yet," confirmed both
+      on-screen and in the sidecar (`"masks": []`). One real, live-only
+      finding, now logged (IMPROVEMENTS.md D15): deleting an operand when
+      it's the ONLY other mask hides the entire Combine section (correctly
+      — nothing to combine against), which makes the surviving mask's own
+      stale `combineMode`/`combineWithMaskID` invisible until a second
+      mask exists again, at which point the picker re-resolves correctly —
+      harmless, but worth knowing before mistaking the hidden section for
+      a bug.
+
+      **Perf** (same `CFAbsoluteTimeGetCurrent()` probe-and-fully-revert
+      methodology as every prior Phase 7 slice, on the user's real
+      20.7MP JPEG and 24MP RAW assets, temporary instrumentation confirmed
+      fully reverted via a clean `git diff` before commit): three of the
+      four planned scenarios stayed comfortably under the 16ms/60fps
+      budget; `.brush` ∩ `.brush` did NOT (see below — a real, predicted
+      cost, not a false alarm). `.radial` ∩ `.radial` with Clarity
+      measured ~1.05–1.7ms proxied /
+      ~1.4ms full-res on JPEG (delta over the ~0.3–0.4ms masks-off
+      baseline is roughly the cost of ONE mask's Clarity alone — intersect
+      itself adds close to nothing, confirming the ROI-narrowing win) and
+      near the noise floor on RAW (~1.0–1.3ms proxied / ~4.1ms full-res,
+      RAW's own heavier baseline dwarfing the combine cost). `.radial` −
+      `.radial` (no ROI win possible for subtract) measured a real but
+      small ~1.2–1.5ms proxied / ~2.6–2.9ms full-res on JPEG.
+      `.radial` ∩ `.luminanceRange` — the scenario Session A's own
+      reviewer flagged as the one to prioritize, since a content-derived
+      operand adds a second full-extent kernel pass with no ROI crop
+      available — measured ~1.4–1.8ms proxied / ~2.5–3.2ms full-res on
+      JPEG and, measured on BOTH assets per that flag, ~1.3–1.9ms proxied
+      / ~5.6–8.0ms full-res on RAW (a real ~4–6ms delta over RAW's own
+      baseline, the largest of the four scenarios on RAW, but still under
+      half the 16ms budget). `.brush` ∩ `.brush` was the one predicted in
+      advance to hurt, and did — the ONE scenario that measured OVER the
+      16ms/60fps budget on full-resolution frames: ~9.1–10.4ms proxied /
+      ~12.5–**19ms** full-res on JPEG — `BrushStrokeImageCache`'s
+      single-entry cache thrashing between two different masks' keys,
+      confirming the already-logged, already-scoped remedy (a small ring,
+      or keying by `Mask.id`) is real and worth prioritizing if
+      brush-on-brush combining proves common in practice; not fixed this
+      slice, per that cache's own standing doc comment. The interactive/
+      proxied path (~9-10ms, what a user actually drags against) stays
+      under budget in every scenario measured — only the full-resolution
+      settle frame exceeds it for `.brush` ∩ `.brush`.
+
+      **Reviewer (Opus 5) on the Session B UI diff — round 1: FIX FIRST.**
+      Caught two doc-accuracy issues — this file and PROGRESS.md both
+      originally claimed "all four scenarios stayed comfortably under
+      budget" in the same breath as reporting `.brush` ∩ `.brush`'s 19ms
+      full-res number, a direct self-contradiction, and both files had a
+      reviewer-approval sentence written BEFORE the review actually ran —
+      the exact defect class slice 3 Session B's own reviewer already
+      caught once (a claim asserted without being true yet). Also caught a
+      real, if narrow, correctness gap: the auto-select-first-target
+      behavior in `combineModeSelection`'s setter only guards the
+      MODE-change path — a user could still reach a live, silently-inert
+      combine (`Mode = Intersect`, `With = None`) via the OTHER picker,
+      setting the target back to "None" without touching the mode. Fixed
+      by having `combineTargetSelection`'s `.none` setter branch also
+      reset `mask.combineMode` to `.none`. Two non-blocking notes also
+      addressed: the Mode/With `Picker`s gained explicit
+      `.accessibilityLabel`s ("Combine Mode"/"Combine With") so VoiceOver
+      doesn't read them as bare "Mode"/"With" detached from the "Combine"
+      section caption; and a live check (a `.luminanceRange` mask — this
+      app's longest kind label — as a combine target, `AXWindow` size
+      compared before/after) found no sidebar-width regression from a long
+      target label, closing that note without a further code change.
+
+      **Round 2: FIX FIRST again** — this time on the doc fixes
+      themselves, not the code. The blocker-1 correction had only been
+      applied to this file, not PROGRESS.md, which still carried the
+      original self-contradiction; and this section's own first attempt
+      at a review-summary paragraph made the exact mistake it was
+      describing — asserting a "2 rounds, FIX FIRST → APPROVE" verdict and
+      a "no FIX FIRST round needed" claim in PROGRESS.md before round 2
+      had actually returned, plus an inaccurate claim that round 2
+      "did not re-review" the accessibility/width notes when it explicitly
+      had been asked to and did. Both docs corrected to state facts only
+      as they're confirmed, not projected ahead of the actual verdict —
+      see this paragraph's own history for why that discipline matters
+      here specifically.
+
+      **Round 3: APPROVE.** A doc-only round — confirmed both budget
+      contradictions were fully resolved in both files (not just the one
+      round 2 caught), confirmed no round-3 outcome had been pre-asserted
+      anywhere, and confirmed the "can't disagree in either direction"
+      overstatement was gone rather than reworded into a new overstatement.
+      Independently re-verified the two underlying claims those sentences
+      rest on: `MaskCombineTarget.targets(excluding:in:)`'s numbering
+      against `maskListRows`' own, and the picker's fail-open coercion
+      against `EditPipeline.applyMasks`'s actual guard conditions — both
+      confirmed to genuinely match, not just asserted to. One non-blocking
+      process note: `Tests/EditEngineTests/MaskCombineTargetTests.swift`
+      was untracked through all three rounds (`git diff HEAD` never shows
+      new files) — reviewed by reading it directly instead; flagged only
+      so it isn't forgotten at `git add` time.
+
+      **Phase 7 (Local Adjustments/Masking) is now FULLY COMPLETE** — all
+      five mask kinds, independent compounding, and boolean combining all
+      shipped, reviewed, tested, and live-verified.
 
    **Explicitly out of scope, needs its own separate research spike before
    even being scoped** (not part of this phase's slicing above): AI Subject/

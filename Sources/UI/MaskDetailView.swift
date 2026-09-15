@@ -1,5 +1,42 @@
 import SwiftUI
 
+/// One other mask `MaskDetailView`'s combine-target picker can offer,
+/// pre-labeled by `AdjustTabView.targets(excluding:in:)` so the label
+/// shown here can never disagree with `maskListRows`' own "Mask N"
+/// numbering (Phase 7 slice 6, Session B).
+struct MaskCombineTarget: Identifiable, Hashable {
+    let id: UUID
+    let label: String
+}
+
+/// `Mask.combineWithMaskID`'s own doc comment names this exact fix: a
+/// SwiftUI `Picker`/`List` bound directly to an `Optional`-typed selection
+/// was measured LIVE, elsewhere in this codebase, to make the `nil`-tagged
+/// row silently unselectable once a real value had been chosen
+/// (`LibraryFilter`, `Sources/UI/CatalogModel.swift`). A concrete,
+/// non-optional selection type sidesteps that quirk entirely — every row
+/// here tags a real `CombineTargetSelection` value, never `nil` itself.
+enum CombineTargetSelection: Hashable {
+    case none
+    case mask(UUID)
+}
+
+extension MaskCombineTarget {
+    /// Numbering here MUST match `AdjustTabView.maskListRows`' own
+    /// `index + 1` — both are computed from the SAME `masks` array in the
+    /// SAME order, so this deliberately does NOT filter `masks` down
+    /// before numbering (a `filter`-then-`enumerate` would renumber
+    /// everything after the excluded mask). `id` is excluded from the
+    /// RESULT only, after numbering every mask exactly as the sidebar
+    /// list does.
+    static func targets(excluding id: UUID, in masks: [Mask]) -> [MaskCombineTarget] {
+        masks.enumerated().compactMap { index, mask in
+            guard mask.id != id else { return nil }
+            return MaskCombineTarget(id: mask.id, label: "Mask \(index + 1) — \(AdjustTabView.maskKindLabel(mask.kind))")
+        }
+    }
+}
+
 /// The selected mask's slider rows (14 for `.radial`, 12 for `.linear`,
 /// 11 for `.luminanceRange`) — a top-level `struct`, deliberately
 /// NOT a computed property inside `AdjustTabView` (that file's `body`
@@ -60,6 +97,14 @@ struct MaskDetailView: View {
     /// `.colorRange` only — called when "Pick Color"/"Re-pick Color" is
     /// tapped. `nil` for every other kind, same shape as `onBeginBrushStroke`.
     var onBeginColorPick: (() -> Void)?
+    /// Phase 7 slice 6, Session B — every OTHER mask on this photo,
+    /// pre-labeled, that `mask` could combine against. Empty (the
+    /// default) on a photo with only this one mask, which is what makes
+    /// `combineRows` hide itself entirely rather than show a picker with
+    /// nothing in it. `AdjustTabView.maskDetail` recomputes this on every
+    /// body evaluation from `document.editState.masks`, so add/delete
+    /// refreshes it for free — no new observation machinery needed here.
+    var combineTargets: [MaskCombineTarget] = []
 
     /// Kind-aware: calling a tone window a "Shape" would be wrong — this
     /// kind has no shape at all, only a tonal selection.
@@ -78,6 +123,10 @@ struct MaskDetailView: View {
             colorRows
             Text(shapeSectionTitle).font(.caption).foregroundStyle(.secondary)
             shapeRows
+            if !combineTargets.isEmpty {
+                Text("Combine").font(.caption).foregroundStyle(.secondary)
+                combineRows
+            }
         }
     }
 
@@ -330,6 +379,108 @@ struct MaskDetailView: View {
             label: "Feather", value: $mask.feather,
             range: 0...1, identity: 0.5, displayMultiplier: 100
         ) { String(format: "%.0f%%", $0 * 100) }
+    }
+
+    /// Phase 7 slice 6, Session B — narrows (`.intersect`) or punches a
+    /// hole in (`.subtract`) `mask`'s own selection using another mask's
+    /// shape. See `EditPipeline.applyMasks`'s own doc comment for the
+    /// full render semantics — this is purely the UI for
+    /// `Mask.combineMode`/`Mask.combineWithMaskID`, already documented
+    /// there. `body` above hides this whole group when `combineTargets`
+    /// is empty, so it's never shown with nothing to combine against.
+    private var combineRows: some View {
+        Group {
+            Picker("Mode", selection: combineModeSelection) {
+                ForEach(MaskCombineMode.allCases, id: \.self) { mode in
+                    Text(combineModeLabel(mode)).tag(mode)
+                }
+            }
+            .accessibilityLabel("Combine Mode")
+            Picker("With", selection: combineTargetSelection) {
+                Text("None").tag(CombineTargetSelection.none)
+                ForEach(combineTargets) { target in
+                    Text(target.label).tag(CombineTargetSelection.mask(target.id))
+                }
+            }
+            .disabled(mask.combineMode == .none)
+            .accessibilityLabel("Combine With")
+        }
+    }
+
+    /// Labels come from an exhaustive `switch`, not `rawValue` —
+    /// `MaskCombineMode`'s own doc comment reserves `CaseIterable`/
+    /// `.allCases` for ENUMERATION only, so a future case fails to
+    /// COMPILE here instead of silently showing a raw identifier.
+    private func combineModeLabel(_ mode: MaskCombineMode) -> String {
+        switch mode {
+        case .none: return "None"
+        case .intersect: return "Intersect"
+        case .subtract: return "Subtract"
+        }
+    }
+
+    /// Setting a non-`.none` mode auto-fills the FIRST available target
+    /// when none is already chosen (or the stored one no longer
+    /// resolves) — without this, picking "Intersect" on a mask with
+    /// `combineWithMaskID == nil` fails open to `.none` at render time
+    /// (correct, see `Mask.combineWithMaskID`'s own doc comment) but
+    /// would read to the user as a broken control, since nothing visible
+    /// would happen. Switching BACK to `.none` deliberately does NOT
+    /// clear the stored target, so a None -> Intersect round-trip
+    /// restores the same operand rather than losing it.
+    private var combineModeSelection: Binding<MaskCombineMode> {
+        Binding(
+            get: { mask.combineMode },
+            set: { newMode in
+                mask.combineMode = newMode
+                guard newMode != .none else { return }
+                let resolvedTargetExists = mask.combineWithMaskID.map { id in
+                    combineTargets.contains { $0.id == id }
+                } ?? false
+                if !resolvedTargetExists {
+                    mask.combineWithMaskID = combineTargets.first?.id
+                }
+            }
+        )
+    }
+
+    /// The `LibraryFilter`-style coercing binding (see this file's own
+    /// `CombineTargetSelection` doc comment for the bug it avoids). The
+    /// GETTER maps an unresolvable stored id (the operand was deleted, or
+    /// this sidecar belongs to a different photo) back to `.none`, so
+    /// this picker can never display a value outside its own list — and
+    /// can never disagree with `EditPipeline.applyMasks`'s own fail-open
+    /// render, which degrades a dangling reference to `.none` the exact
+    /// same way. The SETTER writes a concrete id or `nil` back to
+    /// `mask.combineWithMaskID` — and, reviewer-caught: picking "None"
+    /// here ALSO resets `mask.combineMode` to `.none`. Without this,
+    /// `combineModeSelection`'s own auto-fill only guards the
+    /// mode-change direction — a user could still reach a live, silently
+    /// INERT combine (`combineMode == .intersect`/`.subtract` with
+    /// `combineWithMaskID == nil`) by picking "None" from THIS picker
+    /// without touching Mode. Render-wise both states already fail open
+    /// identically (see `EditPipeline.applyMasks`), so this is a UI
+    /// clarity fix, not a correctness fix — but "None" should always
+    /// mean genuinely uncombined from either picker, not just from the
+    /// mode one.
+    private var combineTargetSelection: Binding<CombineTargetSelection> {
+        Binding(
+            get: {
+                guard let id = mask.combineWithMaskID, combineTargets.contains(where: { $0.id == id }) else {
+                    return .none
+                }
+                return .mask(id)
+            },
+            set: { selection in
+                switch selection {
+                case .none:
+                    mask.combineWithMaskID = nil
+                    mask.combineMode = .none
+                case .mask(let id):
+                    mask.combineWithMaskID = id
+                }
+            }
+        )
     }
 
     /// Shared between both kinds — the mask's anchor point, same

@@ -547,7 +547,13 @@ struct AdjustTabView: View {
         }
     }
 
-    private func maskKindLabel(_ kind: MaskKind) -> String {
+    /// `static`, not `private` (Phase 7 slice 6, Session B): also called
+    /// from `MaskCombineTarget.targets(excluding:in:)` in
+    /// `MaskDetailView.swift`, so the combine-target picker's labels can
+    /// never drift from `maskRow`'s own `Mask \(number)` text below —
+    /// same purpose the doc comment above already states for this
+    /// function's exhaustive-switch shape.
+    static func maskKindLabel(_ kind: MaskKind) -> String {
         switch kind {
         case .radial: return "Radial"
         case .linear: return "Linear"
@@ -581,7 +587,7 @@ struct AdjustTabView: View {
             }
             .buttonStyle(.plain)
             .fontWeight(isSelected ? .semibold : .regular)
-            .accessibilityLabel("Mask \(number), \(maskKindLabel(mask.kind))")
+            .accessibilityLabel("Mask \(number), \(Self.maskKindLabel(mask.kind))")
             Spacer()
             Button {
                 delete(mask)
@@ -605,7 +611,12 @@ struct AdjustTabView: View {
             MaskDetailView(
                 mask: binding,
                 onBeginBrushStroke: binding.wrappedValue.kind == .brush ? { beginBrushStroke(for: id) } : nil,
-                onBeginColorPick: binding.wrappedValue.kind == .colorRange ? { beginColorPick(for: id) } : nil
+                onBeginColorPick: binding.wrappedValue.kind == .colorRange ? { beginColorPick(for: id) } : nil,
+                // Recomputed on every body evaluation from the live
+                // masks array (Phase 7 slice 6, Session B) — adding or
+                // deleting a mask refreshes the combine-target picker for
+                // free, no new observation machinery needed.
+                combineTargets: MaskCombineTarget.targets(excluding: id, in: document.editState.masks)
             ).id(id)
         }
     }

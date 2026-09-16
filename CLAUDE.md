@@ -826,7 +826,7 @@ Edits are stored as parameter sets and rendered live on the GPU.
    from Apple's own SDK documentation (not independently re-verified
    live): `CIRAWFilter.contrastAmount` is explicitly LOCAL/edge-aware
    contrast ("applied to the edges of the image"), architecturally
-   closer to this app's existing Definition/Clarity slider than to its
+   closer to this app's existing Clarity slider than to its
    global Contrast slider, despite the "RAW Contrast" label suggesting
    a direct parallel — flagged as a candidate rename (e.g. "RAW Local
    Contrast") if it reads as confusing with more use, not changed this
@@ -944,7 +944,7 @@ Edits are stored as parameter sets and rendered live on the GPU.
 
    **Hazard 1 — several existing pipeline stages read the FULL image extent for
    their own geometry**, not just the masked region: Vignette centers on
-   `extent.midX/midY`; Definition/Sharpen radii scale off
+   `extent.midX/midY`; Clarity/Texture/Sharpen radii scale off
    `min(extent.width, extent.height)`; Red-Eye centers map against `extent`.
    Running a masked adjustment by CROPPING to the mask's bounding box first and
    running `EditPipeline.apply` on the crop would silently compute WRONG
@@ -1905,13 +1905,14 @@ each gets its own Plan Mode session per the workflow rules below.
   A Luminance/RGB toggle (`HistogramDisplayMode`) switches `HistogramView`
   between the plain luminance bars and an additive-blended (`.plusLighter`)
   overlay of all four series.
-- **Definition (Clarity):** ✅ shipped — a single Amount slider via a large-radius
-  `CIUnsharpMask` (16x Sharpen's radius fraction), runs after Vignette (measured
-  non-commutative with it, unlike Sharpen) and before Noise Reduction/Sharpen.
-  One-directional 0...1, NOT bipolar: `CIUnsharpMask` was measured to silently
-  clamp negative intensity to a no-op, so the originally-planned bipolar
-  "Clarity" (positive=punch, negative=soften) was dropped for Apple Photos'
-  one-directional "Definition" convention. v1 scope: single Amount slider only.
+- **Definition (Clarity):** ✅ shipped, then **SUPERSEDED** — the single
+  `definition` field was split into `texture` + `clarity` (see the
+  Texture/Clarity entry under "Gaps vs. Adobe Lightroom Desktop" below).
+  `definition` no longer exists as a field; it survives only as a read-only
+  legacy decoding key. Do not re-add it. Its original design notes (large-radius
+  `CIUnsharpMask` at 16x Sharpen's radius fraction, runs after Vignette because
+  measured non-commutative with it unlike Sharpen, before Noise Reduction/
+  Sharpen) all still describe `clarity`, which inherited the math unchanged.
 - **Selective Color:** ✅ shipped — this is HSL v2, 8 fixed hue bands
   (Red/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta) × Hue/Saturation/Luminance
   (24 params) + a shared Range falloff-width parameter. The first custom Core
@@ -1972,17 +1973,43 @@ when this section comes up. Split into two tiers by how big a lift each actually
 **Tier 1 — fits the existing global-adjustment architecture** (a new `EditState`
 field(s) + `EditPipeline` stage(s) + `AdjustTabView` section, the same shape every
 shipped slider already follows):
-- **Texture / Dehaze — WANTED, decided:** split `definition` into three separate
-  fields — `texture`, `clarity`, `dehaze` — matching Lightroom's model exactly,
-  not a bolted-on extra `dehaze` field alongside the existing composite. This is
-  a **breaking change to an already-shipped field**: `definition` is a real
-  `EditState` field today (schema-tolerant `Codable`, included in
-  `comparisonOriginal()`/`applyingPreset(onto:)`/`isAdjustTabAtIdentity`/
-  `resetAdjustmentsButton`, an existing `AdjustTabView` slider, an existing
-  `EditPipeline.applyDefinition` stage) — splitting it needs a real migration
-  plan for old sidecars/presets (e.g. decode `definition` into `clarity` for
-  backward compatibility, or keep `definition` as a deprecated-but-still-decoded
-  key), not just adding two new fields. Needs its own Plan Mode session.
+- **Texture / Clarity — ✅ SHIPPED** (the first two thirds of the Texture/
+  Dehaze split). `definition` was replaced by two BIPOLAR (-1...1) fields,
+  `texture` (radius fraction 0.01) and `clarity` (0.04, inheriting
+  `definition`'s exact math on the positive half). Both are `CIUnsharpMask` at
+  different radii — radius is the ONLY difference between the two controls.
+  - **Migration**: `definition` lives on as a read-only key in `EditState`'s
+    own `LegacyCodingKeys` enum, decoded into `clarity`. It is kept in a
+    SEPARATE enum, not as an extra `CodingKeys` case, because Swift's
+    synthesized `encode(to:)` — which `EditState` still relies on, only
+    `init(from:)` is hand-written — requires every `CodingKeys` case to have a
+    matching stored property. Presets migrate for free: GRDB serializes
+    `Preset.editState` through the same decoder, so NO SQL migration was
+    needed.
+  - **Bipolar took a second construction.** The negative half cannot use
+    `CIUnsharpMask` (measured: it clamps negative `intensity` to a
+    bit-identical no-op, which is why `definition` originally shipped
+    one-directional). `EditPipeline.localContrast` runs the positive half
+    through `CIUnsharpMask` and the negative half through a blend toward
+    `CIGaussianBlur` at the same radius. The blur EXPANDS extent, so that
+    path clamps-then-crops back — `applyMasks` resolves mask geometry against
+    this extent, so a regression there would misalign masks, not just look
+    soft.
+  - `Mask.clarity` became bipolar too, sharing the same helper. Masks have no
+    `texture` counterpart yet (Lightroom's do) — a future additive item.
+  - Texture/Clarity ordering is coarse-then-fine by CONVENTION, not
+    measurement: swapping them moves the profile by at most 0.00215, only
+    marginally above the test suite's own 0.002 tolerance. Recorded honestly
+    as such in `applyTexture`'s doc comment.
+- **Dehaze — WANTED, still outstanding.** The remaining third of the split, a
+  deliberately separate slice: it is a different ALGORITHM, not another radius
+  on `CIUnsharpMask`, and Core Image ships no dehaze filter. Needs its own Plan
+  Mode session and its own measurement pass on real hazy photos. Note the
+  existing constraint: this project's `CIColorKernel(source:)` pattern is
+  per-pixel and cannot sample neighbours, so a dark-channel-prior approach
+  would need the spatial part from a built-in (e.g. `CIMorphologyMinimum`).
+  The `AdjustTabView` Effects section already leaves Dehaze's slot after
+  Texture/Clarity.
 - **Grain — WANTED.** Film-grain effect, not present in any form. Straightforward
   new `EditState` field + a new perceptual-domain `EditPipeline` stage (likely
   Core Image's own grain-simulation building blocks, or a small custom kernel if
@@ -2102,6 +2129,22 @@ step and make every stopping point safe:
 - The reviewer agent only reads diffs, not the full tree — keep it that way.
 
 ## Conventions
+- **Measurement records are historical facts, not descriptions of the current
+  code.** A doc comment that says "measured live: X and Y active, 24.6-399.9ms"
+  records a run that actually happened. When a stage is RENAMED, propagating the
+  new name into that record is correct. When a stage is ADDED, adding it to that
+  record is NOT — it invents a configuration nobody ever ran. Distinguish these
+  from STRUCTURAL claims ("radii are extent fractions"), which describe the code
+  as it stands and should be kept current. Caught by the reviewer during the
+  Texture/Clarity split, where a comment sweep falsified three past timing runs.
+- **Never write measurement-shaped prose you have not run.** If a number is
+  needed, add a temporary harness, run it, paste the real figures, delete the
+  harness. A fabricated measurement is worse than no measurement, and this
+  codebase's doc comments are load-bearing precisely because their numbers are
+  real. Also applies to negative results: when a measurement comes back weak
+  (e.g. Texture/Clarity commutativity, 0.00215 against a 0.002 tolerance), say
+  so and call the decision a convention rather than dressing it up as a measured
+  necessity.
 - Swift: SwiftLint defaults, no force-unwraps outside tests, `// MARK:` sections.
 - Shaders live in `Sources/Rendering/Shaders/`, one kernel per file, commented with
   the math they implement and its source/reference.

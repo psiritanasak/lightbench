@@ -153,14 +153,15 @@ struct MaskDetailView: View {
 
     private var colorRows: some View {
         Group {
-            // Clarity is 0...1, ONE-DIRECTIONAL, NOT bipolar -- matching
-            // the global Definition slider. Mask.clarity's own doc comment
-            // records CIUnsharpMask's measured negative-intensity no-op;
-            // a bipolar range here would ship a provably dead half.
+            // Clarity is -1...1, BIPOLAR, matching the global Clarity
+            // slider. It was one-directional until the Texture/Clarity
+            // split: CIUnsharpMask's measured negative-intensity no-op
+            // made the negative half dead, and EditPipeline.localContrast
+            // now routes that half through a blur blend instead.
             EditSliderRow(
                 label: "Clarity", value: $mask.clarity,
-                range: 0...1, identity: 0, displayMultiplier: 100
-            ) { String(format: "%.0f%%", $0 * 100) }
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Saturation", value: $mask.saturation,
                 range: -1...1, identity: 0, displayMultiplier: 100

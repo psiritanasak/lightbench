@@ -193,7 +193,7 @@ struct Mask: Identifiable, Equatable, Codable {
     /// `.linear` only — inert on `.radial`. The FULL guide-to-guide
     /// distance (not a half-width), as a fraction of
     /// `min(extent.width, extent.height)` — the same non-axis-specific
-    /// denominator Definition/Sharpen's own radii use, chosen for the
+    /// denominator Clarity/Texture/Sharpen's own radii use, chosen for the
     /// same reason: it keeps the band's on-screen THICKNESS constant as
     /// `rotationDegrees` sweeps, which an axis-specific fraction would
     /// not. `LinearMaskGeometry.minimumWidth` is the single source of
@@ -332,10 +332,15 @@ struct Mask: Identifiable, Equatable, Codable {
     var contrast: Double = 0            // matches EditState.contrast's -1...1
     var highlights: Double = 0          // matches EditState.curvesHighlights's -1...1
     var shadows: Double = 0             // matches EditState.curvesShadows's -1...1
-    /// 0...1, ONE-DIRECTIONAL like `EditState.definition` — `CIUnsharpMask`
-    /// is measured (see that field's own doc comment) to silently clamp
-    /// negative intensity to a bit-identical no-op, so a bipolar range here
-    /// would ship a provably dead half of the slider.
+    /// -1...1, BIPOLAR, matching `EditState.clarity`'s own range and using
+    /// the identical `EditPipeline.localContrast` construction at the same
+    /// `kClarityRadiusFraction`/`kClarityAmountSpan` — a mask's Clarity at
+    /// value X is numerically identical to the global slider at X, either
+    /// sign. Was 0...1 before the Texture/Clarity split, because
+    /// `CIUnsharpMask` is measured to clamp negative intensity to a
+    /// bit-identical no-op; the negative half now routes through a blur
+    /// blend instead, so the range is genuinely live in both directions.
+    /// Masks carry no `texture` counterpart yet — see CLAUDE.md.
     var clarity: Double = 0
     var saturation: Double = 0          // matches EditState.hslSaturation's -1...1
     /// Kelvin OFFSET from wherever white balance already left the image —

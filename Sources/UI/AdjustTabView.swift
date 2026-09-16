@@ -329,7 +329,7 @@ struct AdjustTabView: View {
         EditToggleRow(label: "Black & White", value: $document.editState.blackAndWhite)
     }
 
-    /// Vignette/Definition/Sharpen/Noise Reduction — the "finishing"
+    /// Vignette/Texture/Clarity/Sharpen/Noise Reduction — the "finishing"
     /// controls, matching Apple Photos' own Effects/Detail grouping. Just
     /// the rows — see `lightSection`'s comment.
     private var effectsSection: some View {
@@ -343,9 +343,13 @@ struct AdjustTabView: View {
                 range: 0...1, identity: 0.5, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
-                label: "Definition", value: $document.editState.definition,
-                range: 0...1, identity: 0, displayMultiplier: 100
-            ) { String(format: "%.0f%%", $0 * 100) }
+                label: "Texture", value: $document.editState.texture,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Clarity", value: $document.editState.clarity,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Sharpen", value: $document.editState.sharpness,
                 range: 0...1, identity: 0, displayMultiplier: 100
@@ -981,7 +985,8 @@ struct AdjustTabView: View {
             && !state.blackAndWhite
             && state.vignetteStrength == 0
             && state.vignetteRadius == 0.5
-            && state.definition == 0
+            && state.texture == 0
+            && state.clarity == 0
             && state.sharpness == 0
             && state.noiseReduction == 0
             && state.redEyeSize == 0.5
@@ -1014,7 +1019,8 @@ struct AdjustTabView: View {
             document.editState.blackAndWhite = false
             document.editState.vignetteStrength = 0
             document.editState.vignetteRadius = 0.5
-            document.editState.definition = 0
+            document.editState.texture = 0
+            document.editState.clarity = 0
             document.editState.sharpness = 0
             document.editState.noiseReduction = 0
             document.editState.redEyeSize = 0.5

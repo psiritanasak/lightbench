@@ -774,6 +774,44 @@ comment rather than silently assumed:
 `~/.claude/plans/merry-questing-gizmo.md` has both sessions' full design
 history, not re-duplicated here.
 
+### D16. Per-mask Clarity cost is SUPERLINEAR in mask count (found measuring the Texture/Clarity split, predates it)
+
+**Not introduced by the Texture/Clarity split** — measured identical for
+positive and negative Clarity, so it is a property of per-mask Clarity as
+shipped in Phase 7 slice 2. Surfaced only because that slice's reviewer
+asked for a perf number that had never been taken.
+
+Measured at 4000x4000, full `CIContext.createCGImage` over the whole
+extent, best of 3, `.radial` mask at center (0.5, 0.5), feather 0.5,
+rotation 0 (synthetic test-process numbers — NOT comparable to the live
+interactive figures in PROGRESS.md's P3/P4/P5 records):
+
+    masks   r=0.25              r=0.90
+    1       35.6 / 35.1 ms      82.0 / 83.5 ms      (clarity +1 / -1)
+    3      312.5 / 313.5 ms   1811.7 / 1757.1 ms
+
+That is 8.8x and 22x for 3 masks, not 3x. Two compounding causes, both
+inherent to how `EditPipeline.applyMasks` composites: each mask's Clarity
+radius is derived from the FULL image extent (correctly — see the
+"Hazard 1" note in CLAUDE.md Phase 7), and each successive mask's
+composite re-dilates the region of interest of everything before it, so
+mask N pays for masks 1..N-1 again.
+
+Mask RADIUS matters as much as count: one r=0.90 mask costs 2.3x one
+r=0.25 mask, because cost tracks the ellipse's bounding-box ROI. Any
+future fix or benchmark MUST state mask geometry — an earlier draft of
+the PROGRESS.md entry recorded mask timings without it and was not
+reproducible.
+
+Not fixed here: it needs its own slice, and the interactive path is
+already absorbed by `ProxyScale`'s downscaled proxy, so this bites
+full-res export and the settled full-res frame rather than dragging.
+Natural companion to `EditPipeline.swift`'s own `BrushStrokeImageCache`
+(see its doc comment there, and CLAUDE.md's Phase 7 slice 6 perf
+paragraph) — both are "applyMasks recomputes more than it needs to"
+problems. Note that cache is documented in the source and CLAUDE.md, not
+in this file; D15 above covers slice 6's scope cuts, not its perf work.
+
 ### D11. No keyboard/AT path to paint or adjust a Brush mask's stroke shape (Phase 7 slice 4)
 
 A REAL, named accessibility gap — unlike every other mask overlay in

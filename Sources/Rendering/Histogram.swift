@@ -46,7 +46,7 @@ enum HistogramComputer {
     /// Downscale factor for a caller (`ImageDocumentModel.recomputeHistogram()`,
     /// IMPROVEMENTS.md P5) to apply to its OWN source image BEFORE running
     /// `EditPipeline.apply`, so convolution-backed stages (Sharpen/Noise
-    /// Reduction/Definition) never execute at full source resolution just to
+    /// Reduction/Clarity/Texture) never execute at full source resolution just to
     /// feed this type's own 256px downsample. Pure and unit-tested, matching
     /// this codebase's established pattern for exactly this shape of
     /// geometry (`ProxyScale`, `AspectFit`, `ZoomPanGeometry`).

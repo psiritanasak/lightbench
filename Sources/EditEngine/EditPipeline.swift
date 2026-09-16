@@ -23,19 +23,19 @@ import CoreImage.CIFilterBuiltins
 /// (post-crop) extent, not the original frame. MEASURED to commute with
 /// Vignette exactly (order between those two doesn't matter — confirmed at
 /// both a frame-center and a frame-corner correction point, diff ≈ 0), but
-/// it must run before Definition/Noise Reduction/Sharpen: those "detail"
+/// it must run before Clarity/Texture/Noise Reduction/Sharpen: those "detail"
 /// stages should refine the ALREADY-corrected pupil, not reshape a red one
 /// that then gets corrected differently. Vignette runs AFTER crop: it's a
 /// radial darkening tied to the final on-screen framing, so it must see
 /// the post-crop extent, not the fixed-order list's pre-crop stages.
-/// Definition (local-contrast/Clarity)
+/// Clarity (wide local contrast)
 /// runs AFTER Vignette: measured, it does NOT cleanly commute with
 /// Vignette (unlike Sharpen) — its wide radius interacts with Vignette's
 /// spatially-varying darkening, so this order is a real, measured
 /// requirement, not arbitrary. Noise Reduction and Sharpen are a "detail"
-/// pair at the pipeline's true end, after Definition, in the standard
+/// pair at the pipeline's true end, after Clarity and Texture, in the standard
 /// denoise-then-sharpen order (measured: NR-first leaves less residual
-/// noise than the reverse) — all three (Definition, NR, Sharpen) are
+/// noise than the reverse) — all four (Clarity, Texture, NR, Sharpen) are
 /// extent-preserving so none need to run before crop, and running them
 /// last means they act on the actual final framed/stylized pixels, not
 /// content that gets discarded (crop) or resampled (geometric stages)
@@ -56,7 +56,8 @@ enum EditPipeline {
         image = applyRedEye(state, to: image)                 // localized, scene-linear
         image = applyMasks(state, to: image)                  // local adjustments, own perceptual sandwich
         image = applyVignette(state, to: image)               // radial, scene-linear
-        image = applyDefinition(state, to: image)             // local contrast, perceptual, before detail pair
+        image = applyClarity(state, to: image)                // wide local contrast, perceptual, before detail pair
+        image = applyTexture(state, to: image)                // fine local contrast, perceptual, coarse->fine after clarity
         image = applyNoiseReduction(state, to: image)         // detail, scene-linear, before sharpen
         image = applySharpen(state, to: image)                // detail, perceptual, truly last
         return image
@@ -299,7 +300,7 @@ enum EditPipeline {
     /// - Headroom: Levels INTENTIONALLY clips highlight headroom once
     ///   active (measured: a 1.4 linear input with `levelsWhitePoint = 0.9`
     ///   clips to 1.0) — a deliberate deviation from the headroom-preserving
-    ///   family (Brightness/HSL/Vibrance/Vignette/Sharpen/Definition/Noise
+    ///   family (Brightness/HSL/Vibrance/Vignette/Sharpen/Clarity/Texture/Noise
     ///   Reduction), in the same accepted family as active Curves' own
     ///   clamp-to-[0,1]. Alpha is preserved exactly regardless (measured on
     ///   a semi-transparent pixel).
@@ -786,7 +787,7 @@ enum EditPipeline {
 
     /// Size slider → pupil radius as a fraction of the CURRENT extent's MIN
     /// dimension — same resolution-independence rationale as Sharpen/
-    /// Definition (a fixed pixel radius would cover a wildly different
+    /// Clarity/Texture (a fixed pixel radius would cover a wildly different
     /// real-world area on a 400px vs 4000px export). MEASURED plausible
     /// span for a pupil-scale correction: 1.5% (tight, ~15px on a 1000px
     /// min-dimension) to 8% (wide, ~80px).
@@ -834,7 +835,7 @@ enum EditPipeline {
     ///
     /// MEASURED to commute exactly with Vignette (see this file's header
     /// doc comment) — placement relative to Vignette is a soft choice;
-    /// placement BEFORE Definition/Noise Reduction/Sharpen is a real
+    /// placement BEFORE Clarity/Texture/Noise Reduction/Sharpen is a real
     /// requirement (those must refine the corrected pixels, not un-corrected
     /// ones). Preserves alpha and extent exactly (measured). Preserves
     /// headroom on pixels OUTSIDE every point's mask exactly (a 1.4 pixel
@@ -923,8 +924,8 @@ enum EditPipeline {
     /// should adjust the ALREADY-corrected pupil, not a still-red one that
     /// then gets corrected differently underneath it (mirrors this file's
     /// existing "detail stages refine the already-corrected pupil"
-    /// reasoning for why Red-Eye precedes Definition/Noise Reduction/
-    /// Sharpen). Placed before Vignette/Definition/Noise Reduction/Sharpen
+    /// reasoning for why Red-Eye precedes Clarity/Texture/Noise Reduction/
+    /// Sharpen). Placed before Vignette/Clarity/Texture/Noise Reduction/Sharpen
     /// because those are GLOBAL stages that should act on the final,
     /// already-locally-stylized image — masks-vs-Vignette and masks-vs-
     /// Red-Eye commutation were measured, not just argued, matching this
@@ -942,7 +943,7 @@ enum EditPipeline {
     /// 0.6 mask contrast, sampled near a corner (40,40) — shipped order
     /// gives r = 0.60159, the reverse (Vignette-then-mask) gives r =
     /// 0.47563. Real numbers, both directions, matching this file's own
-    /// measured-adjacency convention for Red-Eye/Vignette and Definition/
+    /// measured-adjacency convention for Red-Eye/Vignette and Clarity/
     /// Vignette above.
     ///
     /// Each mask applies via the SAME mask-then-composite shape
@@ -999,9 +1000,9 @@ enum EditPipeline {
     /// incompatible" trap Phase 6 slice 4's write-up documents. Shadows/
     /// Highlights reuse `applyCurves`'s SAME `EffectiveTone`/
     /// `kCurvePointSpan` machinery (not `CIHighlightShadowAdjust` —
-    /// `EditState.definition`'s own doc comment already records that
+    /// `EditState.clarity`'s own doc comment already records that
     /// filter as measured to be an ASYMMETRIC tone-mapper, rejected for
-    /// exactly this reason). `unsharpDefinition` (Clarity) is the ONE
+    /// exactly this reason). `localContrast` (Clarity) is the ONE
     /// extent-sensitive param in this set (CLAUDE.md Phase 7's "Hazard
     /// 1") — its radius is derived from `perceptual.extent`, so it MUST
     /// run on the FULL-image `corrected` built here, never on a subimage
@@ -1099,10 +1100,29 @@ enum EditPipeline {
             // saturation can drive the color-controls factor negative,
             // inverting hue/channels rather than "reading the same as the
             // identically-named global slider," which is this type's own
-            // documented guarantee. Clarity needs no clamp — global
-            // `definition` is unclamped too (one-directional, see
-            // `EditState.definition`'s doc comment), so this is
-            // precedent-consistent, not an oversight.
+            // documented guarantee. Clarity needs no clamp, but the
+            // REASON changed with the Texture/Clarity split and the old
+            // one no longer applies: it used to be safe because
+            // `CIUnsharpMask` clamped negative intensity to a no-op, so an
+            // out-of-range negative `definition` was simply inert. The
+            // blur path has no such accident. It is still safe, for a
+            // different and MEASURED reason: `CIFilter.mix` saturates at
+            // `amount` 1.0, so clarity -1.25 (1.25 * the 0.8 span) is
+            // already the fully blurred image and -2, -5, -20 all render
+            // BIT-IDENTICALLY to it rather than extrapolating past it.
+            // Worst case from an out-of-range NEGATIVE value is therefore
+            // a fully blurred region, not the channel inversion an
+            // unclamped contrast/saturation would produce. See
+            // `testOutOfRangeNegativeClaritySaturatesRatherThanExtrapolating`.
+            // The POSITIVE half has no such ceiling and is genuinely
+            // unbounded — MEASURED, `clarity = +20` (unsharp intensity 16)
+            // renders a 0.2/0.5 edge to 9.84418 on the bright side and
+            // -2.26088 on the dark, i.e. negative channel values. That is
+            // INHERITED UNCHANGED from `definition`, which was equally
+            // unbounded upward, so it is pre-existing rather than something
+            // this split introduced — but it is why the sentence above is
+            // scoped to the negative direction rather than claiming the
+            // field is safe in general.
             let contrast = clamped(mask.contrast)
             let shadows = clamped(mask.shadows)
             let highlights = clamped(mask.highlights)
@@ -1146,7 +1166,12 @@ enum EditPipeline {
                     perceptual = applySaturation(saturation, to: perceptual)
                 }
                 if mask.clarity != 0 {
-                    perceptual = unsharpDefinition(mask.clarity, to: perceptual)
+                    perceptual = localContrast(
+                        mask.clarity,
+                        radiusFraction: kClarityRadiusFraction,
+                        amountSpan: kClarityAmountSpan,
+                        to: perceptual
+                    )
                 }
                 corrected = decodeToLinear(perceptual)
             }
@@ -1917,7 +1942,7 @@ enum EditPipeline {
         return filter.outputImage ?? image
     }
 
-    // MARK: - Definition (Clarity)
+    // MARK: - Texture & Clarity (local contrast)
 
     /// Slider-to-`CIUnsharpMask.intensity` span, MEASURED to give comparable
     /// PEAK punch to Sharpen's own full strength (0.66061 vs Sharpen's
@@ -1925,7 +1950,7 @@ enum EditPipeline {
     /// still 0.50955 elevated 60px from the edge, where Sharpen has already
     /// decayed to baseline. That width, not the peak, is what makes this
     /// local CONTRAST rather than fine sharpening.
-    private static let kDefinitionAmountSpan: Double = 0.8
+    private static let kClarityAmountSpan: Double = 0.8
 
     /// Radius as a fraction of the CURRENT extent's MIN dimension — MEASURED
     /// necessity, same as Sharpen's `kSharpenRadiusFraction`: the filter's
@@ -1935,13 +1960,50 @@ enum EditPipeline {
     /// reach than fine-detail sharpening; a smaller fraction reads as more
     /// sharpening, a much larger one starts reading as a global contrast
     /// boost rather than "local" (measured at a 0.02...0.08 sweep).
-    private static let kDefinitionRadiusFraction: Double = 0.04
+    private static let kClarityRadiusFraction: Double = 0.04
 
-    private static func definitionActive(_ state: EditState) -> Bool {
-        state.definition != 0
+    /// Texture reuses Clarity's span — the two controls differ ONLY in
+    /// radius, which is the whole point of splitting them. Kept as its own
+    /// named constant rather than aliasing `kClarityAmountSpan` so the two
+    /// can be tuned independently later without a confusing rename.
+    private static let kTextureAmountSpan: Double = 0.8
+
+    /// Texture's radius fraction: 0.01, between Sharpen's fine 0.0025 and
+    /// Clarity's wide 0.04. MEASURED by sweeping THIS constant and reading
+    /// the overshoot profile off the same 0.2/0.5 step edge the Clarity and
+    /// Sharpen constants were measured on (800px, amount 1.0), sampling the
+    /// peak and 15/30/60px out from the edge:
+    ///
+    ///   fraction   peak(x=401)  +15px     +30px     +60px
+    ///   0.0025     0.57154      0.49957   0.49957   0.49957
+    ///   0.005      0.61530      0.50032   0.50032   0.50032
+    ///   0.01       0.64124      0.50955   0.50060   0.50060   <- shipped
+    ///   0.02       0.65435      0.55317   0.50955   0.50001
+    ///   0.04       0.66061      0.60219   0.55443   0.50955   (Clarity's)
+    ///
+    /// 0.01 is where the halo is measurably wider than a fine sharpen yet
+    /// still local: elevated at +15px (0.50955, vs 0.50032 at 0.005 — flat
+    /// to three places) and essentially back to baseline by +30px, where
+    /// Clarity is still 0.55443. At 0.02 and above it reads as a weak
+    /// Clarity rather than a separate control; at 0.005 and below it is
+    /// indistinguishable from a sharpen.
+    ///
+    /// For reference, Sharpen at 1.0 on the same edge measures 0.63963 /
+    /// 0.50001 / 0.50001 / 0.50001 — a comparable PEAK to Texture's but
+    /// flat by 15px, so peak height is NOT what separates these controls;
+    /// the width is. (Sharpen's own 0.0025 is not comparable row-for-row
+    /// with the 0.0025 row above: different filter path and span.)
+    private static let kTextureRadiusFraction: Double = 0.01
+
+    private static func clarityActive(_ state: EditState) -> Bool {
+        state.clarity != 0
     }
 
-    /// Local-contrast ("Definition"/"Clarity") via a LARGE-radius, low-
+    private static func textureActive(_ state: EditState) -> Bool {
+        state.texture != 0
+    }
+
+    /// Clarity: wide local contrast via a LARGE-radius, low-
     /// amount `CIUnsharpMask` — the SAME filter Sharpen uses (already
     /// measured numerically identical to `CISharpenLuminance` there), here
     /// at a much larger radius. Runs AFTER Vignette, BEFORE the Noise
@@ -1959,39 +2021,117 @@ enum EditPipeline {
     /// Sharpen (~5%) or Noise Reduction (~2x); perceptual is chosen for
     /// consistency with the sandwich pattern, not because it measurably
     /// wins here. Radius scales with `min(extent)` — see
-    /// `kDefinitionRadiusFraction`. Does NOT clamp highlight headroom (a 1.4
+    /// `kClarityRadiusFraction`. Does NOT clamp highlight headroom (a 1.4
     /// flat survives at 1.40127) and preserves alpha and extent exactly
     /// (measured). Guarded off at amount 0 (exact no-op, measured max diff
-    /// 0.0). One-directional (0...1), NOT bipolar: `CIUnsharpMask` was
-    /// measured to silently clamp negative `intensity` to a no-op in this
-    /// working space (a dead half of a would-be bipolar slider range) — see
-    /// `EditState.definition`'s doc comment for the measurement.
-    private static func applyDefinition(_ state: EditState, to image: CIImage) -> CIImage {
-        guard definitionActive(state) else { return image }
-        return decodeToLinear(unsharpDefinition(state.definition, to: encodeToPerceptual(image)))
+    /// 0.0). BIPOLAR: the positive half is the `CIUnsharpMask` above; the
+    /// negative half is a blur blend, because `CIUnsharpMask` was measured
+    /// to silently clamp negative `intensity` to a no-op in this working
+    /// space. See `localContrast` for both halves and
+    /// `EditState.clarity`'s doc comment for the original measurement.
+    private static func applyClarity(_ state: EditState, to image: CIImage) -> CIImage {
+        guard clarityActive(state) else { return image }
+        return decodeToLinear(localContrast(
+            state.clarity,
+            radiusFraction: kClarityRadiusFraction,
+            amountSpan: kClarityAmountSpan,
+            to: encodeToPerceptual(image)
+        ))
     }
 
-    /// The unsharp construction itself, factored out of `applyDefinition` so
-    /// Phase 7 slice 2's per-mask Clarity can reuse the EXACT same filter
-    /// technique — a mask's Clarity at value X is numerically identical to
-    /// this global Definition slider at value X, same `kDefinitionAmountSpan`/
-    /// `kDefinitionRadiusFraction`. Operates on ALREADY-PERCEPTUAL input —
-    /// the caller owns the encode/decode sandwich (`applyDefinition` opens
-    /// its own; `applyMasks` folds this into the one sandwich it already
-    /// opens for Contrast/Curves/Saturation, avoiding a second round trip
-    /// per mask). Radius is derived from `extent`, so the caller must pass
-    /// the FULL, untouched image — never a subimage cropped to some
+    /// Texture: the SAME construction as Clarity at a much smaller radius —
+    /// see `kTextureRadiusFraction` for the measured sweep that picked it.
+    /// Runs immediately AFTER Clarity, coarse-to-fine, and BEFORE the Noise
+    /// Reduction + Sharpen detail pair, so the pipeline's three local-
+    /// contrast/detail stages descend in radius from Clarity (0.04) through
+    /// Texture (0.01) to Sharpen (0.0025).
+    ///
+    /// MEASURED, and honestly a WEAK result: Texture and Clarity very nearly
+    /// commute. On the 0.2/0.5 step edge with both at 1.0 (800px), swapping
+    /// the two stages moves the profile by at most 0.00215 (at +15px;
+    /// 0.00052 at the peak, 0.00025 at +30px, 0.00060 at +60px) — only
+    /// marginally above this suite's own 0.002 `accuracy` tolerance. So
+    /// unlike Clarity-vs-Vignette (0.0188, a real requirement), this
+    /// adjacency is NOT forced by measurement. It is coarse-then-fine by
+    /// CONVENTION, matching the existing Clarity->NR->Sharpen chain's
+    /// descending radii. Recorded as a convention rather than dressed up as
+    /// a measured necessity.
+    ///
+    /// Takes its own perceptual sandwich rather than sharing Clarity's: the
+    /// two stages are independently guarded (either can be at 0), and
+    /// folding them would either run a pointless encode/decode when only one
+    /// is active or need a combined guard that obscures which stage did
+    /// what.
+    private static func applyTexture(_ state: EditState, to image: CIImage) -> CIImage {
+        guard textureActive(state) else { return image }
+        return decodeToLinear(localContrast(
+            state.texture,
+            radiusFraction: kTextureRadiusFraction,
+            amountSpan: kTextureAmountSpan,
+            to: encodeToPerceptual(image)
+        ))
+    }
+
+    /// The local-contrast construction shared by Clarity, Texture, and each
+    /// mask's own Clarity — factored out so a mask's Clarity at value X is
+    /// numerically identical to the global Clarity slider at X, same span
+    /// and radius fraction. Operates on ALREADY-PERCEPTUAL input — the
+    /// caller owns the encode/decode sandwich (`applyClarity`/`applyTexture`
+    /// each open their own; `applyMasks` folds this into the one sandwich it
+    /// already opens for Contrast/Curves/Saturation, avoiding a second round
+    /// trip per mask). Radius is derived from `extent`, so the caller must
+    /// pass the FULL, untouched image — never a subimage cropped to some
     /// region's bounding box — or the radius silently comes out wrong (see
     /// `applyMasks`'s own doc comment on this exact hazard).
-    private static func unsharpDefinition(_ amount: Double, to perceptual: CIImage) -> CIImage {
+    ///
+    /// BIPOLAR, via two different constructions — this is the whole reason
+    /// the pre-split `definition` shipped one-directional:
+    ///
+    /// - `amount > 0` — `CIUnsharpMask`, unchanged from `definition`.
+    /// - `amount < 0` — blend toward a `CIGaussianBlur` at the SAME radius.
+    ///   `CIUnsharpMask` is MEASURED to silently clamp negative `intensity`
+    ///   to a bit-identical no-op in this working space, so the negative
+    ///   half cannot reuse it; blending toward the blur is what
+    ///   local-contrast REDUCTION physically is. `EditState.clarity`'s doc
+    ///   comment carries the original measurement.
+    ///
+    /// EXTENT HAZARD, handled here: `CIGaussianBlur` EXPANDS its output
+    /// extent (by roughly 3x sigma on every side) and leaves the border
+    /// undefined without help. Every stage in this pipeline is
+    /// extent-preserving, and `applyMasks` feeds this helper the full image
+    /// whose extent its mask geometry is resolved against — a silent extent
+    /// change here would misalign masks, not merely look soft. So the blur
+    /// runs on a `.clampedToExtent()` source (defined borders, no dark
+    /// halo creeping in from outside the frame) and its result is cropped
+    /// straight back to the input's own extent before blending.
+    private static func localContrast(
+        _ amount: Double,
+        radiusFraction: Double,
+        amountSpan: Double,
+        to perceptual: CIImage
+    ) -> CIImage {
+        guard amount != 0 else { return perceptual }
         let extent = perceptual.extent
-        let radius = kDefinitionRadiusFraction * Double(min(extent.width, extent.height))
+        let radius = radiusFraction * Double(min(extent.width, extent.height))
 
-        let filter = CIFilter.unsharpMask()
-        filter.inputImage = perceptual
-        filter.radius = Float(radius)
-        filter.intensity = Float(amount * kDefinitionAmountSpan)
-        return filter.outputImage ?? perceptual
+        if amount > 0 {
+            let filter = CIFilter.unsharpMask()
+            filter.inputImage = perceptual
+            filter.radius = Float(radius)
+            filter.intensity = Float(amount * amountSpan)
+            return filter.outputImage ?? perceptual
+        }
+
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = perceptual.clampedToExtent()
+        blur.radius = Float(radius)
+        guard let blurred = blur.outputImage?.cropped(to: extent) else { return perceptual }
+
+        let mix = CIFilter.mix()
+        mix.inputImage = blurred
+        mix.backgroundImage = perceptual
+        mix.amount = Float(-amount * amountSpan)
+        return mix.outputImage?.cropped(to: extent) ?? perceptual
     }
 
     // MARK: - Noise Reduction

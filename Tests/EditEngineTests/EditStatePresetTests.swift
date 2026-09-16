@@ -45,7 +45,7 @@ final class EditStatePresetTests: XCTestCase {
         s.blackAndWhite = true
         s.vignetteStrength = 0.5
         s.vignetteRadius = 0.7
-        s.definition = 0.4
+        s.clarity = 0.4
         s.sharpness = 0.6
         s.noiseReduction = 0.3
         // red-eye
@@ -113,7 +113,7 @@ final class EditStatePresetTests: XCTestCase {
         XCTAssertEqual(result.blackAndWhite, preset.blackAndWhite)
         XCTAssertEqual(result.vignetteStrength, preset.vignetteStrength)
         XCTAssertEqual(result.vignetteRadius, preset.vignetteRadius)
-        XCTAssertEqual(result.definition, preset.definition)
+        XCTAssertEqual(result.clarity, preset.clarity)
         XCTAssertEqual(result.sharpness, preset.sharpness)
         XCTAssertEqual(result.noiseReduction, preset.noiseReduction)
         XCTAssertEqual(result.redEyeSize, preset.redEyeSize)

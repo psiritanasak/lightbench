@@ -414,29 +414,55 @@ struct EditState: Equatable, Codable {
     /// and not an identity violation.
     var vignetteRadius: Double = 0.5
 
-    // MARK: - Definition (Clarity)
+    // MARK: - Texture & Clarity (Lightroom "Presence")
 
-    /// Local-contrast enhancement, 0...1, default 0 (identity). One-directional
-    /// (0 = none, positive = more defined) — same 0...1 family as Vignette
-    /// Radius/Sharpen/Noise Reduction, NOT bipolar. A bipolar "Clarity" slider
-    /// (positive = punch, negative = soften, the Lightroom convention) was the
-    /// original design intent, but MEASURED (not assumed): `CIUnsharpMask`
-    /// silently clamps negative `intensity` to a no-op in this app's working
-    /// space (intensity -0.2 through -1.0 all produced output BIT-IDENTICAL to
-    /// the unfiltered baseline — not a subtle effect, a dead half of the
-    /// slider range). So this ships one-directional, named "Definition" to
-    /// match CLAUDE.md's own "Definition (Clarity)" backlog heading, matching
-    /// Apple Photos' one-directional convention rather than Lightroom's
-    /// bipolar one. Applied in the perceptual sRGB-gamma domain, AFTER
-    /// Vignette and BEFORE the Noise Reduction + Sharpen detail pair, via
-    /// Core Image's `CIUnsharpMask` at a LARGE radius — see `EditPipeline`.
+    /// Fine/mid-frequency local contrast, -1...1, default 0 (identity).
+    /// Positive brings out surface detail (skin pores, fabric weave, foliage);
+    /// negative smooths it while leaving broad tonal structure alone.
     ///
-    /// MEASURED findings (this app's extendedLinearSRGB/RGBAf working space,
-    /// not assumed):
+    /// Same `CIUnsharpMask` construction as `clarity` below, at a MUCH
+    /// smaller radius — `kTextureRadiusFraction` vs `kClarityRadiusFraction`
+    /// — which is the entire difference between the two controls. Sits
+    /// between Sharpen's fine `kSharpenRadiusFraction` and Clarity's wide
+    /// one; see `EditPipeline` for the measured sweep behind the value.
+    ///
+    /// Bipolar, unlike the one-directional `definition` this and `clarity`
+    /// replaced — see `clarity`'s doc comment for why that took a second
+    /// construction rather than just a wider range.
+    var texture: Double = 0
+
+    /// Large-radius local contrast, -1...1, default 0 (identity). Positive
+    /// adds midtone "punch"; negative softens local contrast for a hazier,
+    /// flatter rendering.
+    ///
+    /// **Replaces the shipped `definition` field** (Phase 8 / Lightroom
+    /// Presence split). Old sidecars and presets written before the split
+    /// decode their `definition` value into THIS field — see this type's
+    /// `LegacyCodingKeys` in the custom-decoding extension below. Positive
+    /// `clarity` at value X is byte-identical to the old `definition` at X:
+    /// same filter, same `kClarityAmountSpan`, same
+    /// `kClarityRadiusFraction`, same pipeline position. Only the name and
+    /// the newly-live negative half changed.
+    ///
+    /// BIPOLAR, and this took real work rather than widening a range.
+    /// MEASURED (this app's extendedLinearSRGB/RGBAf working space, not
+    /// assumed): `CIUnsharpMask` silently clamps negative `intensity` to a
+    /// no-op — intensity -0.2 through -1.0 all produced output
+    /// BIT-IDENTICAL to the unfiltered baseline, a dead half of the slider
+    /// range. That measurement is why `definition` originally shipped
+    /// one-directional and named for Apple Photos' convention rather than
+    /// Lightroom's. The negative half is therefore a DIFFERENT
+    /// construction: blend toward a `CIGaussianBlur` at the same radius,
+    /// which is what local-contrast REDUCTION physically is. See
+    /// `EditPipeline.localContrast(amount:radiusFraction:amountSpan:to:)`,
+    /// which owns both halves and the extent hazard the blur introduces.
+    ///
+    /// MEASURED findings for the POSITIVE half, inherited unchanged from
+    /// `definition`:
     /// - Filter: `CIUnsharpMask` — the SAME filter Sharpen uses (already
     ///   measured numerically identical to `CISharpenLuminance` there), here
     ///   at a much larger radius/lower intensity. Chosen for its explicit
-    ///   `radius` + `intensity` params, since Definition is defined by its
+    ///   `radius` + `intensity` params, since Clarity is defined by its
     ///   wide radius. `intensity: 0` is an exact no-op (measured max diff
     ///   0.0). Rejected: `CIHighlightShadowAdjust` — measured to be an
     ///   ASYMMETRIC shadow/highlight tone-mapper (it LIFTS the dark side of a
@@ -464,16 +490,18 @@ struct EditState: Equatable, Codable {
     /// - Headroom/alpha: does NOT clamp above 1.0 (a 1.4 flat survives at
     ///   1.40127) and preserves alpha exactly (measured).
     /// - Vignette ordering: UNLIKE Sharpen (which commutes with Vignette
-    ///   within 0.00100), Definition does NOT cleanly commute with Vignette
+    ///   within 0.00100), Clarity does NOT cleanly commute with Vignette
     ///   (measured corner differences up to 0.0188 between
-    ///   Definition-then-Vignette and Vignette-then-Definition) — its wide
+    ///   Clarity-then-Vignette and Vignette-then-Clarity) — its wide
     ///   radius interacts with Vignette's spatially-varying darkening in a
     ///   way Sharpen's tiny radius doesn't. This is why the pipeline order
-    ///   (Definition runs AFTER Vignette) is a real, measured requirement,
+    ///   (Clarity runs AFTER Vignette) is a real, measured requirement,
     ///   not an arbitrary choice.
     /// v1 scope: single Amount slider only — same scope-cut pattern as every
-    /// other v1 feature.
-    var definition: Double = 0
+    /// other v1 feature. Dehaze, the third member of Lightroom's Presence
+    /// panel, is a deliberately separate future slice: it is a different
+    /// algorithm, not another radius on this filter.
+    var clarity: Double = 0
 
     // MARK: - Noise Reduction
 
@@ -981,7 +1009,8 @@ struct EditState: Equatable, Codable {
         s.blackAndWhite = false
         s.vignetteStrength = 0
         s.vignetteRadius = 0.5
-        s.definition = 0
+        s.texture = 0
+        s.clarity = 0
         s.sharpness = 0
         s.noiseReduction = 0
         // red-eye: reset sliders AND clear points (see doc comment above)
@@ -1055,7 +1084,8 @@ struct EditState: Equatable, Codable {
         result.blackAndWhite = blackAndWhite
         result.vignetteStrength = vignetteStrength
         result.vignetteRadius = vignetteRadius
-        result.definition = definition
+        result.texture = texture
+        result.clarity = clarity
         result.sharpness = sharpness
         result.noiseReduction = noiseReduction
         // red-eye correction INTENSITY only — `redEyePoints` (where the
@@ -1136,7 +1166,7 @@ extension EditState {
         case redEyePoints, redEyeSize, redEyeStrength
         case masks
         case vignetteStrength, vignetteRadius
-        case definition
+        case texture, clarity
         case noiseReduction
         case sharpness
         case boostAmount
@@ -1146,8 +1176,25 @@ extension EditState {
         case rawDecoderVersionPin
     }
 
+    /// Keys this type NO LONGER writes but must still read, kept in their own
+    /// enum rather than as extra `CodingKeys` cases on purpose: Swift's
+    /// SYNTHESIZED `encode(to:)` (which this type still relies on — only
+    /// `init(from:)` is hand-written) requires every `CodingKeys` case to
+    /// have a matching stored property, so a property-less legacy case there
+    /// would not compile. A second container also keeps the compatibility
+    /// shim visibly separate from the live schema.
+    ///
+    /// - `definition`: the pre-split single local-contrast field, replaced by
+    ///   `texture` + `clarity`. Decoded into `clarity` (see `init(from:)`).
+    ///   Sidecars and presets written before the split still carry it.
+    private enum LegacyCodingKeys: String, CodingKey {
+        case definition
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        let legacyDefinition = try legacyContainer.decodeIfPresent(Double.self, forKey: .definition)
         whiteBalanceTemperature = try container.decodeIfPresent(Double.self, forKey: .whiteBalanceTemperature) ?? 6500
         whiteBalanceTint = try container.decodeIfPresent(Double.self, forKey: .whiteBalanceTint) ?? 0
         exposureEV = try container.decodeIfPresent(Double.self, forKey: .exposureEV) ?? 0
@@ -1204,7 +1251,14 @@ extension EditState {
         masks = try container.decodeIfPresent([Mask].self, forKey: .masks) ?? []
         vignetteStrength = try container.decodeIfPresent(Double.self, forKey: .vignetteStrength) ?? 0
         vignetteRadius = try container.decodeIfPresent(Double.self, forKey: .vignetteRadius) ?? 0.5
-        definition = try container.decodeIfPresent(Double.self, forKey: .definition) ?? 0
+        texture = try container.decodeIfPresent(Double.self, forKey: .texture) ?? 0
+        // `clarity` falls back to the pre-split `definition` key — see
+        // `LegacyCodingKeys`. Positive `definition` at value X and `clarity`
+        // at X are the same filter at the same settings, so this is a true
+        // rename, not a lossy approximation.
+        clarity = try container.decodeIfPresent(Double.self, forKey: .clarity)
+            ?? legacyDefinition
+            ?? 0
         noiseReduction = try container.decodeIfPresent(Double.self, forKey: .noiseReduction) ?? 0
         sharpness = try container.decodeIfPresent(Double.self, forKey: .sharpness) ?? 0
         boostAmount = try container.decodeIfPresent(Double.self, forKey: .boostAmount) ?? 1.0

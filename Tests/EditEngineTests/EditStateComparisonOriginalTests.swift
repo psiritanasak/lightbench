@@ -49,7 +49,7 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.blackAndWhite = true
         s.vignetteStrength = 0.5
         s.vignetteRadius = 0.7
-        s.definition = 0.4
+        s.clarity = 0.4
         s.sharpness = 0.6
         s.noiseReduction = 0.3
         // red-eye
@@ -113,7 +113,7 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         XCTAssertEqual(original.blackAndWhite, identity.blackAndWhite)
         XCTAssertEqual(original.vignetteStrength, identity.vignetteStrength)
         XCTAssertEqual(original.vignetteRadius, identity.vignetteRadius)
-        XCTAssertEqual(original.definition, identity.definition)
+        XCTAssertEqual(original.clarity, identity.clarity)
         XCTAssertEqual(original.sharpness, identity.sharpness)
         XCTAssertEqual(original.noiseReduction, identity.noiseReduction)
         XCTAssertEqual(original.redEyeSize, identity.redEyeSize)

@@ -17,7 +17,8 @@ import CoreGraphics
 /// FRACTION of the current extent (crop insets, vignette center + half-
 /// diagonal radius, straighten around the extent's own center, perspective
 /// corner shifts as fractions of width/height, red-eye radius as a fraction
-/// of `min(extent)`, Definition/Sharpen radii as `fraction * min(extent)`) —
+/// of `min(extent)`, Clarity/Texture/Sharpen radii as `fraction *
+/// min(extent)`) —
 /// the same argument `ThumbnailGenerator.thumbnail(for:maxPixelSize:
 /// editState:)` already documents and ships. So running the pipeline on a
 /// proportionally-downscaled source is correct, not an approximation, for

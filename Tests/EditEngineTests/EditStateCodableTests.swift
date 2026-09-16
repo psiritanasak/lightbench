@@ -751,6 +751,79 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(decoded, expected)
     }
 
+    // MARK: - Legacy `definition` -> `clarity` migration
+    //
+    // `definition` was a SHIPPED field, live in real sidecars on disk and in
+    // saved presets (GRDB serializes `Preset.editState` through this exact
+    // decoder). The Texture/Clarity split replaced it. These tests are the
+    // guard that the split did not silently reset every existing user's
+    // Definition edit to zero — the one failure mode of this change that
+    // nothing else would catch.
+
+    func testLegacyDefinitionKeyDecodesIntoClarity() throws {
+        // A sidecar written before the split.
+        let state = try decode("""
+        {
+            "exposureEV": 0.5,
+            "definition": 0.62
+        }
+        """)
+
+        XCTAssertEqual(state.clarity, 0.62)
+        XCTAssertEqual(state.texture, 0, "texture had no pre-split equivalent and must default to identity")
+        XCTAssertEqual(state.exposureEV, 0.5)
+    }
+
+    func testExplicitClarityWinsOverLegacyDefinition() throws {
+        // A file carrying BOTH (e.g. hand-edited, or written by a build
+        // mid-migration): the current key must win, not the legacy one.
+        let state = try decode("""
+        {
+            "definition": 0.2,
+            "clarity": 0.9
+        }
+        """)
+
+        XCTAssertEqual(state.clarity, 0.9)
+    }
+
+    func testAbsentDefinitionAndClarityBothDefaultToIdentity() throws {
+        let state = try decode("""
+        { "exposureEV": 1.0 }
+        """)
+
+        XCTAssertEqual(state.clarity, 0)
+        XCTAssertEqual(state.texture, 0)
+    }
+
+    func testLegacyDefinitionSurvivesAFullEncodeDecodeRoundTrip() throws {
+        // The realistic upgrade path: an old sidecar is read, the app later
+        // re-saves it, and the value must still be there afterwards under
+        // the new key. Also pins that `definition` is no longer WRITTEN.
+        let decoded = try decode("""
+        { "definition": 0.45 }
+        """)
+        let reencoded = try JSONEncoder().encode(decoded)
+        let roundTripped = try JSONDecoder().decode(EditState.self, from: reencoded)
+
+        XCTAssertEqual(roundTripped.clarity, 0.45)
+
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: reencoded) as? [String: Any])
+        XCTAssertNotNil(json["clarity"], "clarity must be written under its own key")
+        XCTAssertNil(json["definition"], "the legacy key is read-only — it must not be re-emitted")
+    }
+
+    func testNegativeClarityRoundTripsThroughASidecar() throws {
+        // The negative half is new (the pre-split field was 0...1), so a
+        // negative value is exactly the kind of thing a clamping bug in
+        // serialization would silently swallow.
+        let original = EditState(texture: -0.8, clarity: -0.35)
+        let roundTripped = try JSONDecoder().decode(EditState.self, from: JSONEncoder().encode(original))
+
+        XCTAssertEqual(roundTripped.clarity, -0.35)
+        XCTAssertEqual(roundTripped.texture, -0.8)
+    }
+
     // MARK: - ImageDocumentModel.sidecarURL(for:)
 
     func testSidecarURLAppendsPhotoAppJSONSuffix() {

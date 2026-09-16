@@ -7891,7 +7891,8 @@ full round-by-round detail.
 the live-only hidden-section finding added) rather than duplicated as a
 new entry.
 
-**Exact next step**: Phase 7 is fully complete — no open items. The next
+**Exact next step (superseded — see the Texture/Clarity section at the
+end of this file)**: Phase 7 is fully complete — no open items. The next
 piece of work is a fresh pick from CLAUDE.md's own backlog: either Phase 8
 ("Polish: tiled rendering for large images, perf, edge cases") or one of
 the Tier-1 **WANTED** Lightroom-gap items (Texture/Dehaze split — a
@@ -7901,3 +7902,168 @@ Chromatic Aberration removal; Manual Transform Scale/Aspect) — see
 CLAUDE.md's "Gaps vs. Adobe Lightroom Desktop" section for the full list
 and which are user-confirmed WANTED vs. just researched gaps. Ask the user
 which to pick next, same as this session's own opening question.
+
+## Phase 8 / Lightroom Presence: `definition` → `texture` + `clarity` (2026-09-16)
+
+**Shipped.** The first two thirds of CLAUDE.md's Tier-1 WANTED
+"Texture / Dehaze" item. The single shipped `EditState.definition` field
+was split into two BIPOLAR (-1...1) fields — `texture` (radius fraction
+0.01) and `clarity` (0.04) — matching Lightroom's Presence model.
+**Dehaze was deliberately deferred to its own slice** (user decision,
+asked before planning): it is a different algorithm, not another radius
+on `CIUnsharpMask`, and deserves its own measurement pass.
+
+**Three decisions the user made before any code was written:**
+1. Scope — migration + Texture + Clarity now, Dehaze separately.
+2. Range — BIPOLAR -1...1, matching Lightroom, rather than keeping the
+   app's one-directional Definition/Sharpen/NR convention.
+3. Dehaze method — decided in the Dehaze slice, from real measurement.
+
+**The migration is the risky part, and it is covered.** `definition` was
+live in real sidecars on disk and in saved presets. It survives as a
+read-only key in a SEPARATE `LegacyCodingKeys` enum on `EditState`,
+decoded into `clarity`. It is deliberately NOT an extra `CodingKeys`
+case: Swift's synthesized `encode(to:)` (which `EditState` still relies
+on — only `init(from:)` is hand-written) requires every `CodingKeys` case
+to have a matching stored property, so a property-less legacy case there
+would not compile. **Presets needed no SQL migration** — GRDB serializes
+`Preset.editState` through the same decoder, so `Migrations/` is
+untouched. Five new tests in `EditStateCodableTests` pin this: legacy key
+→ `clarity`, explicit `clarity` beating a stale `definition`, a full
+decode→encode→decode round trip, that `definition` is never re-emitted,
+and that negative values survive serialization.
+
+**Bipolar needed a second construction, and this is the interesting
+part.** `EditState.definition` shipped one-directional because
+`CIUnsharpMask` was MEASURED to clamp negative `intensity` to a
+bit-identical no-op in this working space — a provably dead half-slider.
+So `EditPipeline.localContrast(amount:radiusFraction:amountSpan:to:)` now
+owns both halves: `CIUnsharpMask` for positive, a blend toward
+`CIGaussianBlur` at the same radius for negative. **Extent hazard,
+handled:** `CIGaussianBlur` expands its output extent, and `applyMasks`
+resolves mask geometry against this extent — an unhandled expansion would
+MISALIGN MASKS, not merely look soft. The negative path clamps to extent
+before blurring and crops straight back after; two tests assert extent
+and alpha survive.
+
+**`Mask.clarity` became bipolar too** (it shares `localContrast`), range
+widened to -1...1 in `MaskDetailView`. Existing 0...1 mask values stay
+valid — no migration. Masks still have NO `texture` counterpart, unlike
+Lightroom's; logged in CLAUDE.md as a future additive item.
+
+**Texture's radius was MEASURED, not guessed** — swept the real constant
+over 0.0025/0.005/0.01/0.02/0.04 on the same 0.2/0.5 step edge the
+Clarity and Sharpen constants were measured on, reading peak and
++15/+30/+60px. The full table is in `kTextureRadiusFraction`'s doc
+comment. 0.01 is where the halo is measurably wider than a fine sharpen
+(0.50955 at +15px vs 0.50032 at fraction 0.005, flat to three places) yet
+still local (back to 0.50060 by +30px, where Clarity is 0.55443). Peak
+height does NOT separate these controls — all three peak around
+0.64-0.66. Width does.
+
+**One honest negative result, recorded as such:** Texture and Clarity
+very nearly COMMUTE. Swapping the stages moves the profile by at most
+0.00215, only marginally above this suite's own 0.002 `accuracy`
+tolerance. So unlike Clarity-vs-Vignette (0.0188, a genuine requirement),
+this adjacency is coarse-then-fine by CONVENTION. `applyTexture`'s doc
+comment says so plainly rather than dressing a weak number up as a
+measured necessity.
+
+**Process note for the next session:** the doc comments were first
+written with PLACEHOLDER numbers, then a temporary measurement harness
+was added to `EditPipelineTests`, run, and deleted, and every figure
+replaced with the real reading. Do not copy measurement-shaped prose
+forward without re-running it.
+
+Tests: full suite green (`** TEST SUCCEEDED **`). Existing Clarity tests
+kept their measured values unchanged, which is itself the regression
+guard that the rename did not move pixels.
+
+**Reviewer round 1: FIX FIRST → all items addressed.** Three BLOCKING
+issues, all one class of defect and a genuinely good catch: the comment
+sweep had appended "Texture" to three records of PAST LIVE TIMING RUNS
+(`ImageRenderer.swift` P3 and P4, `ImageDocumentModel.swift` P5). Those
+runs happened when `definition` existed and `texture` did not — they
+measured THREE convolution stages, not four. `definition`→`clarity` is a
+true rename so that part was correct, but adding `Texture` retroactively
+invented a configuration nobody ever ran. Reverted to name only the
+stages actually active at measurement time. **Lesson, same one as this
+session's other near-miss: a stage rename may be propagated into a
+measurement record; a stage ADDITION may not.** Structural claims about
+extent-fraction radii (`ProxyScale.swift`, `Histogram.swift`,
+`ImageRenderer.swift:97`) correctly do gain Texture — those describe how
+radii scale, not what was timed.
+
+Non-blocking items 5, 6 and 7 also fixed: a negative-path highlight-
+headroom test (parity with the positive half — a 1.4 flat survives at
+1.39873, independently reproduced by the reviewer's own probe), a test
+comment aligned with `ProxyScale`'s wording, and two new
+`CatalogDatabaseTests` cases closing the preset-migration gap. The
+preset tests decode a `Preset` whose `editState` still carries
+`"definition"`, rather than inserting a raw row — `CatalogDatabase
+.dbQueue` is private and widening production visibility purely for a
+test is the worse trade. That covers the nested-decoding step, the only
+step the split could have broken; the column plumbing around it is
+already covered by `testCreatePresetRoundTripsTheFullEditState`.
+
+**Perf (reviewer item 4 — no measurement existed for this slice).**
+Measured at 4000x4000, full `CIContext.createCGImage` over the whole
+extent, best of 3. NOTE THE SCOPE: synthetic step-edge image rendered in
+the test process. NOT comparable to the live P3/P4/P5 numbers earlier in
+this file, which were real interactive drags on real photos — do not
+quote these side by side. Mask rows use a `.radial` mask at
+center (0.5, 0.5), feather 0.5, rotation 0, at the two radii shown;
+**mask cost is dominated by the ellipse's bounding-box ROI, so a record
+without the geometry is not reproducible** (reviewer round 2 measured
+89.8ms against this entry's original unstated 32.7ms — explained entirely
+by mask size).
+
+    baseline                          5.7 ms
+    texture  +1 / -1            37.1 / 35.8 ms
+    clarity  +1 / -1            48.9 / 48.3 ms
+    texture + clarity                92.7 ms
+    1 mask r=0.25 clarity +1 / -1   35.6 / 35.1 ms
+    3 mask r=0.25 clarity +1 / -1  312.5 / 313.5 ms
+    1 mask r=0.90 clarity +1 / -1   82.0 / 83.5 ms
+    3 mask r=0.90 clarity +1 / -1 1811.7 / 1757.1 ms
+
+**The reviewer's perf hypothesis was WRONG, and measuring it is how we
+know.** It predicted negative `Mask.clarity` would be a new worst case,
+since `CIGaussianBlur` at `0.04 * min(extent)` is a ~160px radius at
+24MP. Measured: negative and positive are identical within noise at every
+geometry and mask count (35.6/35.1, 312.5/313.5, 82.0/83.5,
+1811.7/1757.1). `CIUnsharpMask` is internally a blur plus an add, so a
+same-radius `CIGaussianBlur` is the cost FLOOR, not a new ceiling. Both
+reviewer rounds independently reproduced this.
+
+**Multi-mask Clarity scaling is SUPERLINEAR, and that predates this
+slice.** 1 -> 3 masks costs 8.8x at r=0.25 (35.6 -> 312.5) and 22x at
+r=0.90 (82.0 -> 1811.7), not 3x — each successive mask's composite
+re-dilates the ROI of everything before it. Identical for positive and
+negative, so the negative half did not introduce it; it is a property of
+per-mask Clarity that has been there since Phase 7 slice 2. Logged in
+IMPROVEMENTS.md rather than fixed here. An earlier draft of this entry
+called it "linear at ~100ms/mask" — that figure was derived by dividing
+the 3-mask number by 3 and then asserted as the per-mask cost (circular),
+and was cross-cited to slice 6's 1-19ms drawable-resolution numbers,
+which is exactly the cross-scope comparison this same entry forbids two
+paragraphs above. Reviewer-caught; the third instance of this defect
+class in one session.
+
+The real new cost is simply that **Texture is a second full-image
+convolution**: with both sliders active the render is roughly the sum of
+each (92.7ms vs 48.9ms for Clarity alone). That is inherent to shipping
+two independent local-contrast controls and is exactly what the existing
+`ProxyScale` interactive-proxy path already exists to absorb; no new
+mitigation was added, and none looks warranted.
+
+**Exact next step**: Dehaze — the remaining third of the Texture/Dehaze
+split, and the obvious continuation. Needs its own Plan Mode session; see
+CLAUDE.md's "Dehaze — WANTED, still outstanding" bullet for the
+constraint already identified (this project's `CIColorKernel(source:)` is
+per-pixel and cannot sample neighbours, so a dark-channel-prior approach
+needs its spatial part from a built-in such as `CIMorphologyMinimum`).
+The `AdjustTabView` Effects section already leaves Dehaze's slot after
+Texture and Clarity. Alternatively pick another Tier-1 WANTED item
+(Grain, Color Grading, Point Color, Chromatic Aberration, Manual
+Transform Scale/Aspect) or Phase 8 polish — ask the user.

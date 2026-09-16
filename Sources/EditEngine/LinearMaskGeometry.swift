@@ -65,7 +65,7 @@ enum LinearMaskGeometry {
     ///     dividing top/bottom); the falloff runs along local +Y.
     ///   - width: the FULL guide-to-guide distance, a fraction of
     ///     `min(extent.width, extent.height)` (rotation-invariant on-screen
-    ///     thickness, matching Definition/Sharpen's own radius-scaling
+    ///     thickness, matching Clarity/Texture/Sharpen's own radius-scaling
     ///     precedent) — NOT a half-width.
     static func resolve(
         centerX: Double, centerY: Double, rotationDegrees: Double, width: Double,

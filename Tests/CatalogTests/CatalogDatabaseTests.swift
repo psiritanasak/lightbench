@@ -645,7 +645,7 @@ final class CatalogDatabaseTests: XCTestCase {
         s.magentaHue = -0.1; s.magentaSaturation = -0.2; s.magentaLuminance = -0.3
         s.blackAndWhite = true
         s.vignetteStrength = 0.5
-        s.definition = 0.4
+        s.clarity = 0.4
         s.sharpness = 0.6
         s.noiseReduction = 0.3
         s.redEyeSize = 0.8
@@ -685,6 +685,53 @@ final class CatalogDatabaseTests: XCTestCase {
         let presets = try await db.allPresets()
         XCTAssertEqual(presets.count, 1, "saving under an existing name must overwrite, not duplicate")
         XCTAssertEqual(presets.first?.editState.exposureEV, 2.0)
+    }
+
+    /// Reviewer-flagged gap (Texture/Clarity split): the "presets need no SQL
+    /// migration" claim rested on transitivity — `EditStateCodableTests`
+    /// proves `EditState`'s decoder handles the legacy `definition` key, and
+    /// `Preset.editState` is a nested `Codable` on a JSON TEXT column
+    /// (`Preset.swift`), so GRDB routes it through that same decoder. This
+    /// closes the gap at the decoder boundary GRDB actually uses, with a
+    /// preset payload whose `editState` still carries the PRE-SPLIT key.
+    ///
+    /// Scope, stated honestly: this decodes a `Preset` directly rather than
+    /// inserting a raw row, because `CatalogDatabase.dbQueue` is private and
+    /// widening production visibility purely for a test is a worse trade
+    /// than this. What it proves is the nested-decoding step — the only step
+    /// the split could have broken. The surrounding GRDB column plumbing is
+    /// already covered by `testCreatePresetRoundTripsTheFullEditState`.
+    func testPresetWithLegacyDefinitionKeyDecodesIntoClarity() throws {
+        let json = """
+        {
+            "id": 7,
+            "name": "Punchy",
+            "createdAt": 758246400,
+            "editState": { "exposureEV": 0.25, "definition": 0.62 }
+        }
+        """
+
+        let preset = try JSONDecoder().decode(Preset.self, from: Data(json.utf8))
+
+        XCTAssertEqual(preset.name, "Punchy")
+        XCTAssertEqual(preset.editState.clarity, 0.62, "a preset saved before the split must migrate to clarity")
+        XCTAssertEqual(preset.editState.texture, 0)
+        XCTAssertEqual(preset.editState.exposureEV, 0.25)
+    }
+
+    /// The other half of the same guarantee: a migrated value must then
+    /// survive a real round trip through the database.
+    func testMigratedClarityValueSurvivesAPresetRoundTrip() async throws {
+        let db = try makeDatabase()
+        let legacy = try JSONDecoder().decode(
+            EditState.self,
+            from: Data(#"{ "definition": 0.62 }"#.utf8)
+        )
+
+        _ = try await db.createPreset(name: "Punchy", editState: legacy)
+
+        let fetched = try await db.allPresets()
+        XCTAssertEqual(fetched.first?.editState.clarity, 0.62)
     }
 
     func testDeletePresetRemovesIt() async throws {

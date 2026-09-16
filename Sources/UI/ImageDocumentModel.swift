@@ -528,7 +528,7 @@ final class ImageDocumentModel: ObservableObject {
 
         // Downscale BEFORE the pipeline runs, not after (IMPROVEMENTS.md P5)
         // — measured live: on a 24MP source with Sharpen/Noise Reduction/
-        // Definition all active, HistogramComputer.histogram(of:)'s render
+        // Clarity all active, HistogramComputer.histogram(of:)'s render
         // alone ranged 24.6-399.9ms, because those convolution stages
         // executed at full source resolution before HistogramComputer's OWN
         // downsample-to-256 ever got a chance to shrink the graph. Every
@@ -723,13 +723,13 @@ final class ImageDocumentModel: ObservableObject {
     ///    against inside `EditPipeline.applyMasks`, not the naive fully-
     ///    edited display: `applyMasks` reads the running `img` — the
     ///    result of every EARLIER mask in the array, but BEFORE the later
-    ///    global stages (Vignette, Definition, Noise Reduction, Sharpen)
+    ///    global stages (Vignette, Clarity, Texture, Noise Reduction, Sharpen)
     ///    that run AFTER it in the fixed pipeline order. Sampling the
     ///    fully-edited image would record a color the kernel never
     ///    actually sees there (e.g. under a vignette, a tapped dark
     ///    corner would read darker than what the kernel measures),
     ///    misaligning the selection. So this zeros out `vignetteStrength`/
-    ///    `definition`/`noiseReduction`/`sharpness` and truncates `masks`
+    ///    `clarity`/`texture`/`noiseReduction`/`sharpness` and truncates `masks`
     ///    to only those BEFORE this one in the array, then renders exactly
     ///    that truncated state — structurally guaranteed to match what
     ///    `applyMasks`'s own loop sees at this mask's own position (both
@@ -772,7 +772,8 @@ final class ImageDocumentModel: ObservableObject {
 
         var samplingState = editState
         samplingState.vignetteStrength = 0
-        samplingState.definition = 0
+        samplingState.texture = 0
+        samplingState.clarity = 0
         samplingState.noiseReduction = 0
         samplingState.sharpness = 0
         samplingState.masks = Array(editState.masks[..<maskIndex])

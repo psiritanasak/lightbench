@@ -67,7 +67,7 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     // reaches `draw(in:)` directly without going through `updateNSView` at
     // all. Measured live (IMPROVEMENTS.md P3): most frames were already
     // sub-millisecond, but real spikes up to ~459ms appeared during a
-    // resize/zoom/pan sequence with Sharpen+NR+Definition active and
+    // resize/zoom/pan sequence with Sharpen+NR+Clarity active and
     // nothing else changing — this cache eliminates exactly that redundant
     // rebuild.
     private var cachedSourceImage: CIImage?
@@ -83,7 +83,7 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     // full-resolution source, then a real full-resolution frame renders
     // once the drag settles (~0.25s of no further `editState` change).
     // Justified by live measurement: a continuous Sharpen drag with
-    // Sharpen+NoiseReduction+Definition active on a large photo showed
+    // Sharpen+NoiseReduction+Clarity active on a large photo showed
     // `draw(in:)` frames frequently at 19-42ms with outliers at 184.7ms
     // and 279.0ms — the P3 cache above does NOT help this case, since
     // `editState` changes every frame of a drag, a guaranteed cache miss.
@@ -95,7 +95,7 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     //     comment) — downscaling itself already averages away some noise
     //     before NR runs, so the interactive preview looks CLEANER than
     //     the settled frame and the export.
-    //   - Sharpen / Definition: radii are extent FRACTIONS, so the
+    //   - Sharpen / Clarity / Texture: radii are extent FRACTIONS, so the
     //     on-screen halo is right at fit zoom, but the absolute pixel
     //     radius quantizes differently on a downscaled image.
     //   - Red-eye at aggressive proxy scales: radius is a fraction of
@@ -157,7 +157,7 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     /// input within one `draw(in:)` call, Compare gets the proxy for BOTH
     /// halves for free from this single key — costing nothing in quality,
     /// since `EditState.comparisonOriginal()` already zeroes
-    /// `definition`/`sharpness`/`noiseReduction`, so the original half has
+    /// `clarity`/`texture`/`sharpness`/`noiseReduction`, so the original half has
     /// no convolution stage to diverge in the first place.
     private var cachedPipelineSource: CIImage?
 

@@ -1675,7 +1675,7 @@ final class EditPipelineTests: XCTestCase {
         // the three stages that mutate it together (straighten grows it,
         // perspective preserves it, crop shrinks it). It does NOT cover the
         // resolution-DEPENDENT divergence `ProxyScale`'s own doc comment
-        // already enumerates (vignette/red-eye/Definition/Sharpen radii,
+        // already enumerates (vignette/red-eye/Clarity/Texture/Sharpen radii,
         // none of which change extent; Noise Reduction, measured
         // resolution-independent) — those are accepted, documented preview
         // tradeoffs, not regressions this test is meant to catch.
@@ -2189,15 +2189,15 @@ final class EditPipelineTests: XCTestCase {
 
     // MARK: Clarity (the one extent-sensitive param -- CLAUDE.md's Phase 7 "Hazard 1")
 
-    func testMaskClarityMatchesGlobalDefinitionAndScalesWithExtent() {
-        // A full-covering mask's Clarity must match global Definition
+    func testMaskClarityMatchesGlobalClarityAndScalesWithExtent() {
+        // A full-covering mask's Clarity must match global Clarity
         // EXACTLY at several sizes -- this fails immediately if a future
         // change narrows the input to the mask's own bounding box instead
         // of the full extent (which would silently change the radius).
         for size in [400, 800, 1600] {
             let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: size)
             let masked = EditPipeline.apply(EditState(masks: [fullyCoveringMask(clarity: 1)]), to: input)
-            let global = EditPipeline.apply(EditState(definition: 1), to: input)
+            let global = EditPipeline.apply(EditState(clarity: 1), to: input)
 
             XCTAssertEqual(
                 edgePixel(of: masked, x: size / 2 + 30, size: size).r,
@@ -2370,7 +2370,7 @@ final class EditPipelineTests: XCTestCase {
         // Sharpen were separately measured to commute with Vignette; that
         // is NOT evidence masks-vs-Vignette commute in general). Contrast
         // is perceptual-domain/nonlinear -- the same domain-crossing
-        // reasoning `applyDefinition`'s own doc comment gives for why IT
+        // reasoning `applyClarity`'s own doc comment gives for why IT
         // doesn't cleanly commute with Vignette either. Sampled near a
         // CORNER (not dead-center, where Vignette is itself near a no-op).
         let input = solidColorImage(r: 0.7, g: 0.7, b: 0.7, a: 1, size: 400)
@@ -2589,10 +2589,10 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(pixel(of: masked, at: 200, 200).g, pixel(of: global, at: 200, 200).g, accuracy: accuracy)
     }
 
-    func testLinearMaskClarityMatchesGlobalDefinition() {
+    func testLinearMaskClarityMatchesGlobalClarity() {
         let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 400)
         let masked = EditPipeline.apply(EditState(masks: [fullyCoveringLinearMask(clarity: 1)]), to: input)
-        let global = EditPipeline.apply(EditState(definition: 1), to: input)
+        let global = EditPipeline.apply(EditState(clarity: 1), to: input)
 
         XCTAssertEqual(edgePixel(of: masked, x: 230, size: 400).r, edgePixel(of: global, x: 230, size: 400).r, accuracy: accuracy)
     }
@@ -4133,30 +4133,31 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(state.hslSaturation, 0)
     }
 
-    // MARK: - Definition (Clarity) math
+
+    // MARK: - Clarity + Texture (local contrast) math
     //
-    // Definition is CIUnsharpMask at a much larger radius than Sharpen, so
+    // Clarity is CIUnsharpMask at a much larger radius than Sharpen, so
     // — like Sharpen and Noise Reduction — these values are measured
     // against the real filter, not derived. Uses `stepEdgeImage` and
     // `edgePixel` (defined below, under Sharpen math) exactly like Sharpen's
     // own tests, sampling several offsets from the edge to show the WIDE
     // band that distinguishes local contrast from fine sharpening.
 
-    func testDefinitionZeroIsIdentity() {
+    func testClarityZeroIsIdentity() {
         let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
-        let output = EditPipeline.apply(EditState(definition: 0), to: input)
+        let output = EditPipeline.apply(EditState(clarity: 0), to: input)
 
         XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 0.5, accuracy: accuracy)
         XCTAssertEqual(edgePixel(of: output, x: 398, size: 800).r, 0.2, accuracy: accuracy)
     }
 
-    func testDefinitionBoostsLocalContrastOverBroadBand() {
-        // The signature test: Definition's overshoot stays elevated far from
+    func testClarityBoostsLocalContrastOverBroadBand() {
+        // The signature test: Clarity's overshoot stays elevated far from
         // the edge (x=430, x=460 — 30px/60px away), where a fine sharpen has
         // already decayed to baseline. That WIDTH, not the peak, is what
         // makes this local contrast rather than fine detail sharpening.
         let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
-        let output = EditPipeline.apply(EditState(definition: 1), to: input)
+        let output = EditPipeline.apply(EditState(clarity: 1), to: input)
 
         XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 0.66061, accuracy: accuracy)
         XCTAssertEqual(edgePixel(of: output, x: 415, size: 800).r, 0.60219, accuracy: accuracy)
@@ -4168,21 +4169,21 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(edgePixel(of: output, x: 500, size: 800).r, 0.5, accuracy: accuracy)
     }
 
-    func testDefinitionHaloIsWiderThanSharpen() {
+    func testClarityHaloIsWiderThanSharpen() {
         // Discriminator vs the shipped Sharpen tool: at the same offset from
-        // the edge, Definition stays elevated while Sharpen (tiny radius)
+        // the edge, Clarity stays elevated while Sharpen (tiny radius)
         // has already returned to baseline.
         let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
-        let definitionOutput = EditPipeline.apply(EditState(definition: 1), to: input)
+        let clarityOutput = EditPipeline.apply(EditState(clarity: 1), to: input)
         let sharpenOutput = EditPipeline.apply(EditState(sharpness: 1), to: input)
 
-        let definitionFar = edgePixel(of: definitionOutput, x: 430, size: 800).r
+        let clarityFar = edgePixel(of: clarityOutput, x: 430, size: 800).r
         let sharpenFar = edgePixel(of: sharpenOutput, x: 430, size: 800).r
-        XCTAssertGreaterThan(definitionFar, sharpenFar)
+        XCTAssertGreaterThan(clarityFar, sharpenFar)
         XCTAssertEqual(sharpenFar, 0.5, accuracy: 0.005, "Sharpen's tiny radius should already be flat 30px from the edge")
     }
 
-    func testDefinitionRadiusScalesWithResolution() {
+    func testClarityRadiusScalesWithResolution() {
         // A FIXED pixel radius would give an IDENTICAL profile regardless of
         // image size; measured values strictly increase with resolution at
         // matching offsets, proving the radius scales with the image itself
@@ -4193,7 +4194,7 @@ final class EditPipelineTests: XCTestCase {
         var values: [Float] = []
         for size in sizes {
             let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: size)
-            let output = EditPipeline.apply(EditState(definition: 1), to: input)
+            let output = EditPipeline.apply(EditState(clarity: 1), to: input)
             values.append(edgePixel(of: output, x: size / 2 + 30, size: size).r)
         }
 
@@ -4204,40 +4205,192 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertLessThan(values[1], values[2])
     }
 
-    func testDefinitionPreservesHighlightHeadroom() {
+    func testClarityPreservesHighlightHeadroom() {
         let input = stepEdgeImage(lo: 0.8, hi: 1.4, size: 800)
-        let output = EditPipeline.apply(EditState(definition: 1), to: input)
+        let output = EditPipeline.apply(EditState(clarity: 1), to: input)
 
         XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 1.68714, accuracy: accuracy)
         XCTAssertEqual(edgePixel(of: output, x: 600, size: 800).r, 1.40127, accuracy: accuracy)
         XCTAssertEqual(edgePixel(of: output, x: 398, size: 800).r, 0.62144, accuracy: accuracy)
     }
 
-    func testDefinitionPreservesAlpha() {
+    func testClarityPreservesAlpha() {
         let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800, alpha: 0.5)
-        let output = EditPipeline.apply(EditState(definition: 1), to: input)
+        let output = EditPipeline.apply(EditState(clarity: 1), to: input)
 
         XCTAssertEqual(edgePixel(of: output, x: 200, size: 800).a, 0.5, accuracy: accuracy)
         XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).a, 0.5, accuracy: accuracy)
     }
 
-    func testDefinitionPreservesExtent() {
+    func testClarityPreservesExtent() {
         let input = quadrantImage(width: 100, height: 100)
-        let withDefinition = EditPipeline.apply(
-            EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1, definition: 1),
+        let withClarity = EditPipeline.apply(
+            EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1, clarity: 1),
             to: input
         )
-        let withoutDefinition = EditPipeline.apply(
+        let withoutClarity = EditPipeline.apply(
             EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1),
             to: input
         )
 
-        XCTAssertEqual(withDefinition.extent, withoutDefinition.extent, "definition must not change the extent crop already established")
+        XCTAssertEqual(withClarity.extent, withoutClarity.extent, "clarity must not change the extent crop already established")
     }
 
-    func testDefinitionFlatImageUnaffected() {
+    func testClarityFlatImageUnaffected() {
         let input = solidColorImage(0.35, size: 800)
-        let output = EditPipeline.apply(EditState(definition: 1), to: input)
+        let output = EditPipeline.apply(EditState(clarity: 1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 400, size: 800).r, 0.35, accuracy: accuracy)
+    }
+
+    // MARK: - Texture math
+    //
+    // Texture is the SAME `CIUnsharpMask` construction as Clarity at a much
+    // smaller radius (`kTextureRadiusFraction` 0.01 vs Clarity's 0.04), so
+    // these values are measured against the real filter like Clarity's own.
+    // The point of every test here is the WIDTH of the halo — that is the
+    // only thing separating Texture from Clarity above it and Sharpen below.
+
+    func testTextureZeroIsIdentity() {
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let output = EditPipeline.apply(EditState(texture: 0), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 0.5, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 398, size: 800).r, 0.2, accuracy: accuracy)
+    }
+
+    func testTextureBoostsLocalContrastOverNarrowBand() {
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let output = EditPipeline.apply(EditState(texture: 1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 0.64124, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 415, size: 800).r, 0.50955, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 430, size: 800).r, 0.50060, accuracy: accuracy)
+    }
+
+    func testTextureHaloSitsBetweenSharpenAndClarity() {
+        // The whole reason these are three separate controls: at 15px out
+        // from the edge Sharpen is already flat, Texture is measurably
+        // elevated, and Clarity is far higher still. Peak height does NOT
+        // separate them (all three are ~0.64-0.66) — only width does.
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let sharpen = edgePixel(of: EditPipeline.apply(EditState(sharpness: 1), to: input), x: 415, size: 800).r
+        let texture = edgePixel(of: EditPipeline.apply(EditState(texture: 1), to: input), x: 415, size: 800).r
+        let clarity = edgePixel(of: EditPipeline.apply(EditState(clarity: 1), to: input), x: 415, size: 800).r
+
+        XCTAssertLessThan(sharpen, texture)
+        XCTAssertLessThan(texture, clarity)
+        XCTAssertEqual(sharpen, 0.5, accuracy: 0.005, "Sharpen's tiny radius is already flat 15px out")
+        XCTAssertGreaterThan(texture, 0.505, "Texture must still be measurably elevated 15px out")
+    }
+
+    func testTexturePreservesAlphaAndExtent() {
+        let alphaInput = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800, alpha: 0.5)
+        let output = EditPipeline.apply(EditState(texture: 1), to: alphaInput)
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).a, 0.5, accuracy: accuracy)
+
+        let input = quadrantImage(width: 100, height: 100)
+        let withTexture = EditPipeline.apply(
+            EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1, texture: 1),
+            to: input
+        )
+        let withoutTexture = EditPipeline.apply(
+            EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1),
+            to: input
+        )
+        XCTAssertEqual(withTexture.extent, withoutTexture.extent, "texture must not change the extent crop already established")
+    }
+
+    // MARK: - Negative Clarity/Texture (the formerly-dead half)
+    //
+    // `definition` shipped one-directional because `CIUnsharpMask` was
+    // measured to clamp negative `intensity` to a BIT-IDENTICAL no-op. The
+    // split routes the negative half through a blur blend instead, so these
+    // tests exist specifically to prove the negative range is live rather
+    // than silently inert — the exact regression that would otherwise
+    // reintroduce a dead half-slider without failing anything else.
+
+    func testNegativeClarityActuallySoftens() {
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let baseline = edgePixel(of: EditPipeline.apply(EditState(), to: input), x: 401, size: 800).r
+        let output = EditPipeline.apply(EditState(clarity: -1), to: input)
+
+        XCTAssertEqual(baseline, 0.5, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 0.36483, accuracy: accuracy)
+        XCTAssertLessThan(edgePixel(of: output, x: 401, size: 800).r, baseline - 0.01,
+                          "negative Clarity must measurably soften, not no-op like CIUnsharpMask's clamped negative")
+    }
+
+    func testNegativeTextureActuallySoftensOverNarrowerBand() {
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let output = EditPipeline.apply(EditState(texture: -1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 0.37880, accuracy: accuracy)
+        XCTAssertLessThan(edgePixel(of: output, x: 401, size: 800).r, 0.49,
+                          "negative Texture must measurably soften, not no-op")
+        // Narrower reach than negative Clarity: recovered by 15px out, where
+        // negative Clarity is still well below baseline.
+        XCTAssertEqual(edgePixel(of: output, x: 415, size: 800).r, 0.49056, accuracy: accuracy)
+        let negClarityAt415 = edgePixel(of: EditPipeline.apply(EditState(clarity: -1), to: input), x: 415, size: 800).r
+        XCTAssertLessThan(negClarityAt415, edgePixel(of: output, x: 415, size: 800).r)
+    }
+
+    func testNegativeClarityPreservesExtentAndAlpha() {
+        // The blur-blend path is the one construction here that can change
+        // extent: CIGaussianBlur expands its output. `localContrast` clamps
+        // and re-crops for exactly this reason, and `applyMasks` resolves
+        // mask geometry against this extent — so a regression here would
+        // misalign masks, not merely look soft.
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let output = EditPipeline.apply(EditState(clarity: -1), to: input)
+        XCTAssertEqual(output.extent, input.extent)
+
+        let alphaInput = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800, alpha: 0.5)
+        let alphaOutput = EditPipeline.apply(EditState(clarity: -1), to: alphaInput)
+        XCTAssertEqual(alphaOutput.extent, alphaInput.extent)
+        XCTAssertEqual(edgePixel(of: alphaOutput, x: 401, size: 800).a, 0.5, accuracy: accuracy)
+    }
+
+    func testNegativeClarityPreservesHighlightHeadroom() {
+        // Parity with `testClarityPreservesHighlightHeadroom` on the positive
+        // half: the blur-blend path must not clip above 1.0 either. A 1.4
+        // flat survives at 1.39873 well away from the edge; near the edge the
+        // blur legitimately pulls the two sides toward each other, which is
+        // the softening working, not clipping.
+        let input = stepEdgeImage(lo: 0.8, hi: 1.4, size: 800)
+        let output = EditPipeline.apply(EditState(clarity: -1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 600, size: 800).r, 1.39873, accuracy: accuracy)
+        XCTAssertGreaterThan(edgePixel(of: output, x: 600, size: 800).r, 1.0,
+                             "the negative path must not clamp highlight headroom to 1.0")
+        XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, 1.14359, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: output, x: 398, size: 800).r, 1.00538, accuracy: accuracy)
+    }
+
+    func testOutOfRangeNegativeClaritySaturatesRatherThanExtrapolating() {
+        // Out-of-range values are unreachable from the bounded slider but
+        // reachable from a hand-edited sidecar, and `applyMasks` deliberately
+        // does NOT clamp Clarity (unlike contrast/shadows/highlights/
+        // saturation). MEASURED: `CIFilter.mix` saturates at `amount` 1.0, so
+        // anything past clarity -1.25 (= -1.25 * 0.8 span) is the fully
+        // blurred image and nothing extrapolates beyond it.
+        let input = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+        let atSaturation = edgePixel(of: EditPipeline.apply(EditState(clarity: -1.25), to: input), x: 401, size: 800).r
+
+        XCTAssertEqual(atSaturation, 0.33486, accuracy: accuracy)
+        for wild in [-2.0, -5.0, -20.0] {
+            let output = EditPipeline.apply(EditState(clarity: wild), to: input)
+            XCTAssertEqual(edgePixel(of: output, x: 401, size: 800).r, atSaturation, accuracy: accuracy,
+                           "clarity \(wild) must saturate at the fully blurred image, not extrapolate past it")
+        }
+    }
+
+    func testNegativeClarityLeavesFlatImageUnchanged() {
+        // Blurring a solid colour is a no-op, so the blend must be too —
+        // guards against the negative path introducing an overall level
+        // shift (e.g. a mis-signed mix amount).
+        let input = solidColorImage(0.35, size: 800)
+        let output = EditPipeline.apply(EditState(clarity: -1), to: input)
 
         XCTAssertEqual(edgePixel(of: output, x: 400, size: 800).r, 0.35, accuracy: accuracy)
     }
@@ -4555,7 +4708,8 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditState().redEyeStrength, 0.7)
         XCTAssertEqual(EditState().vignetteStrength, 0)
         XCTAssertEqual(EditState().vignetteRadius, 0.5)
-        XCTAssertEqual(EditState().definition, 0)
+        XCTAssertEqual(EditState().clarity, 0)
+        XCTAssertEqual(EditState().texture, 0)
         XCTAssertEqual(EditState().noiseReduction, 0)
         XCTAssertEqual(EditState().sharpness, 0)
 
@@ -4621,7 +4775,7 @@ final class EditPipelineTests: XCTestCase {
             redEyeStrength: 0.9,
             vignetteStrength: 0.7,
             vignetteRadius: 0.3,
-            definition: 0.55,
+            clarity: 0.55,
             noiseReduction: 0.45,
             sharpness: 0.6,
             boostAmount: 0.35,

@@ -503,6 +503,39 @@ struct EditState: Equatable, Codable {
     /// algorithm, not another radius on this filter.
     var clarity: Double = 0
 
+    /// Haze removal, -1...1, default 0 (identity). Positive removes haze;
+    /// negative ADDS it (Lightroom's Dehaze is bipolar the same way, and here
+    /// the negative half took almost no extra CODE — it reuses the atmospheric
+    /// light the removal path already estimates). Note that is an
+    /// implementation-cost statement, not a runtime one: measured, negative
+    /// and positive show no meaningful render-cost difference (two
+    /// methodologies, 0.6% and 3.5% apart, in opposite directions). Absolute
+    /// numbers for this stage do not reproduce — see IMPROVEMENTS.md D17.
+    ///
+    /// The third member of Lightroom's Presence panel, and the one that is NOT
+    /// another radius on `CIUnsharpMask`. Core Image ships no dehaze filter,
+    /// so this is a real implementation of the DARK CHANNEL PRIOR (He, Sun &
+    /// Tang, "Single Image Haze Removal Using Dark Channel Prior", CVPR 2009)
+    /// across two custom kernels plus `CIMorphologyMinimum` and
+    /// `CIAreaMaximum` — see `EditPipeline.applyDehaze` and
+    /// `Sources/Rendering/Shaders/DehazeDarkChannel.cikernel` /
+    /// `DehazeRecover.cikernel`.
+    ///
+    /// Purely additive: unlike `clarity`, this field has no predecessor in any
+    /// shipped sidecar, so there is NO migration and no `LegacyCodingKeys`
+    /// entry. Absent keys already default to 0 via the schema-tolerant
+    /// decoder.
+    ///
+    /// Identity at 0 is exact, but because `EditPipeline.dehazeActive` SKIPS
+    /// the stage — not because the maths round-trips. `(I - A)/1 + A` is not
+    /// identity in float32 (measured: 265 of 1024 components differ on a
+    /// 256-value ramp, max delta 2.98e-08). That guard is load-bearing.
+    ///
+    /// v1 scope: single Amount slider, matching every other v1 feature here.
+    /// The prior's own parameters (patch radius, omega, transmission floor)
+    /// are tuned constants in `EditPipeline`, not exposed.
+    var dehaze: Double = 0
+
     // MARK: - Noise Reduction
 
     /// Luminance noise reduction amount, 0...1, default 0 (identity).
@@ -1011,6 +1044,7 @@ struct EditState: Equatable, Codable {
         s.vignetteRadius = 0.5
         s.texture = 0
         s.clarity = 0
+        s.dehaze = 0
         s.sharpness = 0
         s.noiseReduction = 0
         // red-eye: reset sliders AND clear points (see doc comment above)
@@ -1086,6 +1120,7 @@ struct EditState: Equatable, Codable {
         result.vignetteRadius = vignetteRadius
         result.texture = texture
         result.clarity = clarity
+        result.dehaze = dehaze
         result.sharpness = sharpness
         result.noiseReduction = noiseReduction
         // red-eye correction INTENSITY only — `redEyePoints` (where the
@@ -1166,7 +1201,7 @@ extension EditState {
         case redEyePoints, redEyeSize, redEyeStrength
         case masks
         case vignetteStrength, vignetteRadius
-        case texture, clarity
+        case texture, clarity, dehaze
         case noiseReduction
         case sharpness
         case boostAmount
@@ -1259,6 +1294,7 @@ extension EditState {
         clarity = try container.decodeIfPresent(Double.self, forKey: .clarity)
             ?? legacyDefinition
             ?? 0
+        dehaze = try container.decodeIfPresent(Double.self, forKey: .dehaze) ?? 0
         noiseReduction = try container.decodeIfPresent(Double.self, forKey: .noiseReduction) ?? 0
         sharpness = try container.decodeIfPresent(Double.self, forKey: .sharpness) ?? 0
         boostAmount = try container.decodeIfPresent(Double.self, forKey: .boostAmount) ?? 1.0

@@ -824,6 +824,26 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(roundTripped.texture, -0.8)
     }
 
+    func testDehazeRoundTripsIncludingNegativeValues() throws {
+        // Purely additive field (no legacy key, unlike clarity), so the only
+        // real risk is a clamp swallowing the negative half.
+        let original = EditState(texture: 0.2, clarity: -0.4, dehaze: -0.75)
+        let roundTripped = try JSONDecoder().decode(EditState.self, from: JSONEncoder().encode(original))
+
+        XCTAssertEqual(roundTripped.dehaze, -0.75)
+        XCTAssertEqual(roundTripped.clarity, -0.4)
+        XCTAssertEqual(roundTripped.texture, 0.2)
+    }
+
+    func testDehazeAbsentFromAnOlderSidecarDefaultsToIdentity() throws {
+        let state = try decode("""
+        { "clarity": 0.5 }
+        """)
+
+        XCTAssertEqual(state.dehaze, 0)
+        XCTAssertEqual(state.clarity, 0.5)
+    }
+
     // MARK: - ImageDocumentModel.sidecarURL(for:)
 
     func testSidecarURLAppendsPhotoAppJSONSuffix() {

@@ -1,0 +1,47 @@
+// Dehaze, step 1 of 2 — the DARK CHANNEL (Phase 8, Lightroom "Presence").
+// The third custom Core Image kernel in this codebase (after
+// SelectiveColor.cikernel and ColorRange.cikernel). Core Image ships no
+// dehaze filter of any kind, and no built-in can compute a per-pixel
+// cross-channel minimum normalized by a second image.
+//
+// Implements the dark channel from He, Sun & Tang, "Single Image Haze Removal
+// Using Dark Channel Prior" (CVPR 2009). The prior: in a haze-free outdoor
+// image, most non-sky patches contain at least one colour channel with a very
+// low value. Where that minimum is HIGH instead, the patch is hazy — so the
+// dark channel is a direct estimate of haze density.
+//
+// This kernel does the PER-PIXEL half only: min over the three channels of
+// I/A. The SPATIAL half (min over a patch) is CIMorphologyMinimum applied to
+// this kernel's output — see EditPipeline.applyDehaze. Splitting it that way
+// is what lets a CIColorKernel (which cannot sample neighbours) implement an
+// inherently neighbourhood-based prior.
+//
+// atmos is the atmospheric light A, delivered as a CONSTANT FIELD: a 1x1
+// CIAreaMaximum result spread with .clampedToExtent(). That keeps A on the
+// GPU — a CPU readback here would stall every frame.
+//
+// Output is vec4(d,d,d,1): opaque on purpose, so the CIMorphologyMinimum that
+// follows cannot pull alpha down and darken the frame's own edges.
+
+kernel vec4 dehazeDarkChannel(__sample s, __sample atmos) {
+    // Unpremultiply before the maths, matching SelectiveColor/ColorRange.
+    float a = s.a;
+    vec3 I = (a > 0.0) ? s.rgb / a : s.rgb;
+
+    float aa = atmos.a;
+    vec3 A = (aa > 0.0) ? atmos.rgb / aa : atmos.rgb;
+
+    // A is a DIVISOR: guard it away from zero. A near-black frame (or a fully
+    // transparent one) would otherwise divide by ~0 and produce inf/NaN that
+    // propagates through the morphology pass into every pixel.
+    A = max(A, vec3(0.0001));
+
+    // Clamp negatives before dividing. This working space is
+    // extendedLinearSRGB and genuinely carries values below 0 (see
+    // ColorRange.cikernel's own note) — a negative channel would otherwise
+    // make the dark channel negative and drive transmission above 1.
+    vec3 n = max(I, vec3(0.0)) / A;
+
+    float d = min(n.r, min(n.g, n.b));
+    return vec4(d, d, d, 1.0);
+}

@@ -55,6 +55,7 @@ enum EditPipeline {
         image = applyCrop(state, to: image)                   // geometric
         image = applyRedEye(state, to: image)                 // localized, scene-linear
         image = applyMasks(state, to: image)                  // local adjustments, own perceptual sandwich
+        image = applyDehaze(state, to: image)                 // scene restoration, scene-linear, before vignette/local contrast
         image = applyVignette(state, to: image)               // radial, scene-linear
         image = applyClarity(state, to: image)                // wide local contrast, perceptual, before detail pair
         image = applyTexture(state, to: image)                // fine local contrast, perceptual, coarse->fine after clarity
@@ -1940,6 +1941,213 @@ enum EditPipeline {
         filter.intensity = Float(intensity)
         filter.falloff = Float(kVignetteFalloff)
         return filter.outputImage ?? image
+    }
+
+    // MARK: - Dehaze (dark channel prior)
+
+    /// Patch radius for the dark channel's spatial minimum, as a fraction of
+    /// `min(extent)`. `CIMorphologyMinimum`'s radius is in ABSOLUTE PIXELS —
+    /// the same resolution trap `kClarityRadiusFraction` and
+    /// `kSharpenRadiusFraction` already document — so it must scale with the
+    /// image or a 24MP photo and its thumbnail would get different haze
+    /// estimates and therefore different colour.
+    /// MEASUREMENT: see `testDehazeRadiusScalesWithResolution`.
+    private static let kDehazeRadiusFraction: Double = 0.0125
+
+    /// Blur radius (fraction of `min(extent)`) applied before `CIAreaMaximum`
+    /// estimates the atmospheric light. Blurring FIRST is the point: the raw
+    /// maximum of a photo is whatever single brightest pixel exists — a
+    /// specular highlight, a street lamp, a hot pixel — which is not the
+    /// atmosphere. Blurring makes the estimate come from the brightest REGION
+    /// instead, the cheap stand-in for the paper's own "brightest 0.1% of the
+    /// dark channel" selection.
+    private static let kDehazeAtmosphereBlurFraction: Double = 0.02
+
+    /// How much haze the model is allowed to remove. The paper's own omega:
+    /// deliberately below 1.0 so a little haze survives in the deepest
+    /// distance, because a perfectly clear far field reads as unnatural
+    /// (aerial perspective is a real depth cue).
+    private static let kDehazeOmega: Double = 0.95
+
+    /// Floor on transmission before dividing by it. Without it, the densest
+    /// haze drives `t` toward 0 and `(I - A)/t` explodes into noise.
+    private static let kDehazeTransmissionFloor: Double = 0.1
+
+    /// Span for the NEGATIVE (add-haze) half: at -1 the image blends this far
+    /// toward the atmospheric light. Below 1.0 on purpose — a full blend is a
+    /// flat rectangle of A with no image left in it.
+    private static let kDehazeAddHazeSpan: Double = 0.85
+
+    /// The third and fourth custom Core Image kernels in this codebase —
+    /// same lazy, bundled, fail-soft-to-`nil` load shape as
+    /// `selectiveColorKernel`/`colorRangeKernel` above. Two kernels rather
+    /// than one because the dark channel prior is inherently a NEIGHBOURHOOD
+    /// operation and a `CIColorKernel` cannot sample neighbours: the
+    /// per-pixel half runs here, the spatial minimum runs as
+    /// `CIMorphologyMinimum` between them.
+    private static let dehazeDarkChannelKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "DehazeDarkChannel", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
+    private static let dehazeRecoverKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "DehazeRecover", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
+    private static func dehazeActive(_ state: EditState) -> Bool {
+        state.dehaze != 0
+    }
+
+    /// Single-image haze removal via the DARK CHANNEL PRIOR (He, Sun & Tang,
+    /// CVPR 2009). Core Image has no dehaze filter, so this is assembled from
+    /// two custom kernels plus `CIAreaMaximum` and `CIMorphologyMinimum`:
+    ///
+    ///   1. atmospheric light A  = area maximum of a blurred copy, spread from
+    ///      1x1 to a constant field with `.clampedToExtent()`
+    ///   2. dark channel d       = per-pixel `min(r,g,b)` of `I/A` (kernel 1)
+    ///   3. spatial minimum      = `CIMorphologyMinimum` over a patch
+    ///   4. recovery             = `J = (I - A)/max(1 - omega*amount*d, t0) + A`
+    ///      (kernel 2)
+    ///
+    /// **Everything stays on the GPU.** Step 1 is the reason: A is reduced to
+    /// a 1x1 image and then spread back out as a sampler, rather than rendered
+    /// to the CPU and passed as a scalar. Do NOT "simplify" this by reusing
+    /// `ImageAverageColor`'s readback — that is correct for Cast, a one-shot
+    /// user action, and would stall every frame here.
+    ///
+    /// Runs in SCENE-LINEAR light with no perceptual sandwich, unlike
+    /// Clarity/Texture. That is not a consistency lapse: the haze model is
+    /// defined on RADIANCE, so the working space is already the right one.
+    /// This is a PRINCIPLED choice, NOT a measured one — no perceptual A/B was
+    /// run, and none is needed to justify using the domain the model is
+    /// defined in.
+    ///
+    /// Placed AFTER masks and BEFORE Vignette, Clarity and Texture:
+    /// - before Vignette because Vignette darkens corners, and A is estimated
+    ///   from the frame's brightest region — letting Vignette run first would
+    ///   feed the haze estimate a value the scene never had
+    /// - before Clarity/Texture so local contrast refines the RESTORED scene
+    ///   rather than sharpening haze, the same argument the pipeline header
+    ///   already makes for Red-Eye preceding the detail stages
+    ///
+    /// Post-crop, with the rest of the Presence group. **Consequence worth
+    /// knowing: A is estimated from the VISIBLE frame, so cropping changes the
+    /// dehaze result.** Consistent with Vignette also tracking the post-crop
+    /// frame, but more surprising, because a crop that excludes the brightest
+    /// region shifts the whole haze estimate.
+    ///
+    /// Extent: `CIGaussianBlur` and `CIMorphologyMinimum` both expand their
+    /// output and `CIAreaMaximum` collapses it to 1x1, so every step is
+    /// clamped and cropped back. The dependents are DOWNSTREAM — Vignette's
+    /// center and Clarity/Texture/Sharpen's `min(extent)` radius fractions all
+    /// read whatever extent this stage emits. (An earlier draft said
+    /// `applyMasks` depends on it; that is backwards — `applyMasks` runs one
+    /// line ABOVE this stage and can never see its extent.)
+    ///
+    /// PERFORMANCE — this stage is the most expensive in the Presence group,
+    /// and combining it with CLARITY specifically costs materially more than
+    /// the sum of the two. Both of those hold under every methodology tried.
+    ///
+    /// **The absolute numbers do not reproduce, so no single figure is quoted
+    /// as this stage's cost.** Three methodologies gave 78.9 / 116.5 / 148.7 ms for the SAME
+    /// configuration at 4000x4000. The Dehaze+Clarity excess landed at 1.7x,
+    /// 2.1x and 3.7x depending on method.
+    ///
+    /// The methodology trap, worth knowing before re-measuring: a harness that
+    /// shares one `CIContext` across configurations lets later runs hit
+    /// subgraphs earlier ones cached — every dehaze configuration shares the
+    /// atmospheric-light blur. Interleaving does not fix that, it CAUSES it.
+    /// THREE claims died this way and are recorded as withdrawn in
+    /// IMPROVEMENTS.md D17 so they are not re-derived (the third,
+    /// `.insertingIntermediate()` being "worse", is noted at the
+    /// `areaMaximum` site below):
+    ///
+    /// - "negative is ~4x cheaper because Core Image prunes the dark-channel
+    ///   chain as dead code" — FALSE. With a fresh context per measurement,
+    ///   +1 and -1 are within 1% (148.7 vs 147.8 ms). No pruning happens.
+    /// - "`CIAreaMaximum` is not the cost driver" — FALSE. Reviewer measured
+    ///   the atmosphere chain at ~25% of this stage's total. The substitution
+    ///   test behind the original claim was confounded: replacing the area
+    ///   maximum with a constant necessarily also removes the 80px Gaussian
+    ///   that feeds it, so it never isolated what it claimed to.
+    ///
+    /// Accepted rather than optimised, by explicit user decision when this
+    /// slice was scoped: ship the correct algorithm, record the cost, and rely
+    /// on `ProxyScale`'s interactive proxy, which already absorbs
+    /// Clarity/Texture. The cost lands on export and the settled full-res
+    /// frame, not on dragging. See IMPROVEMENTS.md D17.
+    ///
+    /// LIMITATION, an unrecorded deviation from the cited paper until now:
+    /// there is no refinement of the transmission map (the paper's soft
+    /// matting, or the usual guided-filter substitute). Transmission is
+    /// therefore blocky at the patch scale and will halo at sharp depth
+    /// discontinuities. Acceptable for v1, same scope-cut pattern as every
+    /// other v1 feature here, but it is a real quality gap rather than a
+    /// tuning choice.
+    ///
+    /// Fails soft to the unmodified image if either kernel is unavailable,
+    /// matching `applySelectiveColor`'s own precedent.
+    private static func applyDehaze(_ state: EditState, to image: CIImage) -> CIImage {
+        guard dehazeActive(state) else { return image }
+        guard let darkKernel = dehazeDarkChannelKernel,
+              let recoverKernel = dehazeRecoverKernel else { return image }
+        let extent = image.extent
+        guard !extent.isInfinite, !extent.isEmpty else { return image }
+
+        let minDimension = Double(min(extent.width, extent.height))
+
+        // 1. Atmospheric light: blur, reduce to 1x1, spread back to a field.
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = image.clampedToExtent()
+        blur.radius = Float(kDehazeAtmosphereBlurFraction * minDimension)
+        guard let blurred = blur.outputImage?.cropped(to: extent) else { return image }
+
+        // `CIAreaMaximum` takes a PER-CHANNEL maximum, so max-RGB and
+        // max-alpha can come from different pixels, making the unpremultiplied
+        // `A = maxRGB / maxAlpha` an underestimate on mixed-alpha input.
+        // Benign as shipped — any opaque interior pins max-alpha to 1 — but
+        // `applyStraighten` upstream genuinely produces partial-alpha frames,
+        // so it is not purely theoretical.
+        let areaMax = CIFilter.areaMaximum()
+        areaMax.inputImage = blurred
+        areaMax.extent = extent
+        guard let atmosphere1x1 = areaMax.outputImage else { return image }
+        // No `.insertingIntermediate()` here — but NOT for the reason an
+        // earlier version of this comment gave. Both of its claims are
+        // WITHDRAWN (see IMPROVEMENTS.md D17): the "worse on the full-extent
+        // field" number did not reproduce (re-measured neutral), and "the area
+        // maximum is not this stage's cost driver" is FALSE — the atmosphere
+        // chain measures ~25% of this stage's total, making it the single
+        // largest removable cost here. Both came from a harness that shared
+        // one `CIContext` across configurations.
+        //
+        // So: if you are optimising this stage, START HERE, at the blur +
+        // area maximum above. `.insertingIntermediate()` was measured neutral
+        // and is omitted on that basis alone.
+        let atmosphere = atmosphere1x1.clampedToExtent().cropped(to: extent)
+
+        // 2. Dark channel, then 3. its spatial minimum over a patch.
+        guard let dark = darkKernel.apply(extent: extent, arguments: [image, atmosphere]) else { return image }
+        let morphology = CIFilter.morphologyMinimum()
+        morphology.inputImage = dark.clampedToExtent()
+        morphology.radius = Float(kDehazeRadiusFraction * minDimension)
+        guard let darkMinimum = morphology.outputImage?.cropped(to: extent) else { return image }
+
+        // 4. Recover. The negative (add-haze) half is pre-scaled by its own
+        //    span here so the kernel can simply read `-amount`.
+        let amount = state.dehaze < 0 ? state.dehaze * kDehazeAddHazeSpan : state.dehaze
+        let arguments: [Any] = [
+            image, darkMinimum, atmosphere,
+            NSNumber(value: amount),
+            NSNumber(value: kDehazeOmega),
+            NSNumber(value: kDehazeTransmissionFloor),
+        ]
+        return recoverKernel.apply(extent: extent, arguments: arguments)?.cropped(to: extent) ?? image
     }
 
     // MARK: - Texture & Clarity (local contrast)

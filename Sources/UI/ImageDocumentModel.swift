@@ -535,10 +535,21 @@ final class ImageDocumentModel: ObservableObject {
         // extent-dependent EditPipeline stage derives its geometry as a
         // FRACTION of the current extent (the same argument `ProxyScale` and
         // `ThumbnailGenerator.thumbnail(for:maxPixelSize:editState:)` already
-        // document and ship), so downscaling first is correct, not an
-        // approximation, for every stage except Noise Reduction: measured
-        // resolution-INDEPENDENT with deliberately no extent term
-        // (`EditPipeline`'s `kNoiseReductionSpan` doc comment). This DOES
+        // document and ship), so downscaling first is APPROXIMATELY correct.
+        // It is not exact — measured, all four stages TESTED (dehaze, noise
+        // reduction, sharpen, clarity) diverge under downscale, by amounts
+        // that swap rank with both scale and image content. Texture,
+        // vignette and red-eye were not measured. Noise Reduction diverges
+        // for the opposite reason to the radius-based ones, being
+        // resolution-INDEPENDENT by design (`kNoiseReductionSpan`).
+        // See IMPROVEMENTS.md D18 for the measured matrix — indicative only
+        // here, since D18 measured a Lanczos downscale while this path uses a
+        // plain affine one (which aliases where Lanczos averages, as this
+        // comment notes further down). Accepted regardless, because this is a
+        // HISTOGRAM: a small tonal shift does not change what the histogram is
+        // for. The same approximation would matter on a rendered pixel path.
+        //
+        // Downscaling first DOES
         // mean the histogram's noise-driven tonal spread can diverge from a
         // full-resolution computation whenever NR is active — the direction
         // isn't asserted here (a plain affine minification can alias rather
@@ -723,13 +734,15 @@ final class ImageDocumentModel: ObservableObject {
     ///    against inside `EditPipeline.applyMasks`, not the naive fully-
     ///    edited display: `applyMasks` reads the running `img` — the
     ///    result of every EARLIER mask in the array, but BEFORE the later
-    ///    global stages (Vignette, Clarity, Texture, Noise Reduction, Sharpen)
+    ///    global stages (Dehaze, Vignette, Clarity, Texture, Noise Reduction,
+    ///    Sharpen)
     ///    that run AFTER it in the fixed pipeline order. Sampling the
     ///    fully-edited image would record a color the kernel never
     ///    actually sees there (e.g. under a vignette, a tapped dark
     ///    corner would read darker than what the kernel measures),
     ///    misaligning the selection. So this zeros out `vignetteStrength`/
-    ///    `clarity`/`texture`/`noiseReduction`/`sharpness` and truncates `masks`
+    ///    `clarity`/`texture`/`dehaze`/`noiseReduction`/`sharpness` and
+    ///    truncates `masks`
     ///    to only those BEFORE this one in the array, then renders exactly
     ///    that truncated state — structurally guaranteed to match what
     ///    `applyMasks`'s own loop sees at this mask's own position (both
@@ -774,6 +787,7 @@ final class ImageDocumentModel: ObservableObject {
         samplingState.vignetteStrength = 0
         samplingState.texture = 0
         samplingState.clarity = 0
+        samplingState.dehaze = 0
         samplingState.noiseReduction = 0
         samplingState.sharpness = 0
         samplingState.masks = Array(editState.masks[..<maskIndex])

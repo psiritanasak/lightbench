@@ -4134,6 +4134,186 @@ final class EditPipelineTests: XCTestCase {
     }
 
 
+    // MARK: - Dehaze (dark channel prior) math
+    //
+    // Dehaze is a real implementation of He/Sun/Tang's dark channel prior, not
+    // a reuse of an existing filter, so every value here is measured against
+    // the running pipeline.
+    //
+    // The fixtures exploit the haze model being AFFINE per pixel: hazing a
+    // step edge just moves its two levels, so `I = J*t + A*(1-t)` can be
+    // synthesized with `stepEdgeImage` alone. With clear J = 0.2, A = 0.9 and
+    // t = 0.5, the hazy dark level is 0.2*0.5 + 0.9*0.5 = 0.55.
+    //
+    // The fixture deliberately includes the SKY (the bright level IS A = 0.9).
+    // That matters: A is ESTIMATED from the image, so a fixture whose bright
+    // level is merely "bright content" would have its own maximum mistaken for
+    // the atmosphere and could not round-trip. Sky pixels themselves recover to
+    // A by construction (I == A makes the recovery term vanish), which is
+    // correct behaviour and why assertions target the CONTENT side.
+
+    func testDehazeZeroIsExactAndTheGateIsWhatMakesItSo() {
+        // The dark level is 0.2, NOT the 0.55 most of this section uses,
+        // and that choice is load-bearing. Sterbenz: `(I - A) + A` is exact
+        // WHENEVER A/2 <= I <= 2A — sufficient, not necessary, so exactness
+        // outside that window is possible but not guaranteed. With A ~ 0.9 the
+        // window contains 0.55 and excludes 0.2, and measurement confirms 0.2
+        // genuinely is not exact. So a 0.55 fixture silently cannot detect the
+        // gate's removal, and two earlier versions of this test were
+        // tautological for exactly that reason.
+        //
+        // VERIFIED BY FAULT INJECTION, not argument: commenting out
+        // `guard dehazeActive(state)` in `applyDehaze` makes this test FAIL
+        // with "0.19999999 is not equal to 0.2 +/- 0.0" — so the assertion
+        // genuinely covers the gate, which is what keeps amount 0 exact.
+        let hazy = stepEdgeImage(lo: 0.2, hi: 0.90, size: 800)
+        let output = EditPipeline.apply(EditState(dehaze: 0), to: hazy)
+
+        for x in [100, 200, 300, 401, 500, 700] {
+            XCTAssertEqual(edgePixel(of: output, x: x, size: 800).r,
+                           edgePixel(of: hazy, x: x, size: 800).r, accuracy: 0)
+            XCTAssertEqual(edgePixel(of: output, x: x, size: 800).a,
+                           edgePixel(of: hazy, x: x, size: 800).a, accuracy: 0)
+        }
+    }
+
+    func testDehazeRecoversKnownSyntheticHaze() {
+        // The signature test: a KNOWN hazy image must come back toward its
+        // known clear original. Everything else in this section is a guard rail.
+        let hazy = stepEdgeImage(lo: 0.55, hi: 0.90, size: 800)
+
+        let half = EditPipeline.apply(EditState(dehaze: 0.5), to: hazy)
+        let full = EditPipeline.apply(EditState(dehaze: 1.0), to: hazy)
+
+        XCTAssertEqual(edgePixel(of: half, x: 200, size: 800).r, 0.40687, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: full, x: 200, size: 800).r, 0.06557, accuracy: accuracy)
+        XCTAssertLessThan(edgePixel(of: full, x: 200, size: 800).r,
+                          edgePixel(of: hazy, x: 200, size: 800).r,
+                          "dehaze must pull hazy content DOWN toward its clear value")
+    }
+
+    func testDehazeFullStrengthOvershootsThePhysicalInverse() {
+        // Honest characterisation of the slider: amount 1.0 removes MORE haze
+        // than the exact inverse. On this fixture the true inverse lands at
+        // amount ~0.86 (measured 0.20103 against the 0.20000 target); 1.0 goes
+        // past it to 0.06557. That is intentional — Lightroom's Dehaze at 100
+        // is likewise aggressive — but it means the slider is a strength
+        // control, not a calibrated physical inversion.
+        let hazy = stepEdgeImage(lo: 0.55, hi: 0.90, size: 800)
+
+        XCTAssertEqual(edgePixel(of: EditPipeline.apply(EditState(dehaze: 0.86), to: hazy), x: 200, size: 800).r,
+                       0.20103, accuracy: accuracy)
+        XCTAssertLessThan(edgePixel(of: EditPipeline.apply(EditState(dehaze: 1.0), to: hazy), x: 200, size: 800).r,
+                          0.20000, "amount 1.0 deliberately goes past the exact inverse")
+    }
+
+    func testDehazeAmountRampsMonotonically() {
+        let hazy = stepEdgeImage(lo: 0.55, hi: 0.90, size: 800)
+        let values = [0.0, 0.25, 0.5, 0.75, 1.0].map {
+            edgePixel(of: EditPipeline.apply(EditState(dehaze: $0), to: hazy), x: 200, size: 800).r
+        }
+        for (lower, higher) in zip(values.dropFirst(), values) {
+            XCTAssertLessThan(lower, higher, "more dehaze must mean less haze, at every step")
+        }
+    }
+
+    func testNegativeDehazeAddsHazeTowardAtmosphericLight() {
+        // The negative half runs the model FORWARD, blending toward the same
+        // estimated A. On a clear 0.2/0.5 edge, A estimates to the image's own
+        // maximum (0.5), so -1.0 gives mix(0.2, 0.5, 0.85) = 0.455 — which is
+        // the add-haze span, `kDehazeAddHazeSpan`, made visible.
+        let clear = stepEdgeImage(lo: 0.2, hi: 0.5, size: 800)
+
+        XCTAssertEqual(edgePixel(of: EditPipeline.apply(EditState(dehaze: -0.5), to: clear), x: 200, size: 800).r,
+                       0.32750, accuracy: accuracy)
+        XCTAssertEqual(edgePixel(of: EditPipeline.apply(EditState(dehaze: -1.0), to: clear), x: 200, size: 800).r,
+                       0.45500, accuracy: accuracy)
+    }
+
+    func testDehazePreservesExtentAndAlpha() {
+        // Three separate extent hazards in this one stage: CIGaussianBlur and
+        // CIMorphologyMinimum both expand, and CIAreaMaximum collapses to 1x1.
+        // Reviewer-corrected: the dependents are DOWNSTREAM — Vignette's
+        // center and Clarity/Texture/Sharpen's `min(extent)` radius fractions.
+        // NOT applyMasks, which runs one line ABOVE this stage and can never
+        // see its extent.
+        let hazy = stepEdgeImage(lo: 0.55, hi: 0.90, size: 800)
+        XCTAssertEqual(EditPipeline.apply(EditState(dehaze: 1), to: hazy).extent, hazy.extent)
+
+        let alphaInput = stepEdgeImage(lo: 0.55, hi: 0.90, size: 800, alpha: 0.5)
+        let alphaOutput = EditPipeline.apply(EditState(dehaze: 1), to: alphaInput)
+        XCTAssertEqual(alphaOutput.extent, alphaInput.extent)
+        XCTAssertEqual(edgePixel(of: alphaOutput, x: 700, size: 800).a, 0.5, accuracy: accuracy)
+    }
+
+    func testDehazePreservesHighlightHeadroom() {
+        // Dividing by transmission legitimately pushes values above 1.0, and
+        // this pipeline preserves headroom everywhere except Levels.
+        let input = stepEdgeImage(lo: 0.8, hi: 1.4, size: 800)
+        let output = EditPipeline.apply(EditState(dehaze: 1), to: input)
+
+        XCTAssertEqual(edgePixel(of: output, x: 700, size: 800).r, 1.40527, accuracy: accuracy)
+        XCTAssertGreaterThan(edgePixel(of: output, x: 700, size: 800).r, 1.0,
+                             "dehaze must not clamp highlight headroom")
+    }
+
+    func testDehazeRadiusScalesWithResolution() {
+        // CIMorphologyMinimum's radius is in ABSOLUTE PIXELS, so a fixed value
+        // would give a 24MP photo and its thumbnail different haze estimates.
+        // Proof has two halves: the same FRACTIONAL offset must agree across
+        // sizes, and the same PIXEL offset must not.
+        //
+        // The deltas are small (~0.0007) for a structural reason worth knowing:
+        // these samples sit in the sky, where I == A makes recovery land on A
+        // almost regardless of transmission. They are nonetheless exactly
+        // reproducible, hence the tight accuracy.
+        func sample(size: Int, offset: Int) -> Float {
+            let hazy = stepEdgeImage(lo: 0.55, hi: 0.90, size: size)
+            let output = EditPipeline.apply(EditState(dehaze: 1), to: hazy)
+            return edgePixel(of: output, x: size / 2 + offset, size: size).r
+        }
+
+        // Same fractional offset (1.25% — exactly the radius): identical.
+        for size in [400, 800, 1600] {
+            XCTAssertEqual(sample(size: size, offset: Int(0.0125 * Double(size))), 0.900878, accuracy: 0.00005)
+        }
+
+        // Same pixel offset: 1600's 20px radius swallows +10px while 400's 5px
+        // does not. 800's radius is EXACTLY 10px, so that row sits on the
+        // boundary rather than outside it — the measured values still separate
+        // 1600 from the other two, which is what the assertion rests on.
+        XCTAssertEqual(sample(size: 400, offset: 10), 0.900878, accuracy: 0.00005)
+        XCTAssertEqual(sample(size: 800, offset: 10), 0.900878, accuracy: 0.00005)
+        XCTAssertEqual(sample(size: 1600, offset: 10), 0.900135, accuracy: 0.00005)
+        XCTAssertNotEqual(sample(size: 1600, offset: 10), sample(size: 400, offset: 10),
+                          "a pixel-fixed radius would make these identical")
+    }
+
+    func testDehazeOrderingIsMeasuredNotArbitrary() {
+        // Unlike Texture/Clarity (which nearly commute, 0.00215), Dehaze is
+        // strongly non-commutative with both its neighbours, so running it
+        // BEFORE Vignette and Clarity is a real requirement.
+        //
+        // Vignette: it darkens corners, and A is estimated from the frame's
+        // brightest region — letting it run first feeds the haze estimate a
+        // value the scene never had.
+        let base = stepEdgeImage(lo: 0.55, hi: 0.90, size: 800)
+
+        let pipelineOrder = EditPipeline.apply(EditState(vignetteStrength: 0.8, dehaze: 1), to: base)
+        let reversed = EditPipeline.apply(EditState(dehaze: 1),
+                                          to: EditPipeline.apply(EditState(vignetteStrength: 0.8), to: base))
+        XCTAssertGreaterThan(
+            abs(edgePixel(of: pipelineOrder, x: 700, size: 800).r - edgePixel(of: reversed, x: 700, size: 800).r),
+            0.4, "Dehaze and Vignette do not commute — measured 0.52275 apart")
+
+        let withClarity = EditPipeline.apply(EditState(clarity: 1, dehaze: 1), to: base)
+        let clarityFirst = EditPipeline.apply(EditState(dehaze: 1),
+                                              to: EditPipeline.apply(EditState(clarity: 1), to: base))
+        XCTAssertGreaterThan(
+            abs(edgePixel(of: withClarity, x: 700, size: 800).r - edgePixel(of: clarityFirst, x: 700, size: 800).r),
+            0.4, "Dehaze and Clarity do not commute — measured 0.42790 apart")
+    }
+
     // MARK: - Clarity + Texture (local contrast) math
     //
     // Clarity is CIUnsharpMask at a much larger radius than Sharpen, so

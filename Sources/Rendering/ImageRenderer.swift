@@ -88,13 +88,23 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     // and 279.0ms — the P3 cache above does NOT help this case, since
     // `editState` changes every frame of a drag, a guaranteed cache miss.
     //
-    // Preview-vs-final divergence this trades in, most severe first:
+    // Preview-vs-final divergence this trades in. Listed in no particular
+    // severity order: measured rank swaps with both proxy scale and image
+    // content (IMPROVEMENTS.md D18), so a fixed ordering would misinform.
     //   - Noise Reduction: `CINoiseReduction.noiseLevel` is a per-pixel
     //     threshold, measured resolution-INDEPENDENT with deliberately no
     //     extent term (see `EditPipeline`'s `kNoiseReductionSpan` doc
     //     comment) — downscaling itself already averages away some noise
     //     before NR runs, so the interactive preview looks CLEANER than
     //     the settled frame and the export.
+    //   - Dehaze: the largest divergence measured, at every scale on
+    //     photo-like content. On a pixel-noise fixture Noise Reduction
+    //     exceeds it at 0.5 — rank swaps with both scale and content, so no
+    //     stage is "the worst" unconditionally. Two mechanisms: its
+    //     morphology radius quantizes the way Sharpen's, Clarity's and
+    //     Texture's do, AND its atmospheric light is a whole-frame statistic
+    //     the proxy estimates from different pixels entirely.
+    //     See IMPROVEMENTS.md D18 for the measured matrix.
     //   - Sharpen / Clarity / Texture: radii are extent FRACTIONS, so the
     //     on-screen halo is right at fit zoom, but the absolute pixel
     //     radius quantizes differently on a downscaled image.
@@ -111,7 +121,11 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     // WB, exposure, levels, curves, HSL, saturation, B&W) is exactly
     // extent-proportional or purely per-pixel, so a proxy renders
     // identically to full-res for those, up to resampling — see
-    // `ProxyScale`'s own doc comment for the fuller argument.
+    // `ProxyScale`'s own doc comment for the fuller argument. Scope note:
+    // NONE of those were included in D18's measurements, which covered only
+    // dehaze/NR/sharpen/clarity. This paragraph is the original reasoning,
+    // not a measured result; do not read D18 as having confirmed OR refuted
+    // it.
     //
     // Interaction is detected purely by COUNTING consecutive `editState`
     // changes (`ProxyInteraction`), not by timing between them — `draw(in:)`
@@ -157,8 +171,12 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     /// input within one `draw(in:)` call, Compare gets the proxy for BOTH
     /// halves for free from this single key — costing nothing in quality,
     /// since `EditState.comparisonOriginal()` already zeroes
-    /// `clarity`/`texture`/`sharpness`/`noiseReduction`, so the original half has
-    /// no convolution stage to diverge in the first place.
+    /// `clarity`/`texture`/`dehaze`/`sharpness`/`noiseReduction`, so the
+    /// original half has no PROXY-DIVERGENT stage left to diverge in the first
+    /// place. (Not "no convolution stage" — Dehaze is not a convolution, and
+    /// its dominant divergence mechanism is a whole-frame statistic, not a
+    /// radius. It belongs in this list for the divergence, not the filter
+    /// shape.)
     private var cachedPipelineSource: CIImage?
 
     init(device: MTLDevice) {

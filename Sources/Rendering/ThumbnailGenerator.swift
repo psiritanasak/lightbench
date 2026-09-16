@@ -105,11 +105,24 @@ enum ThumbnailGenerator {
     /// path — returns the plain thumbnail unchanged, paying zero extra
     /// decode/render cost. For non-RAW, runs the pipeline on the
     /// ALREADY-SMALL, already-EXIF-oriented base thumbnail (not a second
-    /// full-res decode) — correct because every pipeline stage that
-    /// depends on image size (crop, straighten, vignette/sharpen radius,
-    /// etc.) already derives its geometry from the image's own current
-    /// extent, so it scales proportionally rather than needing a fixed
-    /// absolute resolution. For RAW, runs the pipeline directly on
+    /// full-res decode) — approximately correct because every pipeline stage
+    /// that depends on image size (crop, straighten, vignette/sharpen radius,
+    /// etc.) derives its geometry from the image's own current extent, so it
+    /// scales proportionally rather than needing a fixed absolute resolution.
+    /// **Approximately, not exactly** — an earlier version of this sentence
+    /// claimed exactness. `ProxyScale` and `ImageDocumentModel` cite this
+    /// comment as precedent for their own (also overstated) versions, so it
+    /// propagated; `ImageRenderer` cites `ProxyScale`, not this one.
+    /// Measured: all four stages tested diverge under downscale, by amounts
+    /// that swap rank with scale. This path runs the most aggressive ratio in
+    /// the app — but that is BEYOND the measured range (the matrix stops at
+    /// 0.16, and Dehaze is non-monotonic there), so thumbnail behaviour is
+    /// extrapolated, not measured. Dehaze is the likeliest to show it, since
+    /// its atmospheric light is a whole-frame statistic a thumbnail estimates
+    /// from different pixels entirely — which would mean a Library-grid
+    /// thumbnail of a dehazed photo visibly differing from the Editor render.
+    /// Accepted, same class as the documented RAW-thumbnail divergences.
+    /// See IMPROVEMENTS.md D18. For RAW, runs the pipeline directly on
     /// `RawDecoder.decodeDraft`'s `CIImage` — see `rawDecodedThumbnail`'s
     /// doc comment for why that single-render-pass ordering matters.
     static func thumbnail(for url: URL, maxPixelSize: Int, editState: EditState) async -> CGImage? {

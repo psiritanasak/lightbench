@@ -329,7 +329,7 @@ struct AdjustTabView: View {
         EditToggleRow(label: "Black & White", value: $document.editState.blackAndWhite)
     }
 
-    /// Vignette/Texture/Clarity/Sharpen/Noise Reduction — the "finishing"
+    /// Vignette/Texture/Clarity/Dehaze/Sharpen/Noise Reduction — the "finishing"
     /// controls, matching Apple Photos' own Effects/Detail grouping. Just
     /// the rows — see `lightSection`'s comment.
     private var effectsSection: some View {
@@ -348,6 +348,10 @@ struct AdjustTabView: View {
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Clarity", value: $document.editState.clarity,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Dehaze", value: $document.editState.dehaze,
                 range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
@@ -987,6 +991,7 @@ struct AdjustTabView: View {
             && state.vignetteRadius == 0.5
             && state.texture == 0
             && state.clarity == 0
+            && state.dehaze == 0
             && state.sharpness == 0
             && state.noiseReduction == 0
             && state.redEyeSize == 0.5
@@ -1021,6 +1026,7 @@ struct AdjustTabView: View {
             document.editState.vignetteRadius = 0.5
             document.editState.texture = 0
             document.editState.clarity = 0
+            document.editState.dehaze = 0
             document.editState.sharpness = 0
             document.editState.noiseReduction = 0
             document.editState.redEyeSize = 0.5

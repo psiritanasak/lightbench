@@ -812,6 +812,154 @@ paragraph) — both are "applyMasks recomputes more than it needs to"
 problems. Note that cache is documented in the source and CLAUDE.md, not
 in this file; D15 above covers slice 6's scope cuts, not its perf work.
 
+### D17. Dehaze combines superlinearly with Clarity (ROI dilation), found measuring the Dehaze slice
+
+**Read the methodology warning first — three claims in this entry's original
+version were wrong, and all three came from the same measurement mistake.**
+
+The robust finding, which held under every methodology tried: **Dehaze is the
+most expensive stage in the Presence group, and combining it with CLARITY
+specifically costs materially more than the sum of the parts.** Vignette
+(per-pixel) shows no excess at all and Texture (radius 0.01) is mild; only
+Clarity's wide 0.04 radius triggers it. The driver is region-of-interest
+dilation: Clarity's blur requests a dilated ROI from the stage below, forcing
+`applyDehaze`'s `CIMorphologyMinimum` to run over a correspondingly larger
+region. Same family as D16 — "the pipeline recomputes more than it needs to" —
+but between two GLOBAL stages rather than inside `applyMasks`.
+
+**No single figure is quoted as this stage's cost, because they do not
+reproduce.** Three
+methodologies produced 78.9 / 116.5 / 148.7 ms for the SAME configuration at
+4000x4000, and the Dehaze+Clarity excess came out at 1.7x, 2.1x and 3.7x
+depending on method. One run even measured `dehaze + clarity + texture` as
+CHEAPER than `dehaze + clarity`. Anyone optimising this must re-measure first.
+
+**The methodology trap** (this is the part worth keeping): a harness that
+shares one `CIContext` across configurations lets later configurations hit
+subgraphs earlier ones already cached. Every dehaze configuration shares the
+atmospheric-light blur, so whichever runs second looks artificially fast.
+**Interleaving does not fix this — it causes it.** Use a fresh `CIContext` per
+measurement, or better, one configuration per process.
+
+**Three claims WITHDRAWN. Do not re-derive them:**
+
+1. ~~"Negative Dehaze is ~4x cheaper than positive, because Core Image prunes
+   the dark-channel + morphology chain as dead code at a build-time-constant
+   amount."~~ **FALSE.** With a fresh context per measurement, +1 and -1 are
+   within 1% (148.7 vs 147.8 ms). Independently confirmed by the reviewer at
+   78.9 vs 81.7 ms in isolated processes — negative marginally MORE expensive.
+   No pruning happens; `amount` is a uniform, not a compile-time constant.
+2. ~~"`CIAreaMaximum` is NOT the cost driver — replacing it with a constant
+   left the cost unchanged."~~ **FALSE**, and it was steering future work away
+   from the single largest removable cost. The reviewer measured the
+   atmosphere chain at **~25% of this stage's total**. The substitution test
+   behind the original claim was confounded: replacing the area maximum with a
+   literal constant necessarily also prunes the 80px Gaussian that feeds it,
+   so it never isolated what it claimed to.
+3. ~~"`.insertingIntermediate()` is actively worse on the spread field
+   (330.7 -> 428.8ms)."~~ **Not reproducible.** Re-measured as neutral/noise
+   (163.0 -> 155.8ms). Not using it is still the right call, but that number
+   was not evidence for it.
+
+Not fixed, by explicit user decision when the slice was scoped: ship the
+correct algorithm, record the cost, rely on `ProxyScale`'s interactive proxy
+(which already absorbs Clarity/Texture). The cost lands on export and the
+settled full-res frame, not on dragging.
+
+### D18. Proxy/thumbnail downscale-correctness is a SPECTRUM, not "correct except Noise Reduction"
+
+**TWO** doc sites carried the exact claim that running the pipeline on a
+proportionally-downscaled source is "correct, not an approximation, for
+every stage except Noise Reduction": `ProxyScale.swift` and
+`ImageDocumentModel.swift`'s histogram path (verified against HEAD, after
+an earlier draft of this entry said four). Two others carried weaker
+related overstatements — `ThumbnailGenerator.swift` claimed exactness
+without the NR exception, and `ImageRenderer.swift` already enumerated
+five divergence sources but concluded every other stage "renders
+identically."
+
+**The claim is wrong, and was wrong before Dehaze existed.** Found while
+resolving a contradiction the Dehaze slice introduced; the measurement
+then invalidated the framing itself, not just the new stage's place in it.
+
+Measured: ONE 1600px source, downscaled exactly the way `ProxyBuilder`
+does (`.clampedToExtent()` then `CILanczosScaleTransform` — the clamp
+matters, omitting it overstated the 0.5 figure by 39%), comparing
+pipeline-on-proxy against downscale-of-pipeline-on-native. Max abs delta:
+
+    pixel-scale noise      @0.50     @0.25     @0.16
+      dehaze              0.11536   0.24059   0.20570
+      noiseReduction      0.13431   0.06705   0.03740
+      sharpen             0.10713   0.07390   0.07576
+      clarity             0.04257   0.03040   0.02951
+
+    band-limited (~16px structure, photo-like)
+      dehaze              0.01037   0.04070   0.07093
+      sharpen             0.00285   0.00309   0.00315
+      noiseReduction      0.00050   0.00206   0.00436
+      clarity             0.00041   0.00123   0.00123
+
+Three conclusions, none of which the old framing supported:
+
+1. **Every stage MEASURED here diverges** — dehaze, noise reduction,
+   sharpen, clarity. Scoped deliberately: texture, vignette and red-eye
+   were NOT measured, so this entry says nothing about them, and
+   `ImageRenderer`'s own list still treats vignette as exactly
+   extent-proportional. For the three radius-based ones the mechanism is
+   an absolute-pixel radius quantizing differently at each scale; Clarity
+   — cited in those same comments as the correct-by-construction case —
+   is merely the SMALLEST of them, not zero.
+2. **Noise Reduction is not uniquely bad**, and its mechanism is the
+   OPPOSITE of the others': it has deliberately NO extent term
+   (`kNoiseReductionSpan`), and that absence is why it diverges, rather
+   than a radius quantizing. On the PIXEL-NOISE rows it is largest at 0.5
+   (0.13431) and among the smallest by 0.16 — so singling it out was an
+   artifact of whichever scale was originally looked at. **Read that rank
+   with its content regime attached**: on the band-limited rows, the ones
+   D18 calls photo-like, Dehaze leads at EVERY scale including 0.5
+   (0.01037 vs NR's 0.00050), and NR drops to third of four. Any "NR is
+   the one that matters at 0.5" reading is a noise-fixture artifact and is
+   backwards for real photos.
+3. **Dehaze is the worst at the most aggressive scales measured** (0.25
+   and 0.16 — note these are still well short of thumbnail ratios, ~0.04;
+   see the extrapolation limits below), for a reason none of the others share:
+   besides its morphology radius, its atmospheric light is a whole-frame
+   STATISTIC, so a proxy estimates it from a different set of pixels
+   entirely. That is outside the "geometry as a fraction of extent"
+   premise those comments rest on.
+
+**Content dependence cuts BOTH ways, and the naive reading is backwards.**
+Absolute deltas fall sharply on photo-like content (dehaze 0.11536 ->
+0.01037 at 0.5), so the noisy numbers are an upper bound on MAGNITUDE.
+Every other measured stage falls FURTHER than Dehaze does (noise ->
+band-limited at 0.5: dehaze 11x, sharpen 38x, clarity 104x, noise
+reduction 269x), so Dehaze's ratio rises against ALL of them, not just
+Clarity — vs NR 0.86 -> 20.7, vs sharpen 1.08 -> 3.6, vs clarity
+2.71 -> 25.3, and similarly at 0.25 and 0.16. An earlier draft said the
+rise was "against Clarity specifically"; that is false by this table. The
+one place Dehaze does sit below another stage is the PIXEL-NOISE row at
+0.5, where NR leads — and that inverts on photo-like content.
+
+
+**Two limits on how far these numbers may be pushed**, both worth stating
+because the obvious extrapolation is unsafe. On the PIXEL-NOISE rows
+Dehaze is non-monotonic in scale — 0.11536 -> 0.24059 -> 0.20570, peaking
+around 0.25 and falling again — so a smaller ratio is not reliably worse.
+(On the band-limited rows it is strictly monotonic, 0.01037 -> 0.04070 ->
+0.07093. The regime matters here too; the extrapolation warning below
+holds either way.) And the source measured
+is 1600px, while `ProxyScale.minimumSourcePixels` is 8 MP, so no image
+that actually gets proxied is as small as the fixture. Thumbnail ratios
+(~0.04) are an order of magnitude past the last measured point, on a
+curve already seen to turn: treat thumbnails as UNMEASURED.
+
+Practical consequence, plausible but not measured at thumbnail ratios:
+`ThumbnailGenerator` runs the most aggressive downscale in the app, so a
+Library-grid thumbnail of a dehazed photo may visibly differ from the
+Editor render. Accepted for now — the
+same class as the already-documented RAW-thumbnail divergences — but it is
+a real user-visible gap, not just a doc nit.
+
 ### D11. No keyboard/AT path to paint or adjust a Brush mask's stroke shape (Phase 7 slice 4)
 
 A REAL, named accessibility gap — unlike every other mask overlay in

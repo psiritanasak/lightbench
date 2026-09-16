@@ -1,0 +1,69 @@
+// Dehaze, step 2 of 2 — SCENE RECOVERY (Phase 8, Lightroom "Presence").
+// Pairs with DehazeDarkChannel.cikernel; see that file's header for the
+// dark channel prior and why the work is split across two kernels.
+//
+// Haze imaging model (He, Sun & Tang, CVPR 2009):
+//
+//     I = J*t + A*(1 - t)
+//
+// observed I, haze-free scene J, transmission t (1 = clear, 0 = pure haze),
+// atmospheric light A. Solved for J:
+//
+//     J = (I - A) / max(t, t0) + A
+//
+// with t estimated from the spatially-minimised dark channel d:
+//
+//     t = 1 - omega * amount * d
+//
+// The first CIColorKernel in this codebase to take THREE __samples — the
+// image, the dark channel, and A — all read at the same coordinate, which is
+// exactly what a colour kernel can do and why the neighbourhood work had to
+// happen outside it. (DehazeDarkChannel.cikernel already takes two, so this is
+// not the first to exceed one.)
+//
+// `amount` folds the user's slider into omega, so at amount 0, t = 1 and the
+// recovery reduces to J = (I - A)/1 + A. Note carefully: that is NOT identity
+// in float32. Measured on a 256-value ramp with A = 0.9, 265 of 1024
+// components differ (max abs delta 2.98e-08), and a full float32 sweep
+// mismatches ~17% of the time. Exact identity at amount 0 comes entirely from
+// `EditPipeline.dehazeActive`'s `state.dehaze != 0` gate skipping this stage —
+// so that guard is load-bearing, not a cheap early-out. Removing it would
+// break identity silently.
+//
+// NEGATIVE amount ADDS haze, running the model forward instead of inverting
+// it: blend toward the same A the removal path already estimated. Lightroom's
+// Dehaze is bipolar the same way. Swift pre-scales the negative side by its
+// own span before passing it here, so this kernel just reads -amount.
+//
+// Deliberately does NOT clamp the result. Dividing by a small t legitimately
+// pushes values above 1.0, and this pipeline preserves highlight headroom
+// everywhere except Levels (which documents its own exception).
+
+kernel vec4 dehazeRecover(__sample s, __sample dark, __sample atmos,
+                          float amount, float omega, float t0) {
+    float a = s.a;
+    vec3 I = (a > 0.0) ? s.rgb / a : s.rgb;
+
+    float aa = atmos.a;
+    vec3 A = (aa > 0.0) ? atmos.rgb / aa : atmos.rgb;
+    A = max(A, vec3(0.0001));
+
+    vec3 outRGB;
+
+    if (amount < 0.0) {
+        // Add haze: the forward model at a transmission of (1 + amount).
+        outRGB = mix(I, A, -amount);
+    } else {
+        // d is the spatially-minimised dark channel from step 1, already
+        // normalised by A there. Clamp to [0,1]: a value above 1 (possible
+        // where the frame's brightest pixel is not actually haze) would make
+        // t negative and invert the image.
+        float d = clamp(dark.r, 0.0, 1.0);
+        float t = max(1.0 - omega * amount * d, t0);
+        outRGB = (I - A) / t + A;
+    }
+
+    // Repremultiply. Alpha is carried through untouched — dehaze is a tonal
+    // operation and must not alter coverage.
+    return vec4(outRGB * a, a);
+}

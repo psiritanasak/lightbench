@@ -17,15 +17,26 @@ import CoreGraphics
 /// FRACTION of the current extent (crop insets, vignette center + half-
 /// diagonal radius, straighten around the extent's own center, perspective
 /// corner shifts as fractions of width/height, red-eye radius as a fraction
-/// of `min(extent)`, Clarity/Texture/Sharpen radii as `fraction *
-/// min(extent)`) —
+/// of `min(extent)`, Clarity/Texture/Sharpen radii and Dehaze's
+/// patch and atmosphere-blur radii as `fraction * min(extent)`) —
 /// the same argument `ThumbnailGenerator.thumbnail(for:maxPixelSize:
 /// editState:)` already documents and ships. So running the pipeline on a
-/// proportionally-downscaled source is correct, not an approximation, for
-/// every stage except Noise Reduction (documented resolution-INDEPENDENT,
-/// see `EditPipeline`'s `kNoiseReductionSpan` doc comment) — that divergence
-/// is unavoidable and is documented on `ImageRenderer`'s proxy section, not
-/// here.
+/// proportionally-downscaled source is APPROXIMATELY correct — but
+/// "approximately" is doing real work, and an earlier version of this comment
+/// claiming it was exact "for every stage except Noise Reduction" was measured
+/// WRONG. Downscale-correctness is a spectrum, via two DIFFERENT mechanisms.
+/// Clarity, Sharpen and Dehaze carry absolute-pixel radii derived from extent
+/// fractions, which quantize differently at each scale. Noise Reduction
+/// diverges for the OPPOSITE reason: it has deliberately no extent term at
+/// all (`kNoiseReductionSpan`). All four measure as divergent, by amounts
+/// that swap rank with BOTH scale and image content: on a pixel-noise
+/// fixture Noise Reduction is largest at 0.5 and Dehaze at 0.25, but on
+/// band-limited (photo-like) content Dehaze leads at every scale measured.
+/// Dehaze additionally estimates its atmospheric light as a whole-frame
+/// STATISTIC, which the "geometry as a fraction of extent" premise above does
+/// not cover at all. Texture appears in the geometry enumeration above but
+/// was NOT part of D18's measurements, so no divergence claim is made for it.
+/// See IMPROVEMENTS.md D18 for the measured matrix.
 enum ProxyScale {
     /// Proxy pixels per DRAWABLE pixel. `MTKView.drawableSize` is device
     /// PIXELS (backing-scale-multiplied), not points — an earlier draft of

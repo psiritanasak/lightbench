@@ -1529,9 +1529,11 @@ Edits are stored as parameter sets and rendered live on the GPU.
       microseconds), and — the one genuinely novel piece — it samples
       the image `ColorRange.cikernel` will ACTUALLY compare against
       inside `applyMasks`, not the naive fully-edited display: zeroes
-      `vignetteStrength`/`definition`/`noiseReduction`/`sharpness` (the
-      four stages that run AFTER `applyMasks` in the fixed pipeline
-      order) and truncates `masks` to only those BEFORE the target mask,
+      `vignetteStrength`/`dehaze`/`clarity`/`texture`/`noiseReduction`/
+      `sharpness` (every stage that runs AFTER `applyMasks` in the fixed
+      pipeline order — `definition` here predated the texture/clarity
+      split, and Dehaze was added later still; keep this list in sync with
+      `ImageDocumentModel.pickColorRangeTarget`, its source twin) and truncates `masks` to only those BEFORE the target mask,
       then renders exactly that truncated state — structurally
       guaranteed correct (both the sampler and `applyMasks`'s own loop
       read the identical array prefix through the identical earlier
@@ -1995,24 +1997,72 @@ shipped slider already follows):
     one-directional). `EditPipeline.localContrast` runs the positive half
     through `CIUnsharpMask` and the negative half through a blend toward
     `CIGaussianBlur` at the same radius. The blur EXPANDS extent, so that
-    path clamps-then-crops back — `applyMasks` resolves mask geometry against
-    this extent, so a regression there would misalign masks, not just look
-    soft.
+    path clamps-then-crops back. (An earlier version of this bullet said
+    `applyMasks` depends on that extent — backwards: `applyMasks` runs ABOVE
+    both stages. The real dependents are downstream, e.g. Sharpen's own
+    `min(extent)` radius fraction.)
   - `Mask.clarity` became bipolar too, sharing the same helper. Masks have no
     `texture` counterpart yet (Lightroom's do) — a future additive item.
   - Texture/Clarity ordering is coarse-then-fine by CONVENTION, not
     measurement: swapping them moves the profile by at most 0.00215, only
     marginally above the test suite's own 0.002 tolerance. Recorded honestly
     as such in `applyTexture`'s doc comment.
-- **Dehaze — WANTED, still outstanding.** The remaining third of the split, a
-  deliberately separate slice: it is a different ALGORITHM, not another radius
-  on `CIUnsharpMask`, and Core Image ships no dehaze filter. Needs its own Plan
-  Mode session and its own measurement pass on real hazy photos. Note the
-  existing constraint: this project's `CIColorKernel(source:)` pattern is
-  per-pixel and cannot sample neighbours, so a dark-channel-prior approach
-  would need the spatial part from a built-in (e.g. `CIMorphologyMinimum`).
-  The `AdjustTabView` Effects section already leaves Dehaze's slot after
-  Texture/Clarity.
+- **Dehaze — ✅ SHIPPED.** The Presence panel is now complete
+  (Texture/Clarity/Dehaze). A real DARK CHANNEL PRIOR (He, Sun & Tang, CVPR
+  2009), not an approximation: Core Image ships no dehaze filter, so it is
+  assembled from two NEW custom kernels — `DehazeDarkChannel.cikernel` and
+  `DehazeRecover.cikernel`, the third and fourth in this codebase — plus
+  `CIAreaMaximum` and `CIMorphologyMinimum`. Bipolar -1...1; negative ADDS
+  haze by blending toward the same estimated atmospheric light.
+  - **How the per-pixel/neighbourhood split works**, since it is the reason
+    this was possible at all: a `CIColorKernel` cannot sample neighbours, so
+    the per-pixel half (cross-channel min of I/A) is a kernel and the spatial
+    half is `CIMorphologyMinimum` between the two kernels.
+    `DehazeRecover.cikernel` is also the first kernel here to take THREE
+    `__sample`s (`DehazeDarkChannel.cikernel` already takes two).
+  - **Atmospheric light stays on the GPU**: `CIAreaMaximum` reduces a blurred
+    copy to 1x1, then `.clampedToExtent()` spreads it back to a constant
+    field. Do NOT "simplify" this into `ImageAverageColor`'s CPU readback —
+    that is right for Cast, a one-shot action, and would stall every frame.
+    Because A is a whole-frame STATISTIC, it depends on what is in the frame:
+    cropping changes the dehaze result (documented in `applyDehaze`), and so
+    does RENDER RESOLUTION — a proxy or thumbnail estimates A from a different
+    set of pixels entirely. Flagged as unmeasured reasoning, then measured,
+    and it invalidated more than this stage: the claim that downscaling is
+    "correct, not an approximation, for every stage except Noise Reduction"
+    is WRONG, and was wrong before Dehaze existed. It appeared verbatim in
+    TWO places (`ProxyScale` and `ImageDocumentModel`); `ThumbnailGenerator`
+    claimed exactness without the NR exception and `ImageRenderer` concluded
+    every other stage "renders identically" — four sites corrected, but only
+    two carried the exact claim. All FOUR measured stages diverge (dehaze,
+    NR, sharpen, clarity); texture, vignette and red-eye were NOT measured,
+    so nothing here claims anything about them. Rank swaps with scale AND
+    with content. **See IMPROVEMENTS.md D18 for the measured matrix** — note
+    the content dependence inverts: absolute deltas fall on photo-like
+    content, but Dehaze's ratio to every other measured stage RISES, and on
+    photo-like content Dehaze leads at every scale.
+  - **Runs in scene-linear with no perceptual sandwich**, unlike
+    Clarity/Texture. That is a PRINCIPLED choice, not a measured one, and is
+    labelled as such in the code: the haze model is defined on radiance, so
+    the working space is already correct.
+  - **Ordering is measured, not conventional** (unlike Texture/Clarity, which
+    nearly commute): Dehaze runs BEFORE Vignette and Clarity, and swapping
+    either moves the result 0.4+ — Vignette darkens corners and the
+    atmospheric light is estimated from the frame's brightest region, so
+    letting it run first feeds the estimate a value the scene never had.
+  - **Known cost, accepted by user decision**: Dehaze combines superlinearly
+    with CLARITY specifically (Vignette shows no excess, Texture is mild) via
+    ROI dilation. **No ratio is quoted here — the absolute numbers do not
+    reproduce**, and three claims in the first write-up were wrong because the
+    harness shared one `CIContext` across configurations. See IMPROVEMENTS.md
+    D17 for the methodology trap and the three withdrawn claims.
+  - **Identity at 0 comes from the `dehazeActive` GATE**, not from the maths:
+    `(I - A)/1 + A` is not identity in float32 (measured). That guard is
+    load-bearing.
+  - **Limitation**: no transmission refinement (no soft matting / guided
+    filter), so transmission is blocky at the patch scale and halos at sharp
+    depth discontinuities.
+  - Masks have no `dehaze` or `texture` — still a future additive item.
 - **Grain — WANTED.** Film-grain effect, not present in any form. Straightforward
   new `EditState` field + a new perceptual-domain `EditPipeline` stage (likely
   Core Image's own grain-simulation building blocks, or a small custom kernel if

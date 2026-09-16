@@ -8057,7 +8057,8 @@ two independent local-contrast controls and is exactly what the existing
 `ProxyScale` interactive-proxy path already exists to absorb; no new
 mitigation was added, and none looks warranted.
 
-**Exact next step**: Dehaze — the remaining third of the Texture/Dehaze
+**Exact next step (superseded — see the Dehaze section at the end of
+this file)**: Dehaze — the remaining third of the Texture/Dehaze
 split, and the obvious continuation. Needs its own Plan Mode session; see
 CLAUDE.md's "Dehaze — WANTED, still outstanding" bullet for the
 constraint already identified (this project's `CIColorKernel(source:)` is
@@ -8083,3 +8084,181 @@ Chromatic Aberration, Manual Transform Scale/Aspect), or Phase 8 polish,
 or IMPROVEMENTS.md D16 (superlinear multi-mask Clarity). Ask the user —
 and read BOTH the Lightroom-gaps section AND the Phase 2 backlog when
 listing candidates.
+
+## Phase 8 / Lightroom Presence: Dehaze (2026-09-16)
+
+**Shipped.** The Presence panel is now COMPLETE — Texture, Clarity and
+Dehaze. A real DARK CHANNEL PRIOR (He, Sun & Tang, CVPR 2009), not the
+"composite approximation" fallback that was on the table: Core Image
+ships no dehaze filter, so it is built from two NEW custom kernels
+(`DehazeDarkChannel.cikernel`, `DehazeRecover.cikernel` — the third and
+fourth in this codebase) plus `CIAreaMaximum` and `CIMorphologyMinimum`.
+Bipolar -1...1; negative adds haze by blending toward the same estimated
+atmospheric light, which is why bipolar was nearly free to IMPLEMENT (no meaningful render-cost difference either way — see D17).
+
+**The design problem and its solution.** A `CIColorKernel` cannot sample
+neighbours, and the dark channel prior is inherently a neighbourhood
+operation. Split it: the per-pixel half (cross-channel min of I/A) is a
+kernel, the spatial half is `CIMorphologyMinimum` BETWEEN the two
+kernels. `DehazeRecover.cikernel` is also the first kernel here to take
+THREE `__sample`s (image, dark channel, atmosphere) — verified as
+possible during planning before committing to the design, not assumed.
+`DehazeDarkChannel.cikernel` already takes two, so it is not the first to
+exceed one.
+
+**Atmospheric light stays on the GPU**: `CIAreaMaximum` reduces a blurred
+copy to 1x1 and `.clampedToExtent()` spreads it back into a constant
+field usable as a sampler. Blurring FIRST is deliberate — the raw maximum
+of a photo is whatever single brightest pixel exists, which is not the
+atmosphere.
+
+**Identity at 0 is exact — but because the stage is SKIPPED, not because
+the maths round-trips.** Reviewer-corrected, and the correction matters:
+`(I - A)/1 + A` is NOT identity in float32 (measured, 265 of 1024
+components differ on a 256-value ramp, max delta 2.98e-08; a full float32
+sweep mismatches ~17%). Exactness comes entirely from `dehazeActive`'s
+`state.dehaze != 0` gate. That guard is load-bearing — remove it in a
+future refactor and identity silently breaks. The original write-up
+credited the amount fold, which was the wrong mechanism for a real
+observation.
+
+**A silent failure caught early, worth remembering.** The first probe
+showed Dehaze doing NOTHING at every amount — identical output for
+amounts 0 through 1. Cause: new `.cikernel` files need `xcodegen
+generate` before they are bundled as resources; `Bundle.main.url` then
+returns nil and `applyDehaze`'s fail-soft path silently returns the input
+unchanged. The fail-soft is correct (it matches `applySelectiveColor`'s
+precedent) but it means **a missing kernel looks exactly like a working
+identity**. Run `xcodegen generate` after adding any shader.
+
+**Test fixtures had to be designed, not just written.** Two iterations
+were wrong before the third worked:
+1. A two-level hazy step edge cannot round-trip, because A is ESTIMATED
+   from the image: the bright level gets mistaken for the atmosphere. Fix:
+   make the bright level actually BE the sky (0.90 = A).
+2. A step edge cannot demonstrate radius scaling at all for a MIN filter
+   — a patch-min over a flat region is radius-independent, and the first
+   two attempts both returned identical values at every size, which would
+   have "passed" while proving nothing. Fix: measure the EROSION the min
+   filter cuts into the bright side, at a fixed PIXEL offset, and assert
+   the same FRACTIONAL offset agrees across sizes while the same pixel
+   offset does not (400/800 -> 0.900878, 1600 -> 0.900135).
+
+A third fixture problem was reviewer-caught TWICE, and the second catch
+matters more than the first. The zero-amount test was tautological as
+written; the "fix" — comparing `EditState(exposureEV: 0.5, dehaze: 0)`
+against `EditState(exposureEV: 0.5)` — was tautological too, because those
+are the SAME VALUE (`dehaze` defaults to 0). The reviewer proved it by
+commenting out the `dehazeActive` guard and watching the test still pass.
+A third round then showed my disclaimer ("no assertion can detect the
+gate") was ALSO wrong, and fixture-specific rather than fundamental:
+Sterbenz gives that `(I - A) + A` is exact WHENEVER A/2 <= I <= 2A —
+sufficient, not necessary — and with
+A ~ 0.9 that window contains 0.55 but excludes 0.2. Changing the dark
+level from 0.55 to 0.2 makes the test genuinely cover the gate —
+fault-injection confirmed here, not just accepted: with the guard
+commented out it now FAILS with "0.19999999 is not equal to 0.2".
+Lesson, learned three times in one slice: when a test is called
+tautological, check whether the REPLACEMENT is too — and when you write a
+disclaimer explaining why something cannot be tested, check that too.
+
+**Ordering is genuinely measured here**, unlike Texture/Clarity's
+convention-only adjacency: Dehaze runs BEFORE Vignette and Clarity, and
+swapping either moves the result by 0.4+ (vs Texture/Clarity's 0.00215).
+Reviewer independently reproduced both deltas to 7 significant figures
+(0.5227467 and 0.4278953) with a double-apply control at 0.0 confirming
+the delta is ordering and not the nested `apply`.
+
+**Domain is a PRINCIPLED choice, labelled as such, not a measured one.**
+Dehaze runs in scene-linear with no perceptual sandwich because the haze
+model is defined on radiance. A perceptual A/B was NOT run. An earlier
+draft of `applyDehaze`'s doc comment said "MEASURED both ways — see this
+stage's tests," which was a fabricated measurement with a dangling
+citation (no such test exists) that also contradicted this very file.
+Deleted rather than reworded: the principled framing needs no
+measurement.
+
+**PERF — read the methodology warning before quoting any number.**
+The robust finding is that Dehaze is the most expensive Presence stage
+and that it combines superlinearly with CLARITY specifically (Vignette
+shows no excess; Texture is mild). **Absolute numbers do not reproduce**:
+three methodologies gave 78.9 / 116.5 / 148.7 ms for the same
+configuration at 4000x4000, with the Dehaze+Clarity excess landing at
+1.7x / 2.1x / 3.7x. One run measured `dehaze+clarity+texture` as CHEAPER
+than `dehaze+clarity`.
+
+**The trap, and the reason three claims in the first draft were wrong:** a
+harness sharing one `CIContext` across configurations lets later
+configurations hit subgraphs earlier ones cached — and every dehaze
+configuration shares the atmospheric-light blur. **Interleaving does not
+fix this; it CAUSES it.** Use a fresh `CIContext` per measurement, or one
+configuration per process.
+
+Three claims withdrawn, all from that one mistake, all recorded in
+IMPROVEMENTS.md D17 so they are not re-derived: negative is NOT ~4x
+cheaper (within 1% with isolated contexts, and no dead-code pruning
+happens); `CIAreaMaximum` IS a significant cost (~25% per the reviewer,
+not "unchanged" — the substitution test was confounded, since removing
+the area maximum also removes the Gaussian feeding it); and
+`.insertingIntermediate()` is neutral, not a 30% regression.
+
+**A real finding the review process produced — and it outgrew this
+slice.** Round 4 caught that `ProxyScale.swift` claims downscaled
+rendering is "correct, not an approximation, for every stage except Noise
+Reduction", contradicting a note I had just added. Measuring it rather
+than rewording invalidated the FRAMING, not just Dehaze's place in it:
+that claim was wrong before Dehaze existed. Verified against HEAD with
+git rather than assumed — an earlier draft of this paragraph said it
+appeared in FOUR places and that `ThumbnailGenerator` was the precedent
+the other three cite. Both were wrong: the exact claim was in TWO files
+(`ProxyScale`, `ImageDocumentModel`), `ImageRenderer` cites `ProxyScale`,
+and the other two carried weaker related overstatements. Four sites were
+corrected regardless; `ThumbnailGenerator` was flagged in round 5 and
+corrected in round 6.
+
+Getting the measurement right took three attempts, and the first two
+failures are the same trap this slice hit repeatedly: a step edge has a
+uniform bright half (A is 0.90 at every scale by construction) and
+`quadrantImage` is saturated colors with a zero dark channel (dehaze is
+identity). Both returned exact zeros that proved nothing. A third probe
+worked but did not match the SHIPPED path — `ProxyBuilder` clamps to
+extent before Lanczos and mine did not, which overstated the 0.5 figure
+by 39% (reviewer-caught). The final matrix, measured the way the app
+actually downscales, is in IMPROVEMENTS.md D18.
+
+Three conclusions the old framing did not support: all FOUR measured
+stages diverge (Clarity, cited as the correct-by-construction case, is
+merely smallest — texture/vignette/red-eye were not measured and nothing
+is claimed about them); Noise Reduction is not uniquely bad, and diverges
+for the OPPOSITE reason, having deliberately no extent term at all; and
+Dehaze diverges for a reason the others do not share, since A is a
+whole-frame statistic rather than extent-derived geometry. Rank swaps with
+scale AND with content — on photo-like content Dehaze leads at every
+scale measured, including 0.5 where NR leads on the noise fixture. Practical consequence, accepted not fixed: a
+Library thumbnail of a dehazed photo can visibly differ from the Editor.
+
+A comparative claim I made and had to withdraw twice over: "roughly 7x
+Clarity, at the same scale" was BOTH scale-mismatched (it paired
+dehaze@0.5 with clarity@0.25) and framed backwards — the "upper bound"
+caveat covers magnitude, but the RATIO rises on photo-like content rather
+than falling. The four doc sites now cite D18's matrix instead of each
+carrying their own numbers, which is what made them drift apart in the
+first place.
+
+**Known limitation, now recorded**: no refinement of the transmission map
+(the paper's soft matting, or the usual guided-filter substitute), so
+transmission is blocky at the patch scale and will halo at sharp depth
+discontinuities. A real quality gap, not a tuning choice.
+
+Tests: 931 green.
+
+**Exact next step**: **Curves v2** — the interactive draggable RGB
+point-curve editor, which the user chose as the follow-on to Dehaze when
+picking this slice. See CLAUDE.md's Tier-2 entry: it fixes a recorded v1
+defect (`applyCurves` clamps highlight headroom above linear 1.0 whenever
+active, unlike every other stage), unblocks the pending Shadows/
+Highlights split-out decision, and carries the same shipped-field
+migration shape the `definition` -> `texture`/`clarity` split solved —
+reuse that `LegacyCodingKeys` pattern. Needs its own Plan Mode session;
+the UI is the hard part (draggable spline canvas with point hit-testing
+and a channel selector), not the maths.

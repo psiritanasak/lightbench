@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Reviews code changes before commit. Use after completing any feature, especially image processing, Metal shaders, color science math, or edit-state serialization.
-model: fable
+model: opus
 tools: Read, Grep, Glob, Bash
 ---
 

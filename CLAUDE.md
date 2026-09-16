@@ -1892,8 +1892,11 @@ each gets its own Plan Mode session per the workflow rules below.
   within the slider's own range).
 - **Curves:** ✅ v1 shipped as simplified parametric Shadows/Highlights sliders (2
   control points of a `CIToneCurve` spline — known limitation: clamps highlight
-  headroom above linear 1.0 when active, see `EditPipeline.applyCurves`). v2 not built:
-  full interactive draggable RGB point-curve editor.
+  headroom above linear 1.0 when active, see `EditPipeline.applyCurves`).
+  **v2 — WANTED, confirmed by the user 2026-09-16** — full interactive draggable
+  RGB point-curve editor. Also tracked in the Lightroom-gaps section below so it
+  surfaces when picking the next slice; it had previously lived ONLY here and was
+  missed when listing candidates. See that entry for scope.
 - **Levels:** ✅ shipped — `levelsBlackPoint`/`levelsWhitePoint`/`levelsGamma`
   sliders (distinct fields from Curves' own `blackPoint`, despite overlapping
   purpose) via `CIColorMatrix` → `CIColorClamp` → `CIGammaAdjust` (clamp
@@ -2037,11 +2040,41 @@ shipped slider already follows):
   confirming Lightroom treats this as a first-class, separate-from-manual-NR tool
   worth eventually distinguishing from the existing global `noiseReduction` slider.
 
+**Note:** Curves v2 (below, in Tier 2) reached this list late — it was tracked
+only in the Phase 2 backlog above, was never tagged WANTED, and so did not
+surface when next-slice candidates were listed on 2026-09-16. Cross-listed here
+to stop that recurring. When answering "what should we build next", read BOTH
+this section and the Phase 2 backlog above, not just the WANTED items here.
+
 **Tier 2 — genuinely new architecture, don't underscope these** (this app's
 `EditState` is one flat, whole-image parameter set per photo; every one of these
 requires a fundamentally different data model — spatial masks with their own
 per-mask parameter sets, rendered and composited before/alongside the existing
 global pipeline):
+- **Curves v2 (interactive point-curve editor) — WANTED (2026-09-16).** The
+  draggable spline editor with per-channel RGB modes, replacing/extending v1's
+  two parametric sliders. Tier 2 not because the MATH is hard (`CIToneCurve`
+  already ships, and v1 uses it) but because the INTERACTION is: a draggable
+  curve canvas with point hit-testing, add/remove/drag points, curve
+  interpolation between them, and a channel selector — none of which any
+  existing `EditSliderRow`/overlay pattern covers. Nearest precedent in this
+  codebase is the Phase 7 mask overlays (`CropOverlayView`,
+  `BrushMaskOverlayView`) for hit-tested direct manipulation, plus
+  `HistogramView` for drawing in the sidebar — a curve editor wants both at
+  once (curve drawn over a live histogram, Lightroom-style).
+  - **Fixes a recorded v1 defect**: `EditPipeline.applyCurves` clamps highlight
+    headroom above linear 1.0 whenever curves are active, so headroom created by
+    Exposure is crushed the moment Shadows/Highlights move. Every other stage in
+    this pipeline deliberately preserves headroom. v2 should fix this, not
+    inherit it.
+  - **Unblocks a pending structural decision** already noted in the Light-group
+    entry above: whether Shadows/Highlights should split out into dedicated
+    Light sliders once Levels/Curves v2 lands.
+  - **Migration**: `curvesShadows`/`curvesHighlights` are shipped fields in real
+    sidecars and presets. Same class of breaking change as the `definition` ->
+    `texture`/`clarity` split — reuse that pattern (a `LegacyCodingKeys` enum
+    decoding the old fields into the new curve representation). Do NOT design
+    the v2 data model without reading that migration first.
 - **Masking / local adjustments** — the single biggest capability gap found.
   Lightroom's whole modern editing paradigm centers on this: AI Subject/Sky/
   Background/Object select, Brush, Linear (Graduated) and Radial gradients, Color

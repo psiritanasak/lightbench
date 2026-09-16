@@ -8063,7 +8063,23 @@ CLAUDE.md's "Dehaze — WANTED, still outstanding" bullet for the
 constraint already identified (this project's `CIColorKernel(source:)` is
 per-pixel and cannot sample neighbours, so a dark-channel-prior approach
 needs its spatial part from a built-in such as `CIMorphologyMinimum`).
-The `AdjustTabView` Effects section already leaves Dehaze's slot after
-Texture and Clarity. Alternatively pick another Tier-1 WANTED item
-(Grain, Color Grading, Point Color, Chromatic Aberration, Manual
-Transform Scale/Aspect) or Phase 8 polish — ask the user.
+There is NO Dehaze UI in the app today — no field, no stage, no control;
+the Effects section simply runs Texture -> Clarity -> Sharpen, with the
+gap where Dehaze would sit. (An earlier draft of this entry said the
+panel "leaves Dehaze's slot", which the user reasonably read as a
+placeholder existing. Nothing is reserved or greyed out.)
+
+Alternatively: **Curves v2** — the interactive draggable RGB point-curve
+editor — added to CLAUDE.md as user-confirmed WANTED on 2026-09-16. Note
+WHY it was added late: it was tracked only in the Phase 2 backlog, never
+tagged WANTED, and so did not appear when next-slice candidates were
+listed; the user asked where it was. It fixes a recorded v1 defect
+(`applyCurves` clamps highlight headroom above 1.0 when active) and
+carries the same class of shipped-field migration this Texture/Clarity
+slice just solved, so reuse the `LegacyCodingKeys` pattern.
+
+Or another Tier-1 WANTED item (Grain, Color Grading, Point Color,
+Chromatic Aberration, Manual Transform Scale/Aspect), or Phase 8 polish,
+or IMPROVEMENTS.md D16 (superlinear multi-mask Clarity). Ask the user —
+and read BOTH the Lightroom-gaps section AND the Phase 2 backlog when
+listing candidates.

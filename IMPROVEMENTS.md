@@ -960,6 +960,39 @@ Editor render. Accepted for now — the
 same class as the already-documented RAW-thumbnail divergences — but it is
 a real user-visible gap, not just a doc nit.
 
+### D19. Dehaze does essentially nothing on underwater photos (dark channel prior's known failure case)
+
+Found during the Dehaze slice's live verification, on a real diving
+photo chosen precisely because it looked hazy. At Dehaze +100, sampled
+off the rendered window: open-water regions measured a mean delta of
+**exactly 0.00** per channel, while the divers in the foreground moved
+only ~1.0. The region that most looks hazy received no correction.
+
+**Not a bug in the implementation** — the prior does not fit the scene.
+Water absorbs red strongly, so `min(r, g, b)` over any underwater patch
+is already near zero, and a low dark channel is exactly what the prior
+reads as "this patch is not hazy." This is the textbook failure case for
+He/Sun/Tang's dark channel prior; underwater dehazing work uses modified
+priors (commonly UDCP, which computes the dark channel over green and
+blue only, dropping the absorbed red channel).
+
+On atmospheric-style haze the same code works well and is depth-aware —
+see PROGRESS.md's live-verification table, where correction scales ~14x
+with haze density.
+
+Fixing it would mean a channel-selection option on the dark channel
+(all-channels vs green/blue), which is a small kernel change but a real
+design question: it needs either a user-facing control or a heuristic to
+detect underwater scenes, and a wrong auto-detection would be worse than
+the current honest no-op. Not scoped.
+
+Related, from the same session: the atmospheric light A is the
+area-maximum of a blurred copy, so it finds the brightest REGION rather
+than the haze colour. On that underwater frame, negative Dehaze washed
+toward warm cream instead of the scene's blue-green because a bright warm
+highlight won the maximum. `kDehazeAtmosphereBlurFraction` documents the
+shortcut; this records what it costs.
+
 ### D11. No keyboard/AT path to paint or adjust a Brush mask's stroke shape (Phase 7 slice 4)
 
 A REAL, named accessibility gap — unlike every other mask overlay in

@@ -2062,6 +2062,14 @@ shipped slider already follows):
   - **Limitation**: no transmission refinement (no soft matting / guided
     filter), so transmission is blocky at the patch scale and halos at sharp
     depth discontinuities.
+  - **LIVE-VERIFIED 2026-09-17** against a ground-truth hazy image built
+    with the haze model itself: correction scales ~14x with haze density
+    and restores contrast only where haze was, i.e. genuinely depth-aware,
+    not a global contrast boost. See PROGRESS.md for the per-band table.
+  - **Known limitation, found live**: does essentially nothing on
+    UNDERWATER photos (measured delta 0.00 on open water). Water absorbs
+    red, so the dark channel reads "not hazy" — the textbook failure case
+    for this prior, not an implementation bug. IMPROVEMENTS.md D19.
   - Masks have no `dehaze` or `texture` — still a future additive item.
 - **Grain — WANTED.** Film-grain effect, not present in any form. Straightforward
   new `EditState` field + a new perceptual-domain `EditPipeline` stage (likely

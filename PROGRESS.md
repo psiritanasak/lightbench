@@ -8252,6 +8252,55 @@ discontinuities. A real quality gap, not a tuning choice.
 
 Tests: 931 green.
 
+**LIVE-VERIFIED (2026-09-17).** Driven via AX actions (synthetic
+`cliclick` events still do not reach this app — confirmed again this
+session, same limitation slice 5 and the Texture/Clarity slice logged).
+Both test images were COPIES; the user's own files were diffed against
+backups afterward and are byte-identical.
+
+**Ground-truth test, because a real hazy photo was not available.** Built
+one from a real outdoor JPEG by applying the haze model itself in numpy —
+`I = J*t + A*(1-t)`, A = (0.82, 0.85, 0.90), with t ramped 1.00 -> 0.25
+across the frame so transmission VARIES rather than being a flat wash.
+Opened it in the app and set Dehaze +100. Measured off the rendered
+window, by band:
+
+    band            transmission    mean delta   contrast (sd)
+    top             t = 1.00 clear        3.6    41.8 -> 42.3
+    upper-mid                            14.7    47.0 -> 52.7
+    lower-mid                            33.8    28.0 -> 40.4
+    bottom          t = 0.25 hazy        51.6    11.2 -> 20.8
+
+That is the result worth having: correction grows ~14x from the clear
+band to the hazy one, and contrast nearly doubles where haze was heaviest
+while the clear band is left alone. **A global contrast boost would have
+moved all four bands equally** — this is genuinely depth-aware, which no
+unit test in this slice demonstrates. Negative Dehaze was also confirmed
+live and is unmistakable (the frame washes toward the atmospheric light).
+`dehaze: 1` persisted to the sidecar; Revert to Original cleared it back
+to identity, checked on disk.
+
+**A REAL LIMITATION found live, not previously documented: Dehaze does
+essentially nothing on UNDERWATER photos.** Tried first on a real diving
+shot, chosen precisely because it looked hazy. At Dehaze +100 the open
+water measured a delta of EXACTLY 0.00 — the region that most looks hazy
+got no correction at all. This is the algorithm behaving correctly and
+the PRIOR not fitting: water absorbs red, so `min(r,g,b)` is already near
+zero and the dark channel reports "not hazy." It is the textbook failure
+case for dark channel prior, and the reason underwater work uses modified
+priors that skip the red channel. Logged as IMPROVEMENTS.md D19. Worth
+knowing before anyone reports Dehaze as broken — on the scene type it was
+designed for it works well, as the table above shows.
+
+Second observation from the same photo, related and also unlogged until
+now: the atmospheric light A is estimated as the area-maximum of a
+blurred copy, which finds the brightest REGION — not necessarily the haze
+colour. On that underwater frame negative Dehaze washed toward a warm
+cream, not the scene's blue-green, because a bright warm highlight won
+the maximum. `kDehazeAtmosphereBlurFraction`'s doc comment already calls
+this "the cheap stand-in for the paper's own brightest-0.1%-of-the-dark-
+channel selection"; this is what that shortcut costs in practice.
+
 **Exact next step**: **Curves v2** — the interactive draggable RGB
 point-curve editor, which the user chose as the follow-on to Dehaze when
 picking this slice. See CLAUDE.md's Tier-2 entry: it fixes a recorded v1

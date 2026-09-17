@@ -648,6 +648,7 @@ final class CatalogDatabaseTests: XCTestCase {
         s.clarity = 0.4
         s.sharpness = 0.6
         s.noiseReduction = 0.3
+        s.grain = 0.2
         s.redEyeSize = 0.8
         s.redEyeStrength = 0.9
         s.redEyePoints = [RedEyePoint(x: 0.3, y: 0.4), RedEyePoint(x: 0.6, y: 0.5)]

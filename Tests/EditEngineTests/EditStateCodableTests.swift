@@ -986,6 +986,24 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.clarity, 0.5)
     }
 
+    func testGrainRoundTrips() throws {
+        // Purely additive field (no legacy key), same as dehaze.
+        let original = EditState(sharpness: 0.4, grain: 0.65)
+        let roundTripped = try JSONDecoder().decode(EditState.self, from: JSONEncoder().encode(original))
+
+        XCTAssertEqual(roundTripped.grain, 0.65)
+        XCTAssertEqual(roundTripped.sharpness, 0.4)
+    }
+
+    func testGrainAbsentFromAnOlderSidecarDefaultsToIdentity() throws {
+        let state = try decode("""
+        { "sharpness": 0.3 }
+        """)
+
+        XCTAssertEqual(state.grain, 0)
+        XCTAssertEqual(state.sharpness, 0.3)
+    }
+
     // MARK: - ImageDocumentModel.sidecarURL(for:)
 
     func testSidecarURLAppendsPhotoAppJSONSuffix() {

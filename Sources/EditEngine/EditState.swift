@@ -692,6 +692,61 @@ struct EditState: Equatable, Codable {
     /// pattern as Vignette's Softness and Black & White's tone/grain.
     var sharpness: Double = 0
 
+    // MARK: - Grain
+
+    /// Film grain simulation amount, 0...1, default 0 (identity).
+    /// One-directional (0 = none, positive = grain) — matching Sharpen/
+    /// Noise Reduction's 0...1 family, not the bipolar tone/color sliders.
+    /// Applied as the pipeline's new TRUE FINAL stage, AFTER Sharpen (see
+    /// `EditPipeline` — Sharpen's own doc comment previously called ITSELF
+    /// the final stage; that claim now belongs here), in the perceptual
+    /// sRGB-gamma domain, via a custom kernel (`FilmGrain.cikernel`) blending
+    /// a `CIRandomGenerator` noise field — see `EditPipeline.applyGrain`.
+    ///
+    /// Noise source: `CIRandomGenerator`, not a hand-rolled per-pixel hash —
+    /// a coordinate-hash noise function's output is hardware/precision-
+    /// dependent, which would threaten this app's core "replaying the same
+    /// params must be deterministic" invariant. `CIRandomGenerator` is
+    /// Apple's own fixed, coordinate-derived noise field (MEASURED
+    /// identical across independent `CIContext`s — see
+    /// `EditPipelineTests`).
+    ///
+    /// That determinism guarantee is per OUTPUT SIZE, not universal — worth
+    /// stating explicitly, since Grain is the first stage in this pipeline
+    /// with this property. The noise is locked to absolute `CIImage`
+    /// coordinates, so replaying the same `EditState` against the same
+    /// SOURCE at the same rendered size reproduces the identical grain
+    /// pattern, but an export at a DIFFERENT output resolution than the
+    /// Editor's preview will show a different (still deterministic, still
+    /// amplitude-consistent per `kGrainCellFraction`) noise realization,
+    /// not a pixel-for-pixel match. This is inherent to sizing the noise
+    /// off the render's own extent rather than the source photo's fixed
+    /// dimensions, and is a documented non-goal, not an oversight — see
+    /// IMPROVEMENTS.md's Grain entry.
+    ///
+    /// MEASURED findings (this app's extendedLinearSRGB/RGBAf working
+    /// space, not assumed):
+    /// - Span: slider maps to amplitude `amount * kGrainAmountSpan` — see
+    ///   `EditPipeline.kGrainAmountSpan`'s own doc comment for the sweep.
+    /// - Resolution: like Sharpen's radius, the noise cell size is a
+    ///   FRACTION of `min(extent)`, not a fixed pixel count — a fixed cell
+    ///   would make the interactive downscaled proxy show visibly larger
+    ///   grain than the settled full-res render. See
+    ///   `EditPipeline.kGrainCellFraction`.
+    /// - Domain/ordering: perceptual sandwich, same domain as Sharpen and
+    ///   for the same reason (a fixed-amplitude LINEAR perturbation is
+    ///   invisible in highlights and violent in shadows) — see
+    ///   `EditPipeline.applyGrain`'s own doc comment for the measured
+    ///   stage-order requirement relative to Noise Reduction and Sharpen.
+    /// - Headroom/alpha: preserves alpha exactly; the kernel's tonal weight
+    ///   is a PRINCIPLED choice (not measured) that clamps grain to zero
+    ///   above linear 1.0 headroom and at pure black.
+    /// v1 scope: single Amount slider only — Lightroom's own Size/Roughness
+    /// controls are deferred, same scope-cut pattern as every other
+    /// Tier-1 Effects slider in this app (Texture/Clarity/Dehaze/Sharpen/
+    /// Noise Reduction are all single-slider v1s).
+    var grain: Double = 0
+
     // MARK: - RAW (CIRAWFilter-native)
 
     /// Core Image's own RAW tone-curve strength — configures `CIRAWFilter`
@@ -1133,6 +1188,7 @@ struct EditState: Equatable, Codable {
         s.dehaze = 0
         s.sharpness = 0
         s.noiseReduction = 0
+        s.grain = 0
         // red-eye: reset sliders AND clear points (see doc comment above)
         s.redEyeSize = 0.5
         s.redEyeStrength = 0.7
@@ -1219,6 +1275,7 @@ struct EditState: Equatable, Codable {
         result.dehaze = dehaze
         result.sharpness = sharpness
         result.noiseReduction = noiseReduction
+        result.grain = grain
         // red-eye correction INTENSITY only — `redEyePoints` (where the
         // corrections sit) stays `target`'s own, untouched.
         result.redEyeSize = redEyeSize
@@ -1302,6 +1359,7 @@ extension EditState {
         case texture, clarity, dehaze
         case noiseReduction
         case sharpness
+        case grain
         case boostAmount
         case rawExposureEV, shadowBoostScale, rawWhiteBalanceNeutralPoints
         case rawLuminanceNoiseReductionAdjust, rawColorNoiseReductionScale, rawSharpnessScale
@@ -1419,6 +1477,7 @@ extension EditState {
         dehaze = try container.decodeIfPresent(Double.self, forKey: .dehaze) ?? 0
         noiseReduction = try container.decodeIfPresent(Double.self, forKey: .noiseReduction) ?? 0
         sharpness = try container.decodeIfPresent(Double.self, forKey: .sharpness) ?? 0
+        grain = try container.decodeIfPresent(Double.self, forKey: .grain) ?? 0
         boostAmount = try container.decodeIfPresent(Double.self, forKey: .boostAmount) ?? 1.0
         rawExposureEV = try container.decodeIfPresent(Double.self, forKey: .rawExposureEV) ?? 0
         shadowBoostScale = try container.decodeIfPresent(Double.self, forKey: .shadowBoostScale) ?? 1.0

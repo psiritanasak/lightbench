@@ -178,6 +178,16 @@ final class EditStateRawRedecodeTests: XCTestCase {
         XCTAssertFalse(a.requiresRawRedecode(comparedTo: b))
     }
 
+    /// Grain is an `EditPipeline` stage (a custom kernel blend), not a
+    /// `CIRAWFilter` setting — a `true` here would fire a multi-second RAW
+    /// re-decode on every grain slider drag.
+    func testFalseWhenOnlyGrainDiffers() {
+        var a = EditState.identity
+        let b = EditState.identity
+        a.grain = 0.5
+        XCTAssertFalse(a.requiresRawRedecode(comparedTo: b))
+    }
+
     func testFalseComparedToItself() {
         var a = EditState.identity
         a.boostAmount = 0.6

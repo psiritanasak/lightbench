@@ -61,6 +61,7 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.clarity = 0.4
         s.sharpness = 0.6
         s.noiseReduction = 0.3
+        s.grain = 0.2
         // red-eye
         s.redEyeSize = 0.8
         s.redEyeStrength = 0.9
@@ -129,6 +130,7 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         XCTAssertEqual(original.clarity, identity.clarity)
         XCTAssertEqual(original.sharpness, identity.sharpness)
         XCTAssertEqual(original.noiseReduction, identity.noiseReduction)
+        XCTAssertEqual(original.grain, identity.grain)
         XCTAssertEqual(original.redEyeSize, identity.redEyeSize)
         XCTAssertEqual(original.redEyeStrength, identity.redEyeStrength)
     }

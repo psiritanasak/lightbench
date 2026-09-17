@@ -5342,4 +5342,194 @@ final class EditPipelineTests: XCTestCase {
 
         XCTAssertEqual(lowPixel, highPixel)
     }
+
+    // MARK: - Grain math
+
+    func testGrainZeroIsIdentity() {
+        let flat = solidColorImage(0.5)
+        let noisy = noisyGray(base: 0.5, amp: 0.2, size: 32)
+        XCTAssertEqual(pixel(of: EditPipeline.apply(EditState(), to: flat), at: 0, 0).r, 0.5, accuracy: 0)
+        let untouched = pixel(of: noisy, at: 4, 4)
+        let output = pixel(of: EditPipeline.apply(EditState(), to: noisy), at: 4, 4)
+        XCTAssertEqual(output.r, untouched.r, accuracy: 0, "grain 0 must be an exact identity no-op")
+    }
+
+    func testGrainAddsMeasurableNoise() {
+        var state = EditState()
+        state.grain = 1.0
+        let input = solidColorImage(0.5, size: 64)
+        let output = EditPipeline.apply(state, to: input)
+        let inputStd = regionStd(input, x: 0, y: 0, w: 64, h: 64).std
+        let outputStd = regionStd(output, x: 0, y: 0, w: 64, h: 64).std
+        XCTAssertEqual(Double(inputStd), 0, accuracy: 1e-6, "fixture must actually be flat, or this proves nothing")
+        XCTAssertEqual(Double(outputStd), 0.19939, accuracy: 0.01)
+    }
+
+    func testGrainAmountIsMonotone() {
+        let input = solidColorImage(0.5, size: 64)
+        var low = EditState(); low.grain = 0.5
+        var high = EditState(); high.grain = 1.0
+        let noGrainStd = regionStd(EditPipeline.apply(EditState(), to: input), x: 0, y: 0, w: 64, h: 64).std
+        let lowStd = regionStd(EditPipeline.apply(low, to: input), x: 0, y: 0, w: 64, h: 64).std
+        let highStd = regionStd(EditPipeline.apply(high, to: input), x: 0, y: 0, w: 64, h: 64).std
+        XCTAssertLessThan(Double(noGrainStd), Double(lowStd))
+        XCTAssertLessThan(Double(lowStd), Double(highStd))
+    }
+
+    /// The most valuable test in this block: pins that grain is genuinely
+    /// zero-mean (via `kGrainZeroPoint`), not a disguised exposure shift.
+    /// Deliberately runs at 800px, NOT a small fixture — a REAL, reviewer-
+    /// caught bug in an earlier version of this stage (see
+    /// `EditPipeline.kGrainZeroPoint`'s own doc comment) only showed up
+    /// once the noise's affine scale exceeded 1px (`min(extent)` > 500px);
+    /// a 64px fixture floors `cell` to exactly 1px and would have stayed
+    /// green through that entire bug's lifetime. The tolerance is wide
+    /// enough to accommodate the MEASURED, expected Jensen's-inequality-
+    /// style drift from adding symmetric noise before a nonlinear encode/
+    /// decode round trip (up to +0.031 at linear 0.214, measured at this
+    /// same 800px size — see `EditPipeline.applyGrain`'s own doc comment)
+    /// — this test would still catch a genuinely broken zero-point (e.g.
+    /// one off by 0.1+), which is the actual regression it guards against.
+    func testGrainPreservesMeanBrightness() {
+        for base in [0.05, 0.214, 0.5, 0.8, 0.95] {
+            var state = EditState(); state.grain = 1.0
+            let output = EditPipeline.apply(state, to: solidColorImage(base, size: 800))
+            let mean = regionStd(output, x: 300, y: 300, w: 200, h: 200).mean
+            XCTAssertEqual(Double(mean), base, accuracy: 0.05, "at linear \(base)")
+        }
+    }
+
+    /// The measured shape of the kernel's tonal weight `w = 4*L*(1-L)`
+    /// across the tone range, at 800px (see `testGrainPreservesMeanBrightness`
+    /// for why this must not be a small fixture) — cited by name in
+    /// `EditPipeline.kGrainAmountSpan`'s own doc comment.
+    func testGrainToneWeightAcrossRange() {
+        let expected: [Double: Double] = [0.05: 0.05474, 0.214: 0.16417, 0.5: 0.20193, 0.8: 0.11419, 0.95: 0.03236]
+        for (base, expectedStd) in expected {
+            var state = EditState(); state.grain = 1.0
+            let output = EditPipeline.apply(state, to: solidColorImage(base, size: 800))
+            let std = regionStd(output, x: 300, y: 300, w: 200, h: 200).std
+            XCTAssertEqual(Double(std), expectedStd, accuracy: 0.02, "at linear \(base)")
+        }
+    }
+
+    func testGrainIsMonochromatic() {
+        var state = EditState(); state.grain = 1.0
+        let color = CIColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1, colorSpace: linearSpace)!
+        let input = CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: 32, height: 32))
+        let output = EditPipeline.apply(state, to: input)
+        for (x, y) in [(2, 3), (10, 17), (25, 8), (30, 30)] {
+            let p = pixel(of: output, at: x, y)
+            XCTAssertEqual(Double(p.r), Double(p.g), accuracy: 1e-5, "at (\(x),\(y))")
+            XCTAssertEqual(Double(p.g), Double(p.b), accuracy: 1e-5, "at (\(x),\(y))")
+        }
+    }
+
+    func testGrainVanishesAtBlackAndWhite() {
+        var state = EditState(); state.grain = 1.0
+        let blackStd = regionStd(EditPipeline.apply(state, to: solidColorImage(0, size: 32)), x: 0, y: 0, w: 32, h: 32).std
+        let whiteStd = regionStd(EditPipeline.apply(state, to: solidColorImage(1, size: 32)), x: 0, y: 0, w: 32, h: 32).std
+        XCTAssertEqual(Double(blackStd), 0, accuracy: 1e-4)
+        XCTAssertEqual(Double(whiteStd), 0, accuracy: 1e-4)
+    }
+
+    func testGrainDoesNotProduceNegativeValues() {
+        var state = EditState(); state.grain = 1.0
+        let output = EditPipeline.apply(state, to: solidColorImage(0.02, size: 64))
+        var buffer = [Float](repeating: 0, count: 64 * 64 * 4)
+        context.render(output, toBitmap: &buffer, rowBytes: 64 * 16,
+                        bounds: CGRect(x: 0, y: 0, width: 64, height: 64), format: .RGBAf, colorSpace: linearSpace)
+        var minValue: Float = .infinity
+        for i in 0..<(64 * 64) {
+            minValue = min(minValue, buffer[i * 4], buffer[i * 4 + 1], buffer[i * 4 + 2])
+        }
+        XCTAssertGreaterThanOrEqual(minValue, 0)
+    }
+
+    func testGrainPreservesHighlightHeadroom() {
+        var state = EditState(); state.grain = 1.0
+        let output = EditPipeline.apply(state, to: solidColorImage(1.4, size: 32))
+        let mean = regionStd(output, x: 0, y: 0, w: 32, h: 32).mean
+        XCTAssertEqual(Double(mean), 1.4, accuracy: 0.002)
+        XCTAssertGreaterThan(Double(mean), 1.0)
+    }
+
+    func testGrainPreservesAlpha() {
+        var state = EditState(); state.grain = 1.0
+        let noisy = noisyGray(base: 0.5, amp: 0.1, size: 16, alpha: 0.5)
+        let output = EditPipeline.apply(state, to: noisy)
+        XCTAssertEqual(pixel(of: output, at: 8, 8).a, 0.5, accuracy: 0.002)
+    }
+
+    func testGrainPreservesExtent() {
+        var state = EditState()
+        state.grain = 1.0
+        state.cropInsetTop = 0.25
+        state.cropInsetLeft = 0.1
+        let input = solidColorImage(0.5, size: 64)
+        let cropOnly = EditPipeline.apply(EditState(cropInsetTop: 0.25, cropInsetLeft: 0.1), to: input)
+        let withGrain = EditPipeline.apply(state, to: input)
+        XCTAssertEqual(withGrain.extent, cropOnly.extent)
+    }
+
+    func testGrainIsDeterministic() {
+        var state = EditState(); state.grain = 0.6
+        let input = solidColorImage(0.5, size: 64)
+        let first = EditPipeline.apply(state, to: input)
+        let second = EditPipeline.apply(state, to: input)
+        var bufferA = [Float](repeating: 0, count: 64 * 64 * 4)
+        var bufferB = [Float](repeating: 0, count: 64 * 64 * 4)
+        let freshContext = CIContext(options: [.workingColorSpace: linearSpace, .workingFormat: CIFormat.RGBAf])
+        context.render(first, toBitmap: &bufferA, rowBytes: 64 * 16,
+                        bounds: CGRect(x: 0, y: 0, width: 64, height: 64), format: .RGBAf, colorSpace: linearSpace)
+        freshContext.render(second, toBitmap: &bufferB, rowBytes: 64 * 16,
+                             bounds: CGRect(x: 0, y: 0, width: 64, height: 64), format: .RGBAf, colorSpace: linearSpace)
+        XCTAssertEqual(bufferA, bufferB, "grain must render bit-identically across separate CIContexts/render passes for this app's determinism invariant")
+    }
+
+    /// MEASURED, not assumed (800px flat patch, region std over a 256px
+    /// sample) — see `EditPipeline.applyGrain`'s own doc comment for the
+    /// full reasoning. Pins the shipped order as a regression: reversing it
+    /// would push this well outside tolerance (the reversed order measures
+    /// 0.23888, ~2.4x higher).
+    func testGrainSharpenOrderIsFixed() {
+        var state = EditState()
+        state.grain = 0.5
+        state.sharpness = 1.0
+        let output = EditPipeline.apply(state, to: solidColorImage(0.5, size: 800))
+        let std = regionStd(output, x: 0, y: 0, w: 256, h: 256).std
+        XCTAssertEqual(Double(std), 0.09936, accuracy: 0.01)
+    }
+
+    /// MEASURED, not assumed — see `EditPipeline.applyGrain`'s own doc
+    /// comment. Pins the shipped order (grain after Noise Reduction) as a
+    /// regression: the reversed order measures 0.06439, ~35% lower (NR
+    /// eating the grain).
+    func testGrainNoiseReductionOrderIsFixed() {
+        var state = EditState()
+        state.grain = 0.5
+        state.noiseReduction = 1.0
+        let output = EditPipeline.apply(state, to: solidColorImage(0.5, size: 800))
+        let std = regionStd(output, x: 0, y: 0, w: 256, h: 256).std
+        XCTAssertEqual(Double(std), 0.09936, accuracy: 0.01)
+    }
+
+    /// MEASURED after the `kGrainZeroPoint`/`.samplingNearest()` fix (see
+    /// `EditPipeline.kGrainCellFraction`'s own doc comment) — genuinely
+    /// stable across a 4x resolution range now, unlike the pre-fix
+    /// construction this test's own history caught drifting.
+    func testGrainAmplitudeIsResolutionConsistent() {
+        let expected: [Int: Double] = [400: 0.19946, 800: 0.20453, 1600: 0.21236]
+        for (size, expectedStd) in expected {
+            var state = EditState(); state.grain = 1.0
+            let output = EditPipeline.apply(state, to: solidColorImage(0.5, size: size))
+            let origin = size / 2 - 32
+            let std = regionStd(output, x: origin, y: origin, w: 64, h: 64).std
+            XCTAssertEqual(Double(std), expectedStd, accuracy: 0.03, "at \(size)px")
+        }
+    }
+
+    func testGrainDefaultIsZero() {
+        XCTAssertEqual(EditState().grain, 0)
+    }
 }

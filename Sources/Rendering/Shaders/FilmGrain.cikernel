@@ -1,0 +1,77 @@
+// Grain — film grain simulation. The seventh custom Core Image kernel in
+// this codebase (after SelectiveColor, ColorRange, ToneCurve, PointToneCurve,
+// DehazeDarkChannel, DehazeRecover). Core Image ships no grain filter of any
+// kind, and no built-in expresses "blend a second noise image into this one,
+// monochrome, weighted by tone" as a single reviewable operation.
+//
+// NOISE SOURCE: the noise field `n` is produced in Swift by `CIRandomGenerator`
+// scaled up by an affine transform (see `EditPipeline.applyGrain`), NOT a
+// per-pixel coordinate hash computed in this kernel. A `CIColorKernel` cannot
+// read `destCoord()` at all, so the coordinate-dependent part (the noise
+// "cell size") has to live outside it regardless — and `CIRandomGenerator` is
+// Apple's own fixed, coordinate-derived noise field, deterministic across
+// `CIContext`s (measured, see `EditPipelineTests`), unlike a hand-rolled
+// `fract(sin(...))` hash, whose output is hardware/precision-dependent and
+// would threaten this app's core "replaying the same params must be
+// deterministic" invariant.
+//
+// MONOCHROME, ZERO-CENTERED: `n`'s three channels are independent per-pixel
+// uniform-0...1 randoms straight from `CIRandomGenerator`, sampled here with
+// NO unpremultiply — `n.a` is never read at all, deliberately: this kernel
+// does not need the noise image opaque, only its r/g/b, so the generator's
+// own independent random alpha is simply irrelevant rather than something
+// to force or correct. (An earlier version routed the noise through
+// `CIColorClamp`/`CIColorMatrix` in Swift to force alpha to 1 before this
+// kernel ever saw it — MEASURED to silently corrupt the distribution via an
+// implicit premultiply/unpremultiply Core Image's "color matrix" filter
+// family performs on any input, real premultiplied data or not. See
+// `EditPipeline.kGrainZeroPoint`'s own doc comment for the full story.)
+// Averaging the three channels into one scalar both desaturates the noise
+// (real film grain is a luminance/density phenomenon, not color speckle —
+// this kernel adds the SAME delta to r/g/b) and narrows the distribution
+// toward Gaussian via the central limit theorem (a Bates(3) distribution:
+// genuinely symmetric about 0.5, bounded 0...1), which is what makes
+// scaled-and-interpolated `CIRandomGenerator` output read as organic grain
+// rather than flat noise, with no second Size/Roughness slider needed.
+// `zeroPoint` recenters the averaged value to zero — see
+// `EditPipeline.kGrainZeroPoint`'s own doc comment for the measured mean
+// this cancels (0.5, confirmed both analytically and empirically); a
+// non-zero-mean noise field would act as a hidden exposure shift.
+//
+// TONAL WEIGHT: `w = 4*L*(1-L)` is a PRINCIPLED choice, not a measured one —
+// a parabola that is 0 at L=0 and L=1 and peaks at 1.0 at L=0.5. This models
+// developed film density: grain is invisible in clear film (pure black) and
+// in fully-saturated density (pure white), matching the "no grain in
+// shadows/highlights" look real film grain has. Clamping L to [0,1] before
+// computing w also makes grain vanish above headroom (L>1) for free, with no
+// separate highlight-clamp branch.
+//
+// Does NOT clamp the UPPER bound — `w` already guarantees zero contribution
+// above linear 1.0 headroom, so nothing here pushes a legitimate highlight
+// value backward. DOES clamp the LOWER bound to 0 — MEASURED, not assumed,
+// necessary: even with a genuinely SYMMETRIC zero-mean noise field (unlike
+// the skewed pre-fix version — see EditPipeline.kGrainZeroPoint's own doc
+// comment), `w` is small but non-zero near black, so an unlucky strongly-
+// negative noise sample can still push `c + amount*w*noise` slightly below
+// 0 — measured as low as -0.0083 on a linear-0.02 patch, amount 1.0, before
+// this clamp. Unlike Dehaze's own negative values (a genuine intermediate
+// result an inverse optical model needs downstream), Grain is the
+// pipeline's TRUE FINAL stage — there is no later stage that needs negative
+// headroom, and "negative light" in the delivered image has no physical
+// meaning, so clamping here is correct, not merely convenient.
+
+kernel vec4 filmGrain(__sample s, __sample n, float amount, float zeroPoint) {
+    float a = s.a;
+    vec3 c = (a > 0.0) ? s.rgb / a : s.rgb;
+
+    float noise = dot(n.rgb, vec3(1.0 / 3.0)) - zeroPoint;
+
+    float L = clamp(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+    float w = 4.0 * L * (1.0 - L);
+
+    vec3 outRGB = max(c + amount * w * noise, vec3(0.0));
+
+    // Repremultiply. Alpha untouched — grain is a tonal operation and must
+    // not alter coverage.
+    return vec4(outRGB * a, a);
+}

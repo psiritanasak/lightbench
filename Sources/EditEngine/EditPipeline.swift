@@ -39,10 +39,14 @@ import CoreImage.CIFilterBuiltins
 /// extent-preserving so none need to run before crop, and running them
 /// last means they act on the actual final framed/stylized pixels, not
 /// content that gets discarded (crop) or resampled (geometric stages)
-/// afterward. Sharpen is the true FINAL stage: measured to commute with
-/// Vignette (order between those two specifically doesn't matter), but
-/// running dead last overall does, and it must come after Noise Reduction
-/// or it would re-amplify noise NR would otherwise have removed.
+/// afterward. Sharpen: measured to commute with Vignette (order between
+/// those two specifically doesn't matter), but it must come after Noise
+/// Reduction or it would re-amplify noise NR would otherwise have removed.
+/// Grain is now the true FINAL stage, after Sharpen — both orderings
+/// (grain-after-sharpen, grain-after-NR) are MEASURED requirements, not
+/// conventions, being the pipeline's only stochastic stage: sharpening
+/// grain would amplify/halo it, and NR running after grain would eat it.
+/// See `applyGrain`'s own doc comment.
 enum EditPipeline {
     static func apply(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
@@ -60,7 +64,8 @@ enum EditPipeline {
         image = applyClarity(state, to: image)                // wide local contrast, perceptual, before detail pair
         image = applyTexture(state, to: image)                // fine local contrast, perceptual, coarse->fine after clarity
         image = applyNoiseReduction(state, to: image)         // detail, scene-linear, before sharpen
-        image = applySharpen(state, to: image)                // detail, perceptual, truly last
+        image = applySharpen(state, to: image)                // detail, perceptual, before grain
+        image = applyGrain(state, to: image)                  // stochastic, perceptual, truly last
         return image
     }
 
@@ -2396,7 +2401,7 @@ enum EditPipeline {
     /// absolute-pixel radius tracks the final frame and nothing resamples
     /// its work; leads the detail region as its coarsest member so Noise
     /// Reduction then cleans up any noise it amplifies and Sharpen stays
-    /// truly last. MEASURED: does NOT cleanly commute with Vignette (unlike
+    /// last among the detail stages. MEASURED: does NOT cleanly commute with Vignette (unlike
     /// Sharpen) — corner differences up to 0.0188 between orderings, so
     /// running AFTER Vignette is a real requirement, not an arbitrary
     /// choice. Applied in the PERCEPTUAL sRGB-gamma domain, in its own
@@ -2590,12 +2595,15 @@ enum EditPipeline {
         state.sharpness != 0
     }
 
-    /// Detail/edge sharpening via `CISharpenLuminance`, the pipeline's
-    /// TRUE FINAL stage — after crop AND vignette, so it sharpens exactly
-    /// the final framed, stylized pixels (resampling after sharpening
-    /// would soften the halos; measured to commute with vignette to
-    /// within 0.00100, below test tolerance, so ordering between those two
-    /// specifically doesn't matter). Applied in the PERCEPTUAL sRGB-gamma
+    /// Detail/edge sharpening via `CISharpenLuminance` — after crop AND
+    /// vignette, so it sharpens exactly the final framed, stylized pixels
+    /// (resampling after sharpening would soften the halos; measured to
+    /// commute with vignette to within 0.00100, below test tolerance, so
+    /// ordering between those two specifically doesn't matter). No longer
+    /// the pipeline's true final stage — Grain now runs after it (see
+    /// `applyGrain`'s own doc comment for why: sharpening grain would
+    /// amplify and halo it, silently turning this slider into a second
+    /// Grain-intensity control). Applied in the PERCEPTUAL sRGB-gamma
     /// domain (measured more even edge response than scene-linear, and the
     /// conventional domain for unsharp masking), in its own encode/decode
     /// sandwich (self-contained; the encode/decode tone curves are exact
@@ -2621,5 +2629,212 @@ enum EditPipeline {
         filter.radius = Float(radius)
         let sharpened = filter.outputImage ?? encoded
         return decodeToLinear(sharpened)
+    }
+
+    // MARK: - Grain
+
+    private static let filmGrainKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "FilmGrain", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
+    /// The mean of `dot(n.rgb, vec3(1/3))` over `CIRandomGenerator`'s RAW
+    /// output, sampled DIRECTLY by the kernel — MEASURED at 0.4994 over a
+    /// 512x512 sample (a 0.12% deviation from the 0.5 a uniform-[0,1]
+    /// distribution predicts, i.e. finite-sample noise, not a correction).
+    /// Subtracted in the kernel so the noise field is zero-mean; a
+    /// non-zero mean here would act as a hidden exposure shift wherever
+    /// grain is active — confirmed by `testGrainPreservesMeanBrightness`.
+    ///
+    /// AN EARLIER VERSION OF THIS CONSTANT WAS WRONG (0.7439), caught by an
+    /// adversarial reviewer re-measurement, not by this suite — worth
+    /// recording exactly why, since the failure mode is subtle and could
+    /// recur. That version routed the noise through `CIColorClamp` then
+    /// `CIColorMatrix` (to force alpha to 1) before the kernel ever saw it.
+    /// Both of those are members of Core Image's "color matrix" filter
+    /// family, which — MEASURED, not documented anywhere found — treat
+    /// their input as PREMULTIPLIED even though `CIRandomGenerator`'s r/g/b/a
+    /// are independent per-channel randoms, not a true premultiplied
+    /// quadruple. Routing through them performs an implicit unpremultiply/
+    /// repremultiply round trip that reshapes the distribution: measured
+    /// per-pixel output collapses to `min(r,a)/a` for each channel (r,a iid
+    /// uniform 0...1) — mean 0.7439, with exactly 24.6% of pixels pinned at
+    /// 1.0 (matching `∫(1-a)³da = 1/4`, the analytic probability all three
+    /// of r/g/b independently exceed the SAME shared `a`). That distorted
+    /// mean was then measured a SECOND time only at cell=1 (the 64px test
+    /// fixture, where the bilinear resample of the later `.transformed`
+    /// scale is a no-op) — real photos have `min(extent)` well above the
+    /// 500px `cell > 1` threshold, where the bilinear resample shifted the
+    /// mean further, to ~0.82. Net effect: mid-gray rendered at slider 1.0
+    /// drifted to ~0.62 (~+0.31 EV) at real resolutions, not the documented
+    /// +0.052 Jensen's-inequality artifact the 64px tests could see. FIXED
+    /// by removing `CIColorClamp`/`CIColorMatrix` entirely — the kernel
+    /// already reads `n.rgb` directly with no unpremultiply (verified: a
+    /// passthrough kernel sampling the raw generator directly reproduces
+    /// its true 0.4994 mean, undistorted) — and by forcing OPAQUE alpha
+    /// via simply never reading `n.a` in the kernel, rather than by
+    /// mutating the image. See `applyGrain`'s own doc comment for the
+    /// `.samplingNearest()` fix this same investigation required.
+    private static let kGrainZeroPoint: Double = 0.5
+
+    /// Slider-to-kernel-amplitude span, MEASURED "strong but graceful" on a
+    /// flat 64px 0.5-gray patch (1 identical to the raw kernel `amount`,
+    /// the simplest possible correspondence): slider 0.5 -> std 0.09827,
+    /// slider 1.0 -> std 0.19939, roughly linear in amount as expected.
+    /// Across the tone range at slider 1.0 (see `EditPipelineTests`'
+    /// `testGrainToneWeightAcrossRange`, 800px): shadows (0.05) -> std
+    /// 0.05474, mids (0.214) -> std 0.16417, mids (0.5) -> std 0.20193,
+    /// highlights (0.8) -> std 0.11419, near-white (0.95) -> std 0.03236.
+    /// Headroom (1.4) -> exact mean-preserving identity (the tonal weight's
+    /// clamp) is a separate assertion, in `testGrainPreservesHighlightHeadroom`
+    /// (mean, not std, since a std-of-zero fixture can't distinguish "no
+    /// grain" from "no test"). This is the measured shape of `w =
+    /// 4*L*(1-L)`, not a separate claim — it peaks near mid-gray and
+    /// vanishes at both tonal extremes, matching real film grain's
+    /// visibility profile. These numbers reflect the CORRECTED noise
+    /// construction (see `kGrainZeroPoint`'s doc comment) — re-measured
+    /// after that fix.
+    ///
+    /// Currently a NO-OP multiplier (1.0) — kept as its own named constant
+    /// anyway, matching every sibling span (`kSharpenAmountSpan`,
+    /// `kNoiseReductionSpan`) that DOES rescale its slider, rather than
+    /// writing `state.grain` directly into the kernel call. That keeps the
+    /// call site uniform across every stage and gives a single place to
+    /// change if "strong but graceful" is ever re-tuned, without implying
+    /// 1.0 is somehow more measured or more final than any other value —
+    /// it is exactly what direct correspondence between slider and kernel
+    /// amplitude looks like, no more.
+    private static let kGrainAmountSpan: Double = 1.0
+
+    /// Noise cell size as a fraction of the CURRENT extent's MIN dimension —
+    /// same mechanism as `kSharpenRadiusFraction`, for the same reason: a
+    /// fixed pixel cell would make the interactive downscaled proxy show
+    /// visibly larger grain than the settled full-res render (a flicker on
+    /// every slider drag, unique to grain among this pipeline's stages,
+    /// since grain is the only stage whose signal is visible at the pixel
+    /// scale on flat content). MEASURED resolution behavior at slider 1.0,
+    /// re-measured after the `kGrainZeroPoint` fix (see that constant's own
+    /// doc comment — the ORIGINAL bilinear-sampled construction showed a
+    /// much worse drift than this): 400px (cell 0.8px, floored to 1px) ->
+    /// std 0.19946, 800px (cell 1.6px) -> std 0.20453, 1600px (cell 3.2px)
+    /// -> std 0.21236 — genuinely stable (< 7% spread) across a 4x
+    /// resolution range now that `.samplingNearest()` avoids the bilinear
+    /// resample's own distortion.
+    private static let kGrainCellFraction: Double = 0.002
+
+    private static func grainActive(_ state: EditState) -> Bool {
+        state.grain != 0
+    }
+
+    /// Film grain via a custom kernel (`FilmGrain.cikernel`) blending a
+    /// `CIRandomGenerator` noise field, run as the pipeline's new TRUE FINAL
+    /// stage — after Sharpen (see that stage's own updated doc comment) and
+    /// after Noise Reduction. Both orderings are MEASURED requirements, not
+    /// conventions (800px flat 0.5 gray patch, grain 0.5, region std over a
+    /// 256px sample, temporary swap-rebuild-measure-revert, not assumed —
+    /// re-measured after the `kGrainZeroPoint`/`.samplingNearest()` fixes,
+    /// see that constant's own doc comment; the ordering conclusions did
+    /// not change, only the exact figures):
+    /// - grain-then-sharpen (sharpness 1.0) measured std 0.23888 vs. the
+    ///   shipped sharpen-then-grain order's 0.09936 — sharpening AFTER grain
+    ///   is added amplifies/haloes it ~2.4x, so grain must come after
+    ///   Sharpen.
+    /// - grain-then-NR (noiseReduction 1.0) measured std 0.06439 vs. the
+    ///   shipped NR-then-grain order's 0.09936 — Noise Reduction silently
+    ///   ate ~35% of the grain's std when grain ran before it, so grain
+    ///   must come after Noise Reduction too.
+    /// See `EditPipelineTests`' `testGrainSharpenOrderIsFixed`/
+    /// `testGrainNoiseReductionOrderIsFixed` for these exact figures pinned
+    /// as regression tests.
+    ///
+    /// Applied in the PERCEPTUAL sRGB-gamma domain (same domain as Sharpen,
+    /// opposite of Noise Reduction/Vignette/Dehaze) — a PRINCIPLED choice,
+    /// not a measured one (no scene-linear-vs-perceptual comparison was
+    /// run, unlike Noise Reduction's own domain choice): grain is a print/
+    /// density phenomenon, and a fixed-amplitude perturbation applied in
+    /// LINEAR light would scale wrong relative to how a viewer perceives
+    /// shadow/highlight detail. The measured tonal-weight response ACROSS
+    /// the perceptual-domain range (see `kGrainAmountSpan`'s own doc
+    /// comment) confirms the result behaves as intended — peaking near
+    /// mid-gray, vanishing at both extremes — without that by itself
+    /// proving the linear domain would behave worse.
+    ///
+    /// Adding zero-mean noise before a NONLINEAR encode/decode round trip
+    /// is not perfectly mean-preserving — MEASURED, not assumed, at 800px
+    /// (this drift is genuinely resolution-INDEPENDENT, unlike the
+    /// pre-fix bug — see `kGrainZeroPoint`'s own doc comment — so a small
+    /// fixture is not hiding anything here): at slider 1.0 the rendered
+    /// mean drifts from the input by up to +0.031 (at linear 0.214;
+    /// +0.021 at 0.5, +0.014 at 0.05, ~0 at 0.95). This is the expected
+    /// signature of averaging a symmetric perturbation through a convex
+    /// decode curve (Jensen's inequality), not a bug in the zero-centering
+    /// — `testGrainPreservesMeanBrightness` pins a tolerance wide enough to
+    /// accommodate it.
+    ///
+    /// `CIRandomGenerator`'s raw per-channel output IS genuinely bounded to
+    /// 0...1 (MEASURED: min 0.0, max 1.0, mean 0.4994 over a 512x512
+    /// sample) — do NOT route it through `CIColorClamp`/`CIColorMatrix`
+    /// first, even though that looks like the obvious way to force the
+    /// noise image opaque before the kernel. Both of those are Core
+    /// Image's "color matrix" family and, MEASURED, treat their input as
+    /// PREMULTIPLIED regardless of the actual data — `CIRandomGenerator`'s
+    /// r/g/b/a are independent per-channel randoms, not a true
+    /// premultiplied quadruple, so routing through them performs an
+    /// unwanted implicit unpremultiply/repremultiply that reshapes the
+    /// distribution into `min(channel,alpha)/alpha` (measured mean 0.7439,
+    /// not 0.5) — see `kGrainZeroPoint`'s own doc comment for the full
+    /// story of the bug this caused and how an adversarial re-review
+    /// caught it. Instead, this stage never forces the noise opaque at
+    /// all: the kernel simply never reads `n.a`, so the generator's
+    /// independent random alpha is irrelevant, and `n.rgb` is sampled
+    /// exactly as `CIRandomGenerator` produced it (MEASURED: a kernel that
+    /// samples the raw generator directly reproduces its true 0.4994 mean,
+    /// undistorted).
+    ///
+    /// `CIRandomGenerator`'s output has infinite extent, so the noise image
+    /// is explicitly `.cropped(to: extent)` before reaching the kernel —
+    /// the kernel's own `extent:` argument would clip the OUTPUT
+    /// regardless, but cropping the input keeps the render graph honest.
+    ///
+    /// `.samplingNearest()` runs BEFORE the affine scale — MEASURED, not
+    /// decoration, on the CURRENT (raw-generator, no clamp/matrix)
+    /// construction: the default bilinear sampler leaves the noise's MEAN
+    /// alone — measured within 0.006 of the true 0.4994 mean either way,
+    /// across cell 1.0 -> 12.0, well inside ordinary sampling noise for
+    /// these fixture sizes — the mean-drift bug documented in
+    /// `kGrainZeroPoint`'s own doc comment was entirely a `CIColorClamp`/
+    /// `CIColorMatrix` artifact, not a bilinear-resampling one. It DOES
+    /// measurably shrink the STD once `cell`
+    /// (see `kGrainCellFraction`) exceeds 1 pixel, i.e. on every real photo
+    /// (`min(extent)` > 500px): bilinear std drops from 0.1674 at cell 1.0
+    /// to ~0.111 for cell 1.2 and up (adjacent random samples get averaged
+    /// together by the resample, which is a real amplitude loss, not just
+    /// the "narrows toward Gaussian" shaping the kernel's own header
+    /// comment already credits to channel-averaging). Nearest-neighbor
+    /// holds std to within 0.006 of 0.1674 across the same cell range.
+    ///
+    /// Guarded off at grain 0 (exact identity) — NOT a cheap early-out: the
+    /// perceptual encode/decode round-trip plus the kernel's own
+    /// unpremultiply/repremultiply is not bit-exact in float32, the same
+    /// reasoning `dehazeActive`'s gate documents for Dehaze.
+    private static func applyGrain(_ state: EditState, to image: CIImage) -> CIImage {
+        guard grainActive(state), let kernel = filmGrainKernel else { return image }
+        let extent = image.extent
+        guard !extent.isInfinite, !extent.isEmpty else { return image }
+
+        let cell = max(1.0, kGrainCellFraction * Double(min(extent.width, extent.height)))
+        guard let rawNoise = CIFilter.randomGenerator().outputImage else { return image }
+        let noise = rawNoise
+            .samplingNearest()
+            .transformed(by: CGAffineTransform(scaleX: cell, y: cell))
+            .cropped(to: extent)
+
+        let encoded = encodeToPerceptual(image)
+        let amount = Float(state.grain * kGrainAmountSpan)
+        let zeroPoint = Float(kGrainZeroPoint)
+        let grained = kernel.apply(extent: extent, arguments: [encoded, noise, amount, zeroPoint]) ?? encoded
+        return decodeToLinear(grained)
     }
 }

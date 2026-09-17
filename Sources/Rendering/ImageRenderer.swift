@@ -171,12 +171,15 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     /// input within one `draw(in:)` call, Compare gets the proxy for BOTH
     /// halves for free from this single key — costing nothing in quality,
     /// since `EditState.comparisonOriginal()` already zeroes
-    /// `clarity`/`texture`/`dehaze`/`sharpness`/`noiseReduction`, so the
-    /// original half has no PROXY-DIVERGENT stage left to diverge in the first
-    /// place. (Not "no convolution stage" — Dehaze is not a convolution, and
-    /// its dominant divergence mechanism is a whole-frame statistic, not a
-    /// radius. It belongs in this list for the divergence, not the filter
-    /// shape.)
+    /// `clarity`/`texture`/`dehaze`/`sharpness`/`noiseReduction`/`grain`, so
+    /// the original half has no PROXY-DIVERGENT stage left to diverge in the
+    /// first place. (Not "no convolution stage" — Dehaze is not a
+    /// convolution, and its dominant divergence mechanism is a whole-frame
+    /// statistic, not a radius. It belongs in this list for the divergence,
+    /// not the filter shape. Grain is the MOST proxy-divergent stage of
+    /// all: its noise is locked to absolute image coordinates, so proxy and
+    /// full-res don't just differ in amplitude like the others — they show
+    /// a completely different random pattern at every pixel.)
     private var cachedPipelineSource: CIImage?
 
     init(device: MTLDevice) {

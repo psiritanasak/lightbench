@@ -453,7 +453,15 @@ final class CatalogModel: ObservableObject {
         // reviewer-caught: must not run on this @MainActor class's own
         // thread, matching `importFolder`/`importFolderTree`'s existing
         // `Task.detached` discipline for the identical concern.
-        let (moves, _) = await Task.detached { PhotoImporter.matchByFilename([photo], in: folder) }.value
+        // Explicit closure return type is REQUIRED, not stylistic: Xcode 27
+        // added a `name:` overload to `Task.detached`, and with a labeled
+        // tuple result and no contextual type the call became ambiguous.
+        // Pinning the return type resolves it. (The Bool-returning
+        // `Task.detached` above needs no such help.)
+        let matched: (moves: [(photoID: Int64, newPath: String)], unmatchedCount: Int) = await Task.detached {
+            PhotoImporter.matchByFilename([photo], in: folder)
+        }.value
+        let moves = matched.moves
         guard let move = moves.first else {
             importStatusMessage = ["Couldn't find \"\(photo.filename)\" in that folder.", accessWarning]
                 .compactMap { $0 }.joined(separator: " ")
@@ -519,9 +527,11 @@ final class CatalogModel: ObservableObject {
 
         // See `relocatePhoto(_:)`'s own doc comment for why this must not
         // run on the main actor.
-        let (moves, unmatchedCount) = await Task.detached {
+        // Explicit return type required — see `relocatePhoto(_:)`.
+        let matched: (moves: [(photoID: Int64, newPath: String)], unmatchedCount: Int) = await Task.detached {
             PhotoImporter.matchByFilename(missing, in: folder)
         }.value
+        let (moves, unmatchedCount) = (matched.moves, matched.unmatchedCount)
         guard !moves.isEmpty else {
             importStatusMessage = ["No matching files found in that folder.", accessWarning]
                 .compactMap { $0 }.joined(separator: " ")

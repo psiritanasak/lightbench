@@ -8301,7 +8301,8 @@ the maximum. `kDehazeAtmosphereBlurFraction`'s doc comment already calls
 this "the cheap stand-in for the paper's own brightest-0.1%-of-the-dark-
 channel selection"; this is what that shortcut costs in practice.
 
-**Exact next step**: **Curves v2** — the interactive draggable RGB
+**Exact next step (superseded — see the Curves v2 pre-work section at
+the end of this file)**: **Curves v2** — the interactive draggable RGB
 point-curve editor, which the user chose as the follow-on to Dehaze when
 picking this slice. See CLAUDE.md's Tier-2 entry: it fixes a recorded v1
 defect (`applyCurves` clamps highlight headroom above linear 1.0 whenever
@@ -8311,3 +8312,63 @@ migration shape the `definition` -> `texture`/`clarity` split solved —
 reuse that `LegacyCodingKeys` pattern. Needs its own Plan Mode session;
 the UI is the hard part (draggable spline canvas with point hit-testing
 and a channel selector), not the maths.
+
+## Curves v2 slice 1 — pre-work: CIToneCurve fully reverse-engineered (2026-09-17)
+
+**No code written. This section exists so the next session does not
+re-derive a result that took three probes to get right.**
+
+Curves v2 slice 1 (per its approved plan: replace `CIToneCurve` with a
+custom spline kernel, editor second) rested on one unknown — the suite
+hard-codes ~70 values measured off `CIToneCurve`'s undocumented spline
+(`0.02534`, `0.00383`, ...) across four shipped features (global
+Shadows/Highlights, Black Point, Brilliance, per-mask Shadows/Highlights),
+so "behaviour-preserving" could not be assumed. It has now been measured:
+
+    CIToneCurve = sRGB-encode
+                  -> NATURAL CUBIC spline (control points live in sRGB space)
+                  -> sRGB-decode
+
+Verified to **0.00000 error** at every control point and across a
+128-sample sweep, on four control configurations (shadows +/-1,
+highlights +1, black point +1).
+
+**Consequences — this is the good outcome, not the fallback:**
+- A custom kernel can be BYTE-EXACT. The ~70 existing assertions pass
+  untouched and become a real regression gate.
+- **Saved edits render identically** — no user-visible change to anyone's
+  existing photos, which was the risk that made this a user decision.
+- The ONLY intended behaviour change is the headroom fix: linear
+  extrapolation beyond the endpoints instead of the internal LUT clamp.
+  Clamp re-confirmed live this session: inputs 1.0 / 1.2 / 1.5 / 2.0 all
+  return ~1.0.
+
+**How it was found, because two of the three probes were wrong and the
+first would have led to the wrong decision.**
+1. Fitted Catmull-Rom and monotone cubic against the filter sampled in
+   the LINEAR working space. Errors 0.16-0.25, one absurd 11.5. Read
+   naively this says "cannot replicate — accept a large behaviour change
+   and re-baseline every test."
+2. Instead of believing it, dumped the RAW response: at control point
+   (0.25, 0.40) the filter returned 0.23731. **The filter does not pass
+   through its own control points**, so the probe was wrong, not the
+   conclusion. Hypothesis: it converts colour space internally.
+3. Fed it the linear value whose sRGB encoding equals each control
+   point's x — error 0.00000 at all five. Control points are in sRGB.
+   Re-fitting the spline in THAT space: monotone cubic 0.016,
+   Catmull-Rom 0.046, **natural cubic 0.00000**.
+
+Lesson, the third time this project has hit it (see the Dehaze radius
+tests and the proxy-divergence probes): **check the fixture measures what
+you think before trusting what it says.** A confidently wrong probe is
+worse than no probe.
+
+**Exact next step**: implement `Sources/Rendering/Shaders/ToneCurve.cikernel`
+to exactly that recipe — encode, natural cubic in sRGB, decode — with
+linear extrapolation past the endpoints. `applyCurves` keeps its
+signature and call sites so the four dependent features need no edits.
+Then the headroom test, written so it FAILS against the old path. Run
+`xcodegen generate` after adding the shader (a missing `.cikernel` fails
+soft and looks exactly like a working identity — the Dehaze lesson), and
+start the session from `~/photoapp-starter` so the project's own
+`reviewer` agent registers.

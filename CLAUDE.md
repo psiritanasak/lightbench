@@ -2133,6 +2133,14 @@ global pipeline):
     `texture`/`clarity` split — reuse that pattern (a `LegacyCodingKeys` enum
     decoding the old fields into the new curve representation). Do NOT design
     the v2 data model without reading that migration first.
+  - **`CIToneCurve` is fully reverse-engineered (2026-09-17), measured to
+    0.00000 error** — it is sRGB-encode -> NATURAL CUBIC spline with control
+    points in sRGB space -> sRGB-decode. This is why slice 1 can be
+    byte-exact: the ~70 existing assertions pass untouched and saved edits
+    render identically, with the headroom fix as the only intended change.
+    Do not re-derive this; see PROGRESS.md's "Curves v2 slice 1 — pre-work"
+    section, including which two probe designs gave confidently wrong answers
+    first.
 - **Masking / local adjustments** — the single biggest capability gap found.
   Lightroom's whole modern editing paradigm centers on this: AI Subject/Sky/
   Background/Object select, Brush, Linear (Graduated) and Radial gradients, Color

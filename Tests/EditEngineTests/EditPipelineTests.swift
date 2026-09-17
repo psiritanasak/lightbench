@@ -589,11 +589,15 @@ final class EditPipelineTests: XCTestCase {
 
     // MARK: - Curves math
     //
-    // Curves (CIToneCurve) is applied inside the same perceptual sandwich as
-    // contrast, after it. Expected values below are measured from the
-    // diagnostic script that established the point-span constant and the
-    // [0,1] clamp finding — chromatic/tonal spline behavior has no
-    // closed-form transfer function to hand-derive against.
+    // Curves is applied inside the same perceptual sandwich as contrast,
+    // after it. Expected values below are measured from the diagnostic
+    // script that established the point-span constant — chromatic/tonal
+    // spline behavior has no closed-form transfer function to hand-derive
+    // against. Every one of them is UNCHANGED by Curves v2 slice 1's
+    // replacement of CIToneCurve with ToneCurve.cikernel: that replacement
+    // is byte-exact in-domain by construction, and these assertions are the
+    // regression gate that proves it. Only the above-1.0 headroom cases
+    // moved — see testCurvesPreserveHighlightHeadroom.
 
     func testCurvesZeroIsIdentity() {
         // 1.2 proves an INACTIVE curve preserves headroom (no filter added).
@@ -660,30 +664,66 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(pixel.r, 0.84872, accuracy: accuracy)
     }
 
-    func testCurvesClampHighlightHeadroom() {
-        // Documented limitation, not a failure: an ACTIVE CIToneCurve clamps
-        // its domain to [0,1], so values above linear 1.0 collapse to white.
+    func testCurvesPreserveHighlightHeadroom() {
+        // THE Curves v2 slice-1 fix, and the only intended behaviour change
+        // in replacing CIToneCurve with ToneCurve.cikernel. Both assertions
+        // read exactly 1.0 against the OLD path — CIToneCurve hard-clamped
+        // its domain to [0,1] once active, collapsing to white every value
+        // above linear 1.0 that Exposure had legitimately created. This test
+        // is written to FAIL against that path, not merely to pass here.
         let warmInput = solidColorImage(1.2)
         let warmOutput = EditPipeline.apply(EditState(curvesShadows: 1), to: warmInput)
-        XCTAssertEqual(linearPixel(of: warmOutput).r, 1.0, accuracy: accuracy)
+        XCTAssertEqual(linearPixel(of: warmOutput).r, 1.18620, accuracy: accuracy)
 
+        // Above the last control point the curve extrapolates LINEARLY along
+        // its own end slope, so a highlight-recovery curve — whose final
+        // segment climbs steeply from point3 (0.75, 0.60) to point4 (1, 1) —
+        // AMPLIFIES headroom rather than merely passing it through. That is
+        // the honest consequence of a C1-continuous extrapolation, not a
+        // bug: the alternative (clamping) is the defect being fixed.
         let coolInput = solidColorImage(1.4)
         let coolOutput = EditPipeline.apply(EditState(curvesHighlights: -1), to: coolInput)
-        XCTAssertEqual(linearPixel(of: coolOutput).r, 1.0, accuracy: accuracy)
+        XCTAssertEqual(linearPixel(of: coolOutput).r, 1.90490, accuracy: accuracy)
     }
 
-    func testContrastHeadroomLostWhenCurveActive() {
-        // Documents the interaction: contrast alone preserves headroom
-        // (matches testContrastPreservesHighlightHeadroom's 1.54194 at
-        // L=0.7), but the SAME contrast setting with a curve also active
-        // loses it, because curves clamps after contrast in the sandwich.
+    func testCurvesHeadroomIsContinuousAcrossTheExtrapolationBoundary() {
+        // Guards the seam the fix introduces: the linear extrapolation must
+        // MEET the spline at the last control point, not step at it. A
+        // discontinuity here would show up on a real photo as a hard banding
+        // edge in the brightest tones. Values either side of the boundary
+        // must stay within a hair of each other and keep climbing.
+        let below = linearPixel(of: EditPipeline.apply(EditState(curvesShadows: 1), to: solidColorImage(0.999))).r
+        let at = linearPixel(of: EditPipeline.apply(EditState(curvesShadows: 1), to: solidColorImage(1.0))).r
+        let above = linearPixel(of: EditPipeline.apply(EditState(curvesShadows: 1), to: solidColorImage(1.001))).r
+
+        XCTAssertEqual(at, 1.0, accuracy: accuracy)
+        XCTAssertEqual(below, at, accuracy: 0.005)
+        XCTAssertEqual(above, at, accuracy: 0.005)
+        XCTAssertLessThan(below, at)
+        XCTAssertLessThan(at, above)
+    }
+
+    func testContrastHeadroomSurvivesAnActiveCurve() {
+        // The interaction that used to be the sharp edge of the defect:
+        // contrast alone preserves headroom (matches
+        // testContrastPreservesHighlightHeadroom's 1.54194 at L=0.7), and
+        // adding a curve no longer destroys it. Against the old path the
+        // second assertion read exactly 1.0 — enabling a slider silently
+        // revoked another stage's documented guarantee.
+        //
+        // It is still COMPRESSED rather than passed through unchanged: a
+        // highlights +1 curve flattens hard near its top end, so its end
+        // slope is shallow and the extrapolation above it is shallow too.
+        // Compressing headroom is the curve doing its job; discarding it
+        // was the bug.
         let input = solidColorImage(0.7)
 
         let contrastOnly = EditPipeline.apply(EditState(contrast: 1), to: input)
         XCTAssertEqual(linearPixel(of: contrastOnly).r, 1.54194, accuracy: accuracy)
 
         let contrastPlusCurve = EditPipeline.apply(EditState(contrast: 1, curvesHighlights: 1), to: input)
-        XCTAssertEqual(linearPixel(of: contrastPlusCurve).r, 1.0, accuracy: accuracy)
+        XCTAssertEqual(linearPixel(of: contrastPlusCurve).r, 1.01613, accuracy: accuracy)
+        XCTAssertGreaterThan(linearPixel(of: contrastPlusCurve).r, 1.0)
     }
 
     // MARK: - Black Point math
@@ -733,11 +773,12 @@ final class EditPipelineTests: XCTestCase {
         }
     }
 
-    func testBlackPointClampHighlightHeadroom() {
-        // Documented limitation, same family as curves: an active black
-        // point clamps highlight headroom above linear 1.0.
+    func testBlackPointPreservesHighlightHeadroom() {
+        // Same fix reaching Black Point, which shares applyCurves' spline:
+        // clamping the SHADOW end (what point0 is for) must not also clamp
+        // the highlight end. Read exactly 1.0 against the old path.
         let output = EditPipeline.apply(EditState(blackPoint: -1), to: solidColorImage(1.2))
-        XCTAssertEqual(linearPixel(of: output).r, 1.0, accuracy: accuracy)
+        XCTAssertEqual(linearPixel(of: output).r, 1.17330, accuracy: accuracy)
     }
 
     func testBlackPointPreservesAlpha() {
@@ -2298,16 +2339,18 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(pixel(of: output, at: 200, 200).r, 1.4, accuracy: accuracy)
     }
 
-    func testMaskShadowsClampsHeadroomInsideTheEllipse() {
-        // Documents an INHERITED limitation, not a new bug: `applyCurves`'s
-        // `CIToneCurve` clamps to [0,1] once active (see that method's own
-        // doc comment) -- a mask using Shadows/Highlights inherits this
-        // exactly like the global slider does.
+    func testMaskShadowsPreservesHeadroomInsideTheEllipse() {
+        // Per-mask Shadows/Highlights route through the SAME applyCurves, so
+        // the headroom fix reaches them with no per-mask code change. The
+        // second assertion is the one that matters and is unchanged: a mask
+        // must still read identically to the global slider — that equality
+        // held under the clamp and must keep holding under the fix, which is
+        // what proves both paths moved together rather than diverging.
         let input = solidColorImage(r: 1.4, g: 1.4, b: 1.4, a: 1, size: 400)
         let masked = EditPipeline.apply(EditState(masks: [fullyCoveringMask(shadows: 0.5)]), to: input)
         let global = EditPipeline.apply(EditState(curvesShadows: 0.5), to: input)
 
-        XCTAssertLessThanOrEqual(pixel(of: masked, at: 200, 200).r, 1.0)
+        XCTAssertGreaterThan(pixel(of: masked, at: 200, 200).r, 1.0)
         XCTAssertEqual(pixel(of: masked, at: 200, 200).r, pixel(of: global, at: 200, 200).r, accuracy: accuracy)
     }
 
@@ -4107,12 +4150,13 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(linearPixel(of: negativeOutput).r, 0.37444, accuracy: accuracy)
     }
 
-    func testBrillianceClampsHighlightHeadroomWhenCurveActive() {
-        // Once brilliance is non-zero, effective shadows/highlights become
-        // non-zero too, engaging the curve stage — which clamps headroom,
-        // same documented limitation as curves/black point.
+    func testBrilliancePreservesHighlightHeadroom() {
+        // Brilliance never touches the curve stage directly — it works by
+        // making effective shadows/highlights non-zero, which engages it.
+        // So it inherited the clamp, and now inherits the fix: this read
+        // exactly 1.0 against the old path.
         let output = EditPipeline.apply(EditState(brilliance: 1), to: solidColorImage(1.3))
-        XCTAssertEqual(linearPixel(of: output).r, 1.0, accuracy: accuracy)
+        XCTAssertEqual(linearPixel(of: output).r, 1.74659, accuracy: accuracy)
     }
 
     func testBriliancePreservesAlpha() {

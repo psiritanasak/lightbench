@@ -161,10 +161,13 @@ enum EditPipeline {
     /// `decodeToLinear`) are exact inverses of each other and do NOT clamp
     /// values above 1.0, so highlight headroom created by exposure (which
     /// runs before this step) survives the round-trip back to linear — as
-    /// long as no stage in between clamps it itself. `CIToneCurve` (used by
-    /// `applyCurves` below, which now also implements Black Point) DOES clamp
-    /// to [0,1] once active — see that method's comment; the headroom
-    /// guarantee above is conditional on curves/black point being inactive.
+    /// long as no stage in between clamps it itself. As of Curves v2 slice 1
+    /// that guarantee is UNCONDITIONAL for every stage in this sandwich:
+    /// `applyCurves` (which also implements Black Point, and which Brilliance
+    /// and per-mask Shadows/Highlights route through) used to be the one
+    /// exception, because `CIToneCurve` hard-clamped to [0,1] once active.
+    /// It has been replaced by `ToneCurve.cikernel`, which extrapolates
+    /// linearly above its last control point — see `applyCurves`.
     /// Brightness and HSL's filters (`CIColorControls.brightness`,
     /// `CIHueAdjust`, `CIColorControls.saturation`), by contrast, do NOT
     /// clamp — measured: saturation +1 on a 1.4 linear channel reads back as
@@ -356,7 +359,8 @@ enum EditPipeline {
     /// and `applySaturation`'s, since fusing them would apply all three
     /// simultaneously rather than in the pipeline's required
     /// brightness-then-contrast-then-…-then-saturation order. Does NOT clamp
-    /// highlight headroom (measured, unlike `applyCurves`).
+    /// highlight headroom (measured — as, since Curves v2 slice 1, neither
+    /// does `applyCurves`).
     private static func applyBrightness(_ brightness: Double, to image: CIImage) -> CIImage {
         let filter = CIFilter.colorControls()
         filter.inputImage = image
@@ -441,7 +445,7 @@ enum EditPipeline {
     /// A simplified, Lightroom-Basic-panel-style parametric tone curve:
     /// Shadows/Highlights (now driven by Brilliance-blended effective
     /// values, not the raw slider values directly) move `point1`/`point3` of
-    /// a 5-point `CIToneCurve` spline, and Black Point moves `point0` along
+    /// a 5-point natural-cubic spline, and Black Point moves `point0` along
     /// its X (input) axis — reusing the same curve infrastructure rather
     /// than a separate stage. Axis verified empirically, not assumed: moving
     /// point0 on X produces the correct Levels-style "clip to black"
@@ -450,34 +454,72 @@ enum EditPipeline {
     /// (out of scope for this feature; see EditState's doc comments for the
     /// field-level rationale).
     ///
-    /// KNOWN, MEASURED, DOCUMENTED LIMITATIONS:
-    /// 1. `CIToneCurve` builds an internal LUT clamped to [0,1] the moment
-    ///    it's non-identity, so any active curve/black-point adjustment
-    ///    collapses linear values above 1.0 (e.g. highlight headroom created
-    ///    by a prior exposure/brightness boost) to white. This includes
-    ///    headroom contrast itself would otherwise have preserved (see
-    ///    `applyPerceptualAdjustments`'s comment) — enabling curves changes
-    ///    contrast's headroom guarantee. Accepted: it only affects
-    ///    already-very-bright pixels, only when a curve is actively engaged,
-    ///    and behaves like a defensible highlight-recovery clip rather than
-    ///    a visible artifact.
-    /// 2. `CIToneCurve` extrapolates (does not hard-clamp) inputs just below
-    ///    point0.x, producing a mild deep-shadow spline OVERSHOOT on Black
-    ///    Point's crush side (measured: point0=(0.20,0), a very dark input
-    ///    lifts slightly instead of stepping straight to 0). Net effect is a
-    ///    "soft" black point, not a razor clip.
-    /// A custom Metal kernel with linear extrapolation beyond x=1 (anticipated
-    /// by CLAUDE.md's Stack note: "custom kernels for curves, HSL, WB") would
-    /// remove both limitations and is explicitly deferred as future work.
+    /// HEADROOM (the one behaviour change in the Curves v2 slice-1 rewrite):
+    /// values above linear 1.0 now SURVIVE an active curve, via linear
+    /// extrapolation along the spline's own end slope. `CIToneCurve` used to
+    /// hard-clamp them to white (measured: inputs 1.05/1.2/1.5/2.0/4.0 all
+    /// returned exactly 1.0), which made curves the single stage in this
+    /// pipeline that broke the headroom guarantee `applyPerceptualAdjustments`
+    /// documents — enabling Shadows/Highlights silently discarded headroom
+    /// Exposure had created. See `testCurvesPreserveHighlightHeadroom`.
+    ///
+    /// Below `point0.x` the value is still CLAMPED to `point0.y`, matching
+    /// `CIToneCurve` exactly. That is deliberate and is not the same defect:
+    /// `point0.x` IS the black point, so clamping is what makes Black Point
+    /// genuinely clip to black (`testBlackPointDeepClip`); extrapolating
+    /// there would drive values negative instead.
+    ///
+    /// A CORRECTION to what v1's comment claimed here: `CIToneCurve` does NOT
+    /// "extrapolate rather than hard-clamp" below point0.x — it clamps at
+    /// both ends (measured across five control configurations). The mild
+    /// deep-shadow lift v1 described as a "soft black point" (black point -1
+    /// leaving linear 0.01 at 0.03381 instead of 0) is not extrapolation at
+    /// all: after the sandwich's encode AND the curve's own internal encode,
+    /// linear 0.01 arrives at u = 0.349, comfortably inside [0.20, 1]. It is
+    /// the spline's in-domain shape, and this rewrite leaves it unchanged.
+    ///
+    /// Everything else is byte-exact with the `CIToneCurve` it replaces —
+    /// see `ToneCurveSpline` for the reverse-engineered recipe that makes
+    /// that possible, and PROGRESS.md's "Curves v2 slice 1 — pre-work" for
+    /// how it was measured (including the two probe designs that gave
+    /// confidently wrong answers first).
+    private static let toneCurveKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "ToneCurve", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
+    /// The control points `applyCurves` drives, in the spline's own
+    /// sRGB-encoded space. Split out from the render call so the spline maths
+    /// can be tested directly against `ToneCurveSpline` without a CIContext.
+    private static func curveControlPoints(_ effective: EffectiveTone, _ blackPoint: Double) -> [CGPoint] {
+        [
+            CGPoint(x: max(0, -blackPoint) * kBlackPointSpan, y: max(0, blackPoint) * kBlackPointSpan),
+            CGPoint(x: 0.25, y: 0.25 + effective.shadows * kCurvePointSpan),
+            CGPoint(x: 0.5, y: 0.5),
+            CGPoint(x: 0.75, y: 0.75 + effective.highlights * kCurvePointSpan),
+            CGPoint(x: 1, y: 1)
+        ]
+    }
+
     private static func applyCurves(_ effective: EffectiveTone, _ blackPoint: Double, to image: CIImage) -> CIImage {
-        let filter = CIFilter.toneCurve()
-        filter.inputImage = image
-        filter.point0 = CGPoint(x: max(0, -blackPoint) * kBlackPointSpan, y: max(0, blackPoint) * kBlackPointSpan)
-        filter.point1 = CGPoint(x: 0.25, y: 0.25 + effective.shadows * kCurvePointSpan)
-        filter.point2 = CGPoint(x: 0.5, y: 0.5)
-        filter.point3 = CGPoint(x: 0.75, y: 0.75 + effective.highlights * kCurvePointSpan)
-        filter.point4 = CGPoint(x: 1, y: 1)
-        return filter.outputImage ?? image
+        guard let kernel = toneCurveKernel,
+              let spline = ToneCurveSpline(points: curveControlPoints(effective, blackPoint))
+        else { return image }
+
+        let points = spline.points
+        let m = spline.secondDerivatives
+        // Argument layout MUST match ToneCurve.cikernel's own header.
+        let xs = CIVector(x: points[0].x, y: points[1].x, z: points[2].x, w: points[3].x)
+        let ys = CIVector(x: points[0].y, y: points[1].y, z: points[2].y, w: points[3].y)
+        let ms = CIVector(x: m[0], y: m[1], z: m[2], w: m[3])
+        let tail = CIVector(x: points[4].x, y: points[4].y, z: m[4])
+
+        return kernel.apply(
+            extent: image.extent,
+            arguments: [image, xs, ys, ms, tail, spline.endSlope]
+        ) ?? image
     }
 
     // MARK: - HSL (global hue & saturation)
@@ -1668,14 +1710,20 @@ enum EditPipeline {
     /// this file's own Red-Eye/Vignette adjacency claims already use): a
     /// `CIToneCurve` tent (the originally-considered approach) was
     /// rejected instead of tried in shipped code, because
-    /// `applyCurves`'s own doc comment already records two disqualifying
-    /// facts about that filter — it EXTRAPOLATES past its endpoints
-    /// rather than clamping (which would leak spurious selection outside
-    /// the tone window), and its LUT is built clamped to `0...1` the
+    /// `applyCurves`'s own doc comment already records a disqualifying
+    /// fact about that filter: its LUT is built clamped to `0...1` the
     /// instant it's non-identity (which would collapse every HEADROOM
     /// pixel — linear > 1, genuinely present in this pipeline — into one
     /// bucket, making "target the brightest tones" unable to distinguish
-    /// them). The two-ramp form below has neither problem: it is
+    /// them). CORRECTION (Curves v2 slice 1): a SECOND reason recorded
+    /// here — that the filter "extrapolates past its endpoints rather
+    /// than clamping", leaking selection outside the tone window — was
+    /// measured to be false; `CIToneCurve` clamps at both ends. The
+    /// rejection still stands on the headroom ground alone, and the
+    /// custom `ToneCurve.cikernel` that has since replaced the filter
+    /// extrapolates only ABOVE its last point, so it would not have
+    /// rescued a tent built to select a MIDDLE tone window either.
+    /// The two-ramp form below has neither problem: it is
     /// piecewise-LINEAR, exactly zero outside `[lowerZero, upperZero]` by
     /// construction, and its `CIColorMatrix` scale/bias math is defined
     /// for any input, headroom included.

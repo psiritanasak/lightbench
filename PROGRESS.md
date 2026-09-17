@@ -8372,3 +8372,99 @@ Then the headroom test, written so it FAILS against the old path. Run
 soft and looks exactly like a working identity — the Dehaze lesson), and
 start the session from `~/photoapp-starter` so the project's own
 `reviewer` agent registers.
+
+## Curves v2 slice 1 — ToneCurve.cikernel replaces CIToneCurve (2026-09-17)
+
+**Shipped.** `Sources/Rendering/Shaders/ToneCurve.cikernel` (the 5th custom
+kernel here) + `Sources/EditEngine/ToneCurveSpline.swift` (the Swift twin that
+does the spline solve) replace `CIToneCurve` inside `applyCurves`.
+`applyCurves` keeps its signature and both call sites, so global Shadows/
+Highlights, Black Point, Brilliance and per-mask Shadows/Highlights came along
+with no edits of their own.
+
+**940 tests, 0 failures.** Of the ~70 hard-coded spline values across those
+four features, **every in-domain one passed untouched** — the pre-work's
+byte-exactness prediction held. Exactly 6 assertions failed on the first run,
+and all 6 were the ones ASSERTING THE OLD CLAMP. That is the whole result:
+nothing moved except the thing intended to move.
+
+    testCurvesClampHighlightHeadroom            1.0 -> 1.18620 / 1.90490
+    testBlackPointClampHighlightHeadroom        1.0 -> 1.17330
+    testBrillianceClampsHighlightHeadroom...    1.0 -> 1.74659
+    testContrastHeadroomLostWhenCurveActive     1.0 -> 1.01613
+    testMaskShadowsClampsHeadroomInsideTheEl... <=1.0 -> >1.0
+
+All five renamed to say what they now guarantee (`...PreservesHighlightHeadroom`).
+
+**The headroom tests were verified to FAIL against the old path**, not just to
+pass against the new one — `applyCurves` was temporarily reverted to
+`CIToneCurve` and the suite re-run. All 7 assertions failed, on every input
+above 1.0 and only those. The same run is the strongest confirmation of the
+pre-work: `testKernelMatchesTheSwiftTwin`'s in-domain samples (0.002 ... 1.0,
+six control configurations) all PASSED against the real `CIToneCurve`.
+
+**TWO RECORDED CLAIMS WERE MEASURED TO BE FALSE.** Both were checked before
+being built on, per the "check the fixture measures what you think" lesson —
+which is the third thing this project has learned that from, and the first time
+it caught a bad claim BEFORE it cost a session.
+
+1. `applyCurves`'s v1 doc comment (limitation 2) said `CIToneCurve`
+   "extrapolates (does not hard-clamp) inputs just below point0.x", giving a
+   "soft" black point. **It clamps at both ends.** Measured across five control
+   configurations: clamped-domain matched every out-of-domain sample exactly,
+   while continuing the end cubic and extrapolating linearly both diverged
+   wildly (at black point -1, v=-0.05: filter 0.00000, extend-cubic 284.8,
+   linear -7.64). The real "soft black point" (black point -1 leaving linear
+   0.01 at 0.03381) is the spline's IN-DOMAIN shape: after the sandwich's
+   encode AND the curve's own internal encode, linear 0.01 arrives at u = 0.349,
+   comfortably inside [0.20, 1]. That number is unchanged.
+2. `luminanceRangeMaskImage`'s rationale cited that same false claim as one of
+   two reasons a `CIToneCurve` tent was rejected. Corrected in place; the
+   rejection still stands on the headroom reason alone.
+
+**This is why the fix is deliberately asymmetric** — linear extrapolation
+ABOVE x4 only, clamp BELOW x0 preserved. Had the "extrapolates below point0"
+claim been believed, the obvious reading of "linear extrapolation past the
+endpoints" would have been applied to both ends, and Black Point would have
+stopped clipping to black: at black point -1 a deep shadow lands at u = 0.175,
+below x0 = 0.20, so linear extrapolation sends it NEGATIVE instead of to 0.
+`testBlackPointDeepClip` would have caught it, but the design was wrong before
+the test was.
+
+**Also measured, not assumed:** `CIToneCurve` applies its curve to
+UNPREMULTIPLIED colour. With alpha 0.5 its result read back at exactly 0.5x
+the opaque result for the same RGB. The kernel un-premultiplies to match;
+applying to premultiplied values instead gives 0.05524 where
+`testCurvesPreservesAlpha` expects 0.05676.
+
+**Consequence worth knowing before someone reports it as a bug:** above the
+last control point the curve follows its own end slope, so a HIGHLIGHT
+RECOVERY curve (point3 pulled down to 0.60, climbing steeply to point4 at 1.0)
+now AMPLIFIES headroom rather than passing it through — linear 1.4 renders
+1.90. That is what C1-continuous linear extrapolation means; the alternative
+was the clamp being fixed. Conversely highlights +1 flattens near its top, so
+its extrapolation is shallow and headroom is COMPRESSED (1.54 -> 1.02).
+
+**`xcodegen generate` was run after adding the shader**, and the generated
+`project.pbxproj` was checked to contain `ToneCurve.cikernel in Resources`
+before building — the recorded fail-soft trap. It is additionally closed at
+runtime now: `testKernelMatchesTheSwiftTwin` loads the kernel through
+`Bundle.main`, which in this host-based test bundle IS the built app, so a
+missing resource fails that test loudly instead of looking like identity.
+
+**NOT live-verified in the running app.** Everything above is the test suite.
+The math is fully covered (including the real compiled kernel via the twin
+test), but no photo has been opened and no slider dragged since the swap.
+
+**Exact next step**: either (a) live-verify this slice — open a photo with real
+headroom (an over-exposed RAW, or Exposure pushed up), confirm Shadows/
+Highlights/Black Point/Brilliance look unchanged and that highlights no longer
+blow to flat white the instant a curve engages; drive via AX actions, synthetic
+`cliclick` events still do not reach this app — or (b) go on to Curves v2
+slice 2, the interactive draggable editor, which is the hard part (spline
+canvas, point hit-testing, channel selector) and needs its own Plan Mode
+session. The data-model migration for slice 2 must start by reading the
+`definition` -> `texture`/`clarity` `LegacyCodingKeys` pattern, per CLAUDE.md.
+`ToneCurveSpline` is already written n-point-general, so slice 2 adding points
+needs no change to the solve — only the kernel's unrolled 4 segments and the
+`vec4`-packed argument layout are 5-point-specific.

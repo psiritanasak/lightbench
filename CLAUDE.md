@@ -2133,14 +2133,25 @@ global pipeline):
     `texture`/`clarity` split — reuse that pattern (a `LegacyCodingKeys` enum
     decoding the old fields into the new curve representation). Do NOT design
     the v2 data model without reading that migration first.
-  - **`CIToneCurve` is fully reverse-engineered (2026-09-17), measured to
-    0.00000 error** — it is sRGB-encode -> NATURAL CUBIC spline with control
-    points in sRGB space -> sRGB-decode. This is why slice 1 can be
-    byte-exact: the ~70 existing assertions pass untouched and saved edits
-    render identically, with the headroom fix as the only intended change.
-    Do not re-derive this; see PROGRESS.md's "Curves v2 slice 1 — pre-work"
-    section, including which two probe designs gave confidently wrong answers
-    first.
+  - **Slice 1 ✅ SHIPPED (2026-09-17)** — `Sources/Rendering/Shaders/ToneCurve.cikernel`
+    (+ `Sources/EditEngine/ToneCurveSpline.swift`, the Swift twin doing the
+    spline solve) REPLACED `CIToneCurve` inside `applyCurves`, which kept its
+    signature so Black Point, Brilliance and per-mask Shadows/Highlights came
+    along unchanged. The reverse-engineering held: every in-domain assertion of
+    the ~70 passed untouched, and the ONLY tests that failed were the 6
+    asserting the old clamp. Highlight headroom now survives an active curve
+    (linear extrapolation above the last control point); below `point0` the
+    curve still CLAMPS, deliberately — that is what makes Black Point clip to
+    black. Not yet live-verified in the app. **Two recorded claims were
+    measured to be FALSE while doing this** — `CIToneCurve` does NOT
+    extrapolate below point0.x (it clamps at both ends; the "soft black point"
+    is in-domain spline shape), and `luminanceRangeMaskImage` cited that false
+    claim in its own rejection rationale. Both corrected in place. See
+    PROGRESS.md's slice-1 section, including why believing the false claim
+    would have broken Black Point.
+  - Slice 2 (the interactive editor) is the remaining work and the hard part;
+    `ToneCurveSpline`'s solve is already n-point-general, but the kernel's
+    unrolled segments and `vec4` argument packing are 5-point-specific.
 - **Masking / local adjustments** — the single biggest capability gap found.
   Lightroom's whole modern editing paradigm centers on this: AI Subject/Sky/
   Background/Object select, Brush, Linear (Graduated) and Radial gradients, Color

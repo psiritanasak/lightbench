@@ -104,7 +104,7 @@ struct EditState: Equatable, Codable {
     /// Parametric shadow-tone adjustment, -1...1, 0 is identity. Positive
     /// lifts (brightens) shadows, negative crushes them. Applied in the
     /// perceptual sRGB-gamma domain, after contrast, by raising/lowering the
-    /// shadow control point (x=0.25) of a `CIToneCurve` spline — see
+    /// shadow control point (x=0.25) of the tone-curve spline — see
     /// `EditPipeline`. The effect is weighted toward deep shadows and tapers
     /// through the midtones.
     var curvesShadows: Double = 0
@@ -112,24 +112,27 @@ struct EditState: Equatable, Codable {
     /// Parametric highlight-tone adjustment, -1...1, 0 is identity. Positive
     /// lifts (brightens) highlights, negative recovers (darkens) them.
     /// Applied in the perceptual sRGB-gamma domain, after contrast, by
-    /// raising/lowering the highlight control point (x=0.75) of a
-    /// `CIToneCurve` spline — see `EditPipeline`. NOTE: because `CIToneCurve`
-    /// clamps its domain to [0,1], enabling any curve adjustment clips
-    /// highlight headroom above linear 1.0 to white (measured, documented
-    /// limitation — see `EditPipeline` and the curve headroom tests).
+    /// raising/lowering the highlight control point (x=0.75) of the
+    /// tone-curve spline — see `EditPipeline`. Highlight headroom above
+    /// linear 1.0 SURVIVES an active curve as of Curves v2 slice 1; until
+    /// then the underlying `CIToneCurve` clamped it to white. Existing
+    /// sidecars and presets are unaffected — every in-domain value renders
+    /// identically (see `ToneCurveSpline`).
     var curvesHighlights: Double = 0
 
     /// Black-point / shadow-clipping control, -1...1, 0 is identity.
     /// Negative deepens (crushes) the darkest tones toward pure black — the
-    /// Levels black-point behavior — by moving point0 of the same
-    /// `CIToneCurve` spline `curvesShadows`/`curvesHighlights` use, along
-    /// its X (input) axis. Positive gently lifts/fades blacks (subtle by
-    /// design). Applied in the perceptual domain, inside the curve stage.
-    /// NOTE: like any active curve, clamps highlight headroom above 1.0
-    /// when active, and `CIToneCurve`'s extrapolation (not hard clamping)
-    /// near point0 gives a mild deep-shadow overshoot on the crush side —
-    /// measured and documented in `EditPipeline`, a "soft" black point
-    /// rather than a razor clip.
+    /// Levels black-point behavior — by moving point0 of the same tone-curve
+    /// spline `curvesShadows`/`curvesHighlights` use, along its X (input)
+    /// axis. Positive gently lifts/fades blacks (subtle by design). Applied
+    /// in the perceptual domain, inside the curve stage. Below point0 the
+    /// curve CLAMPS, which is what makes the crush actually clip to black.
+    /// The mild deep-shadow lift on the crush side (a "soft" black point
+    /// rather than a razor clip) is real, but it is the spline's in-domain
+    /// shape, NOT the "extrapolation past point0" this comment used to
+    /// claim — corrected by measurement in Curves v2 slice 1; the rendered
+    /// values are unchanged. Highlight headroom now survives — see
+    /// `curvesHighlights`.
     var blackPoint: Double = 0
 
     // MARK: - Brilliance (composite)

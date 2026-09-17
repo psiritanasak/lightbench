@@ -1,0 +1,114 @@
+// Tone curve (Curves v2, slice 1) — the REPLACEMENT for `CIToneCurve`, which
+// every curve-driven feature in this app used until now: global Shadows/
+// Highlights, Black Point, Brilliance (via the same effective tone values)
+// and per-mask Shadows/Highlights.
+//
+// The fifth custom Core Image kernel here, after SelectiveColor, ColorRange
+// and the two Dehaze kernels.
+//
+// WHY REPLACE A WORKING BUILT-IN: `CIToneCurve` hard-clamps its output domain
+// to [0,1] the moment it is non-identity, so any active curve collapsed the
+// highlight headroom a prior Exposure boost had created. Every other stage in
+// this pipeline preserves headroom; curves was the documented exception. See
+// EditPipeline.applyCurves and ToneCurveSpline.swift.
+//
+// WHAT IT REPRODUCES, EXACTLY: `CIToneCurve`'s undocumented spline was
+// reverse-engineered before any of this was written (2026-09-17, PROGRESS.md
+// "Curves v2 slice 1 — pre-work"):
+//
+//     CIToneCurve = sRGB-encode -> NATURAL CUBIC spline -> sRGB-decode
+//
+// with the control points living in the sRGB-encoded space, matched to
+// 3e-7..5e-7 across a 129-sample sweep on five control configurations. That
+// is why ~70 shipped assertions pass untouched and why saved sidecars and
+// presets render identically — the replacement is byte-exact apart from the
+// one intended fix below.
+//
+// The encode here is the filter's OWN and is a SECOND encode: applyCurves is
+// called from inside applyPerceptualAdjustments' encodeToPerceptual/
+// decodeToLinear sandwich, so values arriving here are ALREADY perceptual.
+// Do not "simplify" that away — the double encode is what every shipped edit
+// was rendered with.
+//
+// OUT-OF-DOMAIN, DELIBERATELY ASYMMETRIC:
+//   u > x4  -> LINEAR extrapolation along the spline's own end slope. This is
+//              the headroom fix, and the only intended behaviour change.
+//   u < x0  -> CLAMPED to y0, exactly as CIToneCurve did. point0.x IS the
+//              black point; everything below it is meant to be black, so the
+//              clamp is what makes Black Point genuinely clip. Extrapolating
+//              here would drive values NEGATIVE and break that.
+// (v1's doc comment claimed CIToneCurve extrapolated below point0.x. It does
+// not; it clamps at both ends. Measured — see ToneCurveSpline.swift.)
+//
+// Argument layout — MUST match EditPipeline.applyCurves and the Swift twin
+// ToneCurveSpline.value(at:):
+//   xs   = (x0, x1, x2, x3)      ys   = (y0, y1, y2, y3)
+//   ms   = (m0, m1, m2, m3)      second derivatives from the natural-cubic solve
+//   tail = (x4, y4, m4)          the 5th control point and its 2nd derivative
+//   endSlope                     the spline's derivative at x4
+
+float srgbEncode(float x) {
+    float a = abs(x);
+    float e = (a <= 0.0031308) ? 12.92 * a : 1.055 * pow(a, 1.0 / 2.4) - 0.055;
+    return (x < 0.0) ? -e : e;
+}
+
+float srgbDecode(float x) {
+    float a = abs(x);
+    float d = (a <= 0.04045) ? a / 12.92 : pow((a + 0.055) / 1.055, 2.4);
+    return (x < 0.0) ? -d : d;
+}
+
+// One cubic segment of the natural spline, in the standard second-derivative
+// form. Twin of ToneCurveSpline.segmentValue(at:...).
+float splineSegment(float u, float x0, float x1, float y0, float y1, float m0, float m1) {
+    float h = x1 - x0;
+    float a = (x1 - u) / h;
+    float b = (u - x0) / h;
+    return a * y0 + b * y1 + ((a * a * a - a) * m0 + (b * b * b - b) * m1) * (h * h) / 6.0;
+}
+
+float toneCurveValue(float v, vec4 xs, vec4 ys, vec4 ms, vec3 tail, float endSlope) {
+    float u = srgbEncode(v);
+    float y;
+    if (u <= xs.x) {
+        // Below the black point — clamp, do not extrapolate. See header.
+        y = ys.x;
+    } else if (u >= tail.x) {
+        // Above the last control point — linear extrapolation preserves the
+        // highlight headroom CIToneCurve used to crush. At u == tail.x this
+        // reduces to tail.y, so it is continuous with the segment below.
+        y = tail.y + endSlope * (u - tail.x);
+    } else if (u < xs.y) {
+        y = splineSegment(u, xs.x, xs.y, ys.x, ys.y, ms.x, ms.y);
+    } else if (u < xs.z) {
+        y = splineSegment(u, xs.y, xs.z, ys.y, ys.z, ms.y, ms.z);
+    } else if (u < xs.w) {
+        y = splineSegment(u, xs.z, xs.w, ys.z, ys.w, ms.z, ms.w);
+    } else {
+        y = splineSegment(u, xs.w, tail.x, ys.w, tail.y, ms.w, tail.z);
+    }
+    return srgbDecode(y);
+}
+
+kernel vec4 toneCurve(__sample s, vec4 xs, vec4 ys, vec4 ms, vec3 tail, float endSlope) {
+    // Un-premultiply first: MEASURED (not assumed) that CIToneCurve applies
+    // its curve to UNPREMULTIPLIED colour — with alpha 0.5, its result read
+    // back at exactly 0.5x the opaque result for the same RGB, which is the
+    // signature of an unpremultiplied transform plus a premultiplied readback.
+    // Applying the curve to premultiplied values instead would measurably
+    // change every partially-transparent pixel (0.05524 vs the shipped
+    // 0.05676 for testCurvesPreservesAlpha's case).
+    float a = s.a;
+    vec3 rgb = (a > 0.0) ? s.rgb / a : s.rgb;
+
+    vec3 outRGB = vec3(
+        toneCurveValue(rgb.r, xs, ys, ms, tail, endSlope),
+        toneCurveValue(rgb.g, xs, ys, ms, tail, endSlope),
+        toneCurveValue(rgb.b, xs, ys, ms, tail, endSlope)
+    );
+
+    // Repremultiply; alpha is carried through untouched — a tone curve must
+    // not alter coverage.
+    return vec4(outRGB * a, a);
+}

@@ -8468,3 +8468,80 @@ session. The data-model migration for slice 2 must start by reading the
 `ToneCurveSpline` is already written n-point-general, so slice 2 adding points
 needs no change to the solve — only the kernel's unrolled 4 segments and the
 `vec4`-packed argument layout are 5-point-specific.
+
+### Curves v2 slice 1 — LIVE-VERIFIED (2026-09-17)
+
+Driven via AX actions on the real app. Both test files were in a scratch
+folder; the user's own library was never opened for editing, and all **1608
+files under `~/Pictures/Bolivia_trip` were checksummed before and after and
+are byte-identical**.
+
+**Method note, new this session:** synthetic KEYSTROKES (`keystroke`, `key
+code 36`) DO reach this app and drive the `NSOpenPanel` fine (⇧⌘G, type path,
+Return) — previous sessions only ever established that AX actions work and
+synthetic MOUSE events do not. Sliders are `AXUnknown` with
+`AXIncrement`/`AXDecrement` and a readable `AXValueDescription` (Exposure
+steps 0.5 EV, percent sliders 10%). The 8 Adjust panels start collapsed;
+expanding them all via repeated `AXPress` re-flows the element tree after
+every press, so indices must be re-resolved each time, not cached.
+Also as documented, the FIRST real edit fired the sidecar folder-approval
+`NSOpenPanel` — expected behaviour, granted for the scratch folder only.
+
+**The render is exact identity at zero adjustments.** An 8-bar step wedge
+(8-bit 40/70/100/130/160/190/220/250) rendered back as exactly
+40/70/100/130/160/190/220/250. That is what makes every measurement below
+trustworthy.
+
+**THE HEADROOM FIX, PROVEN QUANTITATIVELY ON SCREEN.** Headroom above linear
+1.0 is invisible on an SDR display — it clips to white either way — so it was
+made visible with Vignette, which runs AFTER the perceptual sandwich and
+multiplies the value back down. At Exposure +1EV the top three bars sit at
+linear 1.030 / 1.431 / 1.912.
+
+With vignette at +100% and NO curve (headroom provably intact), the bars read
+218.7 / 223.0 / 205.0. The vignette factor at each bar position was
+calibrated from exactly that, then Shadows +100% was engaged:
+
+    bar  pre-vig linear  vignette factor  OLD path predicts  MEASURED   gap
+     6          1.0298            0.686              215.9     218.3   +2.4
+     7          1.4314            0.516              190.1     221.0  +30.9
+     8          1.9119            0.319              153.2     201.7  +48.5
+
+The measured values sit **0.4-3.3 levels from the headroom-intact reference
+and 31-49 levels from what the old clamped path predicts**. Bar 6 agrees with
+both, correctly — at linear 1.03 it has almost no headroom to lose, which is
+itself a check that the calibration is honest rather than tuned.
+
+**The preserved low-end clamp was verified live too**, because it is the half
+of the change that could have silently regressed. At Exposure -4EV (bar 1 =
+linear 0.00133) with Black Point -100%, bar 1 renders **exactly 0.0 — pure
+black**. Linear extrapolation at that end would have sent it negative.
+
+**The pre-existing "soft black point" is unchanged**, as the byte-exactness
+claim requires: at Exposure 0, Black Point -100% maps bar 1 (linear 0.0212)
+to 0.0399, sitting neatly between the shipped assertions 0.01 -> 0.03381 and
+0.05 -> 0.04130.
+
+**Real RAW, no regression.** `DSC_1439.NEF` (a copy) with Shadows +100% /
+Highlights -100%: shadows lift and highlights recover exactly as v1 did —
+smooth, photographic, no colour shift. Checked for posterization in the
+smooth sky gradient, since a bad kernel would band there first: 241 distinct
+blue levels with a maximum gap of 5 between used levels (a posterized render
+would collapse to a few dozen with large gaps). Revert to Original restored
+identity on both files, confirmed on screen and in the on-disk sidecar.
+
+**One measurement trap hit and caught, same family as the fixture lesson.**
+The first canvas-bounds auto-detection silently included the sidebar and
+notification banners, producing a bar table that looked plausible and was
+nonsense. It was caught by actually LOOKING at the screenshot instead of
+trusting the detector, then reading the bounds off the render. A
+plausible-looking measurement of the wrong region is the same failure as a
+confidently wrong probe — the fourth time this project has paid for it.
+
+**Exact next step**: Curves v2 slice 2 — the interactive draggable point-curve
+editor. Needs its own Plan Mode session: the UI is the hard part (spline
+canvas, point hit-testing, add/remove/drag, channel selector, ideally drawn
+over the live histogram). Read the `definition` -> `texture`/`clarity`
+`LegacyCodingKeys` migration FIRST, per CLAUDE.md. `ToneCurveSpline`'s solve
+is already n-point-general; only `ToneCurve.cikernel`'s unrolled 4 segments
+and its `vec4`-packed argument layout are 5-point-specific.

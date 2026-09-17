@@ -2142,7 +2142,11 @@ global pipeline):
     asserting the old clamp. Highlight headroom now survives an active curve
     (linear extrapolation above the last control point); below `point0` the
     curve still CLAMPS, deliberately — that is what makes Black Point clip to
-    black. Not yet live-verified in the app. **Two recorded claims were
+    black. **LIVE-VERIFIED 2026-09-17**: headroom measured 31-49 levels away
+    from what the old clamped path predicts and 0.4-3.3 from the
+    headroom-intact reference; the low-end clamp still renders pure black;
+    no banding on a real RAW; user's 1608 library files byte-identical.
+    **Two recorded claims were
     measured to be FALSE while doing this** — `CIToneCurve` does NOT
     extrapolate below point0.x (it clamps at both ends; the "soft black point"
     is in-domain spline shape), and `luminanceRangeMaskImage` cited that false

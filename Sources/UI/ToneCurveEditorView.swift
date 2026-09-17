@@ -19,10 +19,32 @@ import SwiftUI
 /// hit-testing arithmetic via `ToneCurveEditing` — the same layering
 /// `MaskOverlayView`/`RedEyeOverlayView` already use, because a per-handle
 /// gesture can't distinguish "click empty space to add" from "miss".
+///
+/// Curves v2 slice 3 made this view render whichever of the app's four
+/// curves its `points`/`selectedIndex` bindings currently name — the only
+/// channel-aware things it does are the stroke tint, the histogram
+/// backdrop, and the accessibility label (all three derived from the one
+/// `channel` parameter); every editing operation still goes through
+/// `ToneCurveEditing`'s channel-agnostic array functions unchanged. Its
+/// caller (`AdjustTabView.curveSection`) instantiates it with `.id(channel)`
+/// — see that call site's own doc comment for why that is load-bearing for
+/// this view's internal drag/focus state, not decoration.
 struct ToneCurveEditorView: View {
     @Binding var points: [ToneCurvePoint]
     @Binding var selectedIndex: Int?
     let histogramData: HistogramData
+    /// Curves v2 slice 3: which of the four curves `points`/`selectedIndex`
+    /// currently name. This view has no channel LOGIC of its own — it only
+    /// derives three presentation facts from this one token (the stroke
+    /// tint, the histogram backdrop, the accessibility label) rather than
+    /// taking three separate, independently-settable parameters that could
+    /// disagree with each other (e.g. a red tint paired with a green
+    /// label) with no call site that would ever want that. The caller
+    /// (`AdjustTabView.curveSection`) is also responsible for giving this
+    /// view a distinct identity per channel via `.id(channel)` — see that
+    /// call site's own doc comment for why that is load-bearing, not
+    /// decoration, for the `@State`/`@FocusState` this view owns below.
+    let channel: ToneCurveChannel
 
     /// Inset between the canvas's own bounds and `plotRect`, so the corner
     /// handles at (0,0)/(1,1) aren't half-clipped by the view's edge.
@@ -90,7 +112,7 @@ struct ToneCurveEditorView: View {
         .focused($isFocused)
         .onKeyPress { handleKeyPress($0) }
         .accessibilityElement()
-        .accessibilityLabel("Tone curve editor")
+        .accessibilityLabel(accessibilityChannelLabel)
         .accessibilityValue(Text(accessibilityValueText))
         .accessibilityAdjustableAction { direction in
             guard let index = validatedSelection else { return }
@@ -116,7 +138,7 @@ struct ToneCurveEditorView: View {
                 height: max(proxy.size.height - 2 * Self.canvasInset, 0)
             )
             ZStack {
-                HistogramBars(data: histogramData, showChannels: false)
+                HistogramBars(data: histogramData, channels: channel.histogramOverlay)
                     .opacity(0.45)
                     .padding(Self.canvasInset)
                 Canvas { context, _ in draw(into: context, plotRect: plotRect) }
@@ -147,10 +169,14 @@ struct ToneCurveEditorView: View {
         context.stroke(diagonal, with: .color(.white.opacity(0.3)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
 
         guard let curve = curveStrokePath(in: plotRect) else { return }
-        // Black-under-white, the same two-pass legibility idiom
+        // Black-under-tint, the same two-pass legibility idiom
         // `BrushMaskOverlayView.centerLine`/`MaskOverlayView` already use.
+        // The top pass is `channel.strokeColor` (Curves v2 slice 3) —
+        // `.white` for `.composite`, so this pass is byte-identical to the
+        // pre-slice-3 rendering for that case (a structural fact about the
+        // code, not a measurement).
         context.stroke(curve, with: .color(.black.opacity(0.6)), lineWidth: 3)
-        context.stroke(curve, with: .color(.white), lineWidth: 1.5)
+        context.stroke(curve, with: .color(channel.strokeColor), lineWidth: 1.5)
     }
 
     /// Sampled from `MonotoneToneCurve`'s IN-DOMAIN evaluator
@@ -177,6 +203,17 @@ struct ToneCurveEditorView: View {
         return path
     }
 
+    /// Deliberately NOT tinted by `channel` (unlike the curve stroke and
+    /// histogram backdrop) — handle color here encodes SELECTION
+    /// (`Color.accentColor` when selected, `.white` otherwise), and
+    /// overloading it with channel identity too would leave nothing left
+    /// to show selection with. It would also actively hurt legibility in
+    /// the one case it would matter most: `Color.accentColor` (this app's
+    /// own blue-ish system accent) over a pure-blue curve stroke and blue
+    /// histogram overlay is the worst-contrast combination this feature
+    /// has. The channel is already unambiguous from the picker, the curve
+    /// stroke, the histogram tint, and the accessibility label — a fifth,
+    /// redundant signal here would cost contrast for no new information.
     private func handles(plotRect: CGRect) -> some View {
         ZStack {
             ForEach(Array(points.enumerated()), id: \.offset) { index, point in
@@ -395,6 +432,16 @@ struct ToneCurveEditorView: View {
         guard points != before else { return false }
         selectedIndex = nil
         return true
+    }
+
+    /// `.composite`'s string is kept byte-identical to this view's
+    /// pre-slice-3 static label — slice 2B's live-verified VoiceOver custom
+    /// actions were checked against that exact string. NOT "Tone curve
+    /// editor, RGB channel": RGB is this feature's name for the composite
+    /// (all-channels-together) curve, not a fourth channel, and reading it
+    /// as one would be actively confusing.
+    private var accessibilityChannelLabel: String {
+        channel == .composite ? "Tone curve editor" : "Tone curve editor, \(channel.rawValue) channel"
     }
 
     /// Reviewer-caught crash class (the same one `MaskDetailView`'s own

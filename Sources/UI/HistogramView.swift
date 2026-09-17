@@ -15,9 +15,13 @@ import SwiftUI
 /// makes that bug UNREPRESENTABLE rather than merely avoided by discipline.
 struct HistogramBars: View {
     let data: HistogramData
-    /// Whether to layer the Red/Green/Blue channels on top of luminance.
-    /// Luminance is always drawn — this only controls the color overlay.
-    var showChannels: Bool = true
+    /// Which channel series to layer on top of the always-drawn luminance
+    /// base (Curves v2 slice 3 — replaces this view's old `showChannels:
+    /// Bool`, which could only mean "all three RGB channels or none"; the
+    /// tone curve editor needs a THIRD option, exactly one channel, while
+    /// that channel's curve is being edited). See `HistogramChannelOverlay`
+    /// for why it has no `.none` case.
+    var channels: HistogramChannelOverlay = .allChannels
 
     var body: some View {
         Canvas { context, size in
@@ -29,21 +33,35 @@ struct HistogramBars: View {
             // compositing, same gray fill this view has always used.
             draw(data.luminance, into: context, size: size, barWidth: barWidth, color: .secondary)
 
-            guard showChannels else { return }
+            guard channels != .luminanceOnly else { return }
 
-            // Red/Green/Blue layered on top with ADDITIVE blending, so
-            // overlapping channels visually mix (e.g. red+green reads as
-            // yellow) — matches Lightroom/Photos' RGB histogram convention,
-            // confirmed with the user over a non-mixing "4 separate strips"
-            // alternative. `.plusLighter` is the Canvas compositor's
-            // additive operator — real color mixing via the compositor
-            // itself, not a manually-computed blend. See this type's own
+            // Additive blending, so overlapping channels visually mix (e.g.
+            // red+green reads as yellow) — matches Lightroom/Photos' RGB
+            // histogram convention, confirmed with the user over a
+            // non-mixing "4 separate strips" alternative. `.plusLighter` is
+            // the Canvas compositor's additive operator — real color mixing
+            // via the compositor itself, not a manually-computed blend.
+            // Still true with only ONE channel drawn (`.red`/`.green`/
+            // `.blue` below): additive-over-the-gray-luminance-base is what
+            // makes a single channel's own bars legible against it, not
+            // just what makes multiple channels mix. See this type's own
             // doc comment above: this blend mode is never reset, so it is
             // only safe as the LAST thing drawn in its own `Canvas`.
             context.blendMode = .plusLighter
-            draw(data.red, into: context, size: size, barWidth: barWidth, color: .red.opacity(0.65))
-            draw(data.green, into: context, size: size, barWidth: barWidth, color: .green.opacity(0.65))
-            draw(data.blue, into: context, size: size, barWidth: barWidth, color: .blue.opacity(0.65))
+            switch channels {
+            case .luminanceOnly:
+                break
+            case .allChannels:
+                draw(data.red, into: context, size: size, barWidth: barWidth, color: .red.opacity(0.65))
+                draw(data.green, into: context, size: size, barWidth: barWidth, color: .green.opacity(0.65))
+                draw(data.blue, into: context, size: size, barWidth: barWidth, color: .blue.opacity(0.65))
+            case .red:
+                draw(data.red, into: context, size: size, barWidth: barWidth, color: .red.opacity(0.65))
+            case .green:
+                draw(data.green, into: context, size: size, barWidth: barWidth, color: .green.opacity(0.65))
+            case .blue:
+                draw(data.blue, into: context, size: size, barWidth: barWidth, color: .blue.opacity(0.65))
+            }
         }
     }
 
@@ -70,10 +88,10 @@ struct HistogramBars: View {
 /// call-site changes for any existing caller.
 struct HistogramView: View {
     let data: HistogramData
-    var showChannels: Bool = true
+    var channels: HistogramChannelOverlay = .allChannels
 
     var body: some View {
-        HistogramBars(data: data, showChannels: showChannels)
+        HistogramBars(data: data, channels: channels)
             .frame(height: 60)
             .background(Color.black.opacity(0.2))
             .clipShape(RoundedRectangle(cornerRadius: 4))

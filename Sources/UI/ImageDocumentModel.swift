@@ -1003,17 +1003,24 @@ final class ImageDocumentModel: ObservableObject {
         applyHistoryState(history.current)
     }
 
-    /// Curves v2 slice 2B's "Reset Curve" — clears ONLY `toneCurvePoints`,
-    /// leaving every other field (including the parametric Shadows/
-    /// Highlights/Black Point curve) untouched. Structurally identical to
-    /// `revertToOriginal()`/`applyPreset(_:)` just above, for the same
-    /// reason: going through the debounced `editState` `didSet` path
-    /// instead would leave a ~350ms window where a follow-up drag could
-    /// merge into the same undo step as the reset.
-    func resetToneCurve() {
+    /// Curves v2 slice 2B's "Reset Curve", extended in slice 3 to take
+    /// WHICH curve — clears exactly `channel`'s own point array, leaving
+    /// the other three (and the parametric Shadows/Highlights/Black Point
+    /// layer) untouched. "Reset Adjustments" remains the clear-everything
+    /// route. Structurally identical to `revertToOriginal()`/
+    /// `applyPreset(_:)` just above, for the same reason: going through
+    /// the debounced `editState` `didSet` path instead would leave a
+    /// ~350ms window where a follow-up drag could merge into the same undo
+    /// step as the reset.
+    func resetToneCurve(_ channel: ToneCurveChannel) {
         finalizePendingCommit()
         var next = editState
-        next.toneCurvePoints = []
+        switch channel {
+        case .composite: next.toneCurvePoints = []
+        case .red: next.toneCurvePointsRed = []
+        case .green: next.toneCurvePointsGreen = []
+        case .blue: next.toneCurvePointsBlue = []
+        }
         history.commit(next)
         applyHistoryState(history.current)
     }

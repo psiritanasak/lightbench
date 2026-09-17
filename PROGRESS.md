@@ -10,10 +10,11 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
 ✅ FULLY COMPLETE. Currently in **Curves v2** (Tier-2 Lightroom gap, WANTED):
 slices 1, 2A, and 2B (the interactive point-curve editor UI) are all shipped.
-Slice 3 (per-channel R/G/B curves)'s backend half is now shipped too — see
-below. Its editor UI is next, not started. See CLAUDE.md's roadmap for the
-full phase list and `docs/ROADMAP_HISTORY.md` for detail on anything already
-shipped.
+Slice 3 (per-channel R/G/B curves)'s backend shipped earlier this session;
+its editor UI is now code-complete and reviewer-approved (see "In progress /
+blocked" below for the one remaining step before it's fully done). See
+CLAUDE.md's roadmap for the full phase list and `docs/ROADMAP_HISTORY.md`
+for detail on anything already shipped.
 
 ## Open reviewer issues
 None currently open or blocking. Every reviewer round on record ended in
@@ -34,11 +35,81 @@ Phases 1–7 (Foundation, Edit engine, Non-destructive pipeline, Library,
 Presets + export, RAW support, Local Adjustments/Masking) are all shipped,
 reviewed, and live-verified — see CLAUDE.md's roadmap for the one-line
 summary of each and `docs/ROADMAP_HISTORY.md` for full detail. Also shipped:
-all of the Phase 2 edit-engine backlog except Curves v2 slice 3's UI (see
-below), the Tier-1 Lightroom gaps Texture/Clarity and Dehaze, and Curves v2
-slices 1, 2A, 2B, and slice 3's backend. Every numbered IMPROVEMENTS.md item
-marked SHIPPED there is also done — that file is the source of truth for the
-perf/polish backlog, not duplicated here.
+all of the Phase 2 edit-engine backlog except Curves v2 slice 3's UI (code-
+complete, reviewer-approved, not yet live-verified — see below and "In
+progress / blocked"), the Tier-1 Lightroom gaps Texture/Clarity and Dehaze,
+and Curves v2 slices 1, 2A, 2B, and slice 3's backend. Every numbered
+IMPROVEMENTS.md item marked SHIPPED there is also done — that file is the
+source of truth for the perf/polish backlog, not duplicated here.
+
+**Curves v2 slice 3 UI (2026-09-17)**: the per-channel Red/Green/Blue tone
+curve editor, built on the backend shipped earlier this session (commit
+`d9a4d21`). New `ToneCurveChannel` enum (`Sources/UI/ToneCurveChannel.swift`
+— `.composite/.red/.green/.blue`, `String, CaseIterable, Identifiable`,
+matching `HistogramDisplayMode`'s shape rather than `SelectiveColorBand`'s
+because it drives a segmented `Picker`, not a swatch row) and new
+`HistogramChannelOverlay` enum replacing `HistogramBars`'/`HistogramView`'s
+old `showChannels: Bool` — a bool could only mean "all three RGB channels
+or none," which stopped being enough once the editor needed to show exactly
+ONE channel's own histogram while that channel's curve is being edited
+(showing all three additively overlaid while editing Green tells the user
+nothing about Green specifically — that overlay is designed so individual
+channels can't be read out of it). `curveSection` gained a 4-segment
+picker (`RGB | Red | Green | Blue`, each labeled with a trailing "•" when
+that channel's curve is non-empty, so an edited-but-not-currently-shown
+channel isn't invisible state) driving a new `toneCurvePointsBinding(for:)`
+dispatch helper (structurally identical to the existing
+`selectiveColorHueBinding(for:)` pattern). `ToneCurveEditorView` gained a
+`channel: ToneCurveChannel` parameter tinting the curve stroke and
+histogram backdrop and driving a channel-aware accessibility label;
+handles stay deliberately UNtinted (handle color already encodes
+selection, and `Color.accentColor` over a pure-blue stroke/histogram would
+be a real contrast loss — see that view's `handles(plotRect:)` doc
+comment). `ImageDocumentModel.resetToneCurve()` → `resetToneCurve(_
+channel:)`, clearing exactly one channel's array. The `ToneCurveEditorView`
+instantiation is `.id(panel.selectedToneCurveChannel)` — argued and
+reviewer-CONFIRMED as load-bearing, not decoration: that view owns
+view-identity-scoped `@State`/`@FocusState` including two array indices,
+and without a distinct identity per channel, the pre-existing
+`dragStartLocation` self-heal's own documented gap (a dropped `onEnded`
+followed by a same-pixel restart) could misapply an index from one
+channel's array to a different one after a channel switch — bounded to a
+silent no-op/wrong-selection by `ToneCurveEditing`'s existing
+`indices.contains` guards, never a crash, but worth closing structurally
+rather than arguing safe. Direct precedent for this exact `.id()` pattern
+already existed in this file (`maskDetail`'s own `.id(id)`, for an
+analogous per-mask `EditSliderRow` click-to-type-state reason). No new unit
+tests — `ToneCurveEditing.swift` is unchanged and already
+channel-agnostic, the three new `EditState` fields' Codable/preset/
+`comparisonOriginal`/identity plumbing was already covered by the backend
+slice's own tests, and `toneCurvePointsBinding(for:)`/`resetToneCurve(_:)`
+have the same untested-by-precedent profile as their existing Selective-
+Color/`revertToOriginal()` siblings with a reviewer-confirmed bounded (undo-
+recoverable) blast radius if ever wrong. Suite stayed at exactly 1030 tests,
+0 new — predicted before implementation, confirmed after. Reviewer: 2
+rounds, FIX FIRST → APPROVE — round 1 caught a doc-comment misattribution
+(a NaN/crash-guard comment left orphaned next to the wrong property after
+an insertion) and one now-stale structural claim ("no per-channel UI exists
+yet," written before this was that UI); both fixed and confirmed in round 2.
+
+**NOT yet live-verified** — this is the one gap between "code-complete,
+reviewer-approved" and "done" for this entry. `ToneCurveEditorView` is
+SwiftUI interaction glue with no unit-test precedent in this codebase (per
+slice 2B's own entry below); its channel-switching behavior specifically
+needs real synthetic-mouse/keyboard verification, not just a green build —
+slice 2B's own history includes two real bugs (a crash, a multi-delete
+data-loss bug) that only a live-verification pass caught across 3 reviewer
+rounds. Needs, specifically: per-channel isolation (confirm each channel's
+edits land in the right `EditState` field via the saved sidecar, not just
+visually), the stale-index-across-channel-switch scenario `.id()` exists to
+prevent, a re-run of slice 2B's two reviewer-caught regressions (option-
+click multi-delete, drag-off-canvas delete) on a non-composite channel, and
+a re-run of slice 2B's original ScrollView-drag blocking gate (since the
+canvas now recreates on every channel switch). This session paused before
+that step because live verification needs screen/mouse automation
+(`cliclick`/`CGEvent`), which per this user's own standing instruction
+needs to be asked for, scoped per-task, before use — and this session
+fired from an unattended scheduled prompt with no one to ask.
 
 **Curves v2 slice 3 backend (2026-09-17)**: per-channel Red/Green/Blue
 tone-curve stages, additive to the existing composite `toneCurvePoints`.
@@ -115,20 +186,31 @@ interaction glue with no unit-test precedent, per this codebase's own
 convention; verified live instead).
 
 ## In progress / blocked
-Nothing in progress and nothing blocked.
+**Curves v2 slice 3's editor UI** — code-complete and reviewer-APPROVED
+(see the entry above), committed. Blocked on exactly one remaining step
+before it can be marked fully done: **live verification**, which needs
+screen/mouse automation (`cliclick`/`CGEvent`), and this user has a
+standing instruction that automation needs to be asked for, scoped
+per-task, before use. This session ran from an unattended scheduled
+prompt with no one to ask, so it stopped here rather than run automation
+without asking.
+
+**Resuming session: ask the user for permission to drive the app with
+synthetic mouse/keyboard events for this specific verification pass, then
+run the live-verification checklist in the entry above, then — only if
+that surfaces something that needs a code change — re-run the reviewer
+and commit the fix.** If live verification passes clean with no code
+changes, just update this file to move the entry from "In progress /
+blocked" to fully "Done" and mark Curves v2 complete in CLAUDE.md.
 
 ## Exact next step
-Pick the next slice: **Curves v2 slice 3's editor UI** (the backend — per-
-channel `EditState` fields, pipeline stages, kernel `channelMask` — is now
-shipped; nothing in the app can set these fields yet except a preset or a
-hand-edited sidecar. The UI needs a plan of its own: likely a per-channel
-mode switch on the existing "Curve" sidebar section/`ToneCurveEditorView`,
-reusing `ToneCurveEditing.swift`'s screen-space geometry against whichever
-of the four point arrays is selected, plus a channel-tinted curve stroke and
-histogram overlay), or whichever WANTED Lightroom-gap item the user picks
-instead (see CLAUDE.md's "Gaps vs. Adobe Lightroom Desktop" section) —
-Grain, Color Grading, Point Color, Chromatic Aberration removal, and Manual
-Transform Scale/Aspect are all unstarted Tier-1 items; Auto Tone/Auto
-Settings, Enhance/Super Resolution, History panel, and Copy/Paste-and-Sync
-are unstarted Tier-2 items. Per this project's workflow rules, enter Plan
-Mode before starting either.
+Finish Curves v2 slice 3's editor UI per "In progress / blocked" above:
+get the reviewer to APPROVE, ask for and get screen-automation permission,
+live-verify, commit. After that, Curves v2 is fully complete and the next
+slice is picking a WANTED Lightroom-gap item (see CLAUDE.md's "Gaps vs.
+Adobe Lightroom Desktop" section) — Grain, Color Grading, Point Color,
+Chromatic Aberration removal, and Manual Transform Scale/Aspect are all
+unstarted Tier-1 items; Auto Tone/Auto Settings, Enhance/Super Resolution,
+History panel, and Copy/Paste-and-Sync are unstarted Tier-2 items. Per this
+project's workflow rules, enter Plan Mode before starting whichever is
+picked.

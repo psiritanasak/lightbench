@@ -71,8 +71,20 @@ struct AdjustPanelState {
     /// comment for why), so every read of this must go through
     /// `ToneCurveEditing.validated(_:in:)` rather than trust it directly:
     /// Undo/Redo/Revert/a preset apply can all shrink the array underneath
-    /// a stale index.
+    /// a stale index. Curves v2 slice 3 adds one more such reason: this
+    /// index is only meaningful relative to `selectedToneCurveChannel`'s
+    /// OWN array — an index valid on Red is not meaningful applied to
+    /// Blue — so `curveSection`'s channel picker explicitly resets this to
+    /// `nil` on every channel change rather than leaving it to
+    /// coincidentally still validate against the new array.
     var selectedToneCurvePointIndex: Int?
+
+    /// Curves v2 slice 3: which of the four tone curves the Curve section
+    /// currently shows/edits. Presentation-only, exactly like
+    /// `selectedSelectiveColorBand` above — `EditState` holds all four
+    /// point arrays (`toneCurvePoints`/`toneCurvePointsRed/Green/Blue`) at
+    /// once; this only tracks which one the panel is currently editing.
+    var selectedToneCurveChannel: ToneCurveChannel = .composite
 }
 
 /// The Editor's Adjust tab: the six collapsible Light/Color/Selective Color/
@@ -159,6 +171,22 @@ struct AdjustTabView: View {
         case .blue: return $document.editState.blueLuminance
         case .purple: return $document.editState.purpleLuminance
         case .magenta: return $document.editState.magentaLuminance
+        }
+    }
+
+    /// Curves v2 slice 3: routes to whichever of the four tone-curve point
+    /// arrays `channel` names — structurally identical to
+    /// `selectiveColorHueBinding(for:)` above and for the same reason:
+    /// `EditState` has four flat named array fields (matching this
+    /// codebase's established per-field convention, not one array-of-
+    /// arrays), so the panel needs this small dispatch to edit one curve
+    /// at a time.
+    private func toneCurvePointsBinding(for channel: ToneCurveChannel) -> Binding<[ToneCurvePoint]> {
+        switch channel {
+        case .composite: return $document.editState.toneCurvePoints
+        case .red: return $document.editState.toneCurvePointsRed
+        case .green: return $document.editState.toneCurvePointsGreen
+        case .blue: return $document.editState.toneCurvePointsBlue
         }
     }
 
@@ -273,7 +301,10 @@ struct AdjustTabView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            HistogramView(data: document.histogramData, showChannels: panel.histogramDisplayMode == .rgb)
+            HistogramView(
+                data: document.histogramData,
+                channels: panel.histogramDisplayMode == .rgb ? .allChannels : .luminanceOnly
+            )
             EditSliderRow(
                 label: "Levels Black", value: $document.editState.levelsBlackPoint,
                 range: 0...1, identity: 0, displayMultiplier: 100
@@ -302,38 +333,100 @@ struct AdjustTabView: View {
             Text("Applies on top of the Light sliders.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            // Reserved for slice 3's per-channel R/G/B picker — the 8-point
-            // cap is per-channel-kernel-argument-budget, not a dead end;
-            // see CLAUDE.md's Curves v2 slice 3 note. No UI here yet.
+            // Curves v2 slice 3: which of the four curves the canvas below
+            // shows/edits. A segmented `Picker`, matching `lightSection`'s
+            // own `histogramDisplayMode` picker one section above — NOT
+            // `SelectiveColorBand`'s row-of-tappable-swatch-circles pattern,
+            // whose selection ring is drawn in `Color.white` (see that
+            // section below): a selected white RGB swatch ringed in white
+            // would be invisible, and this picker gets keyboard/VoiceOver
+            // handling for free where the swatch row needed hand-written
+            // accessibility traits.
+            Picker("", selection: $panel.selectedToneCurveChannel) {
+                ForEach(ToneCurveChannel.allCases) { channel in
+                    Text(channelSegmentLabel(for: channel)).tag(channel)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            // An index into one channel's array is meaningless applied to
+            // another's (see `selectedToneCurvePointIndex`'s own doc
+            // comment) — cleared explicitly here rather than left to
+            // coincidentally still validate against the new array.
+            .onChange(of: panel.selectedToneCurveChannel) { _, _ in
+                panel.selectedToneCurvePointIndex = nil
+            }
+            // `.id(channel)` is LOAD-BEARING, not decoration — the same
+            // reasoning as `maskDetail`'s `.id(id)` below. `ToneCurveEditorView`
+            // owns view-identity-scoped `@State`
+            // (`draggedPointIndex`/`dragStartLocation`/
+            // `didConsumeGestureAsDiscreteAction`) and `@FocusState`, two of
+            // them array indices. That file's own `dragStartLocation` doc
+            // comment already acknowledges its self-heal is "not an
+            // unconditional guarantee" — a dropped `onEnded` (the enclosing
+            // `ScrollView` can cancel a gesture) followed by a same-pixel
+            // restart keeps stale state. Today that can only misfire within
+            // ONE array; without a distinct identity per channel here, it
+            // could misapply an index from one channel's array to a
+            // completely different one after a channel switch. Cost is
+            // zero: clicking this picker already moves key focus off the
+            // canvas, so nothing is lost that the switch didn't already
+            // destroy. Note this resets only the view's OWN internal
+            // state — `selectedToneCurvePointIndex` lives in
+            // `AdjustPanelState` outside this identity and still needs the
+            // explicit `.onChange` reset above; neither mechanism
+            // substitutes for the other.
             ToneCurveEditorView(
-                points: $document.editState.toneCurvePoints,
+                points: toneCurvePointsBinding(for: panel.selectedToneCurveChannel),
                 selectedIndex: $panel.selectedToneCurvePointIndex,
-                histogramData: document.histogramData
+                histogramData: document.histogramData,
+                channel: panel.selectedToneCurveChannel
             )
+            .id(panel.selectedToneCurveChannel)
             Text(curvePointReadoutText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 Button("Add Point") {
-                    document.editState.toneCurvePoints = ToneCurveEditing.addingAtWidestGap(of: document.editState.toneCurvePoints)
+                    let binding = toneCurvePointsBinding(for: panel.selectedToneCurveChannel)
+                    binding.wrappedValue = ToneCurveEditing.addingAtWidestGap(of: binding.wrappedValue)
                 }
-                .disabled(!ToneCurveEditing.canAddAtWidestGap(to: document.editState.toneCurvePoints))
+                .disabled(!ToneCurveEditing.canAddAtWidestGap(to: activeToneCurvePoints))
                 Button("Delete Point") {
-                    guard let index = ToneCurveEditing.validated(panel.selectedToneCurvePointIndex, in: document.editState.toneCurvePoints)
+                    let binding = toneCurvePointsBinding(for: panel.selectedToneCurveChannel)
+                    guard let index = ToneCurveEditing.validated(panel.selectedToneCurvePointIndex, in: binding.wrappedValue)
                     else { return }
-                    document.editState.toneCurvePoints = ToneCurveEditing.removing(pointAt: index, in: document.editState.toneCurvePoints)
+                    binding.wrappedValue = ToneCurveEditing.removing(pointAt: index, in: binding.wrappedValue)
                     panel.selectedToneCurvePointIndex = nil
                 }
                 .disabled(!canDeleteSelectedCurvePoint)
             }
             .frame(maxWidth: .infinity)
-            Button("Reset Curve") {
-                document.resetToneCurve()
+            Button("Reset \(panel.selectedToneCurveChannel == .composite ? "Curve" : "\(panel.selectedToneCurveChannel.rawValue) Curve")") {
+                document.resetToneCurve(panel.selectedToneCurveChannel)
                 panel.selectedToneCurvePointIndex = nil
             }
             .frame(maxWidth: .infinity)
-            .disabled(document.editState.toneCurvePoints.isEmpty)
+            .disabled(activeToneCurvePoints.isEmpty)
         }
+    }
+
+    /// The segmented picker's label for `channel` — its plain name, plus a
+    /// trailing dot when that channel's curve is non-empty. Without this,
+    /// an edited channel other than the one currently shown is invisible
+    /// state: exactly the failure class this slice's own backend half was
+    /// reviewer-caught shipping once already (`isAdjustTabAtIdentity` not
+    /// accounting for the three new fields).
+    private func channelSegmentLabel(for channel: ToneCurveChannel) -> String {
+        toneCurvePointsBinding(for: channel).wrappedValue.isEmpty ? channel.rawValue : "\(channel.rawValue) •"
+    }
+
+    /// The currently-shown channel's own point array — a read-only
+    /// convenience so `canDeleteSelectedCurvePoint`/`curvePointReadoutText`/
+    /// the button `.disabled` checks above don't each re-derive
+    /// `toneCurvePointsBinding(for:).wrappedValue` separately.
+    private var activeToneCurvePoints: [ToneCurvePoint] {
+        toneCurvePointsBinding(for: panel.selectedToneCurveChannel).wrappedValue
     }
 
     /// "Delete Point" is disabled with no selection AND for a selected
@@ -343,7 +436,7 @@ struct AdjustTabView: View {
     /// pressed, the same UI-honesty reasoning `resetAdjustmentsButton`'s
     /// own disabled-state follows.
     private var canDeleteSelectedCurvePoint: Bool {
-        let points = document.editState.toneCurvePoints
+        let points = activeToneCurvePoints
         guard let index = ToneCurveEditing.validated(panel.selectedToneCurvePointIndex, in: points) else { return false }
         return index != 0 && index != points.count - 1
     }
@@ -354,7 +447,7 @@ struct AdjustTabView: View {
     /// `accessibilityValueText` needs one: a hand-edited sidecar's `NaN`
     /// shouldn't read as legitimate-looking readout text either.
     private var curvePointReadoutText: String {
-        let points = document.editState.toneCurvePoints
+        let points = activeToneCurvePoints
         guard let index = ToneCurveEditing.validated(panel.selectedToneCurvePointIndex, in: points) else {
             return points.isEmpty ? "No curve" : "No point selected"
         }
@@ -1069,10 +1162,10 @@ struct AdjustTabView: View {
             // here, so Reset Adjustments stays enabled and clicking it
             // deletes the points — consistent with how this button treats
             // every other field. Same reasoning for the three per-channel
-            // curves (Curves v2 slice 3) — no per-channel UI exists yet,
-            // but `applyingPreset(onto:)` and sidecar decode can both set
-            // these fields today, so this check and the reset button below
-            // must already account for them.
+            // curves (Curves v2 slice 3) — set via the Curve section's
+            // channel picker (`curveSection`), `applyingPreset(onto:)`, or
+            // sidecar decode, so this check and the reset button below must
+            // account for them.
             && state.toneCurvePoints.isEmpty
             && state.toneCurvePointsRed.isEmpty
             && state.toneCurvePointsGreen.isEmpty

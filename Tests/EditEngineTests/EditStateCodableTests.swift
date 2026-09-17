@@ -165,6 +165,72 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.exposureEV, 2.0)
     }
 
+    // MARK: - Point Curve (Curves v2)
+    //
+    // `toneCurvePoints` decodes with `try?`, unlike the bare `try` on
+    // `redEyePoints`/`masks` beside it. The two "does not discard the
+    // sidecar" tests below are the entire justification for that deviation
+    // — they are what fails under a bare `try`.
+
+    func testToneCurvePointsDefaultToEmptyWhenAbsent() throws {
+        XCTAssertEqual(try decode("{}").toneCurvePoints, [])
+    }
+
+    func testToneCurvePointsDecodeWhenPresent() throws {
+        let json = """
+        {
+            "toneCurvePoints": [{"x": 0, "y": 0}, {"x": 0.5, "y": 0.72}, {"x": 1, "y": 1}]
+        }
+        """
+        XCTAssertEqual(try decode(json).toneCurvePoints, [
+            ToneCurvePoint(x: 0, y: 0),
+            ToneCurvePoint(x: 0.5, y: 0.72),
+            ToneCurvePoint(x: 1, y: 1)
+        ])
+    }
+
+    func testToneCurvePointsRoundTripThroughASidecar() throws {
+        var state = EditState()
+        state.toneCurvePoints = [
+            ToneCurvePoint(x: 0, y: 0.04),
+            ToneCurvePoint(x: 0.42, y: 0.58),
+            ToneCurvePoint(x: 1, y: 0.96)
+        ]
+        let reencoded = try JSONDecoder().decode(EditState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(reencoded.toneCurvePoints, state.toneCurvePoints)
+    }
+
+    func testAMalformedToneCurvePointDoesNotDiscardTheWholeSidecar() throws {
+        // The whole sidecar read is wrapped in `try?` by the caller, so a
+        // throw here would silently discard EVERY edit on the photo. One
+        // bad point must cost the curve, not the photo.
+        let json = """
+        {
+            "exposureEV": 2.0,
+            "curvesShadows": 0.5,
+            "toneCurvePoints": [{"x": 0, "y": 0}, {"x": 0.5}]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.exposureEV, 2.0, "other edits must survive a malformed curve")
+        XCTAssertEqual(state.curvesShadows, 0.5)
+        XCTAssertEqual(state.toneCurvePoints, [], "the curve alone is dropped")
+    }
+
+    func testToneCurvePointsWithAWrongJSONTypeDoesNotDiscardTheWholeSidecar() throws {
+        let state = try decode("""
+        { "exposureEV": 1.5, "toneCurvePoints": 5 }
+        """)
+        XCTAssertEqual(state.exposureEV, 1.5)
+        XCTAssertEqual(state.toneCurvePoints, [])
+    }
+
+    func testStateWithAToneCurveIsNotEffectivelyIdentity() throws {
+        var state = EditState()
+        state.toneCurvePoints = [ToneCurvePoint(x: 0, y: 0), ToneCurvePoint(x: 1, y: 1)]
+        XCTAssertFalse(state.isEffectivelyIdentity)
+    }
+
     func testRedEyePointsArrayDefaultsWhenAbsent() throws {
         let state = try decode("{}")
         XCTAssertEqual(state.redEyePoints, [])

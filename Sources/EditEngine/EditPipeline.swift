@@ -205,6 +205,7 @@ enum EditPipeline {
             || state.brightness != 0
             || effective.contrast != 0
             || curvesActive(effective, state.blackPoint)
+            || pointCurveActive(state)
             || state.hslHue != 0
             || selectiveColorActive(state)
             || state.vibrance != 0
@@ -226,6 +227,22 @@ enum EditPipeline {
         if state.brightness != 0 { img = applyBrightness(state.brightness, to: img) }
         if effective.contrast != 0 { img = applyContrast(effective.contrast, to: img) }
         if curvesActive(effective, state.blackPoint) { img = applyCurves(effective, state.blackPoint, to: img) }
+        // The user's point curve runs immediately AFTER the parametric one,
+        // keeping CLAUDE.md's fixed …→contrast→curves→HSL→… order with
+        // "curves" as one contiguous two-stage block. Parametric first
+        // because it is corrective base shaping (the same rationale that
+        // puts Levels before Brightness and Brightness before Contrast);
+        // the freely-drawn curve is the creative layer applied on top.
+        //
+        // MEASURED non-commuting, not assumed: swapping the two stages and
+        // re-rendering a 4-point S-curve over an active parametric curve
+        // (shadows +0.7, highlights -0.5, black point -0.4) moved the
+        // result by up to 0.07468 — at linear 0.214, photographic middle
+        // gray — against this suite's 0.002 tolerance, i.e. ~37x. So this
+        // order is a real REQUIREMENT, not a convention, unlike
+        // Texture/Clarity's own 0.00215. See
+        // testPointCurveOrderRelativeToTheParametricCurveIsFixed.
+        if pointCurveActive(state) { img = applyPointCurve(state.toneCurvePoints, to: img) }
         if state.hslHue != 0 { img = applyHue(state.hslHue, to: img) }
         // Selective Color runs right after global Hue (bands target hues as
         // the user currently SEES them, post global rotation — the WYSIWYG
@@ -520,6 +537,62 @@ enum EditPipeline {
             extent: image.extent,
             arguments: [image, xs, ys, ms, tail, spline.endSlope]
         ) ?? image
+    }
+
+    // MARK: - Point Curve (Curves v2)
+
+    /// Curves v2's user-placed point curve — a SEPARATE, ADDITIVE stage, not
+    /// a replacement for `applyCurves` above. The parametric layer and
+    /// everything routed through it (Brilliance, Black Point, per-mask
+    /// Shadows/Highlights) is untouched and stays byte-exact; this composes
+    /// on top. See `EditState.toneCurvePoints` and `MonotoneToneCurve`.
+    ///
+    /// Monotone cubic, unlike `applyCurves`' natural cubic — see
+    /// `MonotoneToneCurve`'s doc comment for why the two evaluators coexist
+    /// rather than one being a mode of the other, and
+    /// `PointToneCurve.cikernel`'s header for the same note from the GPU
+    /// side.
+    private static let pointToneCurveKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "PointToneCurve", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
+    /// Kept deliberately cheap — emptiness IS the identity test. No
+    /// identity-SHAPE detection here (e.g. "are these points collinear?"):
+    /// that would be a second source of truth that could disagree with the
+    /// evaluator, and it would buy nothing, because `MonotoneToneCurve`
+    /// already renders a collinear point list as exact identity by
+    /// construction (see its collinearity identity).
+    private static func pointCurveActive(_ state: EditState) -> Bool {
+        !state.toneCurvePoints.isEmpty
+    }
+
+    /// Renders nothing (returns the image untouched) if the kernel is
+    /// missing or the points are malformed — `MonotoneToneCurve.init?`
+    /// rejects fewer than 2 points, non-increasing x, non-finite or absurd
+    /// values, and more points than the kernel's fixed arity can carry.
+    private static func applyPointCurve(_ points: [ToneCurvePoint], to image: CIImage) -> CIImage {
+        guard let kernel = pointToneCurveKernel,
+              let curve = MonotoneToneCurve(points: points)
+        else { return image }
+
+        // Padded to exactly `maximumPointCount` so the kernel can be
+        // fixed-arity and fully unrolled — provably output-identical, see
+        // `paddedForKernel()`.
+        let padded = curve.paddedForKernel()
+        let p = padded.points
+        let m = padded.tangents
+        // Argument layout MUST match PointToneCurve.cikernel's own header.
+        let xa = CIVector(x: p[0].x, y: p[1].x, z: p[2].x, w: p[3].x)
+        let xb = CIVector(x: p[4].x, y: p[5].x, z: p[6].x, w: p[7].x)
+        let ya = CIVector(x: p[0].y, y: p[1].y, z: p[2].y, w: p[3].y)
+        let yb = CIVector(x: p[4].y, y: p[5].y, z: p[6].y, w: p[7].y)
+        let ma = CIVector(x: m[0], y: m[1], z: m[2], w: m[3])
+        let mb = CIVector(x: m[4], y: m[5], z: m[6], w: m[7])
+
+        return kernel.apply(extent: image.extent, arguments: [image, xa, xb, ya, yb, ma, mb]) ?? image
     }
 
     // MARK: - HSL (global hue & saturation)

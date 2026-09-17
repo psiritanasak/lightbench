@@ -71,6 +71,17 @@ struct ToneCurveSpline {
     /// Fails (returns nil) on fewer than 3 points or non-increasing x —
     /// a degenerate solve would divide by a zero interval. Callers treat
     /// nil as "leave the image alone", never as "carry on with garbage".
+    ///
+    /// KNOWN GAP, deliberately not closed here: the ordering check below is
+    /// `x <= previous`, which evaluates to `false` for NaN, so a NaN x
+    /// would PASS this guard and produce NaN pixels. It is unreachable in
+    /// practice — every caller builds these points from sliders that are
+    /// already clamped — so adding a guard to a stage whose byte-exactness
+    /// against ~70 shipped assertions is load-bearing would be a change
+    /// with risk and no reachable benefit. `MonotoneToneCurve`, whose
+    /// points come from a user-editable (and hand-authorable) array, DOES
+    /// check finiteness; see its `init?`. If a future change ever feeds
+    /// unclamped values in here, close this first.
     init?(points: [CGPoint]) {
         guard points.count >= 3 else { return nil }
         for i in 1..<points.count where points[i].x <= points[i - 1].x { return nil }
@@ -166,27 +177,35 @@ struct ToneCurveSpline {
         return x < 0 ? -decoded : decoded
     }
 
+    /// The spline evaluated in its OWN (already sRGB-encoded) domain, with
+    /// no encode/decode wrapper — clamped below `x0`, linearly extrapolated
+    /// above the last point. `value(at:)` is exactly this sandwiched
+    /// between encode and decode.
+    ///
+    /// Split out so a caller that already holds an encoded-domain value
+    /// (a curve editor plotting control points, or a test comparing two
+    /// interpolants on the same points) does not have to round-trip
+    /// through the transfer function to reach the curve itself. Pure
+    /// extraction — `value(at:)`'s behaviour is unchanged, and the existing
+    /// assertions covering it are the proof.
+    func splineValue(atEncoded u: Double) -> Double {
+        let xs = points.map { Double($0.x) }
+        let ys = points.map { Double($0.y) }
+        let m = secondDerivatives
+        let n = xs.count
+
+        if u <= xs[0] { return ys[0] }
+        if u >= xs[n - 1] { return ys[n - 1] + endSlope * (u - xs[n - 1]) }
+        var i = 0
+        while i < n - 2 && u > xs[i + 1] { i += 1 }
+        return Self.segmentValue(at: u, x0: xs[i], x1: xs[i + 1], y0: ys[i], y1: ys[i + 1], m0: m[i], m1: m[i + 1])
+    }
+
     /// The complete transfer function, matching the kernel exactly:
     /// encode -> spline (clamped below `x0`, linearly extrapolated above
     /// `x4`) -> decode. Kept in Swift so the maths can be unit-tested
     /// without a `CIContext`; the kernel is the twin that must agree.
     func value(at v: Double) -> Double {
-        let xs = points.map { Double($0.x) }
-        let ys = points.map { Double($0.y) }
-        let m = secondDerivatives
-        let n = xs.count
-        let u = Self.srgbEncode(v)
-
-        let y: Double
-        if u <= xs[0] {
-            y = ys[0]
-        } else if u >= xs[n - 1] {
-            y = ys[n - 1] + endSlope * (u - xs[n - 1])
-        } else {
-            var i = 0
-            while i < n - 2 && u > xs[i + 1] { i += 1 }
-            y = Self.segmentValue(at: u, x0: xs[i], x1: xs[i + 1], y0: ys[i], y1: ys[i + 1], m0: m[i], m1: m[i + 1])
-        }
-        return Self.srgbDecode(y)
+        Self.srgbDecode(splineValue(atEncoded: Self.srgbEncode(v)))
     }
 }

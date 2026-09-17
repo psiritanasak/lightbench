@@ -1,0 +1,135 @@
+// Point tone curve (Curves v2, slice 2) — the user's own freely-placed tone
+// curve, a SEPARATE, ADDITIVE stage that runs immediately after the
+// parametric curve in ToneCurve.cikernel next door.
+//
+// The sixth custom Core Image kernel here, after SelectiveColor, ColorRange,
+// the two Dehaze kernels and ToneCurve.
+//
+// WHY THIS KERNEL IS MONOTONE WHILE ToneCurve.cikernel BESIDE IT IS NATURAL
+// CUBIC — the single most likely thing to confuse a future reader, so it is
+// recorded in both files:
+//   - ToneCurve.cikernel reproduces CIToneCurve's undocumented spline
+//     byte-exactly, which is what keeps every already-saved sidecar and
+//     preset rendering identically. That spline is a NATURAL cubic; slice
+//     1's pre-work measured a monotone fit at 0.016 error against it, an
+//     order of magnitude past the suite's 0.002 tolerance. Monotone cannot
+//     be used there.
+//   - This kernel's control points are placed FREELY by the user, and a
+//     natural cubic through freely-placed points overshoots: the tone
+//     response can visibly reverse between two points, which reads as a
+//     rendering bug rather than as a curve. Fritsch-Carlson cannot.
+// Two interpolants, two genuinely different requirements.
+//
+// Reference: F. N. Fritsch and R. E. Carlson, "Monotone Piecewise Cubic
+// Interpolation", SIAM J. Numer. Anal. 17(2), 1980, 238-246. The tangent
+// solve and its monotonicity filter run once per edit on the CPU, in
+// MonotoneToneCurve.swift — a colour kernel cannot and should not redo it
+// per pixel. This file only EVALUATES the Hermite segments.
+//
+// DOMAIN: as with ToneCurve.cikernel, the values arriving here are ALREADY
+// perceptual (applyPerceptualAdjustments' encodeToPerceptual/decodeToLinear
+// sandwich), and this kernel encodes a SECOND time internally so its control
+// points share the parametric curve's domain exactly. Do not "simplify" that
+// away, and do not try to hoist a shared encode across the two curve stages
+// — that would change the parametric layer's arithmetic and break its
+// byte-exactness.
+//
+// OUT-OF-DOMAIN, DELIBERATELY ASYMMETRIC, matching ToneCurve.cikernel:
+//   u > last x  -> LINEAR extrapolation along the curve's own end tangent,
+//                  so highlight headroom survives an active curve.
+//   u < first x -> CLAMPED to its y. The leftmost point is a black point;
+//                  extrapolating there would drive values negative.
+//
+// ARGUMENT LAYOUT — must match MonotoneToneCurve.paddedForKernel() and
+// EditPipeline.applyPointCurve exactly:
+//   xa = x0 x1 x2 x3      xb = x4 x5 x6 x7
+//   ya = y0 y1 y2 y3      yb = y4 y5 y6 y7
+//   ma = m0 m1 m2 m3      mb = m4 m5 m6 m7     (Hermite tangents)
+//
+// THE PAD-TO-8 SCHEME, which is why there is no point-count argument and no
+// separate extrapolation branch below. Swift solves the real N points
+// (2 <= N <= 8) and then appends 8-N synthetic points that continue along
+// the end tangent AND carry that tangent. Because those points are collinear
+// with the end tangent, the Hermite collinearity identity (h00 + h01 == 1,
+// h01 + h10 + h11 == t, see MonotoneToneCurve.hermiteSegment) makes every
+// padded segment evaluate to EXACTLY the straight line the extrapolation
+// rule would have produced. So padding is provably output-identical rather
+// than approximate, and the kernel is always exactly 7 segments with
+// mb.w always the end slope. The pad step is arbitrary; nothing depends on
+// its value.
+//
+// Segments are UNROLLED, not looped. No kernel in this codebase uses a loop,
+// and "a constant-bound for compiles and renders correctly in CI Kernel
+// Language here" is exactly the kind of claim this project's conventions
+// forbid asserting without running it. With pad-to-8 the segment count is a
+// compile-time constant anyway, so unrolling costs nothing.
+
+float srgbEncode(float x) {
+    float a = abs(x);
+    float e = (a <= 0.0031308) ? 12.92 * a : 1.055 * pow(a, 1.0 / 2.4) - 0.055;
+    return (x < 0.0) ? -e : e;
+}
+
+float srgbDecode(float x) {
+    float a = abs(x);
+    float d = (a <= 0.04045) ? a / 12.92 : pow((a + 0.055) / 1.055, 2.4);
+    return (x < 0.0) ? -d : d;
+}
+
+// One cubic Hermite segment. Twin of MonotoneToneCurve.hermiteSegment.
+float hermiteSegment(float u, float x0, float x1, float y0, float y1, float m0, float m1) {
+    float h = x1 - x0;
+    float t = (u - x0) / h;
+    float t2 = t * t;
+    float t3 = t2 * t;
+    float h00 =  2.0 * t3 - 3.0 * t2 + 1.0;
+    float h10 =        t3 - 2.0 * t2 + t;
+    float h01 = -2.0 * t3 + 3.0 * t2;
+    float h11 =        t3 -       t2;
+    return h00 * y0 + h10 * h * m0 + h01 * y1 + h11 * h * m1;
+}
+
+float pointCurveValue(float v, vec4 xa, vec4 xb, vec4 ya, vec4 yb, vec4 ma, vec4 mb) {
+    float u = srgbEncode(v);
+    float y;
+    if (u <= xa.x) {
+        // Below the first control point — clamp, do not extrapolate.
+        y = ya.x;
+    } else if (u >= xb.w) {
+        // Above the last (padded) point. With pad-to-8 this is the same
+        // straight line the padded segments already produce, continued.
+        y = yb.w + mb.w * (u - xb.w);
+    } else if (u < xa.y) {
+        y = hermiteSegment(u, xa.x, xa.y, ya.x, ya.y, ma.x, ma.y);
+    } else if (u < xa.z) {
+        y = hermiteSegment(u, xa.y, xa.z, ya.y, ya.z, ma.y, ma.z);
+    } else if (u < xa.w) {
+        y = hermiteSegment(u, xa.z, xa.w, ya.z, ya.w, ma.z, ma.w);
+    } else if (u < xb.x) {
+        y = hermiteSegment(u, xa.w, xb.x, ya.w, yb.x, ma.w, mb.x);
+    } else if (u < xb.y) {
+        y = hermiteSegment(u, xb.x, xb.y, yb.x, yb.y, mb.x, mb.y);
+    } else if (u < xb.z) {
+        y = hermiteSegment(u, xb.y, xb.z, yb.y, yb.z, mb.y, mb.z);
+    } else {
+        y = hermiteSegment(u, xb.z, xb.w, yb.z, yb.w, mb.z, mb.w);
+    }
+    return srgbDecode(y);
+}
+
+kernel vec4 pointToneCurve(__sample s, vec4 xa, vec4 xb, vec4 ya, vec4 yb, vec4 ma, vec4 mb) {
+    // Un-premultiply, same as ToneCurve.cikernel — a tone curve applies to
+    // UNPREMULTIPLIED colour, measured there against CIToneCurve (with alpha
+    // 0.5 its result read back at exactly 0.5x the opaque result).
+    float a = s.a;
+    vec3 rgb = (a > 0.0) ? s.rgb / a : s.rgb;
+
+    vec3 outRGB = vec3(
+        pointCurveValue(rgb.r, xa, xb, ya, yb, ma, mb),
+        pointCurveValue(rgb.g, xa, xb, ya, yb, ma, mb),
+        pointCurveValue(rgb.b, xa, xb, ya, yb, ma, mb)
+    );
+
+    // Repremultiply; alpha untouched — a tone curve must not alter coverage.
+    return vec4(outRGB * a, a);
+}

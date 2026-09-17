@@ -8545,3 +8545,134 @@ over the live histogram). Read the `definition` -> `texture`/`clarity`
 `LegacyCodingKeys` migration FIRST, per CLAUDE.md. `ToneCurveSpline`'s solve
 is already n-point-general; only `ToneCurve.cikernel`'s unrolled 4 segments
 and its `vec4`-packed argument layout are 5-point-specific.
+
+## Curves v2 slice 2A — point curve data model, evaluator, kernel, pipeline (2026-09-17)
+
+**Shipped.** `EditState.toneCurvePoints` (+ the `ToneCurvePoint` element type),
+`Sources/EditEngine/MonotoneToneCurve.swift` and
+`Sources/Rendering/Shaders/PointToneCurve.cikernel` (the 6th custom kernel) add
+the user's own freely-placed tone curve as a SEPARATE, ADDITIVE stage running
+immediately after the parametric curve inside the same perceptual sandwich.
+
+**977 tests, 0 failures** (was 940 before slice 2A).
+
+**No UI yet — that is slice 2B.** Until it ships, a hand-authored sidecar is the
+only input path. Same shape as Phase 7 slice 2 Session A, which shipped masks'
+data/pipeline ahead of their UI.
+
+### The three decisions that shaped it (user-chosen, at plan time)
+
+1. **Additive second stage**, not a replacement. `curvesShadows`/
+   `curvesHighlights`/`blackPoint`, Brilliance's render-time blend and per-mask
+   Shadows/Highlights are all untouched and byte-exact.
+   **Consequence worth stating plainly: Curves v2 needs NO `LegacyCodingKeys`
+   migration at all**, because no shipped field changes meaning. CLAUDE.md's
+   Curves v2 entry had mandated that migration; it has been corrected rather
+   than silently ignored.
+2. **Monotone cubic (Fritsch-Carlson) for the user curve**, while the parametric
+   layer keeps natural cubic. Not duplication — two genuinely different
+   requirements. Slice 1's pre-work measured a monotone fit at 0.016 against
+   `CIToneCurve` vs natural cubic's 0.00000, so monotone CANNOT be used for the
+   byte-exact layer; and a natural cubic through freely-placed points overshoots
+   into visibly non-monotonic tone, so natural cannot be used here. Implemented
+   as a separate TYPE rather than a mode flag, so "which end condition does the
+   byte-exact layer use?" stays a structural fact rather than a runtime one.
+3. **Composite curve only.** Per-channel R/G/B is slice 3.
+
+### Pad-to-8: how a fixed-arity kernel renders a variable-length curve
+
+A `CIColorKernel` can only sample its own coordinate, so a LUT would have forced
+a general `CIKernel` with hand-written ROI/DOD — which this codebase has never
+used, and which would either clip headroom (reintroducing the exact defect slice
+1 fixed) or need an out-of-table path anyway. So the curve goes as `vec4`
+uniforms, capped at 8 points by the argument budget.
+
+The variable count is handled by padding to 8 in Swift with synthetic points
+that continue along the end tangent AND carry it. By the Hermite collinearity
+identity (h00+h01 == 1 and h01+h10+h11 == t identically), each padded segment
+evaluates to EXACTLY the straight line the extrapolation rule would produce — so
+padding is provably free, and there is no count uniform and no separate
+extrapolation branch. `testPaddingDoesNotChangeTheRenderedResult` checks it on
+the real GPU path rather than trusting the algebra.
+
+### Measured, not asserted
+
+- **Stage order is a genuine requirement, not a convention.** Swapping the
+  parametric and point curves and re-rendering a 4-point S-curve over an active
+  parametric curve moved the result by up to **0.07468 at linear 0.214**
+  (photographic middle gray) against the 0.002 tolerance — ~37x. Recorded in
+  `applyPerceptualAdjustments` and pinned by
+  `testPointCurveOrderRelativeToTheParametricCurveIsFixed`. (Contrast
+  Texture/Clarity's 0.00215, which is honestly labelled a convention.)
+- **Perf at 24MP:** without the stage median 5.18ms (4.95-5.37), with it 4.88ms
+  (4.71-5.44). The added pass is NOT separable from run-to-run variance — the
+  ranges overlap — so the honest statement is "below the noise floor", not
+  "faster". Both well inside the 16ms budget. Probe fully reverted; `git diff`
+  checked clean.
+
+### Live-verified (hand-authored sidecar)
+
+- An S-curve `[(0,0),(0.25,0.12),(0.75,0.88),(1,1)]` shapes tone as expected and
+  strictly monotonically: the 8-bar wedge went 40/70/100/130/160/190/220/250 ->
+  30.7/83.3/140/186.7/215.7/230.7/241/252.7 (shadows down, mids expanded,
+  highlights rolled off, no reversal anywhere).
+- **An identity-shaped point list renders BYTE-IDENTICAL to no curve** on all 8
+  bars — the collinearity property holding through the real kernel, which is why
+  `pointCurveActive` needs no identity-shape detection.
+- **A malformed point costs the curve, not the photo**: a sidecar with
+  `exposureEV: 1.0` and a point missing its `y` rendered exactly the +1EV
+  reference, with the curve dropped to `[]`. This is the whole justification for
+  the `try?` deviation from the bare `try` on `redEyePoints`/`masks`.
+- **Headroom survives, proven by upper bound rather than by comparison.** With
+  +1EV and vignette, an aggressive curve left bars 6/7/8 at 219.0/229.0/215.0.
+  If the stage clamped its output to 1.0, those bars could not have exceeded
+  215.9/190.2/153.1 after the same vignette factors. They all did, implying
+  pre-vignette values of 1.03/1.52/2.13.
+- All **1608 files under `~/Pictures/Bolivia_trip` checksummed before and after:
+  byte-identical.** Both test files were copies in a scratch folder.
+
+### A measurement trap hit again, and caught again
+
+The first live measurement of the S-curve showed all eight bars flat near 250 —
+apparently a total failure. The app window had moved itself to a second display
+at (-1389, -150), so `screencapture -R` was measuring an unrelated region of
+screen. Caught by checking the window's actual position instead of believing the
+numbers. **Fifth time this project has paid for "check the fixture measures what
+you think"** — and the second time in two sessions that the failure was a
+plausible-looking measurement of the wrong region rather than bad code.
+
+### Reviewer
+
+APPROVE, with one finding fixed first (and it was a MEASURED one, not a style
+note): `maximumMagnitude` bounds where a control point SITS, not how steep the
+curve between two points is. Measured on the real compiled kernel — the points
+(0,0), (0.5,0.5), (0.5+1e-6, 1.0) passed every guard and rendered linear 0.6 as
+**2.29e12**. Fixed by adding `minimumXSeparation = 1e-4` to `init?` (which also
+subsumes the strictly-increasing check) and correcting the doc comment to say
+what each bound actually covers. Two non-blocking notes accepted as-is: the
+`(try?) ?? nil ?? []` construct has a redundant `?? nil` under Swift 5+, kept
+deliberately because `Mask.init(from:)`'s `brushPoints` line is character-for-
+character the same pattern and consistency between the two reads better than
+removing a no-op; and the four new files are untracked, so `git diff HEAD` does
+not show them to a reviewer — they were named by path instead.
+
+**Process note for the next session:** the project's own `reviewer` agent did
+NOT register, because this session was started from `~` rather than
+`~/photoapp-starter`. The review was run with the same instructions via a
+general agent instead. PROGRESS.md has warned about this before; it is now the
+second time it has bitten.
+
+**Exact next step**: Curves v2 slice 2B — the editor itself. The approved plan
+is at `~/.claude/plans/declarative-wondering-mist.md` and covers it in full:
+a pure `Sources/UI/ToneCurveEditing.swift` (hit-test in SCREEN space, endpoints
+pinned in x, dragged points stop rather than reorder), a square canvas drawn
+over the histogram (split `HistogramBars` out of `HistogramView` FIRST — that
+closes the sticky `.plusLighter` trap structurally), one `DragGesture` with the
+first-callback-is-special idiom and the no-op-click rule, delete-on-release-
+outside plus Option-click plus a button, keyboard nudging for accessibility, and
+a new collapsed-by-default "Curve" section between Light and Color.
+**Its blocking gate**: every shipped sidebar drag is horizontal-only, and this
+is the first VERTICAL drag inside the vertically-scrolling sidebar `ScrollView`.
+Reviewer APPROVE plus green tests are explicitly insufficient evidence there —
+the StableScrollInsets regression passed two reviewer passes and all tests, then
+broke every slider live. A real hand must confirm drag-vs-scroll before polish.

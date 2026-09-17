@@ -24,6 +24,12 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.contrast = 0.2
         s.curvesHighlights = -0.3
         s.curvesShadows = 0.3
+        s.toneCurvePoints = [
+            ToneCurvePoint(x: 0, y: 0.05),
+            ToneCurvePoint(x: 0.35, y: 0.22),
+            ToneCurvePoint(x: 0.7, y: 0.81),
+            ToneCurvePoint(x: 1, y: 0.97)
+        ]
         s.blackPoint = 0.1
         s.levelsBlackPoint = 0.05
         s.levelsWhitePoint = 0.9
@@ -99,6 +105,7 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         XCTAssertEqual(original.contrast, identity.contrast)
         XCTAssertEqual(original.curvesHighlights, identity.curvesHighlights)
         XCTAssertEqual(original.curvesShadows, identity.curvesShadows)
+        XCTAssertEqual(original.toneCurvePoints, identity.toneCurvePoints)
         XCTAssertEqual(original.blackPoint, identity.blackPoint)
         XCTAssertEqual(original.levelsBlackPoint, identity.levelsBlackPoint)
         XCTAssertEqual(original.levelsWhitePoint, identity.levelsWhitePoint)

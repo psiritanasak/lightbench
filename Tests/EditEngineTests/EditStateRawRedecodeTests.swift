@@ -141,6 +141,21 @@ final class EditStateRawRedecodeTests: XCTestCase {
         XCTAssertFalse(a.requiresRawRedecode(comparedTo: b))
     }
 
+    func testFalseWhenOnlyTheToneCurveDiffers() {
+        // Deliberately excluded from `requiresRawRedecode`, same as `masks`:
+        // the point curve is an `EditPipeline` stage, not a `CIRAWFilter`
+        // setting, so including it would fire a multi-second RAW re-decode
+        // on every point drag.
+        var a = EditState.identity
+        let b = EditState.identity
+        a.toneCurvePoints = [
+            ToneCurvePoint(x: 0, y: 0),
+            ToneCurvePoint(x: 0.5, y: 0.7),
+            ToneCurvePoint(x: 1, y: 1)
+        ]
+        XCTAssertFalse(a.requiresRawRedecode(comparedTo: b))
+    }
+
     /// Phase 7 slice 2's regression guard: `masks` is an `EditPipeline`
     /// stage, not a `CIRAWFilter` setting — a `true` here would fire a
     /// multi-second RAW re-decode on every mask drag, the exact silent,

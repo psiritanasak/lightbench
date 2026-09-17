@@ -21,6 +21,26 @@ struct RawNeutralPoint: Equatable, Codable {
     var y: Double
 }
 
+/// A single user-placed control point of the Curves v2 point curve.
+///
+/// `x` (input) and `y` (output) BOTH live in the tone curve's own
+/// sRGB-encoded domain — the same space `EditPipeline.curveControlPoints`'
+/// five parametric points live in, and NOT scene-linear light. That is not
+/// a fresh convention: `applyCurves` already runs inside
+/// `applyPerceptualAdjustments`' encode/decode sandwich AND encodes a second
+/// time internally (see `ToneCurveSpline`), and the point curve stage does
+/// exactly the same, so both curves' control points are directly comparable
+/// and an editor can draw them on one canvas.
+///
+/// Note `y` is an output VALUE, y-UP — unlike `RedEyePoint`, whose `y` is a
+/// y-DOWN screen position. A curve's y is not a screen coordinate, and
+/// storing it y-down would both invert the render and make a sidecar
+/// unreadable by eye. Any y-flip belongs in the editor, once.
+struct ToneCurvePoint: Equatable, Codable {
+    var x: Double
+    var y: Double
+}
+
 /// The full set of non-destructive edit adjustments applied to a photo.
 ///
 /// This is pure data — no image or rendering logic lives here. It is
@@ -134,6 +154,43 @@ struct EditState: Equatable, Codable {
     /// values are unchanged. Highlight headroom now survives — see
     /// `curvesHighlights`.
     var blackPoint: Double = 0
+
+    // MARK: - Point Curve (Curves v2)
+
+    /// The user's own freely-placed tone curve — Curves v2's point curve,
+    /// EMPTY BY DEFAULT, where empty means identity and the whole stage is
+    /// skipped (`EditPipeline.pointCurveActive`).
+    ///
+    /// ADDITIVE, NOT A REPLACEMENT. The parametric layer above
+    /// (`curvesShadows`/`curvesHighlights`/`blackPoint`, plus Brilliance's
+    /// render-time blend into them and the per-mask Shadows/Highlights that
+    /// reuse the same machinery) is completely untouched by this field and
+    /// stays byte-exact with everything ever saved. The two curve stages
+    /// compose deliberately: parametric first as corrective base shaping,
+    /// this one second as the creative layer on top. That choice is also
+    /// why Curves v2 needs NO `LegacyCodingKeys` migration — no shipped
+    /// field changes meaning, so old sidecars and presets simply decode
+    /// with this at `[]`.
+    ///
+    /// The THIRD variable-length field in this struct, after `redEyePoints`
+    /// and `masks`, and the simplest of the three: N points sharing no
+    /// per-point parameters at all.
+    ///
+    /// Uses a MONOTONE cubic (Fritsch-Carlson) between points, unlike the
+    /// parametric layer's natural cubic — see `MonotoneToneCurve` for why
+    /// the two evaluators coexist rather than one being a mode of the other.
+    ///
+    /// RENDERING CAP: at most `MonotoneToneCurve.maximumPointCount` points.
+    /// The kernel passes the curve as fixed-arity `vec4` uniforms, so this
+    /// is a real limit, not a soft one. A hand-authored sidecar carrying
+    /// more renders IDENTITY (visibly wrong) rather than silently dropping
+    /// points — see `MonotoneToneCurve.init?`.
+    ///
+    /// Deliberately NOT part of `requiresRawRedecode` — same reasoning as
+    /// `masks`: this is an `EditPipeline` stage, not a `CIRAWFilter`
+    /// setting, so including it would fire a multi-second RAW re-decode on
+    /// every point drag.
+    var toneCurvePoints: [ToneCurvePoint] = []
 
     // MARK: - Brilliance (composite)
 
@@ -1021,6 +1078,12 @@ struct EditState: Equatable, Codable {
         s.curvesHighlights = 0
         s.curvesShadows = 0
         s.blackPoint = 0
+        // Cleared: Compare's "original" means zero tone edits, and a
+        // surviving point curve would show tone shaping on the BEFORE side.
+        // Safe for this method's pixel-alignment guarantee — the point
+        // curve stage is extent-preserving, the same argument already made
+        // for `masks`.
+        s.toneCurvePoints = []
         s.levelsBlackPoint = 0
         s.levelsWhitePoint = 1
         s.levelsGamma = 1.0
@@ -1097,6 +1160,13 @@ struct EditState: Equatable, Codable {
         result.curvesHighlights = curvesHighlights
         result.curvesShadows = curvesShadows
         result.blackPoint = blackPoint
+        // COPIED, unlike `redEyePoints`/`masks`. A tone curve is the
+        // archetypal reusable look, and this is the first variable-length
+        // field the preset path copies — so the rule is not "arrays are
+        // photo-specific", it is "PLACEMENT is photo-specific": eye
+        // positions and mask geometry belong to one photo, a tone curve
+        // does not.
+        result.toneCurvePoints = toneCurvePoints
         result.levelsBlackPoint = levelsBlackPoint
         result.levelsWhitePoint = levelsWhitePoint
         result.levelsGamma = levelsGamma
@@ -1184,6 +1254,7 @@ extension EditState {
         case brightness
         case contrast
         case curvesShadows, curvesHighlights, blackPoint
+        case toneCurvePoints
         case brilliance
         case hslHue, hslSaturation
         case redHue, redSaturation, redLuminance
@@ -1244,6 +1315,24 @@ extension EditState {
         curvesShadows = try container.decodeIfPresent(Double.self, forKey: .curvesShadows) ?? 0
         curvesHighlights = try container.decodeIfPresent(Double.self, forKey: .curvesHighlights) ?? 0
         blackPoint = try container.decodeIfPresent(Double.self, forKey: .blackPoint) ?? 0
+        // `try?`, DELIBERATELY DIFFERENT from the bare `try` that
+        // `redEyePoints`/`masks`/`rawWhiteBalanceNeutralPoints` use below.
+        // Every sidecar read wraps the whole decode in `try?`
+        // (`ImageDocumentModel.loadSidecarIfReachable`, `PhotoExporter`), so
+        // ONE throw anywhere in here discards EVERY edit on that photo.
+        // `Mask.init(from:)` already makes this exact trade for
+        // `brushPoints`. What makes it more reachable here: a tone curve is
+        // the first array in this struct that is genuinely HUMAN-AUTHORABLE
+        // — a short list of readable numbers describing a shape — and until
+        // the editor ships, a hand-written sidecar is the ONLY way to set
+        // one. Cost of `try?`: a malformed point drops the whole CURVE to
+        // identity instead of the whole PHOTO to identity, which is
+        // strictly the better failure. `ToneCurvePoint`'s own `Codable`
+        // stays synthesized and STRICT on purpose — a tolerant element
+        // decode defaulting a missing `y` to 0 would silently CORRUPT a
+        // curve (the point becomes a black clamp at y=0) rather than
+        // discard it.
+        toneCurvePoints = (try? container.decodeIfPresent([ToneCurvePoint].self, forKey: .toneCurvePoints)) ?? nil ?? []
         brilliance = try container.decodeIfPresent(Double.self, forKey: .brilliance) ?? 0
         hslHue = try container.decodeIfPresent(Double.self, forKey: .hslHue) ?? 0
         hslSaturation = try container.decodeIfPresent(Double.self, forKey: .hslSaturation) ?? 0

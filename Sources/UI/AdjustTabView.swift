@@ -972,6 +972,11 @@ struct AdjustTabView: View {
             && state.curvesHighlights == 0
             && state.curvesShadows == 0
             && state.blackPoint == 0
+            // A non-empty but identity-SHAPED curve reads as non-identity
+            // here, so Reset Adjustments stays enabled and clicking it
+            // deletes the points — consistent with how this button treats
+            // every other field.
+            && state.toneCurvePoints.isEmpty
             && state.levelsBlackPoint == 0
             && state.levelsWhitePoint == 1
             && state.levelsGamma == 1.0
@@ -1007,6 +1012,7 @@ struct AdjustTabView: View {
             document.editState.curvesHighlights = 0
             document.editState.curvesShadows = 0
             document.editState.blackPoint = 0
+            document.editState.toneCurvePoints = []
             document.editState.levelsBlackPoint = 0
             document.editState.levelsWhitePoint = 1
             document.editState.levelsGamma = 1.0

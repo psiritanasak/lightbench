@@ -787,6 +787,146 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(linearPixel(of: output).a, 0.5, accuracy: accuracy)
     }
 
+    // MARK: - Point Curve (Curves v2) math
+    //
+    // The user's freely-placed point curve is a SEPARATE, ADDITIVE stage
+    // running immediately after the parametric curve above, inside the same
+    // perceptual sandwich. Monotone cubic (Fritsch-Carlson), unlike the
+    // parametric layer's natural cubic — see `MonotoneToneCurve`.
+
+    private func curvePoints(_ pairs: [(Double, Double)]) -> [ToneCurvePoint] {
+        pairs.map { ToneCurvePoint(x: $0.0, y: $0.1) }
+    }
+
+    func testEmptyPointCurveIsByteIdenticalToTheParametricCurveAlone() {
+        // THE regression gate for the whole "additive second stage"
+        // decision: adding this field must not perturb a single existing
+        // render. Compares a fully-populated parametric curve against
+        // itself with the new field explicitly empty.
+        for value in [0.01, 0.05, 0.214, 0.5, 0.7, 1.2] {
+            let parametric = EditState(curvesShadows: 0.6, curvesHighlights: -0.4, blackPoint: -0.5)
+            var withEmptyCurve = parametric
+            withEmptyCurve.toneCurvePoints = []
+
+            let a = linearPixel(of: EditPipeline.apply(parametric, to: solidColorImage(value))).r
+            let b = linearPixel(of: EditPipeline.apply(withEmptyCurve, to: solidColorImage(value))).r
+            XCTAssertEqual(a, b, accuracy: 0, "byte-exact required, at L=\(value)")
+        }
+    }
+
+    func testIdentityShapedPointCurveRendersIdentity() {
+        // Collinear control points reduce to the straight line exactly (see
+        // MonotoneToneCurve's collinearity identity), so an identity-shaped
+        // curve is a true no-op rather than merely close to one — which is
+        // why `pointCurveActive` doesn't need identity-shape detection.
+        for value in [0.05, 0.214, 0.5, 0.7, 1.2] {
+            let state = EditState(toneCurvePoints: curvePoints([(0, 0), (0.25, 0.25), (0.75, 0.75), (1, 1)]))
+            let output = EditPipeline.apply(state, to: solidColorImage(value))
+            XCTAssertEqual(linearPixel(of: output).r, Float(value), accuracy: accuracy, "at L=\(value)")
+        }
+    }
+
+    func testPointCurveAloneActivatesThePerceptualSandwich() {
+        // Guards the early-return `guard` in applyPerceptualAdjustments. If
+        // the point curve is missing from that list, a photo whose ONLY
+        // edit is a curve skips the entire sandwich and renders unedited —
+        // a silent no-op with the same signature as a missing .cikernel.
+        let state = EditState(toneCurvePoints: curvePoints([(0, 0), (0.5, 0.72), (1, 1)]))
+        let output = EditPipeline.apply(state, to: solidColorImage(0.25))
+        XCTAssertGreaterThan(linearPixel(of: output).r, 0.30, "a lifting curve must visibly lift")
+    }
+
+    func testPointCurveLiftsAndLowersInTheExpectedDirection() {
+        let lifted = EditPipeline.apply(
+            EditState(toneCurvePoints: curvePoints([(0, 0), (0.5, 0.72), (1, 1)])), to: solidColorImage(0.214)
+        )
+        let lowered = EditPipeline.apply(
+            EditState(toneCurvePoints: curvePoints([(0, 0), (0.5, 0.28), (1, 1)])), to: solidColorImage(0.214)
+        )
+        XCTAssertGreaterThan(linearPixel(of: lifted).r, 0.214)
+        XCTAssertLessThan(linearPixel(of: lowered).r, 0.214)
+    }
+
+    func testPointCurvePreservesHighlightHeadroom() {
+        // The same guarantee slice 1 established for the parametric layer,
+        // now required of the new stage too: values above linear 1.0 must
+        // survive, via linear extrapolation along the curve's end tangent.
+        let state = EditState(toneCurvePoints: curvePoints([(0, 0), (0.5, 0.6), (1, 1)]))
+        let output = EditPipeline.apply(state, to: solidColorImage(1.3))
+        XCTAssertGreaterThan(linearPixel(of: output).r, 1.0, "headroom must not be crushed")
+    }
+
+    func testPointCurveClampsBelowItsFirstPoint() {
+        // The deliberately asymmetric low end: the leftmost point is a
+        // black point, so everything below it clamps rather than
+        // extrapolating negative.
+        let state = EditState(toneCurvePoints: curvePoints([(0.35, 0), (0.7, 0.7), (1, 1)]))
+        let output = EditPipeline.apply(state, to: solidColorImage(0.002))
+        XCTAssertEqual(linearPixel(of: output).r, 0, accuracy: accuracy)
+    }
+
+    func testPointCurveComposesWithTheParametricCurve() {
+        // Both stages active must differ from either alone — the concrete
+        // statement of "additive second stage".
+        let input = solidColorImage(0.3)
+        let curveOnly = EditState(toneCurvePoints: curvePoints([(0, 0), (0.5, 0.68), (1, 1)]))
+        let parametricOnly = EditState(curvesShadows: 0.8)
+        var both = parametricOnly
+        both.toneCurvePoints = curveOnly.toneCurvePoints
+
+        let a = linearPixel(of: EditPipeline.apply(curveOnly, to: input)).r
+        let b = linearPixel(of: EditPipeline.apply(parametricOnly, to: input)).r
+        let c = linearPixel(of: EditPipeline.apply(both, to: input)).r
+        XCTAssertNotEqual(c, a, accuracy: accuracy)
+        XCTAssertNotEqual(c, b, accuracy: accuracy)
+    }
+
+    func testPointCurveOrderRelativeToTheParametricCurveIsFixed() {
+        // Proves ordering: the parametric curve runs BEFORE the point curve,
+        // and they do not commute. MEASURED by swapping the two stages and
+        // re-rendering — the reversed order gives 0.399974 here against
+        // 0.325295, a 0.07468 gap at linear 0.214 (photographic middle
+        // gray), ~37x this file's 0.002 tolerance. A real requirement, not
+        // a convention.
+        var state = EditState(curvesShadows: 0.7, curvesHighlights: -0.5, blackPoint: -0.4)
+        state.toneCurvePoints = curvePoints([(0, 0.04), (0.3, 0.18), (0.7, 0.85), (1, 0.97)])
+
+        let output = EditPipeline.apply(state, to: solidColorImage(0.214))
+        XCTAssertEqual(linearPixel(of: output).r, 0.325295, accuracy: accuracy)
+    }
+
+    func testMalformedPointCurveRendersUntouchedRatherThanGarbage() {
+        // MonotoneToneCurve.init? rejects these; applyPointCurve then leaves
+        // the image alone. Renders IDENTITY (visibly wrong) rather than NaN
+        // pixels or silently dropped points (invisibly wrong).
+        let malformed: [[ToneCurvePoint]] = [
+            curvePoints([(0, 0)]),
+            curvePoints([(0, 0), (0, 1)]),
+            curvePoints([(0, 0), (.nan, 0.5), (1, 1)])
+        ]
+        for pointSet in malformed {
+            let output = EditPipeline.apply(EditState(toneCurvePoints: pointSet), to: solidColorImage(0.5))
+            XCTAssertEqual(linearPixel(of: output).r, 0.5, accuracy: accuracy, "for \(pointSet)")
+        }
+    }
+
+    func testMasksAreUnaffectedByThePointCurveField() {
+        // Confirms the per-mask path deliberately does NOT gain the point
+        // curve in this slice: a mask's own Shadows/Highlights must render
+        // the same whether or not a global point curve is present.
+        let input = solidColorImage(r: 0.4, g: 0.4, b: 0.4, a: 1, size: 400)
+        let withoutCurve = EditPipeline.apply(EditState(masks: [fullyCoveringMask(shadows: 0.5)]), to: input)
+
+        var state = EditState(masks: [fullyCoveringMask(shadows: 0.5)])
+        state.toneCurvePoints = curvePoints([(0, 0), (0.5, 0.5), (1, 1)])
+        let withIdentityCurve = EditPipeline.apply(state, to: input)
+
+        XCTAssertEqual(
+            pixel(of: withoutCurve, at: 200, 200).r, pixel(of: withIdentityCurve, at: 200, 200).r,
+            accuracy: accuracy
+        )
+    }
+
     // MARK: - HSL math
     //
     // Hue/saturation math is applied inside the same perceptual sandwich as

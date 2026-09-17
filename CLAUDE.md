@@ -2153,9 +2153,27 @@ global pipeline):
     claim in its own rejection rationale. Both corrected in place. See
     PROGRESS.md's slice-1 section, including why believing the false claim
     would have broken Black Point.
-  - Slice 2 (the interactive editor) is the remaining work and the hard part;
-    `ToneCurveSpline`'s solve is already n-point-general, but the kernel's
-    unrolled segments and `vec4` argument packing are 5-point-specific.
+  - **Slice 2A ✅ SHIPPED (2026-09-17)** — `EditState.toneCurvePoints` +
+    `MonotoneToneCurve` + `PointToneCurve.cikernel` add the user's point curve
+    as a SEPARATE, ADDITIVE stage after the parametric one. Monotone cubic
+    (Fritsch-Carlson) for the user curve, natural cubic kept for the
+    byte-exact parametric layer — a separate TYPE, not a mode flag, so that
+    contract is structural. Variable point count renders through a
+    fixed-arity kernel via a provably-free pad-to-8 scheme; cap is 8 points
+    (the `vec4` argument budget). Stage order MEASURED non-commuting at
+    0.07468 vs the 0.002 tolerance, so it is a requirement, not a convention.
+    No UI yet.
+    **The migration mandated in the bullets above is now MOOT**: because the
+    parametric layer is untouched, no shipped field changes meaning and no
+    `LegacyCodingKeys` work is needed. Do not go looking for it.
+  - Slice 2B (the editor UI) is the remaining work and the hard part. Approved
+    plan: `~/.claude/plans/declarative-wondering-mist.md`. Its blocking gate is
+    that this is the first VERTICAL drag inside the sidebar's vertically
+    scrolling `ScrollView` — green tests and a reviewer APPROVE are explicitly
+    NOT sufficient evidence there (see the StableScrollInsets precedent).
+  - Slice 3 is per-channel R/G/B. Three more curves will not fit one kernel's
+    argument budget; the likely answer is four passes of the same kernel with a
+    channel-selector argument, so the 8-point cap is not a dead end.
 - **Masking / local adjustments** — the single biggest capability gap found.
   Lightroom's whole modern editing paradigm centers on this: AI Subject/Sky/
   Background/Object select, Brush, Linear (Graduated) and Radial gradients, Color

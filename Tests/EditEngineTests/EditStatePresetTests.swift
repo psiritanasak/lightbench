@@ -20,6 +20,12 @@ final class EditStatePresetTests: XCTestCase {
         s.contrast = 0.2
         s.curvesHighlights = -0.3
         s.curvesShadows = 0.3
+        s.toneCurvePoints = [
+            ToneCurvePoint(x: 0, y: 0.05),
+            ToneCurvePoint(x: 0.35, y: 0.22),
+            ToneCurvePoint(x: 0.7, y: 0.81),
+            ToneCurvePoint(x: 1, y: 0.97)
+        ]
         s.blackPoint = 0.1
         s.levelsBlackPoint = 0.05
         s.levelsWhitePoint = 0.9
@@ -98,6 +104,9 @@ final class EditStatePresetTests: XCTestCase {
         XCTAssertEqual(result.contrast, preset.contrast)
         XCTAssertEqual(result.curvesHighlights, preset.curvesHighlights)
         XCTAssertEqual(result.curvesShadows, preset.curvesShadows)
+        // COPIED by a preset, unlike `redEyePoints`/`masks`. A tone curve is
+        // a look, not a placement — see `applyingPreset(onto:)`.
+        XCTAssertEqual(result.toneCurvePoints, preset.toneCurvePoints)
         XCTAssertEqual(result.blackPoint, preset.blackPoint)
         XCTAssertEqual(result.levelsBlackPoint, preset.levelsBlackPoint)
         XCTAssertEqual(result.levelsWhitePoint, preset.levelsWhitePoint)

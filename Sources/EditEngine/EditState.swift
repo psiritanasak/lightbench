@@ -192,6 +192,23 @@ struct EditState: Equatable, Codable {
     /// every point drag.
     var toneCurvePoints: [ToneCurvePoint] = []
 
+    /// Curves v2 slice 3: the per-channel companions to `toneCurvePoints`
+    /// above — Red/Green/Blue color-grading curves, distinct from that
+    /// composite (applied identically to all three channels) curve. Each
+    /// is its own independent stage: `EditPipeline` applies the composite
+    /// curve first, then whichever of these three are non-empty, each
+    /// touching ONLY its own channel (see `EditPipeline.applyPointCurve`'s
+    /// `channelMask` argument). Same EMPTY-MEANS-IDENTITY,
+    /// `MonotoneToneCurve.maximumPointCount`-capped,
+    /// `requiresRawRedecode`-excluded, no-`LegacyCodingKeys`-needed
+    /// contract as `toneCurvePoints` — see that field's own doc comment
+    /// for the reasoning, not repeated three times here. The 5th-7th
+    /// variable-length fields in this struct (after `toneCurvePoints`,
+    /// `redEyePoints`, `masks`, and `rawWhiteBalanceNeutralPoints`).
+    var toneCurvePointsRed: [ToneCurvePoint] = []
+    var toneCurvePointsGreen: [ToneCurvePoint] = []
+    var toneCurvePointsBlue: [ToneCurvePoint] = []
+
     // MARK: - Brilliance (composite)
 
     /// A single-slider "overall pop" control, -1...1, 0 is identity. THIS
@@ -1082,8 +1099,11 @@ struct EditState: Equatable, Codable {
         // surviving point curve would show tone shaping on the BEFORE side.
         // Safe for this method's pixel-alignment guarantee — the point
         // curve stage is extent-preserving, the same argument already made
-        // for `masks`.
+        // for `masks`. Same reasoning for the three per-channel curves.
         s.toneCurvePoints = []
+        s.toneCurvePointsRed = []
+        s.toneCurvePointsGreen = []
+        s.toneCurvePointsBlue = []
         s.levelsBlackPoint = 0
         s.levelsWhitePoint = 1
         s.levelsGamma = 1.0
@@ -1165,8 +1185,11 @@ struct EditState: Equatable, Codable {
         // field the preset path copies — so the rule is not "arrays are
         // photo-specific", it is "PLACEMENT is photo-specific": eye
         // positions and mask geometry belong to one photo, a tone curve
-        // does not.
+        // does not. Same reasoning for the three per-channel curves.
         result.toneCurvePoints = toneCurvePoints
+        result.toneCurvePointsRed = toneCurvePointsRed
+        result.toneCurvePointsGreen = toneCurvePointsGreen
+        result.toneCurvePointsBlue = toneCurvePointsBlue
         result.levelsBlackPoint = levelsBlackPoint
         result.levelsWhitePoint = levelsWhitePoint
         result.levelsGamma = levelsGamma
@@ -1255,6 +1278,7 @@ extension EditState {
         case contrast
         case curvesShadows, curvesHighlights, blackPoint
         case toneCurvePoints
+        case toneCurvePointsRed, toneCurvePointsGreen, toneCurvePointsBlue
         case brilliance
         case hslHue, hslSaturation
         case redHue, redSaturation, redLuminance
@@ -1333,6 +1357,12 @@ extension EditState {
         // curve (the point becomes a black clamp at y=0) rather than
         // discard it.
         toneCurvePoints = (try? container.decodeIfPresent([ToneCurvePoint].self, forKey: .toneCurvePoints)) ?? nil ?? []
+        // Same tolerant-per-field shape as `toneCurvePoints` above, and the
+        // same reasoning: a malformed RED curve should drop only the red
+        // curve, not the green/blue curves or the rest of the photo's edits.
+        toneCurvePointsRed = (try? container.decodeIfPresent([ToneCurvePoint].self, forKey: .toneCurvePointsRed)) ?? nil ?? []
+        toneCurvePointsGreen = (try? container.decodeIfPresent([ToneCurvePoint].self, forKey: .toneCurvePointsGreen)) ?? nil ?? []
+        toneCurvePointsBlue = (try? container.decodeIfPresent([ToneCurvePoint].self, forKey: .toneCurvePointsBlue)) ?? nil ?? []
         brilliance = try container.decodeIfPresent(Double.self, forKey: .brilliance) ?? 0
         hslHue = try container.decodeIfPresent(Double.self, forKey: .hslHue) ?? 0
         hslSaturation = try container.decodeIfPresent(Double.self, forKey: .hslSaturation) ?? 0

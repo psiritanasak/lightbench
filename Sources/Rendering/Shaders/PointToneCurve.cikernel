@@ -45,6 +45,26 @@
 //   xa = x0 x1 x2 x3      xb = x4 x5 x6 x7
 //   ya = y0 y1 y2 y3      yb = y4 y5 y6 y7
 //   ma = m0 m1 m2 m3      mb = m4 m5 m6 m7     (Hermite tangents)
+//   channelMask = (r, g, b), each > 0.5 or not — WHICH channels this pass
+//                 touches (Curves v2 slice 3). This is the SAME kernel used
+//                 for both the composite curve (mask (1,1,1), byte-identical
+//                 to the pre-slice-3 unconditional call) and up to three
+//                 more single-channel passes (mask (1,0,0)/(0,1,0)/(0,0,1))
+//                 — see EditPipeline.applyPointCurve for why up to 4 passes
+//                 of ONE kernel, not four kernels or one kernel carrying
+//                 four curves' worth of uniforms (argument-budget reasons,
+//                 recorded there).
+//
+// A MASK, NOT A NUMERIC SELECTOR, and a TERNARY, not mix(). mix(a, b, 1.0)
+// is not guaranteed bit-exact to b in IEEE-754; the ternary is exact in
+// both directions, which matters because the composite curve's render has
+// a standing byte-exactness requirement (PointToneCurveKernelTests'
+// accuracy: 0 gate). A ternary also SKIPS pointCurveValue's pow() calls
+// for an untouched channel rather than computing and discarding them.
+// Branching on a uniform mask is the cheap kind (every lane takes the same
+// branch) and matches existing precedent — SelectiveColor.cikernel and
+// ColorRange.cikernel both branch; this codebase's actual rule (see the
+// unrolled-segments note below) is no LOOPS, not no branches.
 //
 // THE PAD-TO-8 SCHEME, which is why there is no point-count argument and no
 // separate extrapolation branch below. Swift solves the real N points
@@ -117,7 +137,7 @@ float pointCurveValue(float v, vec4 xa, vec4 xb, vec4 ya, vec4 yb, vec4 ma, vec4
     return srgbDecode(y);
 }
 
-kernel vec4 pointToneCurve(__sample s, vec4 xa, vec4 xb, vec4 ya, vec4 yb, vec4 ma, vec4 mb) {
+kernel vec4 pointToneCurve(__sample s, vec4 xa, vec4 xb, vec4 ya, vec4 yb, vec4 ma, vec4 mb, vec3 channelMask) {
     // Un-premultiply, same as ToneCurve.cikernel — a tone curve applies to
     // UNPREMULTIPLIED colour, measured there against CIToneCurve (with alpha
     // 0.5 its result read back at exactly 0.5x the opaque result).
@@ -125,9 +145,9 @@ kernel vec4 pointToneCurve(__sample s, vec4 xa, vec4 xb, vec4 ya, vec4 yb, vec4 
     vec3 rgb = (a > 0.0) ? s.rgb / a : s.rgb;
 
     vec3 outRGB = vec3(
-        pointCurveValue(rgb.r, xa, xb, ya, yb, ma, mb),
-        pointCurveValue(rgb.g, xa, xb, ya, yb, ma, mb),
-        pointCurveValue(rgb.b, xa, xb, ya, yb, ma, mb)
+        (channelMask.r > 0.5) ? pointCurveValue(rgb.r, xa, xb, ya, yb, ma, mb) : rgb.r,
+        (channelMask.g > 0.5) ? pointCurveValue(rgb.g, xa, xb, ya, yb, ma, mb) : rgb.g,
+        (channelMask.b > 0.5) ? pointCurveValue(rgb.b, xa, xb, ya, yb, ma, mb) : rgb.b
     );
 
     // Repremultiply; alpha untouched — a tone curve must not alter coverage.

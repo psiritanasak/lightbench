@@ -30,6 +30,9 @@ final class EditStateComparisonOriginalTests: XCTestCase {
             ToneCurvePoint(x: 0.7, y: 0.81),
             ToneCurvePoint(x: 1, y: 0.97)
         ]
+        s.toneCurvePointsRed = [ToneCurvePoint(x: 0, y: 0.1), ToneCurvePoint(x: 1, y: 0.9)]
+        s.toneCurvePointsGreen = [ToneCurvePoint(x: 0, y: 0), ToneCurvePoint(x: 0.5, y: 0.6), ToneCurvePoint(x: 1, y: 1)]
+        s.toneCurvePointsBlue = [ToneCurvePoint(x: 0, y: 0.05), ToneCurvePoint(x: 1, y: 0.95)]
         s.blackPoint = 0.1
         s.levelsBlackPoint = 0.05
         s.levelsWhitePoint = 0.9
@@ -106,6 +109,9 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         XCTAssertEqual(original.curvesHighlights, identity.curvesHighlights)
         XCTAssertEqual(original.curvesShadows, identity.curvesShadows)
         XCTAssertEqual(original.toneCurvePoints, identity.toneCurvePoints)
+        XCTAssertEqual(original.toneCurvePointsRed, identity.toneCurvePointsRed)
+        XCTAssertEqual(original.toneCurvePointsGreen, identity.toneCurvePointsGreen)
+        XCTAssertEqual(original.toneCurvePointsBlue, identity.toneCurvePointsBlue)
         XCTAssertEqual(original.blackPoint, identity.blackPoint)
         XCTAssertEqual(original.levelsBlackPoint, identity.levelsBlackPoint)
         XCTAssertEqual(original.levelsWhitePoint, identity.levelsWhitePoint)

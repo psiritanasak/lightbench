@@ -231,6 +231,82 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertFalse(state.isEffectivelyIdentity)
     }
 
+    // MARK: - Per-channel point curves (Curves v2 slice 3)
+    //
+    // Same tolerant-per-field `try?` shape as `toneCurvePoints` above, now
+    // three more times — the field under test in each case is what
+    // changes, the reasoning does not.
+
+    func testPerChannelCurvesDefaultToEmptyWhenAbsent() throws {
+        let state = try decode("{}")
+        XCTAssertEqual(state.toneCurvePointsRed, [])
+        XCTAssertEqual(state.toneCurvePointsGreen, [])
+        XCTAssertEqual(state.toneCurvePointsBlue, [])
+    }
+
+    func testPerChannelCurvesDecodeIndependently() throws {
+        let json = """
+        {
+            "toneCurvePointsRed": [{"x": 0, "y": 0}, {"x": 0.5, "y": 0.7}, {"x": 1, "y": 1}],
+            "toneCurvePointsGreen": [{"x": 0, "y": 0}, {"x": 0.5, "y": 0.3}, {"x": 1, "y": 1}],
+            "toneCurvePointsBlue": [{"x": 0, "y": 0.1}, {"x": 1, "y": 0.9}]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.toneCurvePointsRed, [
+            ToneCurvePoint(x: 0, y: 0), ToneCurvePoint(x: 0.5, y: 0.7), ToneCurvePoint(x: 1, y: 1),
+        ])
+        XCTAssertEqual(state.toneCurvePointsGreen, [
+            ToneCurvePoint(x: 0, y: 0), ToneCurvePoint(x: 0.5, y: 0.3), ToneCurvePoint(x: 1, y: 1),
+        ])
+        XCTAssertEqual(state.toneCurvePointsBlue, [ToneCurvePoint(x: 0, y: 0.1), ToneCurvePoint(x: 1, y: 0.9)])
+    }
+
+    func testPerChannelCurvesRoundTripThroughASidecar() throws {
+        var state = EditState()
+        state.toneCurvePointsRed = [ToneCurvePoint(x: 0, y: 0.1), ToneCurvePoint(x: 1, y: 0.9)]
+        state.toneCurvePointsGreen = [ToneCurvePoint(x: 0, y: 0), ToneCurvePoint(x: 0.5, y: 0.6), ToneCurvePoint(x: 1, y: 1)]
+        state.toneCurvePointsBlue = [ToneCurvePoint(x: 0, y: 0.05), ToneCurvePoint(x: 1, y: 0.95)]
+        let reencoded = try JSONDecoder().decode(EditState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(reencoded.toneCurvePointsRed, state.toneCurvePointsRed)
+        XCTAssertEqual(reencoded.toneCurvePointsGreen, state.toneCurvePointsGreen)
+        XCTAssertEqual(reencoded.toneCurvePointsBlue, state.toneCurvePointsBlue)
+    }
+
+    /// The whole point of decoding each channel with its OWN `try?`,
+    /// rather than one `try?` around all three read together: a malformed
+    /// RED curve must cost only the red curve, not the green/blue curves,
+    /// and not the rest of the photo's edits.
+    func testAMalformedChannelCurveDoesNotDiscardTheOtherChannelsOrTheSidecar() throws {
+        let json = """
+        {
+            "exposureEV": 2.0,
+            "toneCurvePointsRed": [{"x": 0, "y": 0}, {"x": 0.5}],
+            "toneCurvePointsGreen": [{"x": 0, "y": 0.2}, {"x": 1, "y": 0.8}],
+            "toneCurvePointsBlue": [{"x": 0, "y": 0}, {"x": 1, "y": 1}]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.exposureEV, 2.0, "other edits must survive a malformed channel curve")
+        XCTAssertEqual(state.toneCurvePointsRed, [], "only the malformed channel's curve is dropped")
+        XCTAssertEqual(state.toneCurvePointsGreen, [ToneCurvePoint(x: 0, y: 0.2), ToneCurvePoint(x: 1, y: 0.8)])
+        XCTAssertEqual(state.toneCurvePointsBlue, [ToneCurvePoint(x: 0, y: 0), ToneCurvePoint(x: 1, y: 1)])
+    }
+
+    func testPerChannelCurveWithAWrongJSONTypeDoesNotDiscardTheWholeSidecar() throws {
+        let state = try decode("""
+        { "exposureEV": 1.5, "toneCurvePointsGreen": 5 }
+        """)
+        XCTAssertEqual(state.exposureEV, 1.5)
+        XCTAssertEqual(state.toneCurvePointsGreen, [])
+    }
+
+    func testStateWithAPerChannelCurveIsNotEffectivelyIdentity() throws {
+        var state = EditState()
+        state.toneCurvePointsBlue = [ToneCurvePoint(x: 0, y: 0), ToneCurvePoint(x: 1, y: 1)]
+        XCTAssertFalse(state.isEffectivelyIdentity)
+    }
+
     func testRedEyePointsArrayDefaultsWhenAbsent() throws {
         let state = try decode("{}")
         XCTAssertEqual(state.redEyePoints, [])

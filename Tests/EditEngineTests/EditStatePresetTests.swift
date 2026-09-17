@@ -26,6 +26,9 @@ final class EditStatePresetTests: XCTestCase {
             ToneCurvePoint(x: 0.7, y: 0.81),
             ToneCurvePoint(x: 1, y: 0.97)
         ]
+        s.toneCurvePointsRed = [ToneCurvePoint(x: 0, y: 0.1), ToneCurvePoint(x: 1, y: 0.9)]
+        s.toneCurvePointsGreen = [ToneCurvePoint(x: 0, y: 0), ToneCurvePoint(x: 0.5, y: 0.6), ToneCurvePoint(x: 1, y: 1)]
+        s.toneCurvePointsBlue = [ToneCurvePoint(x: 0, y: 0.05), ToneCurvePoint(x: 1, y: 0.95)]
         s.blackPoint = 0.1
         s.levelsBlackPoint = 0.05
         s.levelsWhitePoint = 0.9
@@ -107,6 +110,9 @@ final class EditStatePresetTests: XCTestCase {
         // COPIED by a preset, unlike `redEyePoints`/`masks`. A tone curve is
         // a look, not a placement — see `applyingPreset(onto:)`.
         XCTAssertEqual(result.toneCurvePoints, preset.toneCurvePoints)
+        XCTAssertEqual(result.toneCurvePointsRed, preset.toneCurvePointsRed)
+        XCTAssertEqual(result.toneCurvePointsGreen, preset.toneCurvePointsGreen)
+        XCTAssertEqual(result.toneCurvePointsBlue, preset.toneCurvePointsBlue)
         XCTAssertEqual(result.blackPoint, preset.blackPoint)
         XCTAssertEqual(result.levelsBlackPoint, preset.levelsBlackPoint)
         XCTAssertEqual(result.levelsWhitePoint, preset.levelsWhitePoint)

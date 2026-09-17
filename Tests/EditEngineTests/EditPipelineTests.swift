@@ -910,6 +910,129 @@ final class EditPipelineTests: XCTestCase {
         }
     }
 
+    /// Pins the shipped composite-then-red order — see the doc comment on
+    /// `applyPerceptualAdjustments`'s point-curve block for the measured
+    /// delta (0.04702, ~23.5x this file's 0.002 tolerance) that makes this
+    /// a requirement, not a convention.
+    func testCompositeAndChannelCurveOrderIsFixed() {
+        var state = EditState()
+        state.toneCurvePoints = curvePoints([(0, 0.02), (0.4, 0.2), (0.7, 0.75), (1, 0.98)])
+        state.toneCurvePointsRed = curvePoints([(0, 0), (0.5, 0.8), (1, 1)])
+        let output = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(0.214)))
+        XCTAssertEqual(output.r, 0.75570166, accuracy: accuracy)
+    }
+
+    /// Unlike composite-vs-channel order, R/G/B mutual order does not need
+    /// to be pinned — measured bit-identical regardless of which runs
+    /// first (temporarily moved the Blue pass before Red in
+    /// `applyPerceptualAdjustments`, rebuilt, re-ran this fixture: r/g/b
+    /// landed on the exact same three constants below at `accuracy: 0`),
+    /// since each pass writes only its own channel. Rather than re-pin
+    /// those three constants under only ONE order (which would silently
+    /// pass even if red and blue secretly interfered, as long as neither
+    /// regressed on its own), this test checks the actual CLAIM —
+    /// red-and-blue-together equals red-alone composed with blue-alone,
+    /// each channel taken from whichever single-curve render owns it —
+    /// through the public API, so a future accidental cross-channel
+    /// dependency fails here without needing another internal reorder.
+    func testPerChannelCurvesComposeIndependentlyOfTheirOwnOrder() {
+        var combined = EditState()
+        combined.toneCurvePointsRed = curvePoints([(0, 0), (0.5, 0.8), (1, 1)])
+        combined.toneCurvePointsBlue = curvePoints([(0, 0), (0.5, 0.15), (1, 1)])
+        let redOnly = EditState(toneCurvePointsRed: combined.toneCurvePointsRed)
+        let blueOnly = EditState(toneCurvePointsBlue: combined.toneCurvePointsBlue)
+
+        let input = solidColorImage(0.214)
+        let combinedOutput = linearPixel(of: EditPipeline.apply(combined, to: input))
+        let redOnlyOutput = linearPixel(of: EditPipeline.apply(redOnly, to: input))
+        let blueOnlyOutput = linearPixel(of: EditPipeline.apply(blueOnly, to: input))
+
+        XCTAssertEqual(combinedOutput.r, redOnlyOutput.r, accuracy: 0)
+        XCTAssertEqual(combinedOutput.b, blueOnlyOutput.b, accuracy: 0)
+        // Green untouched — no green curve active in any of the three states.
+        XCTAssertEqual(combinedOutput.g, redOnlyOutput.g, accuracy: 0)
+        XCTAssertEqual(combinedOutput.g, blueOnlyOutput.g, accuracy: 0)
+    }
+
+    /// Deliberately uses IDENTITY-SHAPED channel curves, not empty ones —
+    /// `EditState(toneCurvePoints:)` alone vs. a copy with all three
+    /// channel fields also set is otherwise `==` before this pipeline ever
+    /// runs, which would make the assertion below true by construction
+    /// regardless of any regression in the three extra kernel passes this
+    /// case is meant to exercise.
+    ///
+    /// NOT `accuracy: 0` — measured, not assumed: unlike an EMPTY channel
+    /// field (which skips `pointCurveValue` entirely, see
+    /// `pointCurveActive`/the kernel's ternary), an identity-SHAPED curve
+    /// still runs the full `pointCurveValue` sRGB-encode/pow/decode chain
+    /// and lands only ~1e-6 from the untouched value (measured: 0.5937605
+    /// vs. 0.59376013 at linear 0.5, 0.96001905 vs. 0.9600181 at linear
+    /// 0.95) — real floating-point round-trip noise, not a bug, and this
+    /// test's own reason to exist rather than reusing the accuracy-0
+    /// tolerance of the actual empty-field byte-exactness gate,
+    /// `PointToneCurveKernelTests.testCompositeCurveRenderIsUnchangedByTheChannelMaskArgument`.
+    func testIdentityShapedChannelCurvesMatchTheCompositeCurveAlone() {
+        let compositeOnly = EditState(toneCurvePoints: curvePoints([(0, 0), (0.5, 0.6), (1, 1)]))
+        let identityShape = curvePoints([(0, 0), (1, 1)])
+        var withIdentityChannels = compositeOnly
+        withIdentityChannels.toneCurvePointsRed = identityShape
+        withIdentityChannels.toneCurvePointsGreen = identityShape
+        withIdentityChannels.toneCurvePointsBlue = identityShape
+        XCTAssertNotEqual(compositeOnly, withIdentityChannels, "the fixture must actually differ, or this proves nothing")
+        for input in [0.05, 0.214, 0.5, 0.95] {
+            let a = linearPixel(of: EditPipeline.apply(compositeOnly, to: solidColorImage(input)))
+            let b = linearPixel(of: EditPipeline.apply(withIdentityChannels, to: solidColorImage(input)))
+            XCTAssertEqual(Double(a.r), Double(b.r), accuracy: 1e-5, "at linear \(input)")
+        }
+    }
+
+    func testEachChannelCurveAloneActivatesThePerceptualSandwich() {
+        // The `pointCurveActive` guard, once per new field — a photo whose
+        // ONLY edit is a single-channel curve must not silently render
+        // unedited, the same silent no-op this app has been bitten by
+        // before with a missing/forgotten `.cikernel`.
+        let input = solidColorImage(0.3)
+        let untouched = linearPixel(of: EditPipeline.apply(EditState(), to: input))
+
+        var redOnly = EditState(); redOnly.toneCurvePointsRed = curvePoints([(0, 0), (0.5, 0.9), (1, 1)])
+        XCTAssertNotEqual(linearPixel(of: EditPipeline.apply(redOnly, to: input)).r, untouched.r, accuracy: accuracy)
+
+        var greenOnly = EditState(); greenOnly.toneCurvePointsGreen = curvePoints([(0, 0), (0.5, 0.9), (1, 1)])
+        XCTAssertNotEqual(linearPixel(of: EditPipeline.apply(greenOnly, to: input)).g, untouched.g, accuracy: accuracy)
+
+        var blueOnly = EditState(); blueOnly.toneCurvePointsBlue = curvePoints([(0, 0), (0.5, 0.9), (1, 1)])
+        XCTAssertNotEqual(linearPixel(of: EditPipeline.apply(blueOnly, to: input)).b, untouched.b, accuracy: accuracy)
+    }
+
+    func testIdentityShapedPerChannelCurveRendersIdentity() {
+        let identityShape = curvePoints([(0, 0), (1, 1)])
+        var state = EditState()
+        state.toneCurvePointsRed = identityShape
+        state.toneCurvePointsGreen = identityShape
+        state.toneCurvePointsBlue = identityShape
+        for input in [0.05, 0.214, 0.5, 0.95] {
+            let output = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(input)))
+            XCTAssertEqual(Double(output.r), input, accuracy: Double(accuracy), "at linear \(input)")
+        }
+    }
+
+    func testAMalformedChannelCurveLeavesOnlyItsOwnChannelUntouched() {
+        // Same MonotoneToneCurve.init? rejection MonotoneToneCurve /
+        // testMalformedPointCurveRendersUntouchedRatherThanGarbage already
+        // covers for the composite curve — once per new field, and
+        // confirming it degrades to just that channel doing nothing, not
+        // the whole render.
+        var state = EditState()
+        state.toneCurvePointsRed = curvePoints([(0, 0), (.nan, 0.5), (1, 1)])
+        state.toneCurvePointsGreen = curvePoints([(0, 0), (0.5, 0.9), (1, 1)])
+        let output = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(0.5)))
+        let untouchedGreen = linearPixel(of: EditPipeline.apply(
+            EditState(toneCurvePointsGreen: curvePoints([(0, 0), (0.5, 0.9), (1, 1)])), to: solidColorImage(0.5)
+        ))
+        XCTAssertEqual(output.r, 0.5, accuracy: accuracy, "the malformed red curve renders untouched, not garbage")
+        XCTAssertEqual(output.g, untouchedGreen.g, accuracy: 0, "green is unaffected by red's malformed curve")
+    }
+
     func testMasksAreUnaffectedByThePointCurveField() {
         // Confirms the per-mask path deliberately does NOT gain the point
         // curve in this slice: a mask's own Shadows/Highlights must render

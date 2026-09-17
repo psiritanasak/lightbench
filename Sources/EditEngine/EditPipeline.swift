@@ -227,22 +227,57 @@ enum EditPipeline {
         if state.brightness != 0 { img = applyBrightness(state.brightness, to: img) }
         if effective.contrast != 0 { img = applyContrast(effective.contrast, to: img) }
         if curvesActive(effective, state.blackPoint) { img = applyCurves(effective, state.blackPoint, to: img) }
-        // The user's point curve runs immediately AFTER the parametric one,
-        // keeping CLAUDE.md's fixed …→contrast→curves→HSL→… order with
-        // "curves" as one contiguous two-stage block. Parametric first
+        // The user's point curve(s) run immediately AFTER the parametric
+        // one, keeping CLAUDE.md's fixed …→contrast→curves→HSL→… order with
+        // "curves" as one contiguous multi-stage block. Parametric first
         // because it is corrective base shaping (the same rationale that
         // puts Levels before Brightness and Brightness before Contrast);
-        // the freely-drawn curve is the creative layer applied on top.
+        // the freely-drawn curve(s) are the creative layer applied on top.
         //
-        // MEASURED non-commuting, not assumed: swapping the two stages and
-        // re-rendering a 4-point S-curve over an active parametric curve
-        // (shadows +0.7, highlights -0.5, black point -0.4) moved the
-        // result by up to 0.07468 — at linear 0.214, photographic middle
-        // gray — against this suite's 0.002 tolerance, i.e. ~37x. So this
-        // order is a real REQUIREMENT, not a convention, unlike
-        // Texture/Clarity's own 0.00215. See
+        // MEASURED non-commuting, not assumed: swapping the parametric and
+        // point-curve stages and re-rendering a 4-point S-curve over an
+        // active parametric curve (shadows +0.7, highlights -0.5, black
+        // point -0.4) moved the result by up to 0.07468 — at linear 0.214,
+        // photographic middle gray — against this suite's 0.002 tolerance,
+        // i.e. ~37x. So THAT order is a real REQUIREMENT, not a convention,
+        // unlike Texture/Clarity's own 0.00215. See
         // testPointCurveOrderRelativeToTheParametricCurveIsFixed.
-        if pointCurveActive(state) { img = applyPointCurve(state.toneCurvePoints, to: img) }
+        //
+        // Curves v2 slice 3: the composite (RGB-combined) curve runs FIRST
+        // among the four point-curve passes, then Red, Green, Blue, each
+        // only when its own array is non-empty and each touching ONLY its
+        // own channel (`PointCurveChannelMask`, `PointToneCurve.cikernel`'s
+        // `channelMask` argument). Composite-then-channels is the same
+        // "corrective base shaping, then creative layer on top" reasoning
+        // as above.
+        //
+        // MEASURED, not assumed, same method as the parametric-vs-point
+        // number above (temporarily reversed the block order, rebuilt, and
+        // re-rendered): composite-then-red vs. red-then-composite (a
+        // 4-point composite S-curve plus a red-lifting curve, at linear
+        // 0.214) gave 0.75570166 vs. 0.70867985 — a 0.04702 gap, ~23.5x
+        // this suite's 0.002 tolerance. Composite-vs-channel order is a
+        // real REQUIREMENT. See testCompositeAndChannelCurveOrderIsFixed.
+        //
+        // R/G/B mutual order does NOT need to be fixed and is not asserted
+        // as a requirement: the same swap-and-remeasure method (red-then-
+        // blue vs. blue-then-red, no composite/green active) rendered
+        // BIT-IDENTICAL (r=0.70266026, g=0.21399991, b=0.036064126, delta
+        // 0.0 on all three) — expected, since each pass writes only its
+        // own channel, and confirmed rather than assumed. See
+        // testPerChannelCurvesComposeIndependentlyOfTheirOwnOrder.
+        if !state.toneCurvePoints.isEmpty {
+            img = applyPointCurve(state.toneCurvePoints, channelMask: PointCurveChannelMask.all, to: img)
+        }
+        if !state.toneCurvePointsRed.isEmpty {
+            img = applyPointCurve(state.toneCurvePointsRed, channelMask: PointCurveChannelMask.red, to: img)
+        }
+        if !state.toneCurvePointsGreen.isEmpty {
+            img = applyPointCurve(state.toneCurvePointsGreen, channelMask: PointCurveChannelMask.green, to: img)
+        }
+        if !state.toneCurvePointsBlue.isEmpty {
+            img = applyPointCurve(state.toneCurvePointsBlue, channelMask: PointCurveChannelMask.blue, to: img)
+        }
         if state.hslHue != 0 { img = applyHue(state.hslHue, to: img) }
         // Selective Color runs right after global Hue (bands target hues as
         // the user currently SEES them, post global rotation — the WYSIWYG
@@ -559,21 +594,42 @@ enum EditPipeline {
         return CIColorKernel(source: source)
     }()
 
-    /// Kept deliberately cheap — emptiness IS the identity test. No
-    /// identity-SHAPE detection here (e.g. "are these points collinear?"):
-    /// that would be a second source of truth that could disagree with the
-    /// evaluator, and it would buy nothing, because `MonotoneToneCurve`
-    /// already renders a collinear point list as exact identity by
-    /// construction (see its collinearity identity).
+    /// Which channel(s) one `applyPointCurve` pass touches — the Swift twin
+    /// of `PointToneCurve.cikernel`'s `channelMask` argument (see that
+    /// kernel's header for why this is a mask rather than a numeric
+    /// selector, and why one kernel takes it rather than four kernels or
+    /// one kernel carrying four curves' worth of uniforms). `.all` is the
+    /// pre-slice-3 composite curve's own mask — passing it reproduces the
+    /// unconditional per-channel call exactly, which is what keeps the
+    /// composite curve's render byte-exact across this change.
+    private enum PointCurveChannelMask {
+        static let all = CIVector(x: 1, y: 1, z: 1)
+        static let red = CIVector(x: 1, y: 0, z: 0)
+        static let green = CIVector(x: 0, y: 1, z: 0)
+        static let blue = CIVector(x: 0, y: 0, z: 1)
+    }
+
+    /// Kept deliberately cheap — emptiness IS the identity test, now across
+    /// all four point-curve fields. No identity-SHAPE detection here (e.g.
+    /// "are these points collinear?"): that would be a second source of
+    /// truth that could disagree with the evaluator, and it would buy
+    /// nothing, because `MonotoneToneCurve` already renders a collinear
+    /// point list as exact identity by construction (see its collinearity
+    /// identity).
     private static func pointCurveActive(_ state: EditState) -> Bool {
         !state.toneCurvePoints.isEmpty
+            || !state.toneCurvePointsRed.isEmpty
+            || !state.toneCurvePointsGreen.isEmpty
+            || !state.toneCurvePointsBlue.isEmpty
     }
 
     /// Renders nothing (returns the image untouched) if the kernel is
     /// missing or the points are malformed — `MonotoneToneCurve.init?`
     /// rejects fewer than 2 points, non-increasing x, non-finite or absurd
     /// values, and more points than the kernel's fixed arity can carry.
-    private static func applyPointCurve(_ points: [ToneCurvePoint], to image: CIImage) -> CIImage {
+    /// `channelMask` is Curves v2 slice 3's addition — see
+    /// `PointCurveChannelMask`'s own doc comment.
+    private static func applyPointCurve(_ points: [ToneCurvePoint], channelMask: CIVector, to image: CIImage) -> CIImage {
         guard let kernel = pointToneCurveKernel,
               let curve = MonotoneToneCurve(points: points)
         else { return image }
@@ -592,7 +648,7 @@ enum EditPipeline {
         let ma = CIVector(x: m[0], y: m[1], z: m[2], w: m[3])
         let mb = CIVector(x: m[4], y: m[5], z: m[6], w: m[7])
 
-        return kernel.apply(extent: image.extent, arguments: [image, xa, xb, ya, yb, ma, mb]) ?? image
+        return kernel.apply(extent: image.extent, arguments: [image, xa, xb, ya, yb, ma, mb, channelMask]) ?? image
     }
 
     // MARK: - HSL (global hue & saturation)

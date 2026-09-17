@@ -1068,8 +1068,15 @@ struct AdjustTabView: View {
             // A non-empty but identity-SHAPED curve reads as non-identity
             // here, so Reset Adjustments stays enabled and clicking it
             // deletes the points — consistent with how this button treats
-            // every other field.
+            // every other field. Same reasoning for the three per-channel
+            // curves (Curves v2 slice 3) — no per-channel UI exists yet,
+            // but `applyingPreset(onto:)` and sidecar decode can both set
+            // these fields today, so this check and the reset button below
+            // must already account for them.
             && state.toneCurvePoints.isEmpty
+            && state.toneCurvePointsRed.isEmpty
+            && state.toneCurvePointsGreen.isEmpty
+            && state.toneCurvePointsBlue.isEmpty
             && state.levelsBlackPoint == 0
             && state.levelsWhitePoint == 1
             && state.levelsGamma == 1.0
@@ -1106,6 +1113,9 @@ struct AdjustTabView: View {
             document.editState.curvesShadows = 0
             document.editState.blackPoint = 0
             document.editState.toneCurvePoints = []
+            document.editState.toneCurvePointsRed = []
+            document.editState.toneCurvePointsGreen = []
+            document.editState.toneCurvePointsBlue = []
             document.editState.levelsBlackPoint = 0
             document.editState.levelsWhitePoint = 1
             document.editState.levelsGamma = 1.0

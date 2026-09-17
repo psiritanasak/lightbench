@@ -8696,3 +8696,195 @@ is the first VERTICAL drag inside the vertically-scrolling sidebar `ScrollView`.
 Reviewer APPROVE plus green tests are explicitly insufficient evidence there —
 the StableScrollInsets regression passed two reviewer passes and all tests, then
 broke every slider live. A real hand must confirm drag-vs-scroll before polish.
+
+## Curves v2 slice 2B — the interactive point-curve editor (2026-09-17)
+
+Shipped the editor itself, per the approved plan at
+`~/.claude/plans/declarative-wondering-mist.md`. New
+`Sources/UI/ToneCurveEditing.swift` (pure `CoreGraphics`-only geometry, the
+`RedEyeHitTest`/`MaskGeometry`/`CropAspectMath` convention): screen<->
+normalized conversion (the one place the y-flip lives — curve y is UP,
+`plotRect` is SwiftUI's own y-DOWN), hit-testing, `adding`/`addingAtWidestGap`
+(seeds `[] -> [(0,0),(1,1)]` first, returns the inserted index so a caller
+never has to re-derive it by a second distance search), `moving`/`nudged`
+(sharing one clamp, endpoints pinned in x), `removing` (interior-only,
+collapses to `[]` only when the two survivors are exactly the DEFAULT
+endpoints — a moved endpoint survives as a real 2-point line), and
+`validated` (points carry no id, so every read of a stored selection index
+must go through this). New `Sources/UI/ToneCurveEditorView.swift`: a square
+canvas (histogram backdrop via a NEW `HistogramBars` split out of
+`HistogramView` — the split is structural, not stylistic, since
+`HistogramBars` sets `blendMode = .plusLighter` and never resets it, so the
+curve stroke needs its OWN `Canvas` or it would inherit additive blending),
+grid + dashed diagonal reference + curve stroke sampled from
+`MonotoneToneCurve.curveValue(atEncoded:)` (the in-domain evaluator, never
+the sRGB-wrapped `value(at:)`), drag-to-add/move, Option-click and
+drag-off-canvas delete, keyboard nudging (arrows + Shift-coarse + `[`/`]` +
+Delete + Escape, mirroring `ContentView.handleImagePaneKeyPress`'s shape),
+and VoiceOver support (an `AXUnknown` element with `AXIncrement`/
+`AXDecrement` nudging the selected point's Y, plus custom "Next Point"/
+"Previous Point"/"Delete Selected Point" actions). `AdjustTabView` gained a
+new "Curve" section between Light and Color (collapsed by default),
+`AdjustPanelState` gained `isCurveSectionExpanded`/
+`selectedToneCurvePointIndex`, and `ImageDocumentModel.resetToneCurve()`
+mirrors `revertToOriginal()`/`applyPreset(_:)`'s exact flush-then-commit
+shape for "Reset Curve".
+
+### The blocking gate — live-verified with REAL synthetic input, not just AX
+
+The plan flagged this as the first vertical drag inside the sidebar's
+vertically-scrolling `ScrollView` and was explicit that green tests plus a
+reviewer APPROVE are NOT sufficient evidence, citing the StableScrollInsets
+regression (which passed both, then broke every slider live). The plan's own
+"2B verification" section also warned that "synthetic mouse and scroll
+events do not reach this app at all," a finding established across Phase 7
+slices 3-5 and the Library grid's D4 keyboard test.
+
+That finding did NOT hold this session. `cliclick` (mouse drag/click) and a
+small ad hoc `CGEvent`-based scroll-wheel tool both worked cleanly against
+the real built `PhotoApp.app`, confirmed via direct AX-tree readback
+(`AXValueDescription`) after each action, not just visual inspection:
+
+- A real drag (`cliclick dd:/dm:/du:`) on a curve point moved it — output
+  went from 50% to 24% on a straight vertical pull — while every OTHER
+  sidebar section's `AXDisclosureTriangle` y-position stayed byte-identical,
+  confirming the drag did not also scroll the `ScrollView`.
+- A synthetic scroll (`CGEvent(scrollWheelEvent2Source:...)`) over the
+  canvas correctly scrolled the WHOLE sidebar by ~191pt (every section's
+  disclosure triangle shifted by the same amount), and did NOT change the
+  curve's own value — confirming the canvas has no scroll gesture of its
+  own and correctly lets the event bubble to the enclosing `ScrollView`.
+- After that scroll, a click at a screen position computed relative to the
+  canvas's NEW (post-scroll) position landed at EXACTLY the intended value
+  (a deliberate 75%/75% target read back as "Input 75 percent, output 75
+  percent") — confirming `coordinateSpace: .local` keeps click-to-point
+  math correct across a scroll with no manual offset bookkeeping to go
+  stale.
+
+**Do not assume this generalizes.** The prior "no synthetic input" finding
+was established for different gestures (scroll-wheel via a dedicated
+`NSEvent` local monitor on `MetalImageView`, and keyboard events specifically)
+on different views. This session's result says a plain `DragGesture` inside
+a standard SwiftUI `ScrollView` is reachable by `cliclick`/`CGEvent` in this
+environment; it says nothing about whether the OTHER, already-documented
+limitations still hold for their own specific mechanisms. Re-verify per
+gesture type, not by precedent.
+
+### Reviewer — 3 rounds, FIX FIRST -> FIX FIRST -> APPROVE, the most of any
+### Curves v2 slice, both real rounds catching genuine bugs
+
+**Round 1** caught three real issues in `ToneCurveEditorView.swift`:
+
+1. A crash: `accessibilityValueText`'s `Int(round(point.x * 100))` had no
+   finiteness OR magnitude guard, and — the part that made it reachable, not
+   theoretical — the `.accessibilityValue` modifier sits on the OUTER
+   `Group`, ABOVE the `if isGeometryFinite` branch that gates the canvas
+   itself. A hand-edited sidecar's `NaN` or a `1e300` coordinate would trap
+   the moment the section's body evaluates with a selection, regardless of
+   whether the canvas renders anything. The identical defect class
+   `MaskDetailView`'s own tone-percent readout was caught with once already.
+   Fixed with an `isFinite` guard plus a ±1,000,000 clamp before the cast;
+   `AdjustTabView.curvePointReadoutText` got the same treatment for
+   consistency even though its `String(format:)` doesn't trap (it prints
+   "nan" instead — still worth guarding against for display honesty).
+2. A fragile gesture composition: the original design used
+   `SpatialTapGesture().modifiers(.option).exclusively(before:
+   DragGesture(minimumDistance: 0))` for Option-click delete. Reviewer's
+   diagnosis: a `minimumDistance: 0` drag recognizes at mouse-DOWN, so in
+   practice its `onChanged` ALWAYS fires before the "exclusive" tap could
+   ever win on mouse-up — the composition never worked as designed. This let
+   an Option-click over empty space silently ADD a point (the drag's own
+   miss path) that the tap then immediately deleted — a phantom add/delete
+   pair firing a real undo-history entry and sidecar save for an interaction
+   meant to be a no-op — and could leave `draggedPointIndex` set if the
+   drag's `onEnded` was ever skipped once the tap "won," corrupting the
+   NEXT, unrelated gesture (a teleport bug). Fixed by removing the second
+   gesture recognizer entirely: a single `DragGesture` now checks
+   `NSEvent.modifierFlags.contains(.option)` directly inside `onChanged`,
+   plus a self-healing `dragStartLocation` — a stale `draggedPointIndex` is
+   discarded the moment a callback's `startLocation` doesn't match the one
+   recorded for the currently-tracked gesture.
+3. Selection not shifting on delete: deleting a point BELOW the current
+   selection left `selectedIndex` pointing at a different, now-shifted
+   point (the readout/highlight/button-enabled-state would all silently
+   retarget). Fixed with a shared `deletePoint(at:)`: clears the selection
+   if it WAS the deleted point, shifts it down by one if it was above.
+
+Non-blocking notes also fixed in the same pass (this project's own standing
+practice — fix everything on the list, not just the blockers): a copied
+doc-comment inaccuracy in `nearestPointIndex`'s tie-break claim (shared with
+`RedEyeHitTest`, fixed only in the new file — `RedEyeHitTest.swift` itself is
+out of scope); the "Add Point" button staying enabled through a real no-op
+(every gap already at minimum separation) — fixed with a shared
+`canAddAtWidestGap(to:)` so the button's `.disabled` can never disagree with
+what the action would actually do; two doc-only notes (an edge asymmetry in
+`adding`'s insertion math, and `clamped`'s unstated assumption that neighbor
+separation already holds); `handleKeyPress` returning `.handled` for a
+no-op Delete — fixed to return `.ignored` when nothing was actually removed
+(Escape stays unconditionally `.handled`, now documented as safe: this
+canvas's own `FocusState` is mutually exclusive with the image pane's, so
+Escape can never be "stolen" from that pane's own disarm chain).
+
+**Round 2** re-verified every round-1 fix by re-deriving it (not trusting the
+diff), confirmed all correct, but caught ONE new, genuinely destructive bug
+that round 1's own rewrite introduced: **a single Option-click-drag could
+delete MORE THAN ONE point.** The option-delete branch deliberately never
+set `draggedPointIndex` (on the theory that later callbacks of the same
+still-held gesture would fall through to a no-op "miss" path) — but `points`
+shrinks after the delete, so a LATER callback re-runs the WHOLE
+first-callback branch against the now-shorter array and, if another point
+is now within `hitTestThreshold` of the still-constant `startLocation`
+(genuinely reachable: two points can legally sit as close as
+`minimumXSeparation`, 1e-2 normalized, well inside the 16pt hit threshold),
+deletes it too. Fixed with a new, purpose-built
+`@State private var didConsumeGestureAsDiscreteAction` flag — a THIRD piece
+of gesture state, deliberately separate from both `draggedPointIndex`
+(tracks an ACTIVE drag) and `dragStartLocation` (which the miss/add-refused
+paths also legitimately re-enter with the same value, so it can't double as
+this signal). Set the moment the discrete delete fires, checked at the top
+of `onDragChanged` before anything else runs, reset in `onDragEnded`'s
+`defer` and whenever the self-healing check detects a genuinely new gesture.
+Live re-verified against the real built binary (not simulated): built a
+tight cluster of three points ~4-8pt apart on screen (well inside the 16pt
+threshold), then an Option-click-drag with FOUR intermediate move callbacks
+before release — exactly ONE point was deleted, and the selection (on a
+DIFFERENT, previously-selected point) correctly shifted to keep tracking the
+same logical point through the array's resize.
+
+Round 2 also asked for two small additions, both done: a doc-comment fix
+noting the tie-break change also flips the hit-test threshold boundary from
+exclusive to inclusive, and two new tests
+(`testNearestPointIndexBreaksTiesByFirstMatch`,
+`testCanAddAtWidestGapAgreesWithAddingAtWidestGapAcrossFixtures`) plus a
+threshold-boundary test. That last one needed its own fix mid-round: an
+initial version tapped at a point offset by a 9.6/12.8 "3-4-5 triangle x4"
+diagonal (the exact values `RedEyeHitTestTests` uses successfully) but
+FAILED — Swift's `hypot` landed a few ULPs off exactly 16.0 for that specific
+diagonal (`16.000000000000007`, confirmed via a throwaway probe), unlike
+Python's `math.hypot` on the same inputs, which happens to round to exactly
+16.0. Fixed by using a purely VERTICAL offset instead (`CGPoint(x: 0, y:
+184)` against a point at screen `(0, 200)`) — `hypot(0, x)` returns `|x|`
+with no rounding ambiguity in IEEE-754, so the test is exact by
+construction rather than by floating-point luck.
+
+**Round 3**: APPROVE. Independently re-derived the `didConsumeGestureAsDiscreteAction`
+fix's ordering (self-heal reset -> consumed-flag guard -> first-callback
+branch is the only order that works), confirmed every first-callback exit
+that leaves `draggedPointIndex` nil also correctly sets or doesn't need the
+new flag, confirmed no cross-gesture leak by the same mechanism
+`draggedPointIndex` already used, and re-verified all three new/fixed tests
+are non-vacuous (would fail under the naive/old implementation) rather than
+trusting the round-2 write-up.
+
+435 -> 465 test-count era conventions aside, this slice's actual count: 1010
+-> 1013 tests (36 new, all in `ToneCurveEditingTests` — `ToneCurveEditorView`
+itself is SwiftUI interaction glue with no unit-test precedent in this
+codebase, verified live instead, matching the `ThinSlider`/`EditSliderRow`/
+`CompareDividerOverlay` convention).
+
+**Exact next step**: Curves v2 slice 3 (per-channel R/G/B curves) needs its
+own Plan Mode session — one kernel's argument budget won't fit three more
+curves, and the likely shape (four passes of `PointToneCurve.cikernel` with
+a channel-selector argument) was flagged as a forward note back in slice 2A,
+not solved yet. Alternatively, pick any other WANTED Lightroom-gap item from
+CLAUDE.md's "Gaps vs. Adobe Lightroom Desktop" section.

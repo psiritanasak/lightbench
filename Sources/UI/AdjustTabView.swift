@@ -16,6 +16,11 @@ struct AdjustPanelState {
     /// existing convention of separate named fields per presentation-only
     /// concern.
     var isLightSectionExpanded = false
+    /// Curves v2 slice 2B: whether the "Curve" section is expanded.
+    /// Collapsed by default, same reasoning as every other section bool —
+    /// also means the ScrollView vertical-drag risk documented on
+    /// `ToneCurveEditorView` is inert for anyone who never opens it.
+    var isCurveSectionExpanded = false
     var isColorSectionExpanded = false
     var isSelectiveColorSectionExpanded = false
     var isBlackAndWhiteSectionExpanded = false
@@ -58,6 +63,16 @@ struct AdjustPanelState {
     /// and `canZoom`), so unlike the purely-internal fields above, this
     /// one is not "the panel's private business."
     var selectedMaskID: UUID?
+
+    /// Curves v2 slice 2B: which point curve control point (if any) is
+    /// currently selected, driving `ToneCurveEditorView`'s detail readout
+    /// and the "Delete Point" button. A plain `Int`, NOT an id — points
+    /// carry no id at all (see `EditState.toneCurvePoints`'s own doc
+    /// comment for why), so every read of this must go through
+    /// `ToneCurveEditing.validated(_:in:)` rather than trust it directly:
+    /// Undo/Redo/Revert/a preset apply can all shrink the array underneath
+    /// a stale index.
+    var selectedToneCurvePointIndex: Int?
 }
 
 /// The Editor's Adjust tab: the six collapsible Light/Color/Selective Color/
@@ -155,6 +170,10 @@ struct AdjustTabView: View {
                 .textCase(.uppercase)
             AdjustSectionContainer(icon: "sun.max", title: "Light", isExpanded: $panel.isLightSectionExpanded) {
                 lightSection
+            }
+            Divider()
+            AdjustSectionContainer(icon: "chart.xyaxis.line", title: "Curve", isExpanded: $panel.isCurveSectionExpanded) {
+                curveSection
             }
             Divider()
             AdjustSectionContainer(icon: "paintpalette", title: "Color", isExpanded: $panel.isColorSectionExpanded) {
@@ -268,6 +287,80 @@ struct AdjustTabView: View {
                 range: 0.3...3.0, identity: 1.0
             ) { String(format: "%.2f", $0) }
         }
+    }
+
+    /// Curves v2 slice 2B: the interactive point-curve editor. Its own
+    /// section, separate from `lightSection`'s Shadows/Highlights/Black
+    /// Point sliders — those are the PARAMETRIC layer; this is the
+    /// user's free-form ADDITIVE curve on top (`EditState.toneCurvePoints`'
+    /// own doc comment). A 10-slider-plus-histogram Light section is
+    /// already this sidebar's longest; a ~220pt canvas alongside it would
+    /// make Light unmanageably long, and every other tool here already
+    /// gets its own section.
+    private var curveSection: some View {
+        Group {
+            Text("Applies on top of the Light sliders.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            // Reserved for slice 3's per-channel R/G/B picker — the 8-point
+            // cap is per-channel-kernel-argument-budget, not a dead end;
+            // see CLAUDE.md's Curves v2 slice 3 note. No UI here yet.
+            ToneCurveEditorView(
+                points: $document.editState.toneCurvePoints,
+                selectedIndex: $panel.selectedToneCurvePointIndex,
+                histogramData: document.histogramData
+            )
+            Text(curvePointReadoutText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Button("Add Point") {
+                    document.editState.toneCurvePoints = ToneCurveEditing.addingAtWidestGap(of: document.editState.toneCurvePoints)
+                }
+                .disabled(!ToneCurveEditing.canAddAtWidestGap(to: document.editState.toneCurvePoints))
+                Button("Delete Point") {
+                    guard let index = ToneCurveEditing.validated(panel.selectedToneCurvePointIndex, in: document.editState.toneCurvePoints)
+                    else { return }
+                    document.editState.toneCurvePoints = ToneCurveEditing.removing(pointAt: index, in: document.editState.toneCurvePoints)
+                    panel.selectedToneCurvePointIndex = nil
+                }
+                .disabled(!canDeleteSelectedCurvePoint)
+            }
+            .frame(maxWidth: .infinity)
+            Button("Reset Curve") {
+                document.resetToneCurve()
+                panel.selectedToneCurvePointIndex = nil
+            }
+            .frame(maxWidth: .infinity)
+            .disabled(document.editState.toneCurvePoints.isEmpty)
+        }
+    }
+
+    /// "Delete Point" is disabled with no selection AND for a selected
+    /// endpoint (index 0 or the last index) — `ToneCurveEditing.removing`
+    /// itself already refuses an endpoint, but disabling the button too
+    /// means it doesn't sit there enabled and silently do nothing when
+    /// pressed, the same UI-honesty reasoning `resetAdjustmentsButton`'s
+    /// own disabled-state follows.
+    private var canDeleteSelectedCurvePoint: Bool {
+        let points = document.editState.toneCurvePoints
+        guard let index = ToneCurveEditing.validated(panel.selectedToneCurvePointIndex, in: points) else { return false }
+        return index != 0 && index != points.count - 1
+    }
+
+    /// `String(format: "%.0f", ...)` doesn't trap on a non-finite value the
+    /// way `Int(round(...))` does (it prints "nan"/"inf") — but a guard is
+    /// added anyway, for the same reason `ToneCurveEditorView`'s own
+    /// `accessibilityValueText` needs one: a hand-edited sidecar's `NaN`
+    /// shouldn't read as legitimate-looking readout text either.
+    private var curvePointReadoutText: String {
+        let points = document.editState.toneCurvePoints
+        guard let index = ToneCurveEditing.validated(panel.selectedToneCurvePointIndex, in: points) else {
+            return points.isEmpty ? "No curve" : "No point selected"
+        }
+        let point = points[index]
+        guard point.x.isFinite, point.y.isFinite else { return "Value unavailable" }
+        return String(format: "In %.0f  Out %.0f", point.x * 100, point.y * 100)
     }
 
     /// Color/white-balance-family controls, matching Apple Photos' own

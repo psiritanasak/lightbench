@@ -1003,6 +1003,21 @@ final class ImageDocumentModel: ObservableObject {
         applyHistoryState(history.current)
     }
 
+    /// Curves v2 slice 2B's "Reset Curve" — clears ONLY `toneCurvePoints`,
+    /// leaving every other field (including the parametric Shadows/
+    /// Highlights/Black Point curve) untouched. Structurally identical to
+    /// `revertToOriginal()`/`applyPreset(_:)` just above, for the same
+    /// reason: going through the debounced `editState` `didSet` path
+    /// instead would leave a ~350ms window where a follow-up drag could
+    /// merge into the same undo step as the reset.
+    func resetToneCurve() {
+        finalizePendingCommit()
+        var next = editState
+        next.toneCurvePoints = []
+        history.commit(next)
+        applyHistoryState(history.current)
+    }
+
     // MARK: - Sidecar Persistence
 
     /// Whether the current `editState` assignment is `load(from:)` applying

@@ -8,13 +8,10 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
 Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
-✅ FULLY COMPLETE. Currently in **Curves v2** (Tier-2 Lightroom gap, WANTED):
-slices 1, 2A, and 2B (the interactive point-curve editor UI) are all shipped.
-Slice 3 (per-channel R/G/B curves)'s backend shipped earlier this session;
-its editor UI is now code-complete and reviewer-approved (see "In progress /
-blocked" below for the one remaining step before it's fully done). See
-CLAUDE.md's roadmap for the full phase list and `docs/ROADMAP_HISTORY.md`
-for detail on anything already shipped.
+✅ FULLY COMPLETE. **Curves v2 is now FULLY COMPLETE** (Tier-2 Lightroom gap,
+WANTED) — slices 1, 2A, 2B, and 3 (backend + UI) are all shipped, reviewed,
+and live-verified. See CLAUDE.md's roadmap for the full phase list and
+`docs/ROADMAP_HISTORY.md` for detail on anything already shipped.
 
 ## Open reviewer issues
 None currently open or blocking. Every reviewer round on record ended in
@@ -35,10 +32,9 @@ Phases 1–7 (Foundation, Edit engine, Non-destructive pipeline, Library,
 Presets + export, RAW support, Local Adjustments/Masking) are all shipped,
 reviewed, and live-verified — see CLAUDE.md's roadmap for the one-line
 summary of each and `docs/ROADMAP_HISTORY.md` for full detail. Also shipped:
-all of the Phase 2 edit-engine backlog except Curves v2 slice 3's UI (code-
-complete, reviewer-approved, not yet live-verified — see below and "In
-progress / blocked"), the Tier-1 Lightroom gaps Texture/Clarity and Dehaze,
-and Curves v2 slices 1, 2A, 2B, and slice 3's backend. Every numbered
+all of the Phase 2 edit-engine backlog, the Tier-1 Lightroom gaps
+Texture/Clarity and Dehaze, and all of Curves v2 (slices 1, 2A, 2B, and 3 —
+backend and UI, fully shipped and live-verified). Every numbered
 IMPROVEMENTS.md item marked SHIPPED there is also done — that file is the
 source of truth for the perf/polish backlog, not duplicated here.
 
@@ -92,24 +88,37 @@ rounds, FIX FIRST → APPROVE — round 1 caught a doc-comment misattribution
 an insertion) and one now-stale structural claim ("no per-channel UI exists
 yet," written before this was that UI); both fixed and confirmed in round 2.
 
-**NOT yet live-verified** — this is the one gap between "code-complete,
-reviewer-approved" and "done" for this entry. `ToneCurveEditorView` is
-SwiftUI interaction glue with no unit-test precedent in this codebase (per
-slice 2B's own entry below); its channel-switching behavior specifically
-needs real synthetic-mouse/keyboard verification, not just a green build —
-slice 2B's own history includes two real bugs (a crash, a multi-delete
-data-loss bug) that only a live-verification pass caught across 3 reviewer
-rounds. Needs, specifically: per-channel isolation (confirm each channel's
-edits land in the right `EditState` field via the saved sidecar, not just
-visually), the stale-index-across-channel-switch scenario `.id()` exists to
-prevent, a re-run of slice 2B's two reviewer-caught regressions (option-
-click multi-delete, drag-off-canvas delete) on a non-composite channel, and
-a re-run of slice 2B's original ScrollView-drag blocking gate (since the
-canvas now recreates on every channel switch). This session paused before
-that step because live verification needs screen/mouse automation
-(`cliclick`/`CGEvent`), which per this user's own standing instruction
-needs to be asked for, scoped per-task, before use — and this session
-fired from an unattended scheduled prompt with no one to ask.
+**Live-verified (2026-09-17)**, with explicit user permission for this
+session to drive the app via synthetic mouse/keyboard events
+(`cliclick`/`CGEvent`/AX), against `stepwedge.jpg` — a neutral gray-gradient
+scratch fixture in a `livetest` folder from a prior session (NOT the user's
+real photo library; confirmed by diffing `IMG_6564.jpeg.photoapp.json`
+byte-for-byte before/after this session — untouched). A neutral test image
+turned out to be an especially clean isolation check: since input R=G=B
+everywhere, a single-channel curve immediately shows up as a color TINT
+(confirmed: Red-only lift → red tint; Red+Green-cut → magenta; Red+Blue-cut
+→ orange/yellow; RGB composite on top → uniformly lifted). Confirmed, each
+cross-checked against the saved sidecar JSON, not just visually: per-channel
+isolation on all 4 channels (each edit landed in exactly its own
+`EditState` field, others provably untouched); the picker's "•"
+edited-marker appearing/persisting independently per channel; channel-aware
+stroke tint (white/red/green/blue) and Reset-button label; stale-index
+safety across channel switches (switching to an empty channel showed no
+leaked selection or stale highlight — the `.id()`/`.onChange` fix works);
+keyboard arrow-nudge (Out 30→31, exactly `nudgeStep`); Option-click delete
+on a non-composite channel (slice 2B's own round-1/round-2 regression
+class — no crash, no multi-delete, correct single-channel isolation);
+point drag-to-move without the sidebar's `ScrollView` hijacking the
+gesture (re-confirms slice 2B's original blocking gate still holds with
+per-channel `.id()` recreation); Reset-one-channel leaving the other three
+untouched, undone in exactly one atomic Undo step. Not separately
+re-verified live: drag-off-canvas delete and the top-level "Reset
+Adjustments" button (both reuse already-tested, channel-agnostic code
+paths at low incremental risk) and VoiceOver's actual spoken output
+(the label string was verified only by reading `accessibilityChannelLabel`
+in code, not by running VoiceOver itself). Cleaned up after: "Revert to
+Original" on the test photo, confirmed via the sidecar that all four
+tone-curve fields returned to `[]`, then quit the app.
 
 **Curves v2 slice 3 backend (2026-09-17)**: per-channel Red/Green/Blue
 tone-curve stages, additive to the existing composite `toneCurvePoints`.
@@ -186,31 +195,16 @@ interaction glue with no unit-test precedent, per this codebase's own
 convention; verified live instead).
 
 ## In progress / blocked
-**Curves v2 slice 3's editor UI** — code-complete and reviewer-APPROVED
-(see the entry above), committed. Blocked on exactly one remaining step
-before it can be marked fully done: **live verification**, which needs
-screen/mouse automation (`cliclick`/`CGEvent`), and this user has a
-standing instruction that automation needs to be asked for, scoped
-per-task, before use. This session ran from an unattended scheduled
-prompt with no one to ask, so it stopped here rather than run automation
-without asking.
-
-**Resuming session: ask the user for permission to drive the app with
-synthetic mouse/keyboard events for this specific verification pass, then
-run the live-verification checklist in the entry above, then — only if
-that surfaces something that needs a code change — re-run the reviewer
-and commit the fix.** If live verification passes clean with no code
-changes, just update this file to move the entry from "In progress /
-blocked" to fully "Done" and mark Curves v2 complete in CLAUDE.md.
+Nothing in progress and nothing blocked. Curves v2 slice 3's editor UI
+(code, review, and live verification) is complete — see the "Done" entry
+above.
 
 ## Exact next step
-Finish Curves v2 slice 3's editor UI per "In progress / blocked" above:
-get the reviewer to APPROVE, ask for and get screen-automation permission,
-live-verify, commit. After that, Curves v2 is fully complete and the next
-slice is picking a WANTED Lightroom-gap item (see CLAUDE.md's "Gaps vs.
-Adobe Lightroom Desktop" section) — Grain, Color Grading, Point Color,
-Chromatic Aberration removal, and Manual Transform Scale/Aspect are all
-unstarted Tier-1 items; Auto Tone/Auto Settings, Enhance/Super Resolution,
-History panel, and Copy/Paste-and-Sync are unstarted Tier-2 items. Per this
-project's workflow rules, enter Plan Mode before starting whichever is
+Curves v2 is now fully complete. Pick the next slice from a WANTED
+Lightroom-gap item (see CLAUDE.md's "Gaps vs. Adobe Lightroom Desktop"
+section) — Grain, Color Grading, Point Color, Chromatic Aberration removal,
+and Manual Transform Scale/Aspect are all unstarted Tier-1 items; Auto
+Tone/Auto Settings, Enhance/Super Resolution, History panel, and
+Copy/Paste-and-Sync are unstarted Tier-2 items. Per this project's
+workflow rules, enter Plan Mode before starting whichever is
 picked.

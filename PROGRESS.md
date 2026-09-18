@@ -10,16 +10,20 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
 ✅ FULLY COMPLETE, Curves v2 (Tier-2 Lightroom gap) is fully shipped,
 reviewed, and live-verified, and **Grain** (Tier-1 Lightroom gap) is
-committed (see "Done" below). Currently finishing **Color Grading Slice A**
-(backend: 9 new `EditState` fields, `ColorGrading.cikernel`, the
-`applyColorGrading` pipeline stage) — code-complete, all 1069 tests passing,
-reviewer pass not yet run (see "In progress / blocked" below). Slice B (the
-color-wheel UI) is intentionally a separate future session. Also done this
-session: verified the app builds and all tests pass clean after an Xcode 27
-(Swift 6.4, macOS 27 SDK) upgrade, and logged the resulting
-`CIColorKernel(source:)` deprecation warning in IMPROVEMENTS.md rather than
-fixing it inline. See CLAUDE.md's roadmap for the full phase list and
-`docs/ROADMAP_HISTORY.md` for detail on anything already shipped.
+shipped. **Color Grading (Tier-1 Lightroom gap) is now FULLY SHIPPED** —
+both Slice A (backend: 9 `EditState` fields, `ColorGrading.cikernel`, the
+`applyColorGrading` pipeline stage) and Slice B (the color-wheel UI:
+`ColorWheelGeometry`, `ColorGradingWheelView`, `ColorGradingRange`, wired
+into a new "Color Grading" section in `AdjustTabView`) are committed,
+reviewed (Slice A: 2 rounds; Slice B: 3 rounds, FIX FIRST → FIX FIRST →
+APPROVE), and all 1088 tests pass. See CLAUDE.md's Color Grading entry for
+the full reviewer-round write-up. NOT yet live-verified — the
+`AngularGradient` painted-wheel convention is DERIVED from documentation,
+not confirmed on screen; see IMPROVEMENTS.md D20 for the separately-logged
+keyboard/AT/numeric-readout gap (Hue/Saturation are pointer-only with no
+value display; only Luminance has a real slider). See CLAUDE.md's roadmap
+for the full phase list and `docs/ROADMAP_HISTORY.md` for detail on
+anything already shipped.
 
 ## Open reviewer issues
 None currently open or blocking. Every reviewer round on record ended in
@@ -197,9 +201,54 @@ the premultiply round trip — caught along the way that this suite's
 `CIContext.render` returns PREMULTIPLIED not straight alpha, a real thing
 to know for any future test in this file — and `ImageRenderer.swift`'s
 structural stage list extended). All 1069 tests still pass after the
-fixes. **Reviewer round 2 pending.** Currently fully uncommitted. Slice B
-(the color-wheel UI) is out of scope for this slice, its own future Plan
-Mode session.
+fixes. **Reviewer round 2: APPROVE.** Committed in 4 logical commits
+(state field, tint helper, kernel + pipeline stage + tests, docs).
+
+**Color Grading Slice B / the wheel UI (2026-09-18)**: `ColorWheelGeometry.swift`
+(pure polar<->screen-point math — `screenPoint`/`polarValue`, a true polar
+radial clamp, a center snap zeroing Hue AND Saturation together, and
+`angularGradientFraction` for the painted wheel's `AngularGradient` stops),
+`ColorGradingWheelView.swift` (the draggable wheel, this app's first
+continuous-hue rendering UI), `ColorGradingRange.swift` (presentation-only
+Shadows/Midtones/Highlights selector), wired into a new "Color Grading"
+section in `AdjustTabView` (segmented picker with an edited-state dot,
+shared wheel, Luminance slider, per-range Reset). 1088 tests (19 new, all
+in `ColorWheelGeometryTests`).
+
+Reviewer: 3 rounds, FIX FIRST → FIX FIRST → APPROVE. Round 1 caught a wrong
+`AngularGradient` fraction-convention assumption that rotated the whole
+painted wheel 90° from the puck's actual position (the "color under the
+puck never matches the actual tint" bug — the one thing this control
+exists to communicate), a missing wrap-around gradient stop (a flat,
+hard-edged wedge), an unrelated hardcoded `RadialGradient` radius (the
+wheel rendered washed-out everywhere, unrelated to where Saturation 1
+actually sits), a center-snap epsilon that was both an absolute
+point-distance (too tight for real cursor input to ever trigger) and
+incomplete (zeroed Hue but not Saturation), three mutually-disagreeing
+"is this range edited" definitions across the segment-label dot/per-range
+Reset/top-level identity check, and a `.id()` doc comment overclaiming
+"load-bearing" for a view with no persistent `@State` to protect. Round 2
+caught a residual doc-comment contradiction (one file's comment still said
+"load-bearing" after the other's was fixed) and a test that computed both
+its expected and actual values from the same function under test, so it
+passed trivially without cross-checking anything — rewritten to derive the
+expected value independently via `atan2` on `screenPoint`'s own output.
+Also relabeled a doc comment from MEASURED to DERIVED (it was a claim read
+from SwiftUI's documentation, not an actual run — this codebase's own
+CLAUDE.md convention reserves MEASURED for the latter). Round 3: APPROVE.
+
+**Not yet live-verified**: the `AngularGradient` convention itself (fraction
+0 at the wheel's right edge, sweeping clockwise) rests on reading SwiftUI's
+documented behavior, not on-screen confirmation that the painted color
+under the puck actually matches the tint being applied — flagged in both
+`ColorWheelGeometry.angularGradientFraction`'s and
+`ColorGradingWheelView.hueGradientStops`'s own doc comments for a future
+session. Also not built: keyboard/VoiceOver support and a numeric Hue/
+Saturation readout (only Luminance has a real accessible slider) — logged
+as IMPROVEMENTS.md D20, matching the WB-eyedropper/Red-Eye placement
+precedent for deferring pointer-only interaction accessibility to its own
+session. Committed in 4 logical commits (geometry + tests, wheel view +
+range selector, `AdjustTabView` wiring, docs).
 
 **Curves v2 slice 3 UI (2026-09-17)**: the per-channel Red/Green/Blue tone
 curve editor, built on the backend shipped earlier this session (commit
@@ -358,20 +407,17 @@ interaction glue with no unit-test precedent, per this codebase's own
 convention; verified live instead).
 
 ## In progress / blocked
-**Color Grading Slice A (backend)** — code-complete, all 1069 tests
-passing (see the "Done" entry above for the full write-up). Reviewer pass
-NOT yet run — mandatory before commit, this diff touches a shader/color-
-math stage. Currently fully uncommitted.
+None. Color Grading (both Slice A backend and Slice B UI) is fully shipped,
+reviewed (APPROVE both), and committed — see the "Done" entries above.
 
 ## Exact next step
-Run the `reviewer` agent (model "opus") on `git diff HEAD` for Color
-Grading Slice A. If FIX FIRST: fix every listed issue, re-run, iterate to
-APPROVE. Only then commit, in small logical commits (state field / tint
-helper / kernel + pipeline stage + tests / docs), matching the Grain
-commit shape. After that, Slice A is done — Slice B (the color-wheel UI)
-needs its own future Plan Mode session, not a continuation of this one.
-Beyond Color Grading entirely: Point Color, Chromatic Aberration removal,
-and Manual Transform Scale/Aspect are the remaining unstarted Tier-1 gaps;
-Auto Tone/Auto Settings, Enhance/Super Resolution, History panel, and
-Copy/Paste-and-Sync are unstarted Tier-2 items. Per this project's
-workflow rules, enter Plan Mode before starting whichever is picked next.
+Pick the next Lightroom gap and enter Plan Mode first, per this project's
+workflow rules. Point Color, Chromatic Aberration removal, and Manual
+Transform Scale/Aspect are the remaining unstarted Tier-1 gaps; Auto Tone/
+Auto Settings, Enhance/Super Resolution, History panel, and Copy/Paste-and-
+Sync are unstarted Tier-2 items. Also worth considering: Color Grading
+Slice B's own follow-ups logged this session — live-verifying the
+`AngularGradient` painted-wheel convention on screen (flagged DERIVED, not
+measured, in `ColorWheelGeometry.angularGradientFraction`'s doc comment),
+and IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout, which would also
+double as the wheel's first AT-accessible path to those two axes).

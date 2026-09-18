@@ -1363,6 +1363,215 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(pixel.b, 0.6, accuracy: accuracy)
     }
 
+    // MARK: - Point Color math (per-color eyedropper refinement)
+    //
+    // The 9th custom Core Image kernel in this codebase — every value below
+    // was measured against the real compiled kernel wired into the full
+    // perceptual sandwich exactly as `EditPipeline` integrates it (a
+    // temporary print-based harness, deleted after transcribing these
+    // numbers), matching `SelectiveColor.cikernel`'s own test methodology,
+    // not hand-derived. Test colors' TARGET hue/saturation are the GAMMA-
+    // DOMAIN values a chosen linear RGB triple maps to (computed with a
+    // throwaway calculator mirroring the kernel's own headroom-normalize +
+    // rgb2hsl math) — this kernel selects in the perceptual/gamma domain,
+    // matching Selective Color's own domain, NOT `Mask.colorRange`'s
+    // scene-linear one (see `EditPipeline.applyPointColors`'s own doc
+    // comment for why).
+
+    private func pointColorState(hue: Double = 0, saturation: Double = 0, luminance: Double = 0,
+                                  targetHue: Double = 0, targetSaturation: Double = 0,
+                                  range: Double = 0.5) -> EditState {
+        var state = EditState()
+        state.pointColors = [PointColor(
+            hasTarget: true, targetHue: targetHue, targetSaturation: targetSaturation, range: range,
+            hue: hue, saturation: saturation, luminance: luminance
+        )]
+        return state
+    }
+
+    func testPointColorZeroIsExactNoOp() {
+        // Includes 1.2 to prove an inactive stage preserves headroom (no
+        // kernel invocation at all — the `pointColorsActive` guard), and
+        // an un-picked (`hasTarget: false`) instance with non-zero sliders
+        // is ALSO a no-op (the pipeline's own `guard ... hasTarget else { continue }`).
+        for value in [0.05, 0.214, 0.5, 0.7, 1.2] {
+            let input = solidColorImage(value)
+            let zeroSliders = EditPipeline.apply(pointColorState(targetHue: 0, targetSaturation: 0.5762), to: input)
+            XCTAssertEqual(linearPixel(of: zeroSliders).r, Float(value), accuracy: accuracy, "zero sliders, value \(value)")
+
+            var unpicked = EditState()
+            unpicked.pointColors = [PointColor(hasTarget: false, hue: 1, saturation: 1, luminance: 1)]
+            let unpickedOutput = EditPipeline.apply(unpicked, to: input)
+            XCTAssertEqual(linearPixel(of: unpickedOutput).r, Float(value), accuracy: accuracy, "unpicked, value \(value)")
+        }
+    }
+
+    func testPointColorHueShiftsMatchingPixel() {
+        // Linear red 0.6/0.05/0.05 maps to gamma-domain hue=0, sat=0.5762 —
+        // an exact target match, full weight.
+        let input = solidColorImage(r: 0.6, g: 0.05, b: 0.05)
+        let output = EditPipeline.apply(pointColorState(hue: 1, targetHue: 0, targetSaturation: 0.5762), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.6, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.23572, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.05, accuracy: accuracy)
+    }
+
+    func testPointColorIsolatesFarPixel() {
+        // A blue pixel (gamma-domain hue=240) is far outside a hue=0
+        // target's falloff window at the default Range — must leave it
+        // (essentially) untouched, proving the kernel selects by distance
+        // to the picked color, not globally.
+        let input = solidColorImage(r: 0.05, g: 0.05, b: 0.6)
+        let output = EditPipeline.apply(pointColorState(hue: 1, targetHue: 0, targetSaturation: 0.5762), to: input)
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.05, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.05, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.6, accuracy: accuracy)
+    }
+
+    /// Regression test for a reviewer-caught real bug: `rgb2hsl` returns a
+    /// FABRICATED hue of 0 for any achromatic pixel. A neutral pixel must
+    /// select identically regardless of a desaturated target's HUE (0 or
+    /// 210 here) — if the hue axis were scored against that fabricated
+    /// value without a saturation-based gate, a target near hue 0 would
+    /// over-select every neutral pixel in the frame while one further away
+    /// (like 210) would under-select the same content.
+    func testPointColorNeutralPixelIgnoresTargetHue() {
+        let input = solidColorImage(0.3) // r == g == b: no real hue, S == 0
+
+        let nearZeroHueTarget = linearPixel(of: EditPipeline.apply(
+            pointColorState(luminance: 1, targetHue: 0, targetSaturation: 0.1, range: 0.5), to: input
+        ))
+        let farHueTarget = linearPixel(of: EditPipeline.apply(
+            pointColorState(luminance: 1, targetHue: 210, targetSaturation: 0.1, range: 0.5), to: input
+        ))
+
+        // Both must move the neutral pixel by the SAME amount — proving
+        // the target's hue had no bearing on a neutral pixel's weight.
+        XCTAssertEqual(nearZeroHueTarget.r, farHueTarget.r, accuracy: accuracy)
+        XCTAssertGreaterThan(nearZeroHueTarget.r, Float(0.3), "a matching-saturation target must actually select this neutral pixel")
+    }
+
+    func testPointColorRangeWidensEffect() {
+        // An in-between (gamma-domain hue=36.66) orange pixel: a narrow
+        // Range barely reaches it, a wide Range affects it substantially —
+        // MEASURED, matching `testSelectiveColorRangeWidensEffect`'s own
+        // methodology for the analogous claim about Selective Color.
+        let input = solidColorImage(r: 0.6, g: 0.3, b: 0.05)
+
+        let narrow = linearPixel(of: EditPipeline.apply(
+            pointColorState(hue: 1, targetHue: 0, targetSaturation: 0.5762, range: 0), to: input
+        ))
+        XCTAssertEqual(narrow.g, 0.3, accuracy: accuracy, "range 0 should barely reach this in-between pixel")
+
+        let wide = linearPixel(of: EditPipeline.apply(
+            pointColorState(hue: 1, targetHue: 0, targetSaturation: 0.5762, range: 1), to: input
+        ))
+        XCTAssertEqual(wide.g, 0.41229, accuracy: accuracy)
+        XCTAssertGreaterThan(wide.g, narrow.g + 0.05, "wide range must affect this pixel substantially more than narrow")
+    }
+
+    func testPointColorPreservesHeadroomOutsideWindow() {
+        // A bright (R>1 headroom) red pixel, with a target far from its own
+        // hue — untouched, headroom preserved exactly.
+        let input = solidColorImage(r: 1.4, g: 0.1, b: 0.1)
+        let output = EditPipeline.apply(
+            pointColorState(hue: 1, targetHue: 240, targetSaturation: 0.5762, range: 0.1), to: input
+        )
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 1.4, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.1, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.1, accuracy: accuracy)
+    }
+
+    func testPointColorPreservesHeadroomInsideWindow() {
+        // Same bright red pixel, this time with a MATCHING target (its own
+        // measured gamma-domain saturation is exactly 1.0, unlike the
+        // 0.5762 test pixel above — headroom-normalization changes a
+        // pixel's measured saturation, not just its luminance, so this
+        // target had to be independently measured, not reused). Luminance
+        // pushed up: R's headroom (1.4) survives EXACTLY, unlike a
+        // destructive clamp-to-1 would give.
+        let input = solidColorImage(r: 1.4, g: 0.1, b: 0.1)
+        let output = EditPipeline.apply(
+            pointColorState(luminance: 1, targetHue: 0, targetSaturation: 1.0, range: 0.5), to: input
+        )
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 1.4, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.84515, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.84515, accuracy: accuracy)
+    }
+
+    func testPointColorSaturationAdjustment() {
+        let input = solidColorImage(r: 0.6, g: 0.05, b: 0.05)
+        let output = EditPipeline.apply(
+            pointColorState(saturation: -1, targetHue: 0, targetSaturation: 0.5762), to: input
+        )
+        let pixel = linearPixel(of: output)
+
+        XCTAssertEqual(pixel.r, 0.23572, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.23572, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.23572, accuracy: accuracy)
+        XCTAssertLessThan(hsvSaturation(pixel), hsvSaturation(linearPixel(of: input)))
+    }
+
+    func testPointColorMultipleInstancesComposeSequentially() {
+        // Two instances, one targeting red, one targeting blue — each
+        // should affect only its own matching pixel, proving independent
+        // instances don't cross-contaminate.
+        var state = EditState()
+        state.pointColors = [
+            PointColor(hasTarget: true, targetHue: 0, targetSaturation: 0.5762, range: 0.5, hue: 1),
+            PointColor(hasTarget: true, targetHue: 240, targetSaturation: 0.5762, range: 0.5, luminance: 1),
+        ]
+
+        let redInput = solidColorImage(r: 0.6, g: 0.05, b: 0.05)
+        let redOutput = linearPixel(of: EditPipeline.apply(state, to: redInput))
+        XCTAssertEqual(redOutput.r, 0.6, accuracy: accuracy)
+        XCTAssertEqual(redOutput.g, 0.23572, accuracy: accuracy, "only the 1st (hue) instance should affect the red pixel")
+        XCTAssertEqual(redOutput.b, 0.05, accuracy: accuracy)
+
+        let blueInput = solidColorImage(r: 0.05, g: 0.05, b: 0.6)
+        let blueOutput = linearPixel(of: EditPipeline.apply(state, to: blueInput))
+        XCTAssertEqual(blueOutput.r, 0.36959, accuracy: accuracy, "only the 2nd (luminance) instance should affect the blue pixel")
+        XCTAssertEqual(blueOutput.g, 0.36959, accuracy: accuracy)
+        XCTAssertEqual(blueOutput.b, 0.79474, accuracy: accuracy)
+    }
+
+    func testPointColorRunsAfterSelectiveColor() {
+        // Proves pipeline ORDERING (Selective Color, then Point Color), not
+        // just each stage in isolation — MEASURED non-commuting (temporary
+        // swap-rebuild-remeasure, reverted). Uses Selective Color's
+        // `redHue: 1` (a HUE shift, not saturation): reviewer-caught that a
+        // first draft used `redSaturation: -1`, which weights BY the
+        // pixel's own saturation and so gated Point Color's own
+        // saturation-window weight to exactly zero in the shipped order —
+        // that version of this test passed byte-identically even with the
+        // Point Color stage deleted from the pipeline entirely, so it
+        // proved nothing about ordering. `redHue` leaves saturation
+        // untouched, keeping Point Color's weight nonzero regardless of
+        // order, so the HUE shift Selective Color applies first is what
+        // actually makes order matter here.
+        //
+        // Shipped order (Selective Color, then Point Color) gives
+        // (0.6, 0.05756, 0.05); reversing the two stages gives
+        // (0.6, 0.05, 0.18564) — a 0.13564 gap on blue, ~68x this suite's
+        // 0.002 tolerance.
+        let input = solidColorImage(r: 0.6, g: 0.05, b: 0.05)
+        var state = EditState(redHue: 1)
+        state.pointColors = [PointColor(hasTarget: true, targetHue: 0, targetSaturation: 0.5762, range: 0.5, hue: -1)]
+        let pixel = linearPixel(of: EditPipeline.apply(state, to: input))
+
+        XCTAssertEqual(pixel.r, 0.6, accuracy: accuracy)
+        XCTAssertEqual(pixel.g, 0.05756, accuracy: accuracy)
+        XCTAssertEqual(pixel.b, 0.05, accuracy: accuracy)
+    }
+
     // MARK: - Vibrance math
     //
     // Vibrance is a selective saturation (CIVibrance) that boosts muted

@@ -74,6 +74,10 @@ final class EditStatePresetTests: XCTestCase {
                 clarity: 0.25, saturation: 0.3, temperature: 200, tint: -10
             )
         ]
+        // point color
+        s.pointColors = [
+            PointColor(hasTarget: true, targetHue: 30, targetSaturation: 0.5, range: 0.4, hue: 0.2, saturation: 0.1, luminance: -0.1)
+        ]
         // geometry
         s.straightenAngle = 12
         s.verticalPerspective = 0.2
@@ -199,6 +203,23 @@ final class EditStatePresetTests: XCTestCase {
         XCTAssertNotEqual(
             result.masks, preset.masks,
             "sanity check: the preset's own masks must NOT have leaked through"
+        )
+    }
+
+    /// Point Color joins `redEyePoints`/`masks` in this same guard, for the
+    /// same reason: a color picked from the PRESET's own source photo is
+    /// meaningless dropped onto a different target photo.
+    func testTargetsPointColorsSurviveAPreset() {
+        let preset = fullyEditedState() // preset's OWN pointColors are non-empty too
+        var target = EditState.identity
+        target.pointColors = [PointColor(hasTarget: true, targetHue: 90, targetSaturation: 0.3)]
+
+        let result = preset.applyingPreset(onto: target)
+
+        XCTAssertEqual(result.pointColors, target.pointColors)
+        XCTAssertNotEqual(
+            result.pointColors, preset.pointColors,
+            "sanity check: the preset's own point colors must NOT have leaked through"
         )
     }
 
@@ -344,6 +365,15 @@ final class EditStatePresetTests: XCTestCase {
         XCTAssertEqual(savedPreset.masks, [])
     }
 
+    /// Same contract as `testASavedPresetCarriesNoMasks`, for Point Color.
+    func testASavedPresetCarriesNoPointColors() {
+        let currentEditState = fullyEditedState() // pointColors is non-empty
+
+        let savedPreset = currentEditState.applyingPreset(onto: .identity)
+
+        XCTAssertEqual(savedPreset.pointColors, [])
+    }
+
     /// `applyingPreset(onto:)` and `comparisonOriginal()` draw the color/
     /// tone-vs-geometry line in exactly the same place — but they are NOT
     /// perfect complements for `redEyePoints`: `comparisonOriginal()`
@@ -354,7 +384,7 @@ final class EditStatePresetTests: XCTestCase {
     /// down explicitly rather than assuming a full round trip — the same
     /// "don't assume symmetry" discipline this project has needed before
     /// (see PROGRESS.md's Vibrance notes).
-    func testApplyingAStatesOwnColorOntoItsOwnComparisonOriginalReproducesEverythingExceptRedEyePointsAndMasks() {
+    func testApplyingAStatesOwnColorOntoItsOwnComparisonOriginalReproducesEverythingExceptRedEyePointsAndMasksAndPointColors() {
         let state = fullyEditedState()
 
         let roundTripped = state.applyingPreset(onto: state.comparisonOriginal())
@@ -362,6 +392,7 @@ final class EditStatePresetTests: XCTestCase {
         var expected = state
         expected.redEyePoints = [] // comparisonOriginal() cleared these; applyingPreset never restores them
         expected.masks = [] // same asymmetry as redEyePoints -- see both methods' own doc comments
+        expected.pointColors = [] // same asymmetry again -- see both methods' own doc comments
         XCTAssertEqual(roundTripped, expected)
         XCTAssertNotEqual(
             roundTripped.redEyePoints, state.redEyePoints,
@@ -370,6 +401,10 @@ final class EditStatePresetTests: XCTestCase {
         XCTAssertNotEqual(
             roundTripped.masks, state.masks,
             "documents the same asymmetry for masks — not an oversight if this ever fails"
+        )
+        XCTAssertNotEqual(
+            roundTripped.pointColors, state.pointColors,
+            "documents the same asymmetry for point colors — not an oversight if this ever fails"
         )
     }
 }

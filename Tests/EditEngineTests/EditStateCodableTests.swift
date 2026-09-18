@@ -878,6 +878,81 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertFalse(state.isEffectivelyIdentity)
     }
 
+    // MARK: - Point Color
+
+    func testPointColorsArrayDefaultsWhenAbsent() throws {
+        let state = try decode("{}")
+        XCTAssertEqual(state.pointColors, [])
+    }
+
+    func testPointColorsArrayDecodesWhenPresent() throws {
+        let json = """
+        {
+            "pointColors": [{
+                "hasTarget": true, "targetHue": 120, "targetSaturation": 0.6, "range": 0.4,
+                "hue": 0.5, "saturation": -0.3, "luminance": 0.2
+            }]
+        }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.pointColors.count, 1)
+        XCTAssertEqual(state.pointColors[0].hasTarget, true)
+        XCTAssertEqual(state.pointColors[0].targetHue, 120)
+        XCTAssertEqual(state.pointColors[0].targetSaturation, 0.6)
+        XCTAssertEqual(state.pointColors[0].range, 0.4)
+        XCTAssertEqual(state.pointColors[0].hue, 0.5)
+        XCTAssertEqual(state.pointColors[0].saturation, -0.3)
+        XCTAssertEqual(state.pointColors[0].luminance, 0.2)
+    }
+
+    func testPointColorWithMissingParamKeysDecodesToItsDeclaredDefaults() throws {
+        let json = """
+        { "pointColors": [{ "hue": 0.5 }] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.pointColors.count, 1)
+        let pointColor = state.pointColors[0]
+        XCTAssertEqual(pointColor.hasTarget, false)
+        XCTAssertEqual(pointColor.targetHue, 0)
+        XCTAssertEqual(pointColor.targetSaturation, 0)
+        XCTAssertEqual(pointColor.range, 0.5)
+        XCTAssertEqual(pointColor.hue, 0.5)
+        XCTAssertEqual(pointColor.saturation, 0)
+        XCTAssertEqual(pointColor.luminance, 0)
+    }
+
+    func testPointColorIDRoundTripsThroughCodable() throws {
+        let id = UUID()
+        let pointColor = PointColor(id: id, hasTarget: true, targetHue: 30, targetSaturation: 0.5)
+        var state = EditState()
+        state.pointColors = [pointColor]
+
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(EditState.self, from: data)
+
+        XCTAssertEqual(decoded.pointColors[0].id, id)
+    }
+
+    func testPointColorUnknownExtraKeyIsIgnoredNotAnError() throws {
+        let json = """
+        { "pointColors": [{ "hue": 0.5, "someFutureFieldThatDoesNotExistYet": 42 }] }
+        """
+        let state = try decode(json)
+        XCTAssertEqual(state.pointColors[0].hue, 0.5)
+    }
+
+    /// The deliberate asymmetry `PointColor.isIdentity`'s own doc comment
+    /// describes: an instance with a picked target but every adjustment
+    /// at 0 renders byte-identical to no instance at all, yet the STATE
+    /// holding it is not `isEffectivelyIdentity` — mirroring `Mask`'s
+    /// existing `testStateWithAnIdentityParamMaskIsNotEffectivelyIdentity`.
+    func testStateWithAnIdentityPointColorIsNotEffectivelyIdentity() {
+        var state = EditState.identity
+        state.pointColors = [PointColor(hasTarget: true, targetHue: 30, targetSaturation: 0.5)]
+        XCTAssertTrue(state.pointColors[0].isIdentity, "sanity check: every adjustment field is at identity")
+        XCTAssertFalse(state.isEffectivelyIdentity)
+    }
+
     func testFullyPopulatedJSONStillDecodesCorrectly() throws {
         // Sanity check that the custom decoder isn't ONLY correct in the
         // all-missing case — every field explicitly present should decode

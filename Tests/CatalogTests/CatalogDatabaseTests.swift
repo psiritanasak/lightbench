@@ -655,6 +655,7 @@ final class CatalogDatabaseTests: XCTestCase {
         s.redEyeSize = 0.8
         s.redEyeStrength = 0.9
         s.redEyePoints = [RedEyePoint(x: 0.3, y: 0.4), RedEyePoint(x: 0.6, y: 0.5)]
+        s.pointColors = [PointColor(hasTarget: true, targetHue: 30, targetSaturation: 0.5, range: 0.4, hue: 0.2)]
         s.straightenAngle = 12
         s.cropInsetTop = 0.1
         s.flipHorizontal = true
@@ -664,8 +665,9 @@ final class CatalogDatabaseTests: XCTestCase {
     /// A real, executable proof that GRDB's Codable-record support actually
     /// serializes the nested `EditState` to a JSON column and back
     /// correctly — including the 24 selective-color fields and the
-    /// variable-length `redEyePoints` array — not just an assumption from
-    /// the framework's docs. The first blob/JSON column in this codebase.
+    /// variable-length `redEyePoints`/`pointColors` arrays — not just an
+    /// assumption from the framework's docs. The first blob/JSON column in
+    /// this codebase.
     func testCreatePresetRoundTripsTheFullEditState() async throws {
         let db = try makeDatabase()
         let state = fullyEditedState()

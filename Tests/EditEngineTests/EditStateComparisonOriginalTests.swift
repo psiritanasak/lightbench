@@ -78,6 +78,10 @@ final class EditStateComparisonOriginalTests: XCTestCase {
                 clarity: 0.25, saturation: 0.3, temperature: 200, tint: -10
             )
         ]
+        // point color
+        s.pointColors = [
+            PointColor(hasTarget: true, targetHue: 30, targetSaturation: 0.5, range: 0.4, hue: 0.2, saturation: 0.1, luminance: -0.1)
+        ]
         // geometry
         s.straightenAngle = 12
         s.verticalPerspective = 0.2
@@ -164,6 +168,14 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         let edited = fullyEditedState()
         XCTAssertFalse(edited.masks.isEmpty, "test fixture should start with a mask placed")
         XCTAssertTrue(edited.comparisonOriginal().masks.isEmpty)
+    }
+
+    /// Point Color is retouching/stylization, same reasoning as masks
+    /// just above.
+    func testPointColorsAreCleared() {
+        let edited = fullyEditedState()
+        XCTAssertFalse(edited.pointColors.isEmpty, "test fixture should start with a point color instance placed")
+        XCTAssertTrue(edited.comparisonOriginal().pointColors.isEmpty)
     }
 
     func testGeometryFieldsAreLeftByteIdenticalToTheInput() {

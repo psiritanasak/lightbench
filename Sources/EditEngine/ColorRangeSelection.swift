@@ -243,9 +243,14 @@ enum ColorRangeSelection {
 
     // MARK: - Swatch-only helpers (never used by the mask's own selection math)
 
-    /// HSL→RGB, Swift twin of `SelectiveColor.cikernel`'s `hsl2rgb` — used
-    /// ONLY by `displaySRGB` below to reconstruct a swatch color from the
-    /// three stored scalars, never by `resolve`'s own selection math.
+    /// HSL→RGB, Swift twin of `SelectiveColor.cikernel`'s `hsl2rgb`. Used by
+    /// `displaySRGB` below to reconstruct a swatch color from the three
+    /// stored scalars (never by `resolve`'s own selection math), and by
+    /// `ColorGradingTint.rgbDelta` for Color Grading's wheel-to-tint
+    /// conversion — both need a pure, CoreImage-free HSL→RGB reconstruction,
+    /// so this stays the one implementation rather than a second copy.
+    /// Expects `hue` already wrapped to 0..<360 — callers outside this file
+    /// wrap first, the same way `displaySRGB` does just below.
     static func rgb(forHue hue: Double, saturation: Double, lightness: Double) -> (r: Double, g: Double, b: Double) {
         let chroma = (1 - abs(2 * lightness - 1)) * saturation
         let hp = hue / 60

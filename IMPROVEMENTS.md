@@ -1039,6 +1039,25 @@ placing straight-line segments between keyboard-driven points, closer to
 Red-Eye's tap-to-place model than to a freehand drag) is one candidate
 starting point, not a decided design.
 
+### D20. Color Grading Slice B's wheel has no keyboard/AT path AND no numeric readout for 2 of its 3 axes (reviewer-caught, Slice B)
+
+`ColorGradingWheelView` is `.accessibilityHidden(true)`, matching the
+established WB-eyedropper/Red-Eye/pan-overlay deferral precedent (D8) —
+but unlike those, this control has no on-screen numeric value at all for
+Hue or Saturation, only the puck's visual position. Only the third axis,
+Luminance, has a real accessible `EditSliderRow` next to the wheel. This
+is a bigger gap than the "the sliders ARE the accessibility answer"
+shape D6/D9 established for Radial/Linear masks (where every dragged
+value has a labeled slider equivalent) — here 2 of 3 axes are pointer-
+only with no value ever displayed anywhere, sighted or not.
+
+Cheapest fix, not yet built: a small text caption under the wheel (e.g.
+"H 137° / S 0.42") that doubles as both a sighted numeric readout and,
+via `.accessibilityValue`, the AT readout — cheaper than a full D8-style
+keyboard-driven interaction redesign, and could ship independently of one.
+Needs its own small session; not touched during Slice B itself (reviewer
+flagged as non-blocking).
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

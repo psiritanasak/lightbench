@@ -507,6 +507,28 @@ struct EditState: Equatable, Codable {
     /// reusable look) — see both methods' own doc comments.
     var masks: [Mask] = []
 
+    // MARK: - Point Color
+
+    /// Per-photo Lightroom-style per-color eyedropper refinement — a
+    /// picked target color plus a Hue/Saturation/Luminance adjustment,
+    /// applied SEQUENTIALLY in array order (each instance's effect stacks
+    /// on the previous instances' output, the same `applyMasks`-style
+    /// accumulation `EditPipeline.applyPointColors` uses, not `redEyePoints`'
+    /// union). The THIRD variable-length field in this struct, after
+    /// `redEyePoints` and `masks` — same underlying justification: an
+    /// unbounded, per-photo, user-added collection the flat-named-field
+    /// convention doesn't fit. Deliberately much smaller than `Mask`
+    /// (`PointColor`'s own doc comment): no kind polymorphism, no
+    /// geometry, no combine mode.
+    ///
+    /// NOT included in `requiresRawRedecode` — an `EditPipeline` stage,
+    /// not a `CIRAWFilter` setting, matching `masks`. CLEARED by
+    /// `comparisonOriginal()` (retouching/stylization, same as `masks`)
+    /// but NOT copied by `applyingPreset(onto:)` (a picked color is this
+    /// photo's own composition, not part of a portable reusable look) —
+    /// see both methods' own doc comments.
+    var pointColors: [PointColor] = []
+
     // MARK: - Vignette
 
     /// Radial vignette strength, -1...1, 0 is identity. Positive DARKENS the
@@ -1246,6 +1268,12 @@ struct EditState: Equatable, Codable {
         // extent-preserving, which is exactly what this method's own
         // pixel-alignment guarantee (see the doc comment above) depends on.
         s.masks.removeAll()
+        // pointColors: same retouching/stylization reasoning as masks
+        // just above. `applyPointColors` is extent-preserving too (a
+        // sequential kernel pass over the whole extent, no crop/resize),
+        // so clearing it here is safe by the same pixel-alignment
+        // argument this method's own doc comment makes for masks.
+        s.pointColors.removeAll()
         // geometry (cropInset*, straightenAngle, verticalPerspective,
         // horizontalPerspective, flipHorizontal, flipVertical) is left
         // untouched — inherited from `self` via `var s = self` above.
@@ -1406,6 +1434,7 @@ extension EditState {
         case cropInsetTop, cropInsetBottom, cropInsetLeft, cropInsetRight
         case redEyePoints, redEyeSize, redEyeStrength
         case masks
+        case pointColors
         case vignetteStrength, vignetteRadius
         case texture, clarity, dehaze
         case noiseReduction
@@ -1524,6 +1553,7 @@ extension EditState {
         redEyeSize = try container.decodeIfPresent(Double.self, forKey: .redEyeSize) ?? 0.5
         redEyeStrength = try container.decodeIfPresent(Double.self, forKey: .redEyeStrength) ?? 0.7
         masks = try container.decodeIfPresent([Mask].self, forKey: .masks) ?? []
+        pointColors = try container.decodeIfPresent([PointColor].self, forKey: .pointColors) ?? []
         vignetteStrength = try container.decodeIfPresent(Double.self, forKey: .vignetteStrength) ?? 0
         vignetteRadius = try container.decodeIfPresent(Double.self, forKey: .vignetteRadius) ?? 0.5
         texture = try container.decodeIfPresent(Double.self, forKey: .texture) ?? 0

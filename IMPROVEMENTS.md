@@ -1125,6 +1125,40 @@ wasn't itself reported as exhibiting this — but the mechanism is now
 understood and confirmed real, so this is a real bug, not a
 theoretical one, the next time anyone touches that file.
 
+### D22. Point Color has no luminance-based selection axis — a real divergence from Lightroom's own feature (Slice A, reviewer-caught)
+
+`PointColor.cikernel` selects pixels by hue and saturation distance to
+the picked target only, never luminance — a deliberate v1 scope choice
+(not a domain impossibility, see the kernel's own header comment; an
+earlier draft of this file mis-stated it as a hard "domain hazard"
+before a reviewer corrected it). Real consequence: a bright highlight
+and a dark shadow of the exact same picked hue/saturation are
+INSEPARABLE by this kernel — both get selected and adjusted together,
+where Lightroom's real Point Color would let a user's luminance
+tolerance tell them apart.
+
+Root reason it's not simply "add a third axis": after this kernel's
+own headroom normalization (`rgb / max(maxChannel, 1)`), the resulting
+`L` is RELATIVE, not absolute — a 1.4-peak red and a 0.7-peak red can
+normalize to the same `L` value. A naive luminance-distance axis added
+on top of that normalized `L` would conflate genuinely different
+source brightnesses on any headroom content (skies, boosted
+highlights), the same class of subtlety `SelectiveColor.cikernel`'s
+own headroom-normalize fix had to work around once already. Note the
+kernel's EXISTING Luminance ADJUSTMENT slider does NOT sidestep this —
+`lumDelta` is added directly to the same normalized `hslv.z` this
+paragraph says is unsuitable for selection, so it has the identical
+relativity property today (a v1 scope choice for the adjustment side,
+not yet examined for its own correctness). Adding a correct SELECTION
+axis needs its own design pass (one candidate: comparing Rec.709 luma
+computed on the UN-normalized pixel, which neither the selection nor
+the adjustment side currently does) — not a same-slice addition, and
+not something this entry claims already exists anywhere in this file.
+
+Not fixed here — logged for whoever builds Slice B's UI, since a user
+who picks a shadow color and expects highlights of the same hue to be
+unaffected will be surprised.
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

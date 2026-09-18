@@ -1923,9 +1923,11 @@ each gets its own Plan Mode session per the workflow rules below.
   default is a re-sharpen that adds noise back, measured). Unlike Sharpen's
   radius, `noiseLevel` needed no extent-derived scaling (measured
   resolution-independent). v1 scope: single Amount slider only.
-- **Sharpen:** ✅ shipped — a single Amount slider via `CISharpenLuminance`, the
-  pipeline's true final stage (radius scales with the image's own min
-  dimension — measured necessity, the filter's radius is in absolute pixels).
+- **Sharpen:** ✅ shipped — a single Amount slider via `CISharpenLuminance`
+  (radius scales with the image's own min dimension — measured necessity,
+  the filter's radius is in absolute pixels). No longer the pipeline's
+  final stage as of the Grain slice below — that structural claim is kept
+  current there, not repeated stage-by-stage each time it moves.
   v1 scope: no separate Radius/Detail/Masking controls.
 - **Vignette:** ✅ Strength + Radius shipped (via Core Image's `CIVignetteEffect`,
   centered on the post-crop extent so it correctly follows a crop). Softness
@@ -2061,10 +2063,153 @@ shipped slider already follows):
     red, so the dark channel reads "not hazy" — the textbook failure case
     for this prior, not an implementation bug. IMPROVEMENTS.md D19.
   - Masks have no `dehaze` or `texture` — still a future additive item.
-- **Grain — WANTED.** Film-grain effect, not present in any form. Straightforward
-  new `EditState` field + a new perceptual-domain `EditPipeline` stage (likely
-  Core Image's own grain-simulation building blocks, or a small custom kernel if
-  none fit) — no migration concern, purely additive.
+- **Grain — ✅ SHIPPED (2026-09-17).** Single Amount slider (0...1, matching
+  Sharpen/Noise Reduction's one-directional family). No stock Core Image
+  filter does "blend a second noise image, monochrome, weighted by tone" as
+  one reviewable operation, so this needed a new custom kernel —
+  `FilmGrain.cikernel`, the SEVENTH in this codebase (after SelectiveColor,
+  ColorRange, ToneCurve, PointToneCurve, DehazeDarkChannel, DehazeRecover) —
+  blending a `CIRandomGenerator` noise field.
+  - **This slice's own round-1 "fix" shipped a WORSE bug than the one it
+    fixed — the single most important thing to read before touching this
+    stage again.** Round 1 (self-caught, before any review): a naive
+    construction fed `CIRandomGenerator` through `CIColorClamp` then
+    `CIColorMatrix` (to force the noise image opaque before the kernel).
+    That appeared to blow up into runaway values (~90588 on a 64x64
+    sample), which LOOKED like it confirmed "the generator's raw output
+    isn't bounded to 0...1" and was "fixed" by clamping first and
+    measuring the kernel's zero-point on the clamped-and-matrixed result
+    (0.7439). Round 2 was an ADVERSARIAL REVIEWER RE-MEASUREMENT — not
+    this suite, which was green throughout — and it found the round-1
+    "fix" was itself built on a false premise: `CIRandomGenerator`'s raw
+    output genuinely IS bounded to 0...1 (measured directly: min 0.0, max
+    1.0, mean 0.4994 over a 512x512 sample). The runaway values came from
+    `CIColorClamp`/`CIColorMatrix` themselves — MEASURED, not documented
+    anywhere found, both members of Core Image's "color matrix" family
+    treat their input as PREMULTIPLIED regardless of whether it actually
+    is. `CIRandomGenerator`'s r/g/b/a are independent per-channel randoms,
+    not a true premultiplied quadruple, so routing them through either
+    filter performs an unwanted implicit unpremultiply/repremultiply that
+    reshapes the distribution into `min(channel,alpha)/alpha` for uniform
+    r/a — mean 0.7439, with exactly 24.6% of pixels pinned at 1.0
+    (matching the analytic probability all three of r/g/b independently
+    exceed the SAME shared alpha, `∫(1-a)³da = 1/4`). That distorted
+    0.7439 zero-point was then measured a SECOND time only on a 64px test
+    fixture, where the noise's later affine scale floors to a 1px no-op —
+    real photos (`min(extent)` > 500px) hit a THIRD, independent
+    distortion from the default bilinear resampler, drifting the mean
+    further to ~0.82. Net compounded effect of all three: mid-gray at
+    slider 1.0 rendered at ~0.62 (~+0.31 EV of pure lift) at real
+    resolutions, not the intended few-percent artifact — a hidden,
+    resolution-DEPENDENT exposure bug that every unit test in the original
+    round-1 suite was structurally unable to see, because they all used
+    small (32-64px) fixtures where the noise's affine scale is a no-op.
+  - **Actual fix**: remove `CIColorClamp`/`CIColorMatrix` from the noise
+    construction ENTIRELY. Verified directly (a passthrough kernel
+    sampling the raw generator) that the kernel's own `__sample` mechanism
+    delivers `CIRandomGenerator`'s true, undistorted values with no
+    reinterpretation — the corruption was 100% a property of routing
+    through those two specific filters, not of kernel sampling in general.
+    The kernel already never read the noise argument's alpha (`n.a`), so
+    once the clamp/matrix are gone there is nothing left forcing it
+    opaque, and nothing needs to: the generator's independent random alpha
+    is simply irrelevant to a kernel that only ever reads `n.rgb`.
+    `kGrainZeroPoint` is 0.5 — confirmed BOTH analytically (the exact
+    theoretical mean of a uniform-0...1 field) AND empirically (0.4994
+    measured). Add `.samplingNearest()` before the noise's affine scale —
+    MEASURED as still necessary on the corrected construction, just for a
+    narrower reason than originally documented: bilinear resampling
+    doesn't distort the MEAN on the fixed noise (measured within ~0.006
+    of the true 0.4994 mean either way — well inside ordinary sampling
+    noise for these fixture sizes), but it still shrinks the STD by ~34% once the cell
+    exceeds 1px (adjacent random samples get averaged together, a real
+    amplitude loss) — `.samplingNearest()` holds std flat within 4% across
+    a 4x resolution range where bilinear alone would not.
+  - **Monochrome by construction**: the kernel adds the SAME delta to r/g/b
+    (averaging `CIRandomGenerator`'s three independent channels also
+    narrows the noise toward Gaussian via the central limit theorem — a
+    genuinely symmetric Bates(3) distribution about 0.5 — which is the
+    "organic, not flat" look, with no second Size/Roughness slider).
+  - **Tonal weight `w = 4*L*(1-L)` is a PRINCIPLED choice, not measured** —
+    models developed-film density (grain vanishes at pure black/white and
+    above 1.0 headroom); the measured shape across the tone range at
+    slider 1.0, RE-MEASURED at 800px after the fix above (shadows 0.05 ->
+    std 0.0547, mids 0.214 -> std 0.1642, mids 0.5 -> std 0.2019,
+    highlights 0.8 -> std 0.1142, near-white 0.95 -> std 0.0324, headroom
+    1.4 -> std ~0) confirms the parabola's real photographic behavior
+    rather than just its formula.
+  - **Ordering is measured, not conventional, on BOTH sides**: grain runs
+    as the pipeline's new true final stage, after Sharpen AND after Noise
+    Reduction. A temporary swap-rebuild-measure-revert harness (same
+    method Curves v2 slice 3 used), RE-MEASURED after the fix above (the
+    ordering conclusion did not change, only the exact figures): grain-
+    before-sharpen measures std 0.23888 vs. the shipped order's 0.09936
+    (~2.4x amplification — sharpen haloes the grain), and grain-before-NR
+    measures 0.06439 vs. 0.09936 (NR silently ate ~35% of the grain).
+    Sharpen's own doc comment and this file's Sharpen entry both
+    previously called it "the pipeline's true final stage" — that
+    STRUCTURAL claim is now false and was corrected in both places (its
+    embedded MEASUREMENT records were left untouched).
+  - **Resolution independence, a real design decision for this
+    stage specifically**: noise cell size is `kGrainCellFraction *
+    min(extent)`, the same fraction-of-extent mechanism Sharpen's radius
+    already uses — a fixed pixel cell would make the interactive
+    downscaled proxy show visibly larger grain that snaps smaller when the
+    full-res frame settles, a flicker unique to grain among this
+    pipeline's stages (the only stage whose signal is visible at the pixel
+    scale on flat content). RE-MEASURED at 400/800/1600px after the fix:
+    std 0.19946 / 0.20453 / 0.21236 — genuinely stable (<7% spread) across
+    a 4x resolution range, a real improvement over the pre-fix
+    construction's own much worse drift.
+  - **Lower bound IS clamped, unlike Dehaze's own deliberately-unclamped
+    result** — a real, measured necessity even with the CORRECTED,
+    genuinely symmetric noise: near black, `w` is small but non-zero, so
+    an unlucky strongly-negative sample can still push output to -0.0083
+    (re-measured on a linear-0.02 patch after the fix; the pre-fix,
+    asymmetric/skewed noise pushed as low as -0.0437, but the clamp is
+    needed either way). Unlike Dehaze, where a negative intermediate
+    value is a real byproduct an inverse optical model needs downstream,
+    Grain is the pipeline's TRUE FINAL stage, so nothing downstream needs
+    negative headroom, and "negative light" in the delivered image has no
+    meaning — clamping the lower bound only (never the upper, preserving
+    highlight headroom) is correct, not merely convenient.
+  - **Mean brightness is not perfectly preserved** — measured, not assumed,
+    at 800px (this drift is genuinely resolution-INDEPENDENT post-fix, so
+    a small fixture isn't hiding anything the way it did pre-fix): adding
+    zero-mean noise before the nonlinear perceptual encode/decode round
+    trip drifts the rendered mean by up to +0.031 (at linear 0.214;
+    smaller elsewhere), the expected signature of averaging a symmetric
+    perturbation through a convex decode curve (Jensen's inequality), not
+    a bug in the zero-centering.
+  - **Noise pattern, not just amplitude, is coordinate-locked** — worth
+    stating explicitly since Grain is the first stage in this pipeline
+    with this property: replaying the same `EditState` against the same
+    source at the same OUTPUT SIZE reproduces the identical grain pattern
+    (deterministic, confirmed across independent `CIContext`s), but an
+    export at a different resolution than the Editor's preview will show
+    a different — still deterministic, still amplitude-consistent —
+    noise realization, not a pixel match. `ImageRenderer.swift`'s own
+    proxy-divergence stage list (a STRUCTURAL claim) needed `grain` added
+    for the same underlying reason, and Grain is actually the MOST
+    divergent stage in that list: the others differ in amplitude between
+    proxy and full-res, Grain differs in its entire random pattern.
+  - **`pickColorRangeTarget`'s hand-maintained field list** (`ImageDocumentModel.swift`)
+    needed `grain` added alongside `vignetteStrength`/`texture`/`clarity`/
+    `dehaze`/`noiseReduction`/`sharpness` — this exact list was already
+    noted (line ~1525 above) as missing Dehaze once before; keep it in sync
+    for any future post-mask stage.
+  - **No new unit-testable claim about "the look"** — grain reading as
+    photographic vs. digital noise, clump size, rolloff naturalness are
+    subjective and live-verified instead, same precedent as
+    `ToneCurveEditorView`'s untested SwiftUI interaction glue.
+  - 1049 tests (16 new, all in `EditPipelineTests`' new `// MARK: - Grain
+    math` block, plus small plumbing additions across the Codable/Preset/
+    ComparisonOriginal/RawRedecode/Catalog test files following the
+    existing `dehaze` pattern). Reviewer: round 1 FIX FIRST (caught the
+    original, more superficial framing of the noise-distribution issue);
+    round 2 FIX FIRST via an adversarial re-measurement that caught the
+    round-1 fix's own deeper bug (see above) — this is the reviewer
+    process working exactly as intended, not a process failure.
 - **Color Grading — WANTED.** 3-way shadows/midtones/highlights color wheels
   (Lightroom's successor to Split Toning). Not present; no existing field covers
   this. Bigger UI lift than a slider (needs a color-wheel control, not an

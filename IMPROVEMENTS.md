@@ -287,6 +287,19 @@ new), 0 regressions.
   Photo menu's enabled state re-derives it on every Scene body pass, i.e. every
   slider tick — so this fix now has a measured case behind it at 10,000+
   photos, though it stays unjustified at this project's current scale.
+- Grain: `PhotoExporter.export` resizes AFTER `EditPipeline.apply` runs, so
+  an exported photo at a smaller-than-source output size will show
+  attenuated grain relative to what the Editor previews (a downscale
+  averages adjacent grain-perturbed pixels together). NOT measured — this
+  is a structural observation from reading the export/pipeline call order,
+  not a quantified claim; if it turns out to be visually significant, the
+  fix is regenerating grain's noise field sized to the OUTPUT resolution
+  rather than compensating after the fact. Related but distinct: the noise
+  is locked to absolute `CIImage` coordinates (see `EditState.grain`'s own
+  doc comment), so even at matching output size, an export won't
+  necessarily reproduce the Editor preview's exact noise PATTERN pixel-
+  for-pixel unless the render pipeline's coordinate origin matches too —
+  not verified either way for this app's actual export path.
 
 ---
 

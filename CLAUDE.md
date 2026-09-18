@@ -102,7 +102,8 @@ Grouped to match Apple Photos' adjustment panel. Full detail in `docs/ROADMAP_HI
 - **Selective Color:** ✅ — HSL v2, 8 fixed hue bands × Hue/Saturation/Luminance, `SelectiveColor.cikernel` (this app's first custom kernel).
 - **HSL v1:** ✅ global Hue + Saturation only (no Lightness — would duplicate Exposure/Curves).
 - **Noise Reduction:** ✅ single Amount slider (`CINoiseReduction`).
-- **Sharpen:** ✅ single Amount slider (`CISharpenLuminance`), the pipeline's true final stage.
+- **Sharpen:** ✅ single Amount slider (`CISharpenLuminance`). No longer the pipeline's final stage — Grain runs after it (measured: sharpening after grain amplifies it ~2.4x).
+- **Grain:** ✅ single Amount slider, `FilmGrain.cikernel` (7th custom kernel) blending a `CIRandomGenerator` noise field, sampled directly by the kernel with NO `CIColorClamp`/`CIColorMatrix` in between — an adversarial reviewer re-measurement caught that those Core Image "color matrix" family filters silently corrupt `CIRandomGenerator`'s output (an implicit premultiply/unpremultiply round trip they perform on ANY input, real premultiplied data or not) into a resolution-dependent hidden exposure lift; see `EditPipeline.kGrainZeroPoint`'s own doc comment for the full story of a real bug caught after this slice's own initial ship-ready review. Noise cell size is a fraction of `min(extent)` (same mechanism as Sharpen's radius), sampled with `.samplingNearest()` (not the default bilinear, which measurably shrinks the noise's amplitude once the cell exceeds 1px) so apparent grain size AND intensity stay consistent across thumbnail/proxy/full-res. Grain-AFTER-Sharpen and grain-AFTER-Noise-Reduction are both measured requirements, not conventions (reversing either is what was measured and rejected) — see `EditPipeline.applyGrain`'s own doc comment.
 - **Vignette:** ✅ Strength + Radius (`CIVignetteEffect`, centered on post-crop extent). Softness/falloff not built.
 - **Transform/Distort:** Straighten ✅, Vertical/Horizontal perspective (keystone) ✅ (`CIPerspectiveTransform`). Lens distortion correction not built (needs camera-profile data).
 - **Flip:** ✅ horizontal/vertical toggles.
@@ -121,7 +122,7 @@ backlog and was missed once for that reason.)
 field(s) + `EditPipeline` stage(s) + `AdjustTabView` section):**
 - Texture / Clarity — ✅ SHIPPED (see Phase 2 backlog above; do not re-add `definition`)
 - Dehaze — ✅ SHIPPED (see Phase 2 backlog above)
-- Grain — WANTED, not started
+- Grain — ✅ SHIPPED (see Phase 2 backlog above)
 - Color Grading (3-way shadow/mid/highlight color wheels) — WANTED, not started; needs a new color-wheel UI control, but purely additive to `EditState`
 - Point Color (per-color eyedropper refinement, distinct from Selective Color's 8 fixed bands) — WANTED, not started; likely needs a variable-length collection field, like `redEyePoints`
 - Chromatic Aberration removal — WANTED, not started; purely additive

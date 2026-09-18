@@ -8,9 +8,14 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
 Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
-✅ FULLY COMPLETE. **Curves v2 is now FULLY COMPLETE** (Tier-2 Lightroom gap,
-WANTED) — slices 1, 2A, 2B, and 3 (backend + UI) are all shipped, reviewed,
-and live-verified. See CLAUDE.md's roadmap for the full phase list and
+✅ FULLY COMPLETE, and Curves v2 (Tier-2 Lightroom gap) is fully shipped,
+reviewed, and live-verified. **Grain** (Tier-1 Lightroom gap, WANTED, first
+item on that list) is code-complete, all 1049 tests passing, and reviewer-
+APPROVED after a real bug in round 1's own fix was caught by an adversarial
+re-measurement plus a handful of doc-comment-only FIX FIRST rounds after
+that (see "Done" below for the full story). Not yet committed — live
+verification and commit are the remaining steps (see "In progress /
+blocked" below). See CLAUDE.md's roadmap for the full phase list and
 `docs/ROADMAP_HISTORY.md` for detail on anything already shipped.
 
 ## Open reviewer issues
@@ -37,6 +42,81 @@ Texture/Clarity and Dehaze, and all of Curves v2 (slices 1, 2A, 2B, and 3 —
 backend and UI, fully shipped and live-verified). Every numbered
 IMPROVEMENTS.md item marked SHIPPED there is also done — that file is the
 source of truth for the perf/polish backlog, not duplicated here.
+
+**Grain (2026-09-17)**: single Amount slider, the pipeline's new true
+final stage (after Sharpen and Noise Reduction — see below). New
+`FilmGrain.cikernel` (7th custom kernel in this codebase) blends a
+`CIRandomGenerator` noise field, monochrome by construction (same delta on
+r/g/b), weighted by a principled `4*L*(1-L)` tonal curve that vanishes at
+pure black/white and above highlight headroom.
+
+This slice went through TWO full reviewer rounds because the first round's
+own FIX FIRST fixes shipped a genuine, more serious bug than the one being
+fixed — worth recording in full since the failure mode is subtle and
+could recur. Round 1 (self-caught before any review): `CIRandomGenerator`
+fed through `CIColorClamp` then `CIColorMatrix` (to force the noise
+opaque) appeared to blow up into runaway values (~90588 on a 64x64
+sample), "fixed" by measuring the kernel's zero-point on that
+clamped-and-matrixed noise (0.7439). Round 2 (an ADVERSARIAL reviewer
+re-measurement, not this suite): that "fix" was itself wrong. Both
+`CIColorClamp` and `CIColorMatrix` — MEASURED, not documented anywhere
+found — treat their input as PREMULTIPLIED regardless of the actual data;
+routing `CIRandomGenerator`'s independent per-channel randoms through them
+performs an unwanted implicit unpremultiply/repremultiply that reshapes
+the distribution into `min(channel,alpha)/alpha` (mean 0.7439, not the
+raw generator's own genuine 0.5, with 24.6% of pixels pinned exactly at
+1.0 — matching the analytic probability all three of r/g/b independently
+exceed the same shared alpha). That distorted 0.7439 zero-point was ALSO
+measured only on a 64px test fixture, where the noise's later affine
+scale floors to a 1px no-op — real photos (`min(extent)` > 500px) hit a
+SECOND, independent distortion from the default bilinear resampler,
+drifting the mean further to ~0.82. Net effect of the two compounding
+bugs: mid-gray at slider 1.0 rendered at ~0.62 (~+0.31 EV) at real
+resolutions, not the intended few-percent Jensen's-inequality artifact.
+**Actual fix**: remove `CIColorClamp`/`CIColorMatrix` entirely — verified
+directly that a kernel sampling `CIRandomGenerator`'s raw output
+reproduces its true, undistorted 0.4994 mean — and simply never read the
+noise argument's alpha channel in the kernel (the generator's own
+independent random alpha is irrelevant, not something to force or
+correct). `kGrainZeroPoint` is 0.5 (confirmed both analytically — the
+theoretical mean of a uniform-0...1 field — and empirically). Add
+`.samplingNearest()` before the noise's affine scale: MEASURED, the
+default bilinear resampler leaves the mean alone on this corrected
+construction but still shrinks the noise's STD by ~34% once the cell
+exceeds 1px (adjacent random samples get averaged together), which
+`.samplingNearest()` holds flat across a 4x resolution range.
+
+Stage order (after Sharpen, after Noise Reduction) is MEASURED on both
+sides via a temporary swap-rebuild-measure-revert harness, re-confirmed
+after the fix above: grain-before-sharpen amplifies noise ~2.4x (std
+0.23888 vs. shipped 0.09936), grain-before-NR gets ~35% of it silently
+eaten (std 0.06439 vs. 0.09936) — Sharpen's own "true final stage" claim
+(in two places: the `EditPipeline` type header and its own doc comment)
+was corrected rather than left stale. Lower bound IS clamped in the
+kernel (unlike Dehaze's deliberately-unclamped result) — a real,
+re-measured necessity even with the corrected SYMMETRIC noise: near
+black, `w` is small but non-zero, so an unlucky sample can still push
+output to -0.0083 before the clamp. `pickColorRangeTarget` in
+`ImageDocumentModel.swift` needed `grain` added to its hand-maintained
+post-mask-stage field list (the same list that was missing Dehaze once
+before). `ImageRenderer.swift`'s own proxy-divergence stage list (a
+STRUCTURAL claim) needed `grain` added too — and Grain is the MOST
+proxy-divergent stage of all, since its noise pattern (not just its
+amplitude) is coordinate-locked and differs completely between a proxy
+and a full-res render, a nuance now recorded on `EditState.grain`'s own
+doc comment and in IMPROVEMENTS.md. 1049 tests (16 new, `EditPipelineTests`'
+new `// MARK: - Grain math` block, plus plumbing across Codable/Preset/
+ComparisonOriginal/RawRedecode/Catalog tests following the `dehaze`
+pattern). Reviewer: FIX FIRST (the adversarial re-measurement that caught
+the CIColorClamp/CIColorMatrix premultiply bug — see above) → FIX FIRST (3
+blocking + 3 nits, all doc-comment consistency: an inverted stage-order
+claim and a stale figure in CLAUDE.md, a missing-`grain`-from-a-hand-
+maintained-list gap in `ImageDocumentModel.swift`, a stale "Sharpen is
+final" claim in `docs/ROADMAP_HISTORY.md`'s original Sharpen entry, a test
+mis-citation, an over-tight measurement band) → FIX FIRST (one of those doc
+fixes had only been applied in one of two files carrying the same stale
+band) → **APPROVE**. NOT yet live-verified or committed — see "In progress
+/ blocked" below.
 
 **Curves v2 slice 3 UI (2026-09-17)**: the per-channel Red/Green/Blue tone
 curve editor, built on the backend shipped earlier this session (commit
@@ -195,16 +275,25 @@ interaction glue with no unit-test precedent, per this codebase's own
 convention; verified live instead).
 
 ## In progress / blocked
-Nothing in progress and nothing blocked. Curves v2 slice 3's editor UI
-(code, review, and live verification) is complete — see the "Done" entry
-above.
+**Grain** — code-complete, all 1049 tests passing, reviewer-APPROVED (see
+the "Done" entry above for the full story, including a genuine bug in
+round 1's own fix that an adversarial re-measurement caught — not a normal
+review pass). Committed WITHOUT live verification, by explicit user choice
+(asked; user chose to skip it and commit now rather than grant screen-
+automation permission for this task). NOT live-verified: the slider's
+visual effect across its range, whether it reads as photographic grain
+rather than digital noise (a subjective judgment, deliberately not unit-
+tested), and — the actual payoff of the resolution-independence design
+decision — whether dragging the slider on a large photo shows any visible
+grain-size pop when the interactive downscaled proxy is dropped and the
+full-res frame settles. Worth live-verifying in a future session before
+relying on the "no visible pop" claim; not currently blocking anything.
 
 ## Exact next step
-Curves v2 is now fully complete. Pick the next slice from a WANTED
-Lightroom-gap item (see CLAUDE.md's "Gaps vs. Adobe Lightroom Desktop"
-section) — Grain, Color Grading, Point Color, Chromatic Aberration removal,
-and Manual Transform Scale/Aspect are all unstarted Tier-1 items; Auto
-Tone/Auto Settings, Enhance/Super Resolution, History panel, and
-Copy/Paste-and-Sync are unstarted Tier-2 items. Per this project's
-workflow rules, enter Plan Mode before starting whichever is
-picked.
+Grain is committed. Pick the next WANTED Lightroom-gap item (see
+CLAUDE.md's "Gaps vs. Adobe Lightroom Desktop" section) — Color Grading,
+Point Color, Chromatic Aberration removal, and Manual Transform
+Scale/Aspect are the remaining unstarted Tier-1 items; Auto Tone/Auto
+Settings, Enhance/Super Resolution, History panel, and Copy/Paste-and-Sync
+are unstarted Tier-2 items. Per this project's workflow rules, enter Plan
+Mode before starting whichever is picked.

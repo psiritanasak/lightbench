@@ -24,6 +24,11 @@ struct AdjustPanelState {
     var isColorSectionExpanded = false
     var isSelectiveColorSectionExpanded = false
     var isBlackAndWhiteSectionExpanded = false
+    /// Color Grading Slice B: whether the "Color Grading" section is
+    /// expanded. Collapsed by default, same reasoning as every other
+    /// section bool — also means the wheel's own drag interaction is inert
+    /// for anyone who never opens it.
+    var isColorGradingSectionExpanded = false
     var isEffectsSectionExpanded = false
     var isRedEyeSectionExpanded = false
 
@@ -85,6 +90,14 @@ struct AdjustPanelState {
     /// point arrays (`toneCurvePoints`/`toneCurvePointsRed/Green/Blue`) at
     /// once; this only tracks which one the panel is currently editing.
     var selectedToneCurveChannel: ToneCurveChannel = .composite
+
+    /// Color Grading Slice B: which of the 3 tonal ranges the section's
+    /// single shared `ColorGradingWheelView` currently shows/edits.
+    /// Presentation-only, exactly like `selectedSelectiveColorBand`/
+    /// `selectedToneCurveChannel` above — `EditState` holds all 3 ranges'
+    /// Hue/Saturation/Luminance at once; this only tracks which one the
+    /// panel is currently editing.
+    var selectedColorGradingRange: ColorGradingRange = .shadow
 }
 
 /// The Editor's Adjust tab: the six collapsible Light/Color/Selective Color/
@@ -190,6 +203,36 @@ struct AdjustTabView: View {
         }
     }
 
+    /// Color Grading Slice B: routes to whichever of the 3 tonal ranges
+    /// `range` names — structurally identical to
+    /// `selectiveColorHueBinding(for:)` above and for the same reason:
+    /// `EditState` has 9 flat named fields (matching this codebase's
+    /// established per-field convention), so the panel needs this small
+    /// dispatch to edit one range's trio at a time.
+    private func colorGradingHueBinding(for range: ColorGradingRange) -> Binding<Double> {
+        switch range {
+        case .shadow: return $document.editState.shadowHue
+        case .midtone: return $document.editState.midtoneHue
+        case .highlight: return $document.editState.highlightHue
+        }
+    }
+
+    private func colorGradingSaturationBinding(for range: ColorGradingRange) -> Binding<Double> {
+        switch range {
+        case .shadow: return $document.editState.shadowSaturation
+        case .midtone: return $document.editState.midtoneSaturation
+        case .highlight: return $document.editState.highlightSaturation
+        }
+    }
+
+    private func colorGradingLuminanceBinding(for range: ColorGradingRange) -> Binding<Double> {
+        switch range {
+        case .shadow: return $document.editState.shadowLuminance
+        case .midtone: return $document.editState.midtoneLuminance
+        case .highlight: return $document.editState.highlightLuminance
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Adjust")
@@ -218,6 +261,12 @@ struct AdjustTabView: View {
                 icon: "circle.lefthalf.filled", title: "Black & White", isExpanded: $panel.isBlackAndWhiteSectionExpanded
             ) {
                 blackAndWhiteSection
+            }
+            Divider()
+            AdjustSectionContainer(
+                icon: "circle.hexagongrid", title: "Color Grading", isExpanded: $panel.isColorGradingSectionExpanded
+            ) {
+                colorGradingSection
             }
             Divider()
             AdjustSectionContainer(icon: "sparkles", title: "Effects", isExpanded: $panel.isEffectsSectionExpanded) {
@@ -513,6 +562,90 @@ struct AdjustTabView: View {
     /// Just the row — see `lightSection`'s comment.
     private var blackAndWhiteSection: some View {
         EditToggleRow(label: "Black & White", value: $document.editState.blackAndWhite)
+    }
+
+    /// Color Grading Slice B — 3-way Shadows/Midtones/Highlights color
+    /// wheels. Mirrors `curveSection`'s exact structure (segmented picker
+    /// -> single shared editor -> per-target Reset button), the same
+    /// "one control, several bindable targets" shape, for the same reason:
+    /// `EditState` has 9 flat named fields (3 ranges x Hue/Saturation/
+    /// Luminance), so the panel needs this dispatch to show one range's
+    /// trio at a time rather than 3 simultaneous wheels (a layout that
+    /// would need its own, unproven compact-wheel sizing — see the Slice B
+    /// plan's own layout decision).
+    private var colorGradingSection: some View {
+        Group {
+            Text("Applies after Black & White — a colored tint here survives forced desaturation.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Picker("", selection: $panel.selectedColorGradingRange) {
+                ForEach(ColorGradingRange.allCases) { range in
+                    Text(colorGradingRangeSegmentLabel(for: range)).tag(range)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            // `.id(range)` is PRECAUTIONARY, not load-bearing today —
+            // unlike `curveSection`'s own `.id(channel)`, which closes a
+            // real stale-per-gesture-index hazard in `ToneCurveEditorView`.
+            // `ColorGradingWheelView` holds no `@State`/`@FocusState` at
+            // all (see that view's own doc comment: every `onChanged`
+            // callback writes `hue`/`saturation` directly, with no
+            // per-gesture index to go stale), so this `.id` is currently a
+            // no-op. Kept anyway, matching `curveSection`'s established
+            // "one control, several bindable targets" shape, so that if
+            // this view ever grows its own view-identity-scoped state it
+            // already has the safe default rather than needing this call
+            // site revisited.
+            ColorGradingWheelView(
+                hue: colorGradingHueBinding(for: panel.selectedColorGradingRange),
+                saturation: colorGradingSaturationBinding(for: panel.selectedColorGradingRange)
+            )
+            .id(panel.selectedColorGradingRange)
+            EditSliderRow(
+                label: "Luminance",
+                value: colorGradingLuminanceBinding(for: panel.selectedColorGradingRange),
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            Button("Reset \(panel.selectedColorGradingRange.rawValue)") {
+                colorGradingHueBinding(for: panel.selectedColorGradingRange).wrappedValue = 0
+                colorGradingSaturationBinding(for: panel.selectedColorGradingRange).wrappedValue = 0
+                colorGradingLuminanceBinding(for: panel.selectedColorGradingRange).wrappedValue = 0
+            }
+            .frame(maxWidth: .infinity)
+            .disabled(isSelectedColorGradingRangeAtIdentity)
+        }
+    }
+
+    /// Single source of truth for "is `range` at identity" — shared by the
+    /// segmented picker's edited-dot and the per-range Reset button's
+    /// disabled state, so the two can't disagree (an earlier draft checked
+    /// Saturation/Luminance for the dot but Hue+Saturation+Luminance for
+    /// Reset, which — combined with a puck that could land at a non-zero
+    /// Hue with near-zero Saturation — could show Reset enabled with no
+    /// dot on the segment, the same "invisible edited state" failure class
+    /// `channelSegmentLabel` above documents being reviewer-caught for the
+    /// Curve section once already). `ColorWheelGeometry.polarValue`'s
+    /// center snap keeps a puck dragged back to dead-center at exactly
+    /// Hue 0/Saturation 0, so this trio reads as identity exactly when the
+    /// wheel visually looks centered.
+    private func isColorGradingRangeAtIdentity(_ range: ColorGradingRange) -> Bool {
+        colorGradingHueBinding(for: range).wrappedValue == 0
+            && colorGradingSaturationBinding(for: range).wrappedValue == 0
+            && colorGradingLuminanceBinding(for: range).wrappedValue == 0
+    }
+
+    /// The segmented picker's label for `range` — its plain name, plus a
+    /// trailing dot when `range` is not at identity. Without this, an
+    /// edited range other than the one currently shown is invisible state
+    /// — the same failure class `channelSegmentLabel` above already
+    /// documents being reviewer-caught for the Curve section once.
+    private func colorGradingRangeSegmentLabel(for range: ColorGradingRange) -> String {
+        isColorGradingRangeAtIdentity(range) ? range.rawValue : "\(range.rawValue) •"
+    }
+
+    private var isSelectedColorGradingRangeAtIdentity: Bool {
+        isColorGradingRangeAtIdentity(panel.selectedColorGradingRange)
     }
 
     /// Vignette/Texture/Clarity/Dehaze/Sharpen/Noise Reduction/Grain — the

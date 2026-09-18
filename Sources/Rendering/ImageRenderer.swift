@@ -119,10 +119,15 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     //     if minor, extra divergence source.
     // Every other stage (crop, straighten, perspective, flip, vignette,
     // WB, exposure, levels, curves, HSL, saturation, B&W, Selective Color,
-    // Color Grading) is exactly extent-proportional or purely per-pixel
-    // (Color Grading has no geometry at all — its weight depends only on
-    // each pixel's own luminance, confirmed empirically via
-    // `testColorGradingIsResolutionConsistent`, not just assumed), so a
+    // Color Grading, Point Color) is exactly extent-proportional or purely
+    // per-pixel (Color Grading has no geometry at all — its weight depends
+    // only on each pixel's own luminance, confirmed empirically via
+    // `testColorGradingIsResolutionConsistent`, not just assumed; Point
+    // Color's kernel is the same shape — no extent/radius argument at
+    // all, weight depends only on each pixel's own hue/saturation distance
+    // to the picked target — but this is a STRUCTURAL claim from reading
+    // `PointColor.cikernel` itself, not separately empirically confirmed
+    // the way Color Grading's own claim is), so a
     // proxy renders identically to full-res for those, up to resampling — see
     // `ProxyScale`'s own doc comment for the fuller argument. Scope note:
     // NONE of those were included in D18's measurements, which covered only

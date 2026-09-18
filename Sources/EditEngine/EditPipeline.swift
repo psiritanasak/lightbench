@@ -213,6 +213,7 @@ enum EditPipeline {
             || pointCurveActive(state)
             || state.hslHue != 0
             || selectiveColorActive(state)
+            || pointColorsActive(state)
             || state.vibrance != 0
             || effective.saturation != 0
             || state.blackAndWhite
@@ -291,6 +292,27 @@ enum EditPipeline {
         // scalers" then act on the per-band-adjusted result). MEASURED
         // non-commuting with global Hue — see testSelectiveColorRunsAfterGlobalHue.
         if selectiveColorActive(state) { img = applySelectiveColor(state, to: img) }
+        // Point Color runs immediately after Selective Color, before
+        // Vibrance/Saturation — same WYSIWYG reasoning Selective Color
+        // itself documents just above (targets the picked color as the
+        // user currently SEES it, post global Hue AND post Selective
+        // Color's own per-band adjustments), and the same "before B&W's
+        // forced desaturation" placement, so a Point Color instance is
+        // correctly erased by Black & White rather than needing special
+        // interaction with it. MEASURED non-commuting with Selective
+        // Color (temporary swap-rebuild-remeasure, reverted): with
+        // Selective Color's `redHue: 1` (a HUE shift, not saturation —
+        // chosen so Point Color's own saturation-window weight stays
+        // nonzero regardless of order; an earlier `redSaturation`-based
+        // measurement was reviewer-caught as gating Point Color's weight
+        // to exactly zero in the shipped order, making that version of
+        // this test unable to distinguish "after Selective Color" from
+        // "absent entirely") and a matching Point Color `hue: -1` both
+        // active on a red test pixel, this order gives
+        // (0.6, 0.05756, 0.05); reversing the two stages gives
+        // (0.6, 0.05, 0.18564) — a 0.13564 gap on blue, ~68x this suite's
+        // 0.002 tolerance. See testPointColorRunsAfterSelectiveColor.
+        if pointColorsActive(state) { img = applyPointColors(state, to: img) }
         if state.vibrance != 0 { img = applyVibrance(state.vibrance, to: img) }
         // `blackAndWhite` FORCES full desaturation (factor 0, i.e. the same
         // call `applySaturation` already makes at hslSaturation's own -1
@@ -748,6 +770,67 @@ enum EditPipeline {
         // verified against the real compiled kernel before shipping.
         let arguments: [Any] = [image, hueA, hueB, satA, satB, lumA, lumB, NSNumber(value: state.selectiveColorRange)]
         return kernel.apply(extent: image.extent, arguments: arguments) ?? image
+    }
+
+    // MARK: - Point Color (per-color eyedropper refinement)
+
+    /// The 9th custom Core Image kernel in this codebase — Lightroom-style
+    /// per-color refinement: unlike `SelectiveColor.cikernel`'s 8 FIXED
+    /// named hue bands, each `PointColor` instance targets ONE arbitrary
+    /// picked color (Slice B, not yet built, will populate `targetHue`/
+    /// `targetSaturation` via an eyedropper — Slice A ships this stage
+    /// settable only via a hand-edited sidecar or a preset).
+    /// `CIColorKernel(source:)` is deprecated but functional, matching
+    /// `selectiveColorKernel`/`colorGradingKernel`/`colorRangeKernel`
+    /// above — see `selectiveColorKernel`'s own doc comment for the
+    /// deferred Metal `.ci.metal` migration this shares.
+    private static let pointColorKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "PointColor", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
+    /// Matches `applyPointColors`'s own per-instance guard exactly
+    /// (`!isIdentity && hasTarget`) — reviewer-caught: these two
+    /// predicates previously disagreed (this one omitted `hasTarget`),
+    /// which was harmless today (an un-picked instance is a headroom-
+    /// preserving no-op either way — see `testPointColorZeroIsExactNoOp`)
+    /// but meant an un-picked instance with non-zero sliders needlessly
+    /// entered the whole perceptual sandwich for a stage that then does
+    /// nothing.
+    private static func pointColorsActive(_ state: EditState) -> Bool {
+        state.pointColors.contains { !$0.isIdentity && $0.hasTarget }
+    }
+
+    /// Sequential per-instance kernel passes (matching `PointToneCurve`'s
+    /// own "N passes of one shared kernel for a variable/optional set of
+    /// stages" precedent), NOT packed into fixed vec4 slots the way
+    /// Selective Color's fixed 8 bands are — `pointColors` is genuinely
+    /// unbounded, unlike Selective Color's always-exactly-8 bands. Each
+    /// pass sees the PREVIOUS instances' output, so two instances
+    /// targeting overlapping colors stack (the same `applyMasks`-style
+    /// sequential accumulation, not `applyRedEye`'s union).
+    private static func applyPointColors(_ state: EditState, to image: CIImage) -> CIImage {
+        guard let kernel = pointColorKernel else { return image }
+        var img = image
+        for pointColorInstance in state.pointColors {
+            guard !pointColorInstance.isIdentity, pointColorInstance.hasTarget else { continue }
+            let hueWindow = PointColorTuning.hueWindow(forRange: pointColorInstance.range)
+            let saturationWindow = PointColorTuning.saturationWindow(forRange: pointColorInstance.range)
+            let target = CIVector(
+                x: pointColorInstance.targetHue, y: pointColorInstance.targetSaturation,
+                z: hueWindow, w: saturationWindow
+            )
+            let arguments: [Any] = [
+                img, target,
+                NSNumber(value: pointColorInstance.hue),
+                NSNumber(value: pointColorInstance.saturation),
+                NSNumber(value: pointColorInstance.luminance),
+            ]
+            img = kernel.apply(extent: img.extent, arguments: arguments) ?? img
+        }
+        return img
     }
 
     // MARK: - Color Grading (3-way shadows/midtones/highlights)

@@ -56,6 +56,9 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.magentaHue = 0.1; s.magentaSaturation = 0.1; s.magentaLuminance = 0.1
         // black & white + effects
         s.blackAndWhite = true
+        s.shadowHue = 210; s.shadowSaturation = 0.6; s.shadowLuminance = -0.3
+        s.midtoneHue = 30; s.midtoneSaturation = 0.4; s.midtoneLuminance = 0.2
+        s.highlightHue = 50; s.highlightSaturation = 0.5; s.highlightLuminance = 0.1
         s.vignetteStrength = 0.5
         s.vignetteRadius = 0.7
         s.clarity = 0.4
@@ -125,6 +128,15 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         XCTAssertEqual(original.selectiveColorRange, identity.selectiveColorRange)
         XCTAssertEqual(original.redHue, 0); XCTAssertEqual(original.magentaLuminance, 0)
         XCTAssertEqual(original.blackAndWhite, identity.blackAndWhite)
+        XCTAssertEqual(original.shadowHue, identity.shadowHue)
+        XCTAssertEqual(original.shadowSaturation, identity.shadowSaturation)
+        XCTAssertEqual(original.shadowLuminance, identity.shadowLuminance)
+        XCTAssertEqual(original.midtoneHue, identity.midtoneHue)
+        XCTAssertEqual(original.midtoneSaturation, identity.midtoneSaturation)
+        XCTAssertEqual(original.midtoneLuminance, identity.midtoneLuminance)
+        XCTAssertEqual(original.highlightHue, identity.highlightHue)
+        XCTAssertEqual(original.highlightSaturation, identity.highlightSaturation)
+        XCTAssertEqual(original.highlightLuminance, identity.highlightLuminance)
         XCTAssertEqual(original.vignetteStrength, identity.vignetteStrength)
         XCTAssertEqual(original.vignetteRadius, identity.vignetteRadius)
         XCTAssertEqual(original.clarity, identity.clarity)

@@ -332,6 +332,48 @@ struct EditState: Equatable, Codable {
     /// pattern as every other v1 feature in this project).
     var blackAndWhite: Bool = false
 
+    // MARK: - Color Grading (3-way shadows/midtones/highlights)
+
+    /// 3 tonal ranges (Shadows/Midtones/Highlights) × Hue/Saturation/
+    /// Luminance, matching Lightroom's Color Grading color wheels (the
+    /// successor to Split Toning) — flat named fields, same established
+    /// per-slider convention as Selective Color's 24 fields (see that
+    /// section's own doc comment for why: trivial memberwise init,
+    /// `Codable`/`Equatable` identity, per-slider key-path binding).
+    /// Declared here, immediately after Black & White, to match pipeline
+    /// order: `EditPipeline.applyColorGrading` runs LAST inside
+    /// `applyPerceptualAdjustments`'s sandwich — AFTER Selective Color,
+    /// Vibrance, Saturation, and Black & White's forced desaturation, not
+    /// adjacent to Selective Color. That placement is load-bearing, not
+    /// incidental: a colored tint applied before the B&W override would be
+    /// silently erased by it, breaking the single most common real-world
+    /// use of this feature — tinting a monochrome photo (sepia, cross-
+    /// process/split-tone looks). See `EditPipeline.applyColorGrading`'s own
+    /// doc comment for the exact math (per-pixel luminance-weighted tint
+    /// blend, no on-GPU HSL round-trip) and `ColorGradingTint` for how
+    /// Hue/Saturation become a signed RGB delta.
+    ///
+    /// Hue: degrees, -180...180, 0 is identity — same convention as
+    /// `hslHue` (a real rotation angle, unlike Selective Color's `xHue`
+    /// fields, which are -1...1 AMOUNT shifts of a fixed band, not angles).
+    /// Irrelevant at identity: with Saturation 0, Hue's value has no visible
+    /// effect regardless of what it's set to (mirrors `ToneCurvePoint`'s
+    /// empty-array-at-identity reasoning).
+    /// Saturation: 0...1, 0 is identity — the wheel puck's radial distance
+    /// from center, a magnitude, NOT bipolar like `hslSaturation` (there is
+    /// no "negative" direction for a puck's distance from center).
+    /// Luminance: -1...1, 0 is identity — a per-range lightness offset,
+    /// bipolar like `clarity`/`texture`.
+    var shadowHue: Double = 0
+    var shadowSaturation: Double = 0
+    var shadowLuminance: Double = 0
+    var midtoneHue: Double = 0
+    var midtoneSaturation: Double = 0
+    var midtoneLuminance: Double = 0
+    var highlightHue: Double = 0
+    var highlightSaturation: Double = 0
+    var highlightLuminance: Double = 0
+
     // MARK: - Straighten
 
     /// Rotation angle in degrees, 0 is identity. Positive rotates the image
@@ -1181,6 +1223,9 @@ struct EditState: Equatable, Codable {
         s.magentaHue = 0; s.magentaSaturation = 0; s.magentaLuminance = 0
         // black & white + effects
         s.blackAndWhite = false
+        s.shadowHue = 0; s.shadowSaturation = 0; s.shadowLuminance = 0
+        s.midtoneHue = 0; s.midtoneSaturation = 0; s.midtoneLuminance = 0
+        s.highlightHue = 0; s.highlightSaturation = 0; s.highlightLuminance = 0
         s.vignetteStrength = 0
         s.vignetteRadius = 0.5
         s.texture = 0
@@ -1268,6 +1313,9 @@ struct EditState: Equatable, Codable {
         result.magentaHue = magentaHue; result.magentaSaturation = magentaSaturation; result.magentaLuminance = magentaLuminance
         // black & white + effects
         result.blackAndWhite = blackAndWhite
+        result.shadowHue = shadowHue; result.shadowSaturation = shadowSaturation; result.shadowLuminance = shadowLuminance
+        result.midtoneHue = midtoneHue; result.midtoneSaturation = midtoneSaturation; result.midtoneLuminance = midtoneLuminance
+        result.highlightHue = highlightHue; result.highlightSaturation = highlightSaturation; result.highlightLuminance = highlightLuminance
         result.vignetteStrength = vignetteStrength
         result.vignetteRadius = vignetteRadius
         result.texture = texture
@@ -1349,6 +1397,9 @@ extension EditState {
         case selectiveColorRange
         case vibrance
         case blackAndWhite
+        case shadowHue, shadowSaturation, shadowLuminance
+        case midtoneHue, midtoneSaturation, midtoneLuminance
+        case highlightHue, highlightSaturation, highlightLuminance
         case straightenAngle
         case verticalPerspective, horizontalPerspective
         case flipHorizontal, flipVertical
@@ -1451,6 +1502,15 @@ extension EditState {
         selectiveColorRange = try container.decodeIfPresent(Double.self, forKey: .selectiveColorRange) ?? 0.5
         vibrance = try container.decodeIfPresent(Double.self, forKey: .vibrance) ?? 0
         blackAndWhite = try container.decodeIfPresent(Bool.self, forKey: .blackAndWhite) ?? false
+        shadowHue = try container.decodeIfPresent(Double.self, forKey: .shadowHue) ?? 0
+        shadowSaturation = try container.decodeIfPresent(Double.self, forKey: .shadowSaturation) ?? 0
+        shadowLuminance = try container.decodeIfPresent(Double.self, forKey: .shadowLuminance) ?? 0
+        midtoneHue = try container.decodeIfPresent(Double.self, forKey: .midtoneHue) ?? 0
+        midtoneSaturation = try container.decodeIfPresent(Double.self, forKey: .midtoneSaturation) ?? 0
+        midtoneLuminance = try container.decodeIfPresent(Double.self, forKey: .midtoneLuminance) ?? 0
+        highlightHue = try container.decodeIfPresent(Double.self, forKey: .highlightHue) ?? 0
+        highlightSaturation = try container.decodeIfPresent(Double.self, forKey: .highlightSaturation) ?? 0
+        highlightLuminance = try container.decodeIfPresent(Double.self, forKey: .highlightLuminance) ?? 0
         straightenAngle = try container.decodeIfPresent(Double.self, forKey: .straightenAngle) ?? 0
         verticalPerspective = try container.decodeIfPresent(Double.self, forKey: .verticalPerspective) ?? 0
         horizontalPerspective = try container.decodeIfPresent(Double.self, forKey: .horizontalPerspective) ?? 0

@@ -1004,6 +1004,48 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.sharpness, 0.3)
     }
 
+    func testColorGradingRoundTrips() throws {
+        // Purely additive fields (no legacy keys), same as dehaze/grain.
+        var original = EditState()
+        original.shadowHue = 210
+        original.shadowSaturation = 0.6
+        original.shadowLuminance = -0.3
+        original.midtoneHue = 30
+        original.midtoneSaturation = 0.4
+        original.midtoneLuminance = 0.2
+        original.highlightHue = 50
+        original.highlightSaturation = 0.5
+        original.highlightLuminance = 0.1
+        let roundTripped = try JSONDecoder().decode(EditState.self, from: JSONEncoder().encode(original))
+
+        XCTAssertEqual(roundTripped.shadowHue, 210)
+        XCTAssertEqual(roundTripped.shadowSaturation, 0.6)
+        XCTAssertEqual(roundTripped.shadowLuminance, -0.3)
+        XCTAssertEqual(roundTripped.midtoneHue, 30)
+        XCTAssertEqual(roundTripped.midtoneSaturation, 0.4)
+        XCTAssertEqual(roundTripped.midtoneLuminance, 0.2)
+        XCTAssertEqual(roundTripped.highlightHue, 50)
+        XCTAssertEqual(roundTripped.highlightSaturation, 0.5)
+        XCTAssertEqual(roundTripped.highlightLuminance, 0.1)
+    }
+
+    func testColorGradingAbsentFromAnOlderSidecarDefaultsToIdentity() throws {
+        let state = try decode("""
+        { "sharpness": 0.3 }
+        """)
+
+        XCTAssertEqual(state.shadowHue, 0)
+        XCTAssertEqual(state.shadowSaturation, 0)
+        XCTAssertEqual(state.shadowLuminance, 0)
+        XCTAssertEqual(state.midtoneHue, 0)
+        XCTAssertEqual(state.midtoneSaturation, 0)
+        XCTAssertEqual(state.midtoneLuminance, 0)
+        XCTAssertEqual(state.highlightHue, 0)
+        XCTAssertEqual(state.highlightSaturation, 0)
+        XCTAssertEqual(state.highlightLuminance, 0)
+        XCTAssertEqual(state.sharpness, 0.3)
+    }
+
     // MARK: - ImageDocumentModel.sidecarURL(for:)
 
     func testSidecarURLAppendsPhotoAppJSONSuffix() {

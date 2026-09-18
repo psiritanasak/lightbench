@@ -644,6 +644,9 @@ final class CatalogDatabaseTests: XCTestCase {
         s.redHue = 0.1; s.redSaturation = 0.2; s.redLuminance = 0.3
         s.magentaHue = -0.1; s.magentaSaturation = -0.2; s.magentaLuminance = -0.3
         s.blackAndWhite = true
+        s.shadowHue = 210; s.shadowSaturation = 0.6; s.shadowLuminance = -0.3
+        s.midtoneHue = 30; s.midtoneSaturation = 0.4; s.midtoneLuminance = 0.2
+        s.highlightHue = 50; s.highlightSaturation = 0.5; s.highlightLuminance = 0.1
         s.vignetteStrength = 0.5
         s.clarity = 0.4
         s.sharpness = 0.6

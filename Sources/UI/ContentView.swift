@@ -1308,7 +1308,23 @@ struct ContentView: View {
             .layoutPriority(1)
 
             editControls
-                .frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
+                // `minWidth` bumped 260 -> 360, not `idealWidth` — user-
+                // caught via two side-by-side fresh-launch screenshots
+                // (identical collapsed sidebar width whether or not a
+                // photo was loaded) that bumping `idealWidth` alone
+                // (300 -> 340 -> 360, two prior attempts) had NO visible
+                // effect on `HSplitView`'s actual cold-start pane width.
+                // `HSplitView` on macOS is backed by real `NSSplitView`/
+                // `NSSplitViewController` machinery whose initial-layout
+                // algorithm does not appear to honor a nested `.frame`'s
+                // `idealWidth` hint the way `HStack`/`VStack` would —
+                // `minWidth` is a genuine hard floor instead, so it's the
+                // only lever that reliably determines the cold-start
+                // width. 360 was the value the user separately confirmed
+                // (by manually dragging the divider) doesn't clip Color
+                // Grading's caption/labels; `maxWidth` bumped 380 -> 420
+                // to keep some manual resize headroom above the new floor.
+                .frame(minWidth: 360, maxWidth: 420)
         }
     }
 

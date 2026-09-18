@@ -300,6 +300,17 @@ new), 0 regressions.
   necessarily reproduce the Editor preview's exact noise PATTERN pixel-
   for-pixel unless the render pipeline's coordinate origin matches too —
   not verified either way for this app's actual export path.
+- `CIColorKernel(source:)`/`CIKernel(source:)` (Core Image Kernel Language)
+  is deprecated — noticed 2026-09-18 after an Xcode 27 (Swift 6.4, macOS 27
+  SDK) upgrade, at every one of this app's 7 custom `.cikernel` load sites
+  in `EditPipeline.swift`. Still fully functional (BUILD SUCCEEDED, all
+  1049 tests pass on the new toolchain) — a warning, not a break. The real
+  fix is porting every custom kernel from CIKL source strings to Metal
+  Shading Language (`CIColorKernel(functionName:fromMetalLibraryData:)`),
+  which touches all 7 shaders in `Sources/Rendering/Shaders/` — a
+  genuinely new architecture for this app's shader-loading path, not a
+  quick suppression, so it needs its own dedicated session per this file's
+  own "one item per session" discipline, not a drive-by fix.
 
 ---
 

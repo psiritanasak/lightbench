@@ -42,6 +42,16 @@ struct ColorGradingWheelView: View {
     @Binding var hue: Double
     @Binding var saturation: Double
 
+    /// A single fixed value, not a min/max range — see `body`'s own doc
+    /// comment on why this control's frame must be unnegotiated. Chosen
+    /// between the old range's former 140-220 bounds for comfortable puck
+    /// placement. NOT floor-constrained by the sidebar's own minimum
+    /// width today — `ContentView`'s `editControls` pane floor is
+    /// `minWidth: 360` (raised from 260 in the same bug-fix round this
+    /// value shipped in), leaving ~170pt of slack around this circle,
+    /// not a tight fit against that floor.
+    private static let wheelDiameter: CGFloat = 190
+
     var body: some View {
         GeometryReader { proxy in
             let rect = CGRect(origin: .zero, size: proxy.size)
@@ -52,10 +62,31 @@ struct ColorGradingWheelView: View {
                 captureLayer(in: rect)
             }
         }
-        .aspectRatio(1, contentMode: .fit)
-        .frame(minHeight: 140, maxHeight: 220)
+        // An EXACT frame, not a min/max range — deliberately NOT
+        // `aspectRatio(1, .fit)` plus a flexible width/height range.
+        // User-caught symptom: with the old negotiated range, dragging
+        // the puck visibly grew the whole sidebar wider while the
+        // gesture was active and snapped back once it ended. The
+        // WORKING HYPOTHESIS (observed and fixed, but not instrumented
+        // or measured — do not read this as a confirmed root cause):
+        // `aspectRatio(1, .fit)` alone leaves width under-constrained
+        // (`GeometryReader` has no intrinsic size, so width came
+        // entirely from whatever the ancestor proposed), and re-running
+        // that negotiation on every `DragGesture.onChanged` (i.e. every
+        // frame of the drag, since `hue`/`saturation` change that often)
+        // may not have converged to a stable size while state was
+        // changing that fast. Whatever the exact mechanism, an exact,
+        // unnegotiated frame removes the ambiguity entirely: the
+        // `GeometryReader` inside is always proposed precisely
+        // `wheelDiameter`x`wheelDiameter` regardless of ancestor state,
+        // on every frame, drag or not — which is what actually matters.
+        .frame(width: Self.wheelDiameter, height: Self.wheelDiameter)
         .clipShape(Circle())
         .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 1))
+        // Applied AFTER the fixed-size clip, not before — this centers the
+        // already-circular, already-bounded control within the section's
+        // full row width without re-widening the square `Circle()` clips.
+        .frame(maxWidth: .infinity, alignment: .center)
         .accessibilityHidden(true)
     }
 

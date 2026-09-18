@@ -1190,6 +1190,22 @@ struct AdjustTabView: View {
                     && selectiveColorLuminanceBinding(for: band).wrappedValue == 0
             }
             && !state.blackAndWhite
+            // Color Grading's Hue fields are rendering-irrelevant at
+            // Saturation 0 (see `EditState.shadowHue`'s own doc comment),
+            // but are still checked/reset here for the same reason
+            // `vignetteRadius`/`selectiveColorRange` are just above: this
+            // button and check's own established convention is "every
+            // field is at its literal declared default," not "rendering is
+            // currently identical to identity."
+            && state.shadowHue == 0
+            && state.shadowSaturation == 0
+            && state.shadowLuminance == 0
+            && state.midtoneHue == 0
+            && state.midtoneSaturation == 0
+            && state.midtoneLuminance == 0
+            && state.highlightHue == 0
+            && state.highlightSaturation == 0
+            && state.highlightLuminance == 0
             && state.vignetteStrength == 0
             && state.vignetteRadius == 0.5
             && state.texture == 0
@@ -1230,6 +1246,15 @@ struct AdjustTabView: View {
                 selectiveColorLuminanceBinding(for: band).wrappedValue = 0
             }
             document.editState.blackAndWhite = false
+            document.editState.shadowHue = 0
+            document.editState.shadowSaturation = 0
+            document.editState.shadowLuminance = 0
+            document.editState.midtoneHue = 0
+            document.editState.midtoneSaturation = 0
+            document.editState.midtoneLuminance = 0
+            document.editState.highlightHue = 0
+            document.editState.highlightSaturation = 0
+            document.editState.highlightLuminance = 0
             document.editState.vignetteStrength = 0
             document.editState.vignetteRadius = 0.5
             document.editState.texture = 0

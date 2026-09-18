@@ -216,6 +216,7 @@ enum EditPipeline {
             || state.vibrance != 0
             || effective.saturation != 0
             || state.blackAndWhite
+            || colorGradingActive(state)
         else { return image }
 
         var img = encodeToPerceptual(image)
@@ -314,6 +315,15 @@ enum EditPipeline {
         if state.blackAndWhite || effective.saturation != 0 {
             img = applySaturation(saturationOverride, to: img)
         }
+        // Color Grading runs LAST in this sandwich — see
+        // EditState.shadowHue's own doc comment and applyColorGrading's
+        // below for why this placement is load-bearing, not incidental:
+        // it must run AFTER Black & White's forced desaturation so a
+        // colored tint on a monochrome photo (sepia/split-tone) survives.
+        // ALSO measured (not just the B&W case) to not commute with
+        // Vibrance/Saturation on ordinary colored content — see
+        // applyColorGrading's own doc comment for the real numbers.
+        if colorGradingActive(state) { img = applyColorGrading(state, to: img) }
         img = decodeToLinear(img)
         return img
     }
@@ -737,6 +747,107 @@ enum EditPipeline {
         // NSNumber explicitly, not a raw Double — matches exactly what was
         // verified against the real compiled kernel before shipping.
         let arguments: [Any] = [image, hueA, hueB, satA, satB, lumA, lumB, NSNumber(value: state.selectiveColorRange)]
+        return kernel.apply(extent: image.extent, arguments: arguments) ?? image
+    }
+
+    // MARK: - Color Grading (3-way shadows/midtones/highlights)
+
+    /// The 8th custom Core Image kernel in this codebase — Lightroom's
+    /// successor to Split Toning: independent Hue/Saturation/Luminance for
+    /// each of 3 tonal ranges (Shadows/Midtones/Highlights), selected by
+    /// each pixel's own LUMINANCE rather than SelectiveColor's per-hue
+    /// targeting. See `Sources/Rendering/Shaders/ColorGrading.cikernel` for
+    /// the per-pixel math (raised-cosine falloff over PERCEPTUAL/gamma-
+    /// encoded luma distance from 3 fixed anchors, NOT linear light — the
+    /// same mathematical FORM `SelectiveColor.cikernel`'s `bandWeights`
+    /// already uses over circular hue distance, just a different axis and
+    /// domain) and `ColorGradingTint` for the
+    /// Hue/Saturation → RGB delta conversion, done ONCE per wheel per
+    /// render in Swift, not per pixel — this kernel therefore needs no
+    /// `rgb2hsl`/`hsl2rgb` at all, a real simplification over
+    /// `SelectiveColor.cikernel`.
+    ///
+    /// `kColorGradingWidth`/`kColorGradingTintStrength`/
+    /// `kColorGradingLumStrength` are v1's PRINCIPLED DEFAULTS for what
+    /// Lightroom exposes as an adjustable "Blending" control (deferred to a
+    /// future slice, along with "Balance" and the 4th "Global" wheel) — not
+    /// a claimed reproduction of Lightroom's own undisclosed algorithm,
+    /// same disclaimer precedent as Brilliance. MEASURED (a temporary
+    /// spike swept each in turn against solid patches, then deleted before
+    /// this comment was written):
+    /// - Width 0.4 (raised-cosine half-window, on the PERCEPTUAL/gamma-
+    ///   encoded luma this stage actually operates on, since it runs
+    ///   inside `applyPerceptualAdjustments`'s sandwich): gives a clean
+    ///   partition where each anchor (perceptual 0.0/0.5/1.0) is the ONLY
+    ///   active range at its own center (e.g. perceptual luma 0.5 gets
+    ///   zero shadow AND zero highlight weight, only mid), with smooth
+    ///   overlap at the boundaries (e.g. perceptual 0.3 carries both some
+    ///   shadow and some mid weight) — the intended soft handoff, not a
+    ///   bug. Narrower widths (0.2-0.3) left the highlight range with
+    ///   almost no reach into upper-midtones; wider (0.6) let shadow leak
+    ///   measurably into true midtones (perceptual 0.5).
+    /// - Tint strength 0.8: at full Saturation (a shadow patch, linear
+    ///   0.05 base, hue 210°), pushes b from 0.05 to 0.1157 and r down to
+    ///   0.0136 — a strong, clearly visible tint without the runaway
+    ///   distortion measured at 1.5 (b jumps to 0.2007, a
+    ///   disproportionately larger step for the same slider increment).
+    /// - Luminance strength 0.5: at full Luminance on a midtone patch
+    ///   (linear 0.5), +1 lifts r to 0.821 and -1 drops it to 0.267 —
+    ///   meaningfully strong without blowing a midtone past 1.0 the way
+    ///   1.0 does (r reaches 1.238, a highlight already fully clipped
+    ///   for what should be a mid-strength nudge).
+    /// Not user-adjustable yet, so hardcoded inside the kernel as local
+    /// constants rather than passed as arguments — same convention as
+    /// `SelectiveColor.cikernel`'s own `Wmin`/`Wmax`/`kHue`/`kLum`.
+
+    private static let colorGradingKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "ColorGrading", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
+    private static func colorGradingActive(_ state: EditState) -> Bool {
+        state.shadowSaturation != 0 || state.shadowLuminance != 0
+            || state.midtoneSaturation != 0 || state.midtoneLuminance != 0
+            || state.highlightSaturation != 0 || state.highlightLuminance != 0
+    }
+
+    /// MEASURED not to commute with Vibrance/Saturation (a temporary swap-
+    /// rebuild-remeasure harness, matching this codebase's established
+    /// method): on a dark, colored patch (linear r=0.10/g=0.05/b=0.02,
+    /// `redHue`+`hslSaturation`+a shadow tint all active), running Color
+    /// Grading BEFORE Vibrance/Saturation instead of after (its shipped
+    /// position) moved the result by up to 0.0105 (red channel) — ~5.2x
+    /// this suite's 0.002 tolerance. So the shipped position is a real
+    /// REQUIREMENT here too, not just the Black & White case above.
+    private static func applyColorGrading(_ state: EditState, to image: CIImage) -> CIImage {
+        guard let kernel = colorGradingKernel else { return image }
+
+        // Clamped here, not just trusted: this slice has no UI yet, so a
+        // hand-edited sidecar or preset is the ONLY input path, and unlike
+        // every slider-backed field there is no UI range enforcement to
+        // rely on until Slice B ships.
+        func clampedSaturation(_ value: Double) -> Double { min(max(value, 0), 1) }
+        func clampedLuminance(_ value: Double) -> Double { min(max(value, -1), 1) }
+
+        let shadowDelta = ColorGradingTint.rgbDelta(hue: state.shadowHue, saturation: clampedSaturation(state.shadowSaturation))
+        let midtoneDelta = ColorGradingTint.rgbDelta(hue: state.midtoneHue, saturation: clampedSaturation(state.midtoneSaturation))
+        let highlightDelta = ColorGradingTint.rgbDelta(
+            hue: state.highlightHue, saturation: clampedSaturation(state.highlightSaturation)
+        )
+
+        let shadowTint = CIVector(
+            x: shadowDelta.r, y: shadowDelta.g, z: shadowDelta.b, w: clampedLuminance(state.shadowLuminance)
+        )
+        let midtoneTint = CIVector(
+            x: midtoneDelta.r, y: midtoneDelta.g, z: midtoneDelta.b, w: clampedLuminance(state.midtoneLuminance)
+        )
+        let highlightTint = CIVector(
+            x: highlightDelta.r, y: highlightDelta.g, z: highlightDelta.b, w: clampedLuminance(state.highlightLuminance)
+        )
+
+        let arguments: [Any] = [image, shadowTint, midtoneTint, highlightTint]
         return kernel.apply(extent: image.extent, arguments: arguments) ?? image
     }
 

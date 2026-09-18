@@ -1,0 +1,90 @@
+// Color Grading — 3-way Shadows/Midtones/Highlights color wheels
+// (Lightroom's successor to Split Toning). The 8th custom Core Image
+// kernel in this codebase.
+//
+// Unlike SelectiveColor.cikernel (which selects by each pixel's own HUE),
+// this kernel selects by each pixel's own LUMINANCE — a raised-cosine
+// falloff over distance from 3 fixed anchors (0.0/0.5/1.0) on the
+// PERCEPTUAL (sRGB-gamma-encoded) luma this stage actually operates on,
+// since it runs inside applyPerceptualAdjustments's sandwich — NOT linear
+// light. The falloff itself is the same mathematical FORM as
+// SelectiveColor's `bandWeights` (which uses raised cosine over CIRCULAR
+// hue distance) applied to a different axis and domain.
+//
+// Each of the 3 arguments is a vec4 for ONE tonal range: .rgb is that
+// range's tint delta (already converted from the wheel's Hue/Saturation by
+// ColorGradingTint.rgbDelta, Swift-side, ONCE per render — not per pixel),
+// .w is that range's Luminance slider value. This kernel therefore needs
+// NO rgb2hsl/hsl2rgb at all, unlike SelectiveColor — the wheel's own
+// hue/saturation never needs reconstructing per pixel, only the WEIGHT
+// each range gets at this pixel's own luminance.
+//
+// See EditPipeline.applyColorGrading for the Swift-side wrapper and the
+// load-bearing pipeline-placement reasoning (must run AFTER Black & White's
+// forced desaturation, so a B&W split-tone survives), and
+// ColorGradingTint.swift for the Hue/Saturation -> RGB delta conversion.
+
+float rangeWeight(float L, float center, float width) {
+    float d = abs(L - center);
+    if (d >= width) { return 0.0; }
+    return 0.5 * (1.0 + cos(3.14159265 * d / width));
+}
+
+kernel vec4 colorGrading(__sample s, vec4 shadowTint, vec4 midtoneTint, vec4 highlightTint) {
+    // Not (yet) user-adjustable — Lightroom's "Blending"/"Balance" controls
+    // are deferred to a future slice, so these are v1's principled fixed
+    // defaults. MEASURED via a temporary spike (see EditPipeline's own doc
+    // comment on these constants' Swift-side twins for the real numbers
+    // and why each value was chosen), not guessed.
+    float width = 0.4;
+    float tintStrength = 0.8;
+    float lumStrength = 0.5;
+
+    float a = s.a;
+    vec3 c = (a > 0.0) ? s.rgb / a : s.rgb;
+
+    // Rec.709 luma on the RAW (unnormalized) pixel, clamped to [0,1] since
+    // this is purely a WEIGHTING signal, not the pixel's own stored value.
+    // Reviewer-caught: an earlier draft normalized `c` by its own max
+    // channel before this dot product, copying SelectiveColor.cikernel's
+    // headroom technique — wrong here, since a bright SATURATED pixel
+    // (e.g. c=(1.5,0.1,0.1)) normalizes to (1.0,0.067,0.067), whose luma
+    // (0.26) reads as "shadow," while the pixel's own real luma (0.398,
+    // clamped) reads as "mid" — the correct classification. Unlike
+    // SelectiveColor's HSL saturation formula, this dot product is
+    // perfectly well-defined above 1.0 and needs no normalize at all.
+    float L = clamp(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+
+    float wShadow = rangeWeight(L, 0.0, width);
+    float wMid = rangeWeight(L, 0.5, width);
+    float wHighlight = rangeWeight(L, 1.0, width);
+
+    // Unnormalized weighted sum — NOT divided by the weight total, the same
+    // reasoning SelectiveColor's own unnormalized sum documents: if this
+    // kernel were ever invoked with all-9-fields-zero deltas, every
+    // tint/luminance term would be exactly (0,0,0)/0 regardless of the
+    // weights, an exact identity. In PRACTICE that never happens via any
+    // real EditState — EditPipeline.colorGradingActive(_:) skips calling
+    // this kernel entirely once every delta would be zero, so this is
+    // defensive kernel-level correctness, not the actual mechanism behind
+    // Color Grading's real identity guarantee (which is Swift-side).
+    vec3 tint = wShadow * shadowTint.rgb + wMid * midtoneTint.rgb + wHighlight * highlightTint.rgb;
+    float lum = wShadow * shadowTint.w + wMid * midtoneTint.w + wHighlight * highlightTint.w;
+
+    // Added directly to the RAW pixel, NOT to a headroom-normalized-then-
+    // rescaled value. Reviewer-caught: an earlier draft normalized by
+    // `scale = max(max(c.r,c.g,c.b), 1.0)` before adding the delta and
+    // rescaled by the same `scale` after — correct for SelectiveColor's
+    // RELATIVE operations (hue rotation, saturation multiply, all inside
+    // the normalized domain) but wrong for this kernel's ABSOLUTE additive
+    // deltas: `(c/scale + delta) * scale == c + delta*scale`, silently
+    // amplifying the tint/luminance strength by the pixel's own headroom
+    // (measured: the same highlight tint read +0.4 perceptual on a 1.0
+    // white but +0.4*1.1588 on a 1.4-linear white, an exposure-dependent
+    // grade strength with no such dependency intended). Lower-bound clamp
+    // only, preserving highlight headroom exactly like every other stage
+    // in this pipeline's perceptual sandwich — the ADDED delta itself is
+    // headroom-INDEPENDENT, unlike the old (wrong) construction.
+    vec3 outRGB = max(c + tint * tintStrength + vec3(lum * lumStrength, lum * lumStrength, lum * lumStrength), vec3(0.0));
+    return vec4(outRGB * a, a);
+}

@@ -118,9 +118,12 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     //     `applyLevels` clamps before `CIGammaAdjust` runs — but a real,
     //     if minor, extra divergence source.
     // Every other stage (crop, straighten, perspective, flip, vignette,
-    // WB, exposure, levels, curves, HSL, saturation, B&W) is exactly
-    // extent-proportional or purely per-pixel, so a proxy renders
-    // identically to full-res for those, up to resampling — see
+    // WB, exposure, levels, curves, HSL, saturation, B&W, Selective Color,
+    // Color Grading) is exactly extent-proportional or purely per-pixel
+    // (Color Grading has no geometry at all — its weight depends only on
+    // each pixel's own luminance, confirmed empirically via
+    // `testColorGradingIsResolutionConsistent`, not just assumed), so a
+    // proxy renders identically to full-res for those, up to resampling — see
     // `ProxyScale`'s own doc comment for the fuller argument. Scope note:
     // NONE of those were included in D18's measurements, which covered only
     // dehaze/NR/sharpen/clarity. This paragraph is the original reasoning,

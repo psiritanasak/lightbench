@@ -5532,4 +5532,230 @@ final class EditPipelineTests: XCTestCase {
     func testGrainDefaultIsZero() {
         XCTAssertEqual(EditState().grain, 0)
     }
+
+    // MARK: - Color Grading math (3-way shadows/midtones/highlights)
+
+    /// Linear-light inputs chosen so their PERCEPTUAL (sRGB-gamma) encoding
+    /// lands at ~0.1/0.5/0.9 — the domain Color Grading's weight function
+    /// actually operates in, since it runs inside
+    /// `applyPerceptualAdjustments`'s sandwich. Naive evenly-spaced LINEAR
+    /// sample points (0/0.5/1.0) would be misleading here — gamma encoding
+    /// compresses shadow detail into a much larger share of the perceptual
+    /// range, so a linear 0.25 (which sounds "shadow-ish") is already just
+    /// past perceptual midtone. Cross-checked against this file's own
+    /// established "photographic middle gray ≈0.214 linear" figure: 0.214
+    /// is exactly this class's `perceptualMid` below.
+    private let perceptualShadow = 0.0100
+    private let perceptualMid = 0.2140
+    private let perceptualHighlight = 0.7876
+
+    /// Verifies the STAGE-level identity guarantee (`colorGradingActive`
+    /// skips calling the kernel at all once every delta would be zero), not
+    /// the kernel's own math — a fully default `EditState` never reaches
+    /// `applyColorGrading` (or even `applyPerceptualAdjustments`'s sandwich
+    /// at all, since every guard there is also false), so this is a real
+    /// but narrow check, not proof the kernel itself is an identity when
+    /// invoked with all-zero deltas (see `ColorGrading.cikernel`'s own
+    /// comment on that distinction).
+    func testColorGradingZeroIsExactIdentity() {
+        let input = solidColorImage(r: 0.3, g: 0.15, b: 0.05)
+        let output = EditPipeline.apply(EditState(), to: input)
+        let inPx = linearPixel(of: input)
+        let outPx = linearPixel(of: output)
+        XCTAssertEqual(outPx.r, inPx.r, accuracy: 0)
+        XCTAssertEqual(outPx.g, inPx.g, accuracy: 0)
+        XCTAssertEqual(outPx.b, inPx.b, accuracy: 0)
+    }
+
+    func testColorGradingShadowTintAffectsDarkPixelsOnlyNotHighlights() {
+        var state = EditState()
+        state.shadowHue = 0
+        state.shadowSaturation = 1
+
+        let dark = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(perceptualShadow)))
+        XCTAssertEqual(Double(dark.r - dark.g), 0.164, accuracy: 0.02)
+
+        let bright = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(perceptualHighlight)))
+        XCTAssertEqual(bright.r - bright.g, 0, accuracy: accuracy)
+    }
+
+    func testColorGradingMidtoneTintPeaksAtMidGrayNotAtEitherExtreme() {
+        var state = EditState()
+        state.midtoneHue = 0
+        state.midtoneSaturation = 1
+
+        let mid = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(perceptualMid)))
+        XCTAssertEqual(Double(mid.r - mid.g), 0.777, accuracy: 0.02)
+
+        let dark = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(perceptualShadow)))
+        XCTAssertEqual(dark.r - dark.g, 0, accuracy: accuracy)
+
+        let bright = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(perceptualHighlight)))
+        XCTAssertEqual(bright.r - bright.g, 0, accuracy: accuracy)
+    }
+
+    func testColorGradingHighlightTintAffectsBrightPixelsOnlyNotShadows() {
+        var state = EditState()
+        state.highlightHue = 0
+        state.highlightSaturation = 1
+
+        let bright = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(perceptualHighlight)))
+        XCTAssertEqual(Double(bright.r - bright.g), 1.368, accuracy: 0.02)
+
+        let dark = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(perceptualShadow)))
+        XCTAssertEqual(dark.r - dark.g, 0, accuracy: accuracy)
+    }
+
+    func testColorGradingLuminanceOffsetLightensAndDarkensMidGray() {
+        var lighten = EditState()
+        lighten.midtoneLuminance = 1
+        let lightened = linearPixel(of: EditPipeline.apply(lighten, to: solidColorImage(perceptualMid)))
+
+        var darken = EditState()
+        darken.midtoneLuminance = -1
+        let darkened = linearPixel(of: EditPipeline.apply(darken, to: solidColorImage(perceptualMid)))
+
+        let base = linearPixel(of: solidColorImage(perceptualMid))
+        XCTAssertGreaterThan(lightened.r, base.r)
+        XCTAssertLessThan(darkened.r, base.r)
+    }
+
+    /// Also exercises the kernel's unpremultiply-then-repremultiply round
+    /// trip (`s.rgb / a` on entry, `outRGB * a` on exit), not just that the
+    /// alpha channel itself passes through: `CIContext.render(toBitmap:)`'s
+    /// `.RGBAf` format returns PREMULTIPLIED values (confirmed empirically —
+    /// the a=0.5 render's raw r/g/b came back at exactly half the a=1
+    /// render's, not equal), so the computed COLOR at two different alpha
+    /// values must agree only once each side is un-premultiplied first, or
+    /// the kernel's premultiply handling is wrong.
+    func testColorGradingPreservesAlpha() {
+        var state = EditState()
+        state.shadowHue = 210
+        state.shadowSaturation = 1
+
+        let opaque = linearPixel(of: EditPipeline.apply(
+            state, to: solidColorImage(r: perceptualShadow, g: perceptualShadow, b: perceptualShadow, a: 1)
+        ))
+        let translucent = linearPixel(of: EditPipeline.apply(
+            state, to: solidColorImage(r: perceptualShadow, g: perceptualShadow, b: perceptualShadow, a: 0.5)
+        ))
+
+        XCTAssertEqual(translucent.a, 0.5, accuracy: accuracy)
+        XCTAssertEqual(translucent.r / translucent.a, opaque.r / opaque.a, accuracy: accuracy)
+        XCTAssertEqual(translucent.g / translucent.a, opaque.g / opaque.a, accuracy: accuracy)
+        XCTAssertEqual(translucent.b / translucent.a, opaque.b / opaque.a, accuracy: accuracy)
+    }
+
+    /// MEASURED, not assumed: a colored highlight ABOVE 1.0 (headroom from
+    /// e.g. a prior Exposure boost) does NOT get destructively clamped to
+    /// 1.0, and no channel goes negative.
+    ///
+    /// Reviewer-caught real bug, since fixed: an earlier draft added the
+    /// tint/luminance delta to a headroom-normalized-then-rescaled value
+    /// (copying `SelectiveColor.cikernel`'s technique, which is safe there
+    /// only because everything between normalize and rescale is RELATIVE —
+    /// hue rotation, saturation multiply — not additive). For this kernel's
+    /// ABSOLUTE additive deltas, `(c/scale + delta) * scale == c +
+    /// delta*scale` silently amplified the grade by the pixel's own
+    /// headroom — the same highlight tint measured ~3.04 on a 1.4-linear
+    /// white but only ~1.89 on a 1.0-linear white, an exposure-dependent
+    /// grade strength with no such dependency intended. Fixed by adding the
+    /// delta directly to the raw pixel (see `ColorGrading.cikernel`'s own
+    /// doc comment). This test now also pins that fix: the SAME tint at
+    /// linear 1.0 and 1.4 (both fully inside the highlight weight's plateau)
+    /// produces a bounded gap — real encode/decode curve convexity alone
+    /// still grows the gap somewhat with headroom (measured ~0.49 on the
+    /// corrected code), but the old headroom-SCALED bug produced ~1.15, so
+    /// a 0.7 bound cleanly distinguishes "fixed" from "the old bug."
+    func testColorGradingPreservesHighlightHeadroom() {
+        var state = EditState()
+        state.highlightHue = 45
+        state.highlightSaturation = 1
+
+        let headroom = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(r: 1.4, g: 1.4, b: 1.4)))
+        XCTAssertGreaterThan(headroom.r, 1.0)
+        XCTAssertGreaterThanOrEqual(headroom.g, 0)
+        XCTAssertGreaterThanOrEqual(headroom.b, 0)
+
+        let noHeadroom = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(r: 1.0, g: 1.0, b: 1.0)))
+        XCTAssertLessThan(Double(headroom.r - noHeadroom.r), 0.7)
+    }
+
+    /// The single most important test in this feature (M4 in the
+    /// implementation spike): a colored tint MUST survive Black & White's
+    /// forced desaturation, or the most common real-world Color Grading use
+    /// — tinting a monochrome photo for a sepia/split-tone look — would be
+    /// silently dead on arrival. This is exactly why `applyColorGrading`
+    /// runs LAST in `applyPerceptualAdjustments`'s sandwich, after the B&W
+    /// override, not adjacent to Selective Color.
+    func testColorGradingTintSurvivesBlackAndWhite() {
+        var state = EditState()
+        state.blackAndWhite = true
+        state.shadowHue = 210
+        state.shadowSaturation = 1
+        let output = EditPipeline.apply(state, to: solidColorImage(perceptualShadow))
+        let px = linearPixel(of: output)
+        XCTAssertNotEqual(px.r, px.g, accuracy: accuracy)
+        XCTAssertNotEqual(px.g, px.b, accuracy: accuracy)
+    }
+
+    func testColorGradingBlackAndWhiteAloneStaysGrayscale() {
+        var state = EditState()
+        state.blackAndWhite = true
+        let output = EditPipeline.apply(state, to: solidColorImage(perceptualShadow))
+        let px = linearPixel(of: output)
+        XCTAssertEqual(px.r, px.g, accuracy: accuracy)
+        XCTAssertEqual(px.g, px.b, accuracy: accuracy)
+    }
+
+    /// Color Grading has no extent-dependent geometry at all (no radius, no
+    /// cell size) — its weight function depends only on each pixel's own
+    /// luminance. MEASURED (M6), not just assumed: a solid patch's mean
+    /// stays bit-identical across a 4x resolution range.
+    func testColorGradingIsResolutionConsistent() {
+        var state = EditState()
+        state.midtoneHue = 90
+        state.midtoneSaturation = 1
+        var means: [Float] = []
+        for size in [400, 800, 1600] {
+            let output = EditPipeline.apply(state, to: solidColorImage(0.5, size: size))
+            let origin = size / 2 - 32
+            means.append(regionStd(output, x: origin, y: origin, w: 64, h: 64).mean)
+        }
+        XCTAssertEqual(means[0], means[1], accuracy: 0.0001)
+        XCTAssertEqual(means[1], means[2], accuracy: 0.0001)
+    }
+
+    /// Pins the shipped pipeline order (Color Grading runs AFTER Vibrance/
+    /// Saturation) against a regression. MEASURED via a temporary swap-
+    /// rebuild-remeasure harness, not assumed: running Color Grading BEFORE
+    /// Vibrance/Saturation instead moved this exact configuration's result
+    /// by up to 0.0105 on the red channel — ~5.2x this suite's 0.002
+    /// tolerance — so this order is a real REQUIREMENT, not a convention,
+    /// independent of the separate Black & White requirement above.
+    func testColorGradingRunsAfterVibranceAndSaturation() {
+        var state = EditState()
+        state.redHue = 0.6
+        state.hslSaturation = 0.4
+        state.shadowHue = 210
+        state.shadowSaturation = 0.6
+        let output = EditPipeline.apply(state, to: solidColorImage(r: 0.10, g: 0.05, b: 0.02))
+        let px = linearPixel(of: output)
+        XCTAssertEqual(Double(px.r), 0.0851, accuracy: 0.001)
+        XCTAssertEqual(Double(px.g), 0.0515, accuracy: 0.001)
+        XCTAssertEqual(Double(px.b), 0.0228, accuracy: 0.001)
+    }
+
+    func testColorGradingDefaultsAreIdentity() {
+        let state = EditState()
+        XCTAssertEqual(state.shadowHue, 0)
+        XCTAssertEqual(state.shadowSaturation, 0)
+        XCTAssertEqual(state.shadowLuminance, 0)
+        XCTAssertEqual(state.midtoneHue, 0)
+        XCTAssertEqual(state.midtoneSaturation, 0)
+        XCTAssertEqual(state.midtoneLuminance, 0)
+        XCTAssertEqual(state.highlightHue, 0)
+        XCTAssertEqual(state.highlightSaturation, 0)
+        XCTAssertEqual(state.highlightLuminance, 0)
+    }
 }

@@ -1058,6 +1058,73 @@ keyboard-driven interaction redesign, and could ship independently of one.
 Needs its own small session; not touched during Slice B itself (reviewer
 flagged as non-blocking).
 
+### D21. Curve section's channel picker has the same segment-width-shift latent risk fixed in Color Grading's picker
+
+User-caught via screen recording, post-ship: Color Grading's Shadows/
+Midtones/Highlights `.pickerStyle(.segmented)` picker conditionally
+appended `" •"` to a segment's own label STRING when that range left
+identity — since `NSSegmentedControl` (what `.pickerStyle(.segmented)`
+is backed by) auto-sizes each segment to its own content, the string-
+length change visibly shifted every segment to the right of the one
+that grew (e.g. Shadows gaining its dot on the very first wheel drag
+pushed Midtones and Highlights right).
+
+**Two more attempts were also wrong before landing on the fix that
+shipped — worth recording in full since each failure mode is subtle
+and each was caught by a DIFFERENT method (live screenshot, then
+reviewer re-derivation), not by the same check twice.**
+
+Attempt 2 kept the dot glyph always present in each segment's `Text`
+and only varied its COLOR (`.clear` vs. inherited), reasoning that a
+constant-length string would keep each segment's width fixed. A live
+screenshot disproved it outright: all three segments showed a solid,
+fully-visible dot regardless of edited state — `NSSegmentedControl`
+takes each segment's PLAIN STRING title and ignores `Text` styling
+(`foregroundColor`, `opacity`, etc.) entirely when drawing it, so
+`.clear` was silently a no-op and the whole indicator became
+meaningless.
+
+Attempt 3 moved the indicator out of the segmented control's own
+labels entirely into a separate `HStack` of small `Circle` views
+positioned under the picker, one per range, left-to-right. This was
+live-screenshotted and DID visually work (only the edited range's dot
+lit up) — but a reviewer re-derivation caught that the row's own
+layout was still wrong: an `HStack`/`Spacer` arrangement puts dot
+centers at the row's two edges and its middle, while `NSSegmentedControl`
+auto-sizes each segment to its own label text (`"Highlights"` is wider
+than `"Shadows"`), so the segments' TRUE centers are NOT at those same
+three points. The live screenshot happened to look correct only
+because the one lit dot (Shadows, the leftmost) was also at the row's
+leftmost position by coincidence — the same coincidence would not hold
+for Midtones or Highlights. Reproducing each segment's actual center
+would need its real rendered width, which SwiftUI has no way to read
+back from the native control.
+
+**Actual fix (attempt 4)**: sidestep needing per-segment alignment at
+all. Segment labels are now permanently plain (`Text(range.rawValue)`,
+never varying, so the ORIGINAL string-length bug cannot recur either),
+and a plain caption sentence below the picker — `colorGradingEditedRangesSummary`,
+e.g. "Edited: Shadows, Midtones" — names which ranges are edited
+instead of marking them positionally. Ordinary `Text`, no AppKit
+control bridging involved at all, so it needs no special accessibility
+handling and no color-based visibility trick — this is the same
+rendering path already used by this section's own caption above it,
+not a novel one. Live-verified with 3 progressive user screenshots —
+editing Shadows, then also Midtones, then also Highlights — confirming
+the caption read exactly "Edited: Shadows", then "Edited: Shadows,
+Midtones", then "Edited: Shadows, Midtones, Highlights" at each step,
+in that order.
+
+`AdjustTabView.channelSegmentLabel(for:)` (Curve's Red/Green/Blue
+channel picker, shipped earlier in Curves v2 slice 3) uses the
+IDENTICAL conditional-string-append pattern this fix replaced, and so
+has the identical latent risk — adding the first point to an empty
+channel's curve would shift the segments after it. Not fixed here:
+out of scope for a Color-Grading-reported bug, and Curve's picker
+wasn't itself reported as exhibiting this — but the mechanism is now
+understood and confirmed real, so this is a real bug, not a
+theoretical one, the next time anyone touches that file.
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

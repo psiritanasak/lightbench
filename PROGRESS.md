@@ -21,9 +21,19 @@ the full reviewer-round write-up. NOT yet live-verified — the
 `AngularGradient` painted-wheel convention is DERIVED from documentation,
 not confirmed on screen; see IMPROVEMENTS.md D20 for the separately-logged
 keyboard/AT/numeric-readout gap (Hue/Saturation are pointer-only with no
-value display; only Luminance has a real slider). See CLAUDE.md's roadmap
-for the full phase list and `docs/ROADMAP_HISTORY.md` for detail on
-anything already shipped.
+value display; only Luminance has a real slider).
+
+**A post-ship bug-fix round (2026-09-18) is also done**: the user live-tested
+Slice B and found 3 real bugs (sidebar growing during a wheel drag, the
+sidebar's narrow default width, the edited-indicator shifting the
+segmented picker) — see IMPROVEMENTS.md D21 and the "Done" entry below
+for the full story, including two disproven fix attempts caught live
+before the shipped one. 4 commits, reviewer APPROVE after 4 rounds
+(FIX FIRST × 3, all on doc-comment accuracy by round 3-4 — the code
+itself was correct from round 3 on).
+
+See CLAUDE.md's roadmap for the full phase list and
+`docs/ROADMAP_HISTORY.md` for detail on anything already shipped.
 
 ## Open reviewer issues
 None currently open or blocking. Every reviewer round on record ended in
@@ -250,6 +260,60 @@ precedent for deferring pointer-only interaction accessibility to its own
 session. Committed in 4 logical commits (geometry + tests, wheel view +
 range selector, `AdjustTabView` wiring, docs).
 
+**Color Grading Slice B post-ship bug-fix round (2026-09-18)**: the user
+live-tested the just-shipped wheel UI and found 3 real bugs, each fixed
+and (mostly) live-verified in the same session. Full blow-by-blow,
+including the two disproven fix attempts, lives in IMPROVEMENTS.md's
+D21 — summarized here:
+
+1. **Sidebar visibly grew wider while dragging the wheel's puck, then
+   snapped back on release.** `ColorGradingWheelView`'s frame was
+   `aspectRatio(1, .fit)` + a `min/max` range, which re-negotiates on
+   every `GeometryReader` re-evaluation — i.e. every `DragGesture.
+   onChanged`. Fixed with an exact, unnegotiated `.frame(width:height:)`
+   (`wheelDiameter = 190`). Mechanism is a documented WORKING HYPOTHESIS
+   (observed and fixed, not instrumented) per this project's own
+   measurement-honesty convention.
+2. **The Adjust sidebar's default width never actually widened**,
+   despite two `idealWidth` bumps (300 -> 340 -> 360) earlier in this
+   same session. User-caught via two side-by-side fresh-launch
+   screenshots (no photo vs. photo loaded, both showing an identical,
+   too-narrow sidebar) that `idealWidth` was never taking effect at
+   all on `HSplitView`'s cold-start layout. Fixed by raising `minWidth`
+   (260 -> 360) instead — a hard floor `HSplitView` actually respects.
+3. **The edited-state indicator shifted Midtones/Highlights right the
+   moment Shadows became edited.** Root cause: `.pickerStyle(.segmented)`
+   is backed by a real `NSSegmentedControl`, which auto-sizes each
+   segment to its own label STRING — appending `" •"` conditionally
+   grew that segment and shifted every segment after it. TWO fix
+   attempts were tried and DISPROVED live before the one that shipped:
+   (a) keeping the dot glyph always present and only varying its COLOR
+   (`.clear` vs. inherited) — a live screenshot showed all three
+   segments with a permanently solid dot, since `NSSegmentedControl`
+   ignores `Text` styling entirely and just draws the plain string; (b)
+   a separate row of per-segment dots positioned under the picker — this
+   one DID visually work in a live screenshot, but a reviewer
+   re-derivation caught that its `HStack`/`Spacer` positions don't
+   actually align with the native control's own (unequal, auto-sized)
+   segment centers, and the screenshot only looked right because the
+   one edited range (Shadows) happened to also be the row's leftmost
+   dot. **Shipped fix**: segment labels are now permanently plain,
+   never varying (eliminating the original bug's root cause too), and
+   a separate caption below the picker — `colorGradingEditedRangesSummary`,
+   e.g. "Edited: Shadows, Midtones" — names the edited ranges instead of
+   marking them positionally, sidestepping the alignment problem
+   entirely. Live-verified with 3 progressive user screenshots.
+
+All fixes reviewed: 4 rounds (FIX FIRST → FIX FIRST → FIX FIRST →
+APPROVE) — rounds 1-2 caught the disproven fix attempts and several
+real issues (a stale cross-reference, an overclaimed layout-instability
+mechanism, the alignment bug above, an unverified/overclaiming
+accessibility comment); rounds 3-4 were doc-comment-accuracy only, the
+code itself was correct from round 3 on. All 1088 tests pass throughout
+(no test changes needed — these were pure UI-layout/rendering fixes).
+Committed in 4 logical commits (wheel frame fix, sidebar width fix,
+segmented-picker fix, docs).
+
 **Curves v2 slice 3 UI (2026-09-17)**: the per-channel Red/Green/Blue tone
 curve editor, built on the backend shipped earlier this session (commit
 `d9a4d21`). New `ToneCurveChannel` enum (`Sources/UI/ToneCurveChannel.swift`
@@ -407,17 +471,22 @@ interaction glue with no unit-test precedent, per this codebase's own
 convention; verified live instead).
 
 ## In progress / blocked
-None. Color Grading (both Slice A backend and Slice B UI) is fully shipped,
-reviewed (APPROVE both), and committed — see the "Done" entries above.
+None. Color Grading (Slice A backend, Slice B UI, and the Slice B
+post-ship bug-fix round) is fully shipped, reviewed (APPROVE throughout),
+and committed — see the "Done" entries above.
 
 ## Exact next step
-Pick the next Lightroom gap and enter Plan Mode first, per this project's
-workflow rules. Point Color, Chromatic Aberration removal, and Manual
-Transform Scale/Aspect are the remaining unstarted Tier-1 gaps; Auto Tone/
-Auto Settings, Enhance/Super Resolution, History panel, and Copy/Paste-and-
-Sync are unstarted Tier-2 items. Also worth considering: Color Grading
-Slice B's own follow-ups logged this session — live-verifying the
-`AngularGradient` painted-wheel convention on screen (flagged DERIVED, not
-measured, in `ColorWheelGeometry.angularGradientFraction`'s doc comment),
-and IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout, which would also
-double as the wheel's first AT-accessible path to those two axes).
+**User-selected: Point Color** (per-color eyedropper refinement, distinct
+from Selective Color's 8 fixed hue bands) is next — Tier-1 Lightroom gap,
+"likely needs a variable-length collection field, like `redEyePoints`"
+per CLAUDE.md's own gap list. Enter Plan Mode first, per this project's
+workflow rules — this is genuinely new architecture (a new field shape
+this codebase hasn't used before), not a drive-by addition.
+
+Deferred, not forgotten: Chromatic Aberration removal and Manual
+Transform Scale/Aspect (remaining unstarted Tier-1 gaps); Auto Tone/Auto
+Settings, Enhance/Super Resolution, History panel, and Copy/Paste-and-Sync
+(unstarted Tier-2 items); Color Grading Slice B's own follow-ups —
+live-verifying the `AngularGradient` painted-wheel convention on screen
+(flagged DERIVED, not measured, in `ColorWheelGeometry.angularGradientFraction`'s
+doc comment) and IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout).

@@ -32,6 +32,20 @@ before the shipped one. 4 commits, reviewer APPROVE after 4 rounds
 (FIX FIRST × 3, all on doc-comment accuracy by round 3-4 — the code
 itself was correct from round 3 on).
 
+**Point Color Slice A (backend) is now SHIPPED (2026-09-18)** — the
+user's selected next Tier-1 Lightroom gap after Color Grading. New
+`EditState.pointColors` variable-length collection field, `PointColor.
+cikernel` (9th custom kernel, generalizing Selective Color's hue-band
+shape to one arbitrary picked target), `EditPipeline.applyPointColors`.
+4 commits, reviewer APPROVE after 3 rounds (FIX FIRST → FIX FIRST →
+APPROVE) — round 1 caught a real kernel bug (fabricated achromatic hue
+falsely selecting/rejecting neutral pixels) and a pipeline-order test
+that would have passed with the stage deleted entirely; round 2 caught
+a doc overclaim about the missing luminance-selection axis, now logged
+honestly as IMPROVEMENTS.md D22. All 1107 tests pass. Slice B (the
+eyedropper UI) not started — see CLAUDE.md's Point Color entry for the
+full reviewer write-up.
+
 See CLAUDE.md's roadmap for the full phase list and
 `docs/ROADMAP_HISTORY.md` for detail on anything already shipped.
 
@@ -314,6 +328,89 @@ code itself was correct from round 3 on. All 1088 tests pass throughout
 Committed in 4 logical commits (wheel frame fix, sidebar width fix,
 segmented-picker fix, docs).
 
+**Point Color Slice A / backend (2026-09-18)**: the user's selected next
+Tier-1 Lightroom gap after Color Grading. New `Sources/EditEngine/
+PointColor.swift` (a picked target hue/saturation + Hue/Saturation/
+Luminance adjustment + falloff `range`, `EditState.pointColors: [PointColor]`
+— this app's THIRD variable-length collection field after `redEyePoints`
+and `masks`, same treatment: cleared by `comparisonOriginal()`, not
+copied by `applyingPreset`, excluded from `requiresRawRedecode`).
+`init(from:)` deliberately lives in an `extension PointColor { }`, not
+the primary struct body, matching `Mask`'s own file structure, so
+Swift's synthesized memberwise initializer stays available alongside
+the custom schema-tolerant Codable decode.
+
+`Sources/Rendering/Shaders/PointColor.cikernel` (9th custom kernel):
+generalizes `SelectiveColor.cikernel`'s proven shape (raised-cosine hue
+falloff, headroom-normalize before HSL) from 8 fixed named bands to ONE
+arbitrary picked target, plus a new saturation-distance axis (so a
+picked pale pink and a picked saturated red are correctly treated as
+different targets). Applied as N sequential kernel passes (matching
+`PointToneCurve`'s "N passes of one shared kernel" precedent for a
+variable/optional set of stages, not packed into fixed vec4 slots the
+way Selective Color's fixed 8 bands are), immediately after Selective
+Color in the perceptual sandwich — MEASURED non-commuting with it
+(temporary swap-rebuild-remeasure, reverted): with Selective Color's
+`redHue: 1` and a matching Point Color `hue: -1` both active on a red
+test pixel, shipped order gives `(0.6, 0.05756, 0.05)`, reversed order
+gives `(0.6, 0.05, 0.18564)` — a 0.13564 gap on blue, ~68x this suite's
+0.002 tolerance. `PointColorTuning.swift` holds the hue/saturation
+window lerp constants — an honestly-labeled principled starting point,
+not yet measured (no UI exists yet to visually tune against), with
+`range` clamped to 0...1 before use.
+
+Deliberately hue+saturation selection only, no luminance-distance
+axis: after headroom normalization the kernel's own L is relative, not
+absolute (a 1.4-peak red and a 0.7-peak red can normalize to the same
+L), so a naive luminance axis would conflate genuinely different
+source brightnesses. Real, accepted consequence — a divergence from
+Lightroom's own Point Color — logged as IMPROVEMENTS.md D22: a bright
+highlight and a dark shadow of the same picked hue/saturation are
+inseparable by this kernel.
+
+1107 tests (19 new): kernel math measured against the real compiled
+kernel (identity, hue shift, isolation, range widening, headroom
+preservation both outside and inside the window, saturation
+adjustment, multi-instance independence, the pipeline-order test
+above), plus Codable/comparisonOriginal/preset-exclusion/catalog
+JSON-column coverage extended to match `masks`' own existing tests.
+
+Reviewer: 3 rounds, FIX FIRST → FIX FIRST → APPROVE. Round 1 caught a
+real kernel bug: `rgb2hsl` returns a FABRICATED hue of 0 for any
+achromatic pixel, and the kernel scored the hue axis against that
+fabricated value unconditionally — a legitimately-picked desaturated
+target near hue 0 falsely selected EVERY neutral pixel in the frame,
+while one further away (e.g. hue 210) falsely selected NONE of the
+neutral content it was picked from. Fixed by mixing the hue axis to
+"irrelevant" as the pixel's own saturation approaches zero (a new
+regression test, `testPointColorNeutralPixelIgnoresTargetHue`, pins
+this). Round 1 also caught that the original pipeline-order test used
+Selective Color's `redSaturation: -1`, which — because that stage's
+own saturation delta is weighted by the pixel's own saturation —
+happened to gate Point Color's own saturation-window weight to exactly
+zero in the shipped order, so the test passed byte-identically even
+with the Point Color stage deleted from the pipeline entirely; fixed
+by switching to `redHue` (see the measured numbers above). Round 2
+caught a doc overclaim that omitting the luminance axis was forced by
+a "domain hazard" — corrected to the real, narrower reason (headroom
+relativity) and logged honestly as D22 rather than asserting a fix
+path that hasn't been designed. All 1107 tests pass throughout.
+Committed in 4 logical commits (data model, kernel + pipeline stage,
+tests, docs).
+
+**Not built yet (Slice B)**: the eyedropper UI, the `AdjustTabView`
+"Point Color" section, add/select/delete instance management, and
+`ContentView`'s tap-capture wiring — its own future Plan Mode session.
+`PointColor.swift`'s own doc comment flags a reviewer-caught hazard for
+whoever builds it: the narrow saturation window (0.05...0.5) means any
+upstream stage that moves a pixel's saturation (Selective Color, global
+Hue, exposure/curves via headroom normalization) can silently push a
+picked color out of its own instance's selection window, so the
+eyedropper MUST sample at this stage's own pipeline position — the same
+"sample a truncated state" technique `ImageDocumentModel.
+pickColorRangeTarget` already uses for `.colorRange` masks — not from
+the final displayed pixel or the decoded original.
+
 **Curves v2 slice 3 UI (2026-09-17)**: the per-channel Red/Green/Blue tone
 curve editor, built on the backend shipped earlier this session (commit
 `d9a4d21`). New `ToneCurveChannel` enum (`Sources/UI/ToneCurveChannel.swift`
@@ -472,21 +569,26 @@ convention; verified live instead).
 
 ## In progress / blocked
 None. Color Grading (Slice A backend, Slice B UI, and the Slice B
-post-ship bug-fix round) is fully shipped, reviewed (APPROVE throughout),
-and committed — see the "Done" entries above.
+post-ship bug-fix round) and Point Color Slice A (backend) are fully
+shipped, reviewed (APPROVE throughout), and committed — see the "Done"
+entries above.
 
 ## Exact next step
-**User-selected: Point Color** (per-color eyedropper refinement, distinct
-from Selective Color's 8 fixed hue bands) is next — Tier-1 Lightroom gap,
-"likely needs a variable-length collection field, like `redEyePoints`"
-per CLAUDE.md's own gap list. Enter Plan Mode first, per this project's
-workflow rules — this is genuinely new architecture (a new field shape
-this codebase hasn't used before), not a drive-by addition.
+Pick the next Lightroom gap and enter Plan Mode first, per this
+project's workflow rules. **Point Color Slice B (the eyedropper UI)**
+is the natural continuation of the just-shipped backend — it needs its
+own session per this project's "one feature per session" rule, and per
+`PointColor.swift`'s own doc comment the eyedropper must sample at this
+stage's own pipeline position (immediately after Selective Color), not
+the final displayed pixel, since the narrow saturation window can
+otherwise reject a validly-picked color.
 
-Deferred, not forgotten: Chromatic Aberration removal and Manual
-Transform Scale/Aspect (remaining unstarted Tier-1 gaps); Auto Tone/Auto
-Settings, Enhance/Super Resolution, History panel, and Copy/Paste-and-Sync
+Also available: Chromatic Aberration removal and Manual Transform
+Scale/Aspect (remaining unstarted Tier-1 gaps); Auto Tone/Auto Settings,
+Enhance/Super Resolution, History panel, and Copy/Paste-and-Sync
 (unstarted Tier-2 items); Color Grading Slice B's own follow-ups —
 live-verifying the `AngularGradient` painted-wheel convention on screen
 (flagged DERIVED, not measured, in `ColorWheelGeometry.angularGradientFraction`'s
-doc comment) and IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout).
+doc comment) and IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout);
+and IMPROVEMENTS.md D22 (Point Color's missing luminance-selection axis,
+needs its own design pass before Slice B or independently).

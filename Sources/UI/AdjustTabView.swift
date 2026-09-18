@@ -580,11 +580,16 @@ struct AdjustTabView: View {
                 .foregroundStyle(.secondary)
             Picker("", selection: $panel.selectedColorGradingRange) {
                 ForEach(ColorGradingRange.allCases) { range in
-                    Text(colorGradingRangeSegmentLabel(for: range)).tag(range)
+                    // Plain, CONSTANT text — see `colorGradingEditedRangesSummary`'s
+                    // own doc comment for why the edited-indicator moved
+                    // OUT of this label entirely (a live-verified failure
+                    // of the previous approach, not a style preference).
+                    Text(range.rawValue).tag(range)
                 }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            colorGradingEditedRangesSummary
             // `.id(range)` is PRECAUTIONARY, not load-bearing today —
             // unlike `curveSection`'s own `.id(channel)`, which closes a
             // real stale-per-gesture-index hazard in `ToneCurveEditorView`.
@@ -618,12 +623,13 @@ struct AdjustTabView: View {
     }
 
     /// Single source of truth for "is `range` at identity" — shared by the
-    /// segmented picker's edited-dot and the per-range Reset button's
+    /// edited-ranges summary caption and the per-range Reset button's
     /// disabled state, so the two can't disagree (an earlier draft checked
-    /// Saturation/Luminance for the dot but Hue+Saturation+Luminance for
-    /// Reset, which — combined with a puck that could land at a non-zero
-    /// Hue with near-zero Saturation — could show Reset enabled with no
-    /// dot on the segment, the same "invisible edited state" failure class
+    /// Saturation/Luminance for the edited indicator (then a per-segment
+    /// dot) but Hue+Saturation+Luminance for Reset, which — combined with
+    /// a puck that could land at a non-zero Hue with near-zero Saturation
+    /// — could show Reset enabled with that range absent from the
+    /// indicator, the same "invisible edited state" failure class
     /// `channelSegmentLabel` above documents being reviewer-caught for the
     /// Curve section once already). `ColorWheelGeometry.polarValue`'s
     /// center snap keeps a puck dragged back to dead-center at exactly
@@ -635,13 +641,60 @@ struct AdjustTabView: View {
             && colorGradingLuminanceBinding(for: range).wrappedValue == 0
     }
 
-    /// The segmented picker's label for `range` — its plain name, plus a
-    /// trailing dot when `range` is not at identity. Without this, an
-    /// edited range other than the one currently shown is invisible state
-    /// — the same failure class `channelSegmentLabel` above already
-    /// documents being reviewer-caught for the Curve section once.
-    private func colorGradingRangeSegmentLabel(for range: ColorGradingRange) -> String {
-        isColorGradingRangeAtIdentity(range) ? range.rawValue : "\(range.rawValue) •"
+    /// A plain caption summarizing which Shadows/Midtones/Highlights
+    /// ranges are edited, so an edited range other than the one currently
+    /// shown isn't invisible state (the same failure class
+    /// `channelSegmentLabel` above already documents being
+    /// reviewer-caught for the Curve section once). Hidden entirely
+    /// (`Group` renders nothing) when no range is edited, matching this
+    /// section's other identity-driven visibility precedents.
+    ///
+    /// Lives OUTSIDE the `Picker`'s own segment labels — attempt 4 (see
+    /// IMPROVEMENTS.md's D21 for the numbering), and this time
+    /// live-verified, design for this indicator. TWO PRIOR approaches
+    /// were tried and DISPROVED live, both worth recording so neither
+    /// gets rediscovered:
+    /// 1. A trailing `" •"` appended to a segment's own label STRING when
+    ///    that range left identity. `.pickerStyle(.segmented)` is backed
+    ///    by a real `NSSegmentedControl`, which auto-sizes each segment to
+    ///    its own label content — the string-length change visibly
+    ///    shifted every segment after the one that grew. This is the bug
+    ///    that started this whole fix.
+    /// 2. Keeping that dot glyph always present and varying only its
+    ///    color (`.clear` vs. inherited), reasoning a constant-length
+    ///    string would keep widths fixed. A user screenshot disproved
+    ///    this too: `NSSegmentedControl` takes each segment's PLAIN STRING
+    ///    title and ignores `Text` styling entirely when drawing it, so
+    ///    the dot rendered solid on every segment regardless of color,
+    ///    silently making the indicator meaningless.
+    ///
+    /// A per-segment dot ALIGNED under each variably-sized native segment
+    /// (a third design, also considered) has no reliable way to know each
+    /// segment's actual rendered width from SwiftUI (`NSSegmentedControl`
+    /// auto-sizes them to their own text, so "Highlights" is wider than
+    /// "Shadows") — a plain summary sentence sidesteps needing that
+    /// measurement at all, at the cost of being slightly less compact.
+    /// This is ordinary SwiftUI `Text`, with no AppKit control bridging
+    /// segment-by-segment, so it needs no special accessibility handling
+    /// (or `.clear`-based visibility trick) at all — VoiceOver reads it
+    /// exactly as it reads any other `Text` in this file. Live-verified
+    /// with 3 progressive user screenshots — editing Shadows, then also
+    /// Midtones, then also Highlights — confirming the caption read
+    /// exactly "Edited: Shadows", then "Edited: Shadows, Midtones", then
+    /// "Edited: Shadows, Midtones, Highlights" at each step, in that
+    /// order.
+    /// `channelSegmentLabel`'s identical STRING-length-based dot (not
+    /// touched here) still has approach 1's original layout-shift risk —
+    /// see its own IMPROVEMENTS.md entry (D21).
+    private var colorGradingEditedRangesSummary: some View {
+        let edited = ColorGradingRange.allCases.filter { !isColorGradingRangeAtIdentity($0) }
+        return Group {
+            if !edited.isEmpty {
+                Text("Edited: \(edited.map(\.rawValue).joined(separator: ", "))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var isSelectedColorGradingRangeAtIdentity: Bool {

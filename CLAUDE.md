@@ -100,6 +100,7 @@ Grouped to match Apple Photos' adjustment panel. Full detail in `docs/ROADMAP_HI
 - **Definition (Clarity):** superseded — split into bipolar `texture` + `clarity`. `definition` no longer exists as a field; kept only as a read-only legacy decode key (`EditState.LegacyCodingKeys`). **Do not re-add `definition`.**
 - **Dehaze:** ✅ — dark channel prior (He/Sun/Tang 2009), 2 custom kernels (`DehazeDarkChannel.cikernel`, `DehazeRecover.cikernel`). Runs before Vignette/Clarity (measured, not conventional). Known limitation: near-zero effect on underwater photos (water absorbs red — the textbook failure case for this prior, not a bug).
 - **Selective Color:** ✅ — HSL v2, 8 fixed hue bands × Hue/Saturation/Luminance, `SelectiveColor.cikernel` (this app's first custom kernel).
+- **Color Grading:** Slice A (backend) ✅ — 3-way Shadows/Midtones/Highlights, each Hue/Saturation/Luminance (9 fields), `ColorGrading.cikernel` (8th custom kernel). Unlike Selective Color (per-hue targeting), selects by each pixel's own LUMINANCE via a raised-cosine falloff over 3 fixed anchors — no on-GPU HSL round-trip needed, since `ColorGradingTint.swift` converts each wheel's Hue/Saturation to a signed RGB tint delta once per render in Swift. Runs LAST inside `applyPerceptualAdjustments`'s sandwich — a measured REQUIREMENT, not a convention, for two independent reasons: it must survive Black & White's forced desaturation (so a B&W split-tone/sepia look works, this feature's single most common real use) and it measurably does not commute with Vibrance/Saturation either. `Blending`/`Balance` sliders and the 4th "Global" wheel are deferred; the kernel's fixed width/tint-strength/luminance-strength constants (0.4/0.8/0.5) are v1's principled default for what Blending will eventually control. Slice B (the color-wheel UI) not started — this app's first continuous-hue rendering, no UI exists to set these fields yet except a preset or hand-edited sidecar.
 - **HSL v1:** ✅ global Hue + Saturation only (no Lightness — would duplicate Exposure/Curves).
 - **Noise Reduction:** ✅ single Amount slider (`CINoiseReduction`).
 - **Sharpen:** ✅ single Amount slider (`CISharpenLuminance`). No longer the pipeline's final stage — Grain runs after it (measured: sharpening after grain amplifies it ~2.4x).
@@ -123,7 +124,7 @@ field(s) + `EditPipeline` stage(s) + `AdjustTabView` section):**
 - Texture / Clarity — ✅ SHIPPED (see Phase 2 backlog above; do not re-add `definition`)
 - Dehaze — ✅ SHIPPED (see Phase 2 backlog above)
 - Grain — ✅ SHIPPED (see Phase 2 backlog above)
-- Color Grading (3-way shadow/mid/highlight color wheels) — WANTED, not started; needs a new color-wheel UI control, but purely additive to `EditState`
+- Color Grading (3-way shadow/mid/highlight color wheels) — Slice A (backend) ✅ SHIPPED (see Phase 2 backlog above); Slice B (the color-wheel UI control) still WANTED, not started
 - Point Color (per-color eyedropper refinement, distinct from Selective Color's 8 fixed bands) — WANTED, not started; likely needs a variable-length collection field, like `redEyePoints`
 - Chromatic Aberration removal — WANTED, not started; purely additive
 - Manual Transform Scale/Aspect — WANTED, not started; same Transform/Distort stage group already exists

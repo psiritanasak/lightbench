@@ -8,14 +8,17 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
 Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
-✅ FULLY COMPLETE, and Curves v2 (Tier-2 Lightroom gap) is fully shipped,
-reviewed, and live-verified. **Grain** (Tier-1 Lightroom gap, WANTED, first
-item on that list) is code-complete, all 1049 tests passing, and reviewer-
-APPROVED after a real bug in round 1's own fix was caught by an adversarial
-re-measurement plus a handful of doc-comment-only FIX FIRST rounds after
-that (see "Done" below for the full story). Not yet committed — live
-verification and commit are the remaining steps (see "In progress /
-blocked" below). See CLAUDE.md's roadmap for the full phase list and
+✅ FULLY COMPLETE, Curves v2 (Tier-2 Lightroom gap) is fully shipped,
+reviewed, and live-verified, and **Grain** (Tier-1 Lightroom gap) is
+committed (see "Done" below). Currently finishing **Color Grading Slice A**
+(backend: 9 new `EditState` fields, `ColorGrading.cikernel`, the
+`applyColorGrading` pipeline stage) — code-complete, all 1069 tests passing,
+reviewer pass not yet run (see "In progress / blocked" below). Slice B (the
+color-wheel UI) is intentionally a separate future session. Also done this
+session: verified the app builds and all tests pass clean after an Xcode 27
+(Swift 6.4, macOS 27 SDK) upgrade, and logged the resulting
+`CIColorKernel(source:)` deprecation warning in IMPROVEMENTS.md rather than
+fixing it inline. See CLAUDE.md's roadmap for the full phase list and
 `docs/ROADMAP_HISTORY.md` for detail on anything already shipped.
 
 ## Open reviewer issues
@@ -115,8 +118,88 @@ maintained-list gap in `ImageDocumentModel.swift`, a stale "Sharpen is
 final" claim in `docs/ROADMAP_HISTORY.md`'s original Sharpen entry, a test
 mis-citation, an over-tight measurement band) → FIX FIRST (one of those doc
 fixes had only been applied in one of two files carrying the same stale
-band) → **APPROVE**. NOT yet live-verified or committed — see "In progress
-/ blocked" below.
+band) → **APPROVE**. Committed in 4 logical commits (state field, kernel +
+pipeline stage, UI slider, docs), WITHOUT live verification, by explicit
+user choice (asked; user chose to skip it and commit now rather than grant
+screen-automation permission for this task). NOT live-verified: the
+slider's visual effect across its range, whether it reads as photographic
+grain rather than digital noise (a subjective judgment, deliberately not
+unit-tested), and — the actual payoff of the resolution-independence
+design decision — whether dragging the slider on a large photo shows any
+visible grain-size pop when the interactive downscaled proxy is dropped
+and the full-res frame settles. Worth live-verifying in a future session;
+not currently blocking anything.
+
+**Color Grading Slice A / backend (2026-09-18)**: 9 new `EditState` fields
+(Shadows/Midtones/Highlights × Hue/Saturation/Luminance), `ColorGrading.
+cikernel` (8th custom kernel), `EditPipeline.applyColorGrading`. Selects by
+each pixel's own LUMINANCE (raised-cosine falloff over 3 fixed anchors —
+the same mathematical form `SelectiveColor.cikernel`'s hue-band falloff
+already uses, applied to a different axis), unlike Selective Color's
+per-hue targeting. Needs no on-GPU `rgb2hsl`/`hsl2rgb` at all — each
+wheel's Hue/Saturation converts to a signed RGB tint delta ONCE per render
+in Swift (`ColorGradingTint.swift`, new, pure), reusing
+`ColorRangeSelection.rgb(forHue:saturation:lightness:)` rather than
+duplicating that math (its doc comment was corrected for the new caller).
+
+Two independent, both-measured reasons `applyColorGrading` runs LAST
+inside `applyPerceptualAdjustments`'s sandwich, found during planning and
+confirmed during implementation: (1) it must survive Black & White's
+forced desaturation, or the single most common real Color Grading use —
+tinting a monochrome photo for a sepia/split-tone look — would be
+silently dead; live-confirmed via a real render, not just reasoned about.
+(2) MEASURED (temporary swap-rebuild-remeasure harness) not to commute
+with Vibrance/Saturation either — swapping the order moved a colored
+patch's red channel by 0.0105, ~5.2x this suite's 0.002 tolerance.
+
+Constants (width 0.4, tint strength 0.8, luminance strength 0.5) are v1's
+principled defaults for what Lightroom exposes as "Blending" (deferred),
+all MEASURED via a temporary spike (swept each in turn, printed real
+numbers, deleted before the final doc comments were written) — not
+guessed. One real correction mid-spike: the weight function operates on
+PERCEPTUAL (gamma-encoded) luma since the stage runs inside the perceptual
+sandwich, and a first attempt at choosing sample points used naive
+evenly-spaced LINEAR values (0/0.25/0.5/0.75/1.0), which was misleading —
+gamma encoding compresses shadow detail into a much larger share of the
+perceptual range, so linear 0.25 is already just past perceptual midtone.
+Corrected to sample points chosen so their perceptual encoding lands at
+~0.1/0.3/0.5/0.7/0.9 instead, cross-checked against this file's own
+established "linear 0.214 ≈ perceptual middle gray" figure.
+
+Full write-up with all the real measured numbers in
+`docs/ROADMAP_HISTORY.md`. 1069 tests (20 new: 6 pure-math in
+`ColorGradingTintTests.swift`, 12 in `EditPipelineTests`' new Color Grading
+math block, 2 in `EditStateCodableTests`; plumbing-only additions to
+`EditStatePresetTests`/`EditStateComparisonOriginalTests`/
+`CatalogDatabaseTests`' own fixtures). `AdjustTabView.
+isAdjustTabAtIdentity`/`resetAdjustmentsButton` extended despite no UI
+existing yet — same precedent Curves v2 slice 3 backend's own round-1
+reviewer catch established.
+
+Reviewer round 1: FIX FIRST. Caught 2 real kernel-math bugs (see
+`docs/ROADMAP_HISTORY.md` for the full story): the kernel's first draft
+copied `SelectiveColor.cikernel`'s normalize-by-max-channel/rescale
+technique before adding its tint/luminance delta, which silently amplified
+the grade by the pixel's own headroom (wrong for this kernel's ABSOLUTE
+additive deltas, unlike SelectiveColor's RELATIVE operations); the same
+normalize also misclassified bright saturated pixels into the wrong tonal
+range. Both fixed by removing the normalize/rescale entirely and computing
+luminance/adding the delta directly on the raw pixel — the two bugs turned
+out to be the same root cause. Also fixed: 3 doc-honesty issues (stale
+"same technique as SelectiveColor" claim, "linear luminance" wording that
+contradicted the correct "perceptual luma" description elsewhere in the
+same file, a test doc comment that pre-emptively excused the amplification
+bug as "not a bug") and 4 minor items (saturation/luminance clamping in
+the Swift wrapper since no UI exists yet to enforce range, a vacuous
+zero-state test's doc comment corrected for honesty about what it actually
+verifies, the alpha-preservation test strengthened to actually exercise
+the premultiply round trip — caught along the way that this suite's
+`CIContext.render` returns PREMULTIPLIED not straight alpha, a real thing
+to know for any future test in this file — and `ImageRenderer.swift`'s
+structural stage list extended). All 1069 tests still pass after the
+fixes. **Reviewer round 2 pending.** Currently fully uncommitted. Slice B
+(the color-wheel UI) is out of scope for this slice, its own future Plan
+Mode session.
 
 **Curves v2 slice 3 UI (2026-09-17)**: the per-channel Red/Green/Blue tone
 curve editor, built on the backend shipped earlier this session (commit
@@ -275,25 +358,20 @@ interaction glue with no unit-test precedent, per this codebase's own
 convention; verified live instead).
 
 ## In progress / blocked
-**Grain** — code-complete, all 1049 tests passing, reviewer-APPROVED (see
-the "Done" entry above for the full story, including a genuine bug in
-round 1's own fix that an adversarial re-measurement caught — not a normal
-review pass). Committed WITHOUT live verification, by explicit user choice
-(asked; user chose to skip it and commit now rather than grant screen-
-automation permission for this task). NOT live-verified: the slider's
-visual effect across its range, whether it reads as photographic grain
-rather than digital noise (a subjective judgment, deliberately not unit-
-tested), and — the actual payoff of the resolution-independence design
-decision — whether dragging the slider on a large photo shows any visible
-grain-size pop when the interactive downscaled proxy is dropped and the
-full-res frame settles. Worth live-verifying in a future session before
-relying on the "no visible pop" claim; not currently blocking anything.
+**Color Grading Slice A (backend)** — code-complete, all 1069 tests
+passing (see the "Done" entry above for the full write-up). Reviewer pass
+NOT yet run — mandatory before commit, this diff touches a shader/color-
+math stage. Currently fully uncommitted.
 
 ## Exact next step
-Grain is committed. Pick the next WANTED Lightroom-gap item (see
-CLAUDE.md's "Gaps vs. Adobe Lightroom Desktop" section) — Color Grading,
-Point Color, Chromatic Aberration removal, and Manual Transform
-Scale/Aspect are the remaining unstarted Tier-1 items; Auto Tone/Auto
-Settings, Enhance/Super Resolution, History panel, and Copy/Paste-and-Sync
-are unstarted Tier-2 items. Per this project's workflow rules, enter Plan
-Mode before starting whichever is picked.
+Run the `reviewer` agent (model "opus") on `git diff HEAD` for Color
+Grading Slice A. If FIX FIRST: fix every listed issue, re-run, iterate to
+APPROVE. Only then commit, in small logical commits (state field / tint
+helper / kernel + pipeline stage + tests / docs), matching the Grain
+commit shape. After that, Slice A is done — Slice B (the color-wheel UI)
+needs its own future Plan Mode session, not a continuation of this one.
+Beyond Color Grading entirely: Point Color, Chromatic Aberration removal,
+and Manual Transform Scale/Aspect are the remaining unstarted Tier-1 gaps;
+Auto Tone/Auto Settings, Enhance/Super Resolution, History panel, and
+Copy/Paste-and-Sync are unstarted Tier-2 items. Per this project's
+workflow rules, enter Plan Mode before starting whichever is picked next.

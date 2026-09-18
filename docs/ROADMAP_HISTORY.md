@@ -2210,10 +2210,134 @@ shipped slider already follows):
     round 2 FIX FIRST via an adversarial re-measurement that caught the
     round-1 fix's own deeper bug (see above) — this is the reviewer
     process working exactly as intended, not a process failure.
-- **Color Grading — WANTED.** 3-way shadows/midtones/highlights color wheels
-  (Lightroom's successor to Split Toning). Not present; no existing field covers
-  this. Bigger UI lift than a slider (needs a color-wheel control, not an
-  `EditSliderRow`) but purely additive to `EditState` — no migration concern.
+- **Color Grading — Slice A (backend) ✅ SHIPPED 2026-09-18, Slice B (UI)
+  WANTED, not started.** 3-way Shadows/Midtones/Highlights color wheels
+  (Lightroom's successor to Split Toning), each Hue/Saturation/Luminance — 9
+  new `EditState` fields (`shadowHue`/`shadowSaturation`/`shadowLuminance`,
+  `midtoneHue`/.../`highlightLuminance`), matching Selective Color's flat
+  per-range field shape but genuine HSL angle/magnitude values (`hslHue`'s
+  -180...180 convention), not amount-shift deltas like Selective Color's own
+  `redHue`-style fields. User-confirmed v1 scope: the 3 wheels only —
+  Blending/Balance and the 4th "Global" wheel deferred to a future slice.
+  Two-slice split (backend then UI) explicitly chosen to mirror Curves v2's
+  own slice 2A/2B precedent.
+
+  `ColorGrading.cikernel` (8th custom kernel) selects by each pixel's own
+  LUMINANCE — a raised-cosine falloff over LINEAR luminance distance from 3
+  fixed anchors (0.0/0.5/1.0), the same mathematical FORM
+  `SelectiveColor.cikernel`'s `bandWeights` already uses over CIRCULAR hue
+  distance, applied to a different axis. Unlike Selective Color, this kernel
+  needs NO `rgb2hsl`/`hsl2rgb` at all — each wheel's Hue/Saturation is a
+  FIXED value per render, not pixel-dependent, so `ColorGradingTint.swift`
+  (new, pure, `CoreImage`-free) converts it to a signed RGB tint delta ONCE
+  per render in Swift via `ColorRangeSelection.rgb(forHue:saturation:lightness:)`
+  (the existing pure HSL→RGB helper, reused rather than duplicated — its own
+  doc comment was corrected to reflect this second caller) at `lightness:
+  0.5`, minus neutral gray — a genuine simplification over Selective Color's
+  on-GPU HSL round-trip, and it makes the hue/saturation math plain-XCTest-
+  testable with exact numeric assertions instead of only reachable by
+  rendering.
+
+  **Two independent, both-measured reasons `applyColorGrading` runs LAST
+  inside `applyPerceptualAdjustments`'s sandwich — not a style choice:**
+  1. It must run AFTER Black & White's forced desaturation
+     (`applySaturation(-1, ...)`), or the single most common real-world
+     Color Grading use — tinting a monochrome photo for a sepia/split-tone
+     look — would be silently erased. Live-confirmed via
+     `testColorGradingTintSurvivesBlackAndWhite`: a shadow tint on a B&W
+     photo produces r≠g≠b, not the flat gray B&W-alone would give.
+  2. MEASURED (a temporary swap-rebuild-remeasure harness, this project's
+     established method) not to commute with Vibrance/Saturation either: on
+     a dark colored patch with Selective Color's `redHue`, global
+     `hslSaturation`, and a shadow tint all active, running Color Grading
+     BEFORE Vibrance/Saturation instead of its shipped position moved the
+     red channel by 0.0105 — ~5.2x this suite's 0.002 tolerance. Pinned by
+     `testColorGradingRunsAfterVibranceAndSaturation`.
+
+  Weight function operates on the PERCEPTUAL (sRGB-gamma-encoded) luma,
+  since the stage runs inside the perceptual sandwich — a first attempt at
+  measuring the width constant used naive evenly-spaced LINEAR sample points
+  (0/0.25/0.5/0.75/1.0) and was misleading, since gamma encoding compresses
+  shadow detail into a much larger share of the perceptual range (linear
+  0.25 is already just past perceptual midtone). Corrected to sample points
+  chosen so their PERCEPTUAL encoding lands at ~0.1/0.3/0.5/0.7/0.9 instead —
+  cross-checked against this file's own established "linear 0.214 ≈
+  perceptual middle gray" figure. MEASURED (not guessed) constants, all
+  hardcoded inside the kernel as local values (not user-adjustable in v1, so
+  not passed as arguments — matching `SelectiveColor.cikernel`'s own
+  `Wmin`/`Wmax`/`kHue`/`kLum` convention): width 0.4 (gives a clean
+  partition — each anchor is the ONLY active range at its own center, with
+  smooth overlap at the boundaries), tint strength 0.8 (strong, clearly
+  visible at full Saturation without 1.5's runaway distortion), luminance
+  strength 0.5 (meaningfully strong without blowing a midtone past 1.0 the
+  way 1.0 does). These are v1's PRINCIPLED DEFAULTS for what Lightroom
+  exposes as an adjustable "Blending" control (deferred), not a claimed
+  reproduction of Lightroom's own undisclosed algorithm — same disclaimer
+  precedent as Brilliance.
+
+  **Two real kernel-math bugs caught by the reviewer's round-1 pass, both
+  fixed, not just documented as limitations:**
+  1. The kernel's first draft copied `SelectiveColor.cikernel`'s exact
+     normalize-by-max-channel/rescale technique before adding the tint/
+     luminance delta. Wrong here: SelectiveColor's operations are all
+     RELATIVE (hue rotation, saturation multiply) inside the normalized
+     domain, so the later rescale is harmless; this kernel's operations are
+     ABSOLUTE additive offsets, so `(c/scale + delta) * scale == c +
+     delta*scale` silently amplified the grade strength by the pixel's own
+     headroom — the identical highlight tint measured ~3.04 on a
+     1.4-linear white but only ~1.89 on a 1.0-linear white, an
+     exposure-dependent grade strength with no such dependency intended.
+     Fixed by adding the delta directly to the raw (unnormalized) pixel —
+     the delta itself is now headroom-INDEPENDENT, confirmed by a
+     regression test bounding the two cases' gap well below the old bug's.
+  2. The luminance-classification `L` was also computed on the
+     normalized value, which misclassified bright SATURATED pixels: a
+     blown red `(1.5, 0.1, 0.1)` normalizes to `(1.0, 0.067, 0.067)`,
+     whose luma (0.26) reads as "shadow," while the pixel's own real luma
+     (0.398, clamped) correctly reads as "mid." Unlike SelectiveColor's HSL
+     saturation formula (whose denominator genuinely goes undefined outside
+     [0,1] — the actual bug that technique was built to prevent), this
+     Rec.709 dot product is perfectly well-defined above 1.0 and needed no
+     normalize at all. Fixed by computing `L` directly on the raw pixel.
+     Both fixes turned out to be the SAME removal — dropping the
+     normalize/rescale entirely fixes both defects at once.
+
+  Headroom preservation is now correctly the SIMPLER property it always
+  should have been: no destructive clamp to 1.0, no negative channels, and
+  — now also correctly measured, not just asserted — the added delta's
+  magnitude does not scale with the pixel's own headroom.
+  `testColorGradingPreservesHighlightHeadroom` pins both the qualitative
+  claim and a bound distinguishing the fix from the old bug's much larger
+  gap (real encode/decode curve convexity alone still grows the gap
+  somewhat with headroom, ~0.49 measured post-fix vs. ~1.15 pre-fix).
+
+  Resolution-independent by construction (no radius/cell geometry at all,
+  unlike Sharpen/Clarity/Grain) — confirmed empirically
+  (`testColorGradingIsResolutionConsistent`), not just assumed, per this
+  project's own convention. Does NOT join `ImageDocumentModel.
+  pickColorRangeTarget`'s post-mask zeroed-field list or `ImageRenderer`'s
+  proxy-divergence list — both verified by tracing the actual call order:
+  Color Grading runs inside `applyPerceptualAdjustments`, which executes
+  BEFORE `applyMasks` in the top-level pipeline, so its effect is already
+  baked into any pre-mask sample (Selective Color, in the same sandwich,
+  isn't in either list for the identical reason).
+
+  20 new tests total (1049 -> 1069): 6 in a new `ColorGradingTintTests.swift`
+  (pure Swift math, no rendering — zero-saturation-is-zero-delta, a
+  hand-computed pure-red expectation cross-checked against
+  `ColorRangeSelection.rgb` directly, hue-wraparound), 12 in
+  `EditPipelineTests`' new `// MARK: - Color Grading math` block (isolation
+  per range, luminance offset direction, alpha preservation, headroom, the
+  B&W-survival test, resolution consistency, the pipeline-order regression
+  pin), 2 more added to `EditStateCodableTests` (round-trip + missing-key-
+  defaults, mirroring the `dehaze`/`grain` pattern exactly). Plumbing
+  additions (no new test functions) to `EditStatePresetTests`,
+  `EditStateComparisonOriginalTests`, `CatalogDatabaseTests`'s own fixtures.
+  `AdjustTabView.isAdjustTabAtIdentity`/`resetAdjustmentsButton` extended in
+  Slice A despite no UI existing yet — direct precedent from Curves v2 slice
+  3 backend's own round-1 reviewer catch: without this, a photo carrying a
+  Color-Grading edit from a preset or hand-edited sidecar would read as "at
+  identity" with no way to clear it via Reset Adjustments.
 - **Point Color — WANTED.** Lightroom's newer per-color eyedropper refinement
   (pick an exact color, then adjust ITS OWN Hue/Sat/Lum), distinct from this
   app's existing Selective Color (8 FIXED hue bands). A genuinely different

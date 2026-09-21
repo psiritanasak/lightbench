@@ -69,6 +69,16 @@ struct AdjustPanelState {
     /// one is not "the panel's private business."
     var selectedMaskID: UUID?
 
+    /// Point Color Slice B: whether the "Point Color" section is expanded.
+    /// Same reasoning as every other section bool above.
+    var isPointColorSectionExpanded = false
+
+    /// Which point color instance's sliders + eyedropper are shown.
+    /// Presentation-only, exactly like `selectedMaskID` above — stored as
+    /// the instance's own `UUID`, NOT an array index, same reasoning
+    /// (deleting an earlier instance shifts every later index).
+    var selectedPointColorID: UUID?
+
     /// Curves v2 slice 2B: which point curve control point (if any) is
     /// currently selected, driving `ToneCurveEditorView`'s detail readout
     /// and the "Delete Point" button. A plain `Int`, NOT an id — points
@@ -129,6 +139,13 @@ struct AdjustTabView: View {
     /// not `Bool` (mirrors F4's own reasoning): a future falling-edge
     /// cleanup needs to name the OLD id.
     @Binding var colorPickingMaskID: UUID?
+    /// Point Color Slice B: which point color instance (if any) is
+    /// currently armed for its eyedropper tap — owned by `ContentView` for
+    /// the same reason `colorPickingMaskID` is (it gates zoom/pan via
+    /// `canZoom`'s own term, drives the tap-capture overlay, and is
+    /// cleared by photo/tab/Compare switches). `UUID?`, not `Bool`, same
+    /// reasoning: a falling-edge cleanup needs to name the OLD id.
+    @Binding var pointColorPickingID: UUID?
     /// Called when EITHER point-picking mode is entered. `ContentView` exits
     /// Compare and resets zoom/pan in response — passed as a callback so this
     /// view doesn't take bindings to three unrelated viewport states.
@@ -255,6 +272,12 @@ struct AdjustTabView: View {
                 icon: "square.grid.3x3", title: "Selective Color", isExpanded: $panel.isSelectiveColorSectionExpanded
             ) {
                 selectiveColorSection
+            }
+            Divider()
+            AdjustSectionContainer(
+                icon: "eyedropper", title: "Point Color", isExpanded: pointColorSectionExpandedBinding
+            ) {
+                pointColorSection
             }
             Divider()
             AdjustSectionContainer(
@@ -524,6 +547,8 @@ struct AdjustTabView: View {
                     panel.selectedMaskID = nil
                     brushPaintingMaskID = nil
                     colorPickingMaskID = nil
+                    panel.selectedPointColorID = nil
+                    pointColorPickingID = nil
                     onEnterPointPickingMode()
                 }
             } label: {
@@ -756,6 +781,8 @@ struct AdjustTabView: View {
                     panel.selectedMaskID = nil
                     brushPaintingMaskID = nil
                     colorPickingMaskID = nil
+                    panel.selectedPointColorID = nil
+                    pointColorPickingID = nil
                     onEnterPointPickingMode()
                 }
             } label: {
@@ -1064,6 +1091,7 @@ struct AdjustTabView: View {
         isPlacingRedEyeCorrections = false
         brushPaintingMaskID = nil
         colorPickingMaskID = nil
+        pointColorPickingID = nil
         if hasOnImageOverlay(mask.kind) {
             onEnterPointPickingMode()
         }
@@ -1095,6 +1123,7 @@ struct AdjustTabView: View {
         isPlacingRedEyeCorrections = false
         brushPaintingMaskID = id
         colorPickingMaskID = nil
+        pointColorPickingID = nil
         onEnterPointPickingMode()
     }
 
@@ -1117,6 +1146,147 @@ struct AdjustTabView: View {
         isPlacingRedEyeCorrections = false
         brushPaintingMaskID = nil
         colorPickingMaskID = id
+        pointColorPickingID = nil
+        onEnterPointPickingMode()
+    }
+
+    // MARK: - Point Color
+
+    /// Mirrors `masksSectionExpandedBinding` exactly: ONE write through
+    /// `panel`, not two sequential ones, and disarms the eyedropper on
+    /// collapse.
+    private var pointColorSectionExpandedBinding: Binding<Bool> {
+        Binding(
+            get: { panel.isPointColorSectionExpanded },
+            set: { newValue in
+                var next = panel
+                next.isPointColorSectionExpanded = newValue
+                if !newValue { next.selectedPointColorID = nil }
+                panel = next
+                if !newValue {
+                    pointColorPickingID = nil
+                }
+            }
+        )
+    }
+
+    /// No add-then-pick-a-kind step, unlike `masksSection` — there is only
+    /// one kind, so "Add Point Color" immediately selects the new instance
+    /// AND arms its eyedropper in one action (mirroring `addMask(kind:
+    /// .colorRange)`'s own shape exactly).
+    private var pointColorSection: some View {
+        Group {
+            Button("Add Point Color") {
+                addPointColor()
+            }
+            .frame(maxWidth: .infinity)
+            .disabled(document.currentImage == nil)
+            if document.editState.pointColors.isEmpty {
+                Text("No point colors yet").font(.caption).foregroundStyle(.secondary)
+            } else {
+                pointColorListRows
+            }
+            pointColorDetail
+        }
+    }
+
+    /// Label "Point Color N" comes from ARRAY POSITION, same tradeoff
+    /// `maskRow`'s own doc comment already accepts for masks — deleting an
+    /// earlier instance renumbers later ones.
+    private var pointColorListRows: some View {
+        ForEach(Array(document.editState.pointColors.enumerated()), id: \.element.id) { index, pointColor in
+            pointColorRow(number: index + 1, pointColor: pointColor)
+        }
+    }
+
+    private func pointColorRow(number: Int, pointColor: PointColor) -> some View {
+        let isSelected = panel.selectedPointColorID == pointColor.id
+        return HStack {
+            Button {
+                selectPointColor(pointColor)
+            } label: {
+                Label("Point Color \(number)", systemImage: "eyedropper")
+            }
+            .buttonStyle(.plain)
+            .fontWeight(isSelected ? .semibold : .regular)
+            .accessibilityLabel("Point Color \(number)")
+            Spacer()
+            Button {
+                deletePointColor(pointColor)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.red)
+            .accessibilityLabel("Delete Point Color \(number)")
+        }
+    }
+
+    @ViewBuilder private var pointColorDetail: some View {
+        if let id = panel.selectedPointColorID, let binding = $document.editState.pointColor(id: id) {
+            // `.id(id)` is LOAD-BEARING, same reasoning as `maskDetail`'s
+            // own comment: `EditSliderRow` holds click-to-type `@State`,
+            // and without per-instance view identity a typed value could
+            // commit into the wrong instance after switching selection.
+            PointColorDetailView(
+                pointColor: binding,
+                onBeginColorPick: { beginPointColorPick(for: id) }
+            ).id(id)
+        }
+    }
+
+    private func addPointColor() {
+        let pointColor = PointColor()
+        document.editState.pointColors.append(pointColor)
+        selectPointColor(pointColor)
+        beginPointColorPick(for: pointColor.id)
+    }
+
+    /// No on-image overlay to protect (this kind has none, matching
+    /// `.colorRange`'s own `hasOnImageOverlay` == false) — selecting an
+    /// ALREADY-picked instance should not reset the viewport the way
+    /// arming a NEW pick does; only `beginPointColorPick` below calls
+    /// `onEnterPointPickingMode()`.
+    private func selectPointColor(_ pointColor: PointColor) {
+        panel.selectedPointColorID = pointColor.id
+        isPickingWhiteBalance = false
+        isPlacingRedEyeCorrections = false
+        brushPaintingMaskID = nil
+        colorPickingMaskID = nil
+        // Reviewer-caught: without this, arming instance 1's eyedropper
+        // then clicking instance 2's row left the eyedropper armed on 1
+        // while the detail panel showed 2 — the next tap wrote into the
+        // WRONG instance, and the orphaned unpicked instance 1 never got
+        // discarded (`isPointColorSelected` stays true, since instance 2
+        // still exists).
+        pointColorPickingID = nil
+    }
+
+    private func deletePointColor(_ pointColor: PointColor) {
+        document.editState.pointColors.removeAll { $0.id == pointColor.id }
+        if panel.selectedPointColorID == pointColor.id {
+            panel.selectedPointColorID = nil
+        }
+        if pointColorPickingID == pointColor.id {
+            pointColorPickingID = nil
+        }
+    }
+
+    /// Arms this instance's eyedropper — mirrors `beginColorPick`'s shape
+    /// (clears WB/Red-Eye/brush/colorRange, calls `onEnterPointPickingMode()`
+    /// UNCONDITIONALLY, independent of any on-image overlay, since the tap-
+    /// capture layer itself needs the un-zoomed `currentFitRect` regardless).
+    /// This is the 6th hand-rolled mutual-exclusion site (after WB, Red-Eye,
+    /// `select(_:)`, `beginBrushStroke`, `beginColorPick`) — IMPROVEMENTS.md
+    /// already logs that a shared mode enum is overdue; not built this
+    /// slice, for the same reason `beginColorPick` gave (touches already-
+    /// verified WB/Red-Eye/Brush/Color-Range behavior).
+    private func beginPointColorPick(for id: UUID) {
+        isPickingWhiteBalance = false
+        isPlacingRedEyeCorrections = false
+        brushPaintingMaskID = nil
+        colorPickingMaskID = nil
+        pointColorPickingID = id
         onEnterPointPickingMode()
     }
 

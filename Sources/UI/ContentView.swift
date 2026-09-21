@@ -112,9 +112,12 @@ struct ContentView: View {
         // concern: `hasOnImageOverlay(.colorRange)` is `false` (nothing to
         // draw), but the eyedropper TAP's own `location -> image fraction`
         // math still assumes an un-zoomed `currentFitRect`, same as the WB
-        // eyedropper's own capture layer.
+        // eyedropper's own capture layer. `!isPickingPointColor` is the
+        // exact same term, one kind later (Point Color Slice B) — same
+        // reasoning, same un-zoomed assumption in its own tap-capture layer.
         document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance
             && !isPlacingRedEyeCorrections && !isEditingOverlayMask && !isPaintingBrush && !isPickingColorRange
+            && !isPickingPointColor
     }
 
     /// Phase 7 slice 2: the mask `adjustPanel.selectedMaskID` currently
@@ -132,6 +135,16 @@ struct ContentView: View {
     private var isEditingMask: Bool {
         guard let id = adjustPanel.selectedMaskID else { return false }
         return document.editState.masks.contains { $0.id == id }
+    }
+
+    /// Point Color Slice B: the same "compute the truth, don't trust the
+    /// stored id" shape as `isEditingMask` — Undo, Revert to Original, and
+    /// Apply Preset can all delete the selected instance WITHOUT passing
+    /// through `deletePointColor`, which would otherwise leave
+    /// `pointColorPickingID` pointing at an instance that no longer exists.
+    private var isPointColorSelected: Bool {
+        guard let id = adjustPanel.selectedPointColorID else { return false }
+        return document.editState.pointColors.contains { $0.id == id }
     }
 
     /// Whether `kind` draws an on-image overlay positioned against
@@ -199,6 +212,15 @@ struct ContentView: View {
     /// `isPickingColorRange` term, not to draw anything.
     @State private var colorPickingMaskID: UUID?
     private var isPickingColorRange: Bool { colorPickingMaskID != nil }
+
+    /// Point Color Slice B: which point color instance (if any) currently
+    /// has its eyedropper armed — `UUID?`, same F4/`colorPickingMaskID`
+    /// reasoning (a falling-edge cleanup needs to name the OLD id). Like
+    /// `.colorRange`, this kind has no on-image overlay at all — this state
+    /// exists purely to gate the tap-capture layer in `pointAndZoomOverlays`
+    /// and `canZoom`'s own `isPickingPointColor` term.
+    @State private var pointColorPickingID: UUID?
+    private var isPickingPointColor: Bool { pointColorPickingID != nil }
 
     /// Whether a tap on the image should be captured as a WB eyedropper
     /// sample. Its own overlay only exists while this is true AND cropping
@@ -363,7 +385,7 @@ struct ContentView: View {
         // fails closed (falls through to the pan branch, or `.ignored`)
         // instead of committing a point against a crop-mode `fitRect`
         // with no crosshair even drawn.
-        if !isCroppingActive, isPickingWhiteBalance || isPlacingRedEyeCorrections {
+        if !isCroppingActive, isPickingWhiteBalance || isPlacingRedEyeCorrections || isPickingPointColor {
             return handlePointPlacementKeyPress(keyPress)
         }
         // Phase 7 slice 2: same defensive re-check discipline as the
@@ -385,10 +407,37 @@ struct ContentView: View {
             let maskResult = handleMaskKeyPress(keyPress)
             if maskResult == .handled { return maskResult }
         }
+        // Point Color Slice B: same only-intercept-on-`.handled` discipline
+        // as the mask branch above, for the SAME reason. Reviewer-caught
+        // gap: without this, a merely-SELECTED (not currently picking)
+        // Point Color instance had no keyboard way to deselect at all —
+        // the branch above only covers the picking-mode Escape stage
+        // (`handlePointPlacementKeyPress`, reached while `isPickingPointColor`
+        // is still true); once the eyedropper disarms, `isPickingPointColor`
+        // goes false and nothing else routed Escape to the selection itself.
+        if !isCroppingActive, isPointColorSelected {
+            let pointColorResult = handlePointColorKeyPress(keyPress)
+            if pointColorResult == .handled { return pointColorResult }
+        }
         if canZoom, zoomScale > 1, compareMode != .split {
             return handlePanKeyPress(keyPress)
         }
         return .ignored
+    }
+
+    /// Escape deselects the currently-selected Point Color instance — the
+    /// `isEditingMask`/`handleMaskKeyPress` analogue for this kind. No
+    /// intermediate "picking-only" stage needed here the way brush/Color-
+    /// Range masks have: that stage already exists one level up, inside
+    /// `handlePointPlacementKeyPress` (Point Color's eyedropper IS routed
+    /// through the shared point-placement dispatch, unlike Color Range's
+    /// own mouse-only picker) — by the time control reaches here,
+    /// `pointColorPickingID` is already `nil` and only the SELECTION
+    /// remains to clear.
+    private func handlePointColorKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        guard keyPress.key == .escape else { return .ignored }
+        adjustPanel.selectedPointColorID = nil
+        return .handled
     }
 
     /// Escape deselects the currently-edited mask — matches every other
@@ -491,6 +540,25 @@ struct ContentView: View {
         }
     }
 
+    /// Point Color Slice B: the Point Color analogue of
+    /// `discardUnpickedColorRangeMask` — deletes `id` iff it's an instance
+    /// that was armed for the eyedropper and NEVER PICKED (no `hasTarget`,
+    /// identity adjustments — `PointColor.isIdentity` is exactly this,
+    /// adjustment fields only, matching `Mask.isIdentity`), i.e. exactly
+    /// the "Add Point Color, then Escape/switch away without tapping"
+    /// case. Wired to `pointColorPickingID`'s change the same way, and
+    /// inherits that mechanism's own documented photo-switch gap (see
+    /// `discardUnpaintedBrushMask`'s own doc comment and IMPROVEMENTS.md's
+    /// D13 — not re-litigated here, same root cause, same accepted scope).
+    private func discardUnpickedPointColor(_ id: UUID?) {
+        guard let id, let pointColor = document.editState.pointColors.first(where: { $0.id == id }) else { return }
+        guard !pointColor.hasTarget, pointColor.isIdentity else { return }
+        document.editState.pointColors.removeAll { $0.id == id }
+        if adjustPanel.selectedPointColorID == id {
+            adjustPanel.selectedPointColorID = nil
+        }
+    }
+
     /// Arrow keys move `crosshairPosition`; Return commits (samples WB or
     /// toggles a Red-Eye point at the crosshair — see
     /// `commitPointPlacement`); Escape disarms without committing — a
@@ -522,6 +590,7 @@ struct ContentView: View {
         case .escape:
             isPickingWhiteBalance = false
             isPlacingRedEyeCorrections = false
+            pointColorPickingID = nil
         default:
             return .ignored
         }
@@ -547,6 +616,13 @@ struct ContentView: View {
                 crosshairPosition, in: document.editState.redEyePoints, fitRect: fitRect,
                 threshold: RedEyeOverlayView.hitTestThreshold
             )
+        } else if let id = pointColorPickingID {
+            // One-shot, matching WB's own shape above (not Red-Eye's
+            // stays-armed one) — Point Color's eyedropper picks exactly
+            // one target per arm, mirroring the mouse tap handler in
+            // `pointAndZoomOverlays`.
+            document.pickPointColorTarget(pointColorID: id, normalizedX: crosshairPosition.x, normalizedY: crosshairPosition.y)
+            pointColorPickingID = nil
         }
     }
 
@@ -841,6 +917,8 @@ struct ContentView: View {
             adjustPanel.selectedMaskID = nil
             brushPaintingMaskID = nil
             colorPickingMaskID = nil
+            adjustPanel.selectedPointColorID = nil
+            pointColorPickingID = nil
             compareMode = .off
             splitOrientation = .vertical
             splitPosition = 0.5
@@ -859,6 +937,8 @@ struct ContentView: View {
                 adjustPanel.selectedMaskID = nil
                 brushPaintingMaskID = nil
                 colorPickingMaskID = nil
+                adjustPanel.selectedPointColorID = nil
+                pointColorPickingID = nil
                 compareMode = .off
                 zoomScale = 1
                 panOffset = .zero
@@ -950,6 +1030,32 @@ struct ContentView: View {
                 discardUnpickedColorRangeMask(oldID)
             }
         }
+        // Point Color Slice B: same `oldID != newID` shape as
+        // `colorPickingMaskID`'s own `.onChange` above (the identical
+        // add->select->pick coalescing hazard), PLUS the WB/Red-Eye
+        // rising-edge crosshair reset + focus grab those two `.onChange`s
+        // handle separately — combined here since both concerns key off
+        // the same `pointColorPickingID` change, unlike Color Range (which
+        // has no keyboard crosshair support to grab focus for).
+        .onChange(of: pointColorPickingID) { oldID, newID in
+            if oldID != newID {
+                discardUnpickedPointColor(oldID)
+            }
+            if newID != nil {
+                crosshairPosition = CGPoint(x: 0.5, y: 0.5)
+                isImagePaneFocused = true
+            }
+        }
+        // Point Color Slice B: the `isEditingMask` analogue — Undo/Revert/
+        // Apply-Preset can delete the selected instance without passing
+        // through `deletePointColor`, which would otherwise leave
+        // `pointColorPickingID` pointing at an instance that no longer
+        // exists.
+        .onChange(of: isPointColorSelected) { _, stillSelected in
+            if !stillSelected {
+                pointColorPickingID = nil
+            }
+        }
         // Closes the same hazard `isEditingMask`'s own doc comment already
         // names one level up: Undo, Revert to Original, and Apply Preset
         // can all delete the selected mask WITHOUT passing through any
@@ -980,7 +1086,7 @@ struct ContentView: View {
         .onChange(of: showLibrary) { _, isShowingLibrary in
             if !isShowingLibrary,
                isPickingWhiteBalance || isPlacingRedEyeCorrections || isEditingOverlayMask
-                || isPaintingBrush || isPickingColorRange {
+                || isPaintingBrush || isPickingColorRange || isPickingPointColor {
                 isImagePaneFocused = true
             }
         }
@@ -1124,6 +1230,7 @@ struct ContentView: View {
             .disabled(
                 document.currentImage == nil || isCroppingActive
                     || isPickingWhiteBalance || isPlacingRedEyeCorrections || isPickingColorRange
+                    || isPickingPointColor
             )
             .tint(compareMode != .off ? .yellow : nil)
             .accessibilityAddTraits(compareMode != .off ? [.isSelected] : [])
@@ -1139,6 +1246,16 @@ struct ContentView: View {
                     adjustPanel.selectedMaskID = nil
                     brushPaintingMaskID = nil
                     colorPickingMaskID = nil
+                    // Reviewer-caught: this branch was missing entirely —
+                    // the `.disabled` above blocks entering Compare from
+                    // the MENU while armed, but `compareMode` is also a
+                    // plain `@State` this `.onChange` observes regardless
+                    // of how it changed, so leaving this out meant nothing
+                    // actually stopped Point Color's eyedropper from
+                    // staying armed over a Side-by-Side/Split viewport
+                    // whose `currentFitRect` assumption no longer holds.
+                    adjustPanel.selectedPointColorID = nil
+                    pointColorPickingID = nil
                 }
             }
         }
@@ -1296,6 +1413,7 @@ struct ContentView: View {
                             : isPlacingRedEyeCorrections ? "Red-eye placement"
                             : isPaintingBrush ? "Brush painting"
                             : isPickingColorRange ? "Color range picker"
+                            : isPickingPointColor ? "Point color picker"
                             // Phase 7 slice 5: narrowed to overlay-owning
                             // kinds — with no overlay, nothing about the
                             // PANE itself changed, so announcing "Mask
@@ -1525,6 +1643,37 @@ struct ContentView: View {
                 )
                 .accessibilityHidden(true)
         }
+        // Point Color Slice B: this eyedropper's tap-capture layer —
+        // mirrors the WB eyedropper's own capture layer above almost
+        // exactly (same `Color.clear`/crosshair-cursor/`SpatialTapGesture`
+        // shape, same one-shot auto-disarm, same keyboard-crosshair sync),
+        // NOT the Color Range eyedropper's (which has no keyboard
+        // equivalent, IMPROVEMENTS.md's D14 — closed for THIS kind by
+        // giving it the sync WB already has, rather than opening a third
+        // instance of that gap). Resolves the target instance by IDENTITY
+        // at commit time (mirrors `PointColorBinding`'s own discipline —
+        // Undo/Revert/Apply-Preset could delete the instance mid-pick),
+        // same as the Color Range branch above.
+        if isPickingPointColor, !isCroppingActive, !isPickingWhiteBalance, !isPlacingRedEyeCorrections,
+           !isPaintingBrush, !isPickingColorRange, let id = pointColorPickingID, let fitRect = currentFitRect {
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(width: fitRect.width, height: fitRect.height)
+                .position(x: fitRect.midX, y: fitRect.midY)
+                .onHover { inside in
+                    if inside { NSCursor.crosshair.push() } else { NSCursor.pop() }
+                }
+                .gesture(
+                    SpatialTapGesture(coordinateSpace: .local).onEnded { tap in
+                        let normalizedX = tap.location.x / fitRect.width
+                        let normalizedY = tap.location.y / fitRect.height
+                        document.pickPointColorTarget(pointColorID: id, normalizedX: normalizedX, normalizedY: normalizedY)
+                        crosshairPosition = CGPoint(x: normalizedX, y: normalizedY)
+                        pointColorPickingID = nil
+                    }
+                )
+                .accessibilityHidden(true)
+        }
         // D8 (IMPROVEMENTS.md): the keyboard-driven crosshair itself —
         // only while a point-placement mode is armed AND the pane holds
         // keyboard focus (so it doesn't linger on screen after focus
@@ -1536,6 +1685,8 @@ struct ContentView: View {
                 EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .white)
             } else if isPlacingRedEyeCorrections, !isCroppingActive {
                 EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .yellow)
+            } else if isPickingPointColor, !isCroppingActive {
+                EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .cyan)
             }
         }
         // Compare Split's draggable divider. `compareMode` can only be
@@ -1612,6 +1763,7 @@ struct ContentView: View {
                         isPlacingRedEyeCorrections: $isPlacingRedEyeCorrections,
                         brushPaintingMaskID: $brushPaintingMaskID,
                         colorPickingMaskID: $colorPickingMaskID,
+                        pointColorPickingID: $pointColorPickingID,
                         onEnterPointPickingMode: {
                             compareMode = .off
                             zoomScale = 1

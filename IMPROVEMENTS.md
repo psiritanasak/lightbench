@@ -1192,6 +1192,27 @@ Not fixed here — logged for whoever builds Slice B's UI, since a user
 who picks a shadow color and expects highlights of the same hue to be
 unaffected will be surprised.
 
+### D23. Transform Scale/Stretch has no minification prefiltering (reviewer-caught)
+
+`EditPipeline.applyTransformScale` uses a plain `.transformed(by:)`
+affine resample — no `CILanczosScaleTransform`-style prefiltering.
+Straighten and Perspective never minify (rotation/taper only ever
+moves content, never shrinks the sampling density below 1:1), so this
+is the FIRST stage in the Transform/Distort group that can. At the
+clamp extremes (`transformScale: 0.5, transformAspect: 1`, i.e. the
+maximum simultaneous zoom-out plus maximum Stretch compression on one
+axis) `sx ≈ 0.385` — a ~2.6x minification on that axis with no
+prefiltering, a real aliasing risk on high-frequency content (fine
+texture, a brick wall, moiré-prone fabric).
+
+Not fixed here: the common real-world case (Scale near 1.0, nudged up
+just enough to clear a modest keystone wedge) is a mild zoom, not a
+strong minify, so this was scoped as a documented limitation
+(`EditPipeline.applyTransformScale`'s own doc comment) rather than
+blocking v1. Worth a prefiltered resample (or at minimum measuring how
+bad the aliasing actually looks at the clamp extremes on real photo
+content) before this feature is considered fully polished.
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

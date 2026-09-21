@@ -117,10 +117,22 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     //     that a decoded 8-bit source never has. Harmless in practice —
     //     `applyLevels` clamps before `CIGammaAdjust` runs — but a real,
     //     if minor, extra divergence source.
-    // Every other stage (crop, straighten, perspective, flip, vignette,
-    // WB, exposure, levels, curves, HSL, saturation, B&W, Selective Color,
-    // Color Grading, Point Color) is exactly extent-proportional or purely
-    // per-pixel (Color Grading has no geometry at all — its weight depends
+    // Every other stage (crop, straighten, perspective, transform scale/
+    // aspect, flip, vignette, WB, exposure, levels, curves, HSL, saturation,
+    // B&W, Selective Color, Color Grading, Point Color) is exactly
+    // extent-proportional or purely per-pixel (transform scale/aspect is a
+    // STRUCTURAL claim, not separately measured: `EditPipeline.
+    // applyTransformScale` is an affine scale about `extent.mid*` cropped
+    // back to `extent`, with no absolute-pixel radius anywhere in it, so it
+    // scales with the proxy the same way Perspective already does. This is
+    // an EXTENT-equivalence claim only, not a pixel-equivalence one — see
+    // IMPROVEMENTS.md D23, which documents that `.transformed(by:)` has no
+    // minification prefiltering: `ProxyBuilder`'s own Lanczos downscale
+    // already band-limits the proxy before this stage ever runs, while a
+    // full-res render doesn't, so a minifying Scale/Stretch is a genuine
+    // proxy-vs-full-res ALIASING divergence source this paragraph's own
+    // "up to resampling" caveat is meant to cover, not a contradiction of
+    // it. Color Grading has no geometry at all — its weight depends
     // only on each pixel's own luminance, confirmed empirically via
     // `testColorGradingIsResolutionConsistent`, not just assumed; Point
     // Color's kernel is the same shape — no extent/radius argument at
@@ -466,8 +478,9 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
 
         let composited: CIImage
         if let compare {
-            // `original`'s geometry (crop/straighten/perspective/flip) is
-            // identical to `edited`'s by construction — `comparisonOriginal()`
+            // `original`'s geometry (crop/straighten/perspective/
+            // transformScale/transformAspect/flip) is identical to
+            // `edited`'s by construction — `comparisonOriginal()`
             // only resets color/tone fields — so `original.extent ==
             // edited.extent` always holds, and both sides can share ONE
             // `fitRect`/`AspectFit` computation below. Built from

@@ -1457,8 +1457,9 @@ struct AdjustTabView: View {
     /// to its own default — the SAME identity value each field's own
     /// `EditSliderRow`/`EditToggleRow` already resets to individually via
     /// its per-row Reset button, just all at once. Deliberately does NOT
-    /// touch crop/straighten/perspective/flip (those live in the Crop
-    /// tab, out of this button's scope, matching how the reference
+    /// touch crop/straighten/perspective/transformScale/transformAspect/
+    /// flip (those live in the Crop tab, out of this button's scope,
+    /// matching how the reference
     /// screenshot's own "Reset Adjustments" is scoped to the Adjust panel
     /// it's shown in) and does NOT clear placed Red-Eye correction points
     /// (a separate, more destructive action with its own dedicated

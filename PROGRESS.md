@@ -10,7 +10,29 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
 ✅ FULLY COMPLETE, Curves v2 (Tier-2 Lightroom gap) is fully shipped,
 reviewed, and live-verified, and **Grain** (Tier-1 Lightroom gap) is
-shipped. **Point Color (Tier-1 Lightroom gap) is now FULLY SHIPPED** —
+shipped. **Manual Transform Scale/Aspect (Tier-1 Lightroom gap) is now
+FULLY SHIPPED** — Lightroom's own Transform-panel "Scale"/"Aspect"
+sliders (labeled "Scale"/"Stretch" in this app's UI to avoid colliding
+with the existing crop aspect-RATIO "Aspect" section), a new
+`EditPipeline.applyTransformScale` stage between Perspective and Flip.
+1144 tests (14 new). Reviewer: 4 rounds, FIX FIRST x4 — round 1 caught
+a real extent-preservation bug self-caught via a failing test before
+review even started (`.cropped(to:)` alone is not sufficient; fixed
+with a composite-over-transparent-canvas technique) plus 4 stale doc
+enumerations; round 2 caught, and PROVED empirically by reverting the
+fix and re-running the suite, a genuinely asymmetric and completely
+test-unguarded `aspectFactor` formula (fixed with a log-symmetric `pow`
+formula plus magnitude-discriminating tests verified to fail under the
+old one) plus more stale docs and an undocumented minification-
+aliasing limitation (now IMPROVEMENTS.md D23); round 3 independently
+re-ran round 2's own falsification technique to confirm it, catching
+one more stale doc enumeration; round 4 caught the pipeline's own
+file-header comment still describing the Transform/Distort group as 3
+stages instead of 4. See CLAUDE.md's Manual Transform Scale/Aspect
+entry for the full write-up. NOT yet live-verified — see "Exact next
+step" below.
+
+**Point Color (Tier-1 Lightroom gap) is FULLY SHIPPED** —
 both Slice A (backend, 2026-09-18) and **Slice B (the eyedropper UI,
 2026-09-18)**. Slice B needed `EditPipeline.apply(_:to:truncatingColorAt:)`,
 a new pipeline-internal truncation mechanism, because the existing
@@ -598,10 +620,12 @@ interaction glue with no unit-test precedent, per this codebase's own
 convention; verified live instead).
 
 ## In progress / blocked
-None. Point Color Slice B (the eyedropper UI) is fully shipped,
+None. Manual Transform Scale/Aspect is fully shipped and reviewed (4
+rounds, FIX FIRST x4), but NOT YET committed — see "Exact next step"
+below. Point Color Slice B (the eyedropper UI) is fully shipped,
 reviewed (2 rounds, FIX FIRST → APPROVE), committed in 5 logical
-commits, and now live-verified too — see the "Done"/"Current phase"
-entries above. Everything else (Color Grading in full, and Point Color
+commits, and live-verified — see the "Done"/"Current phase" entries
+above. Everything else (Color Grading in full, and Point Color
 Slice A) was already shipped, reviewed, and committed.
 
 **Live-verified (2026-09-21)**, with explicit user permission for this
@@ -638,29 +662,29 @@ didn't block verification and no code changed as a result. The
 permission classifier before it could be tried as an alternative.
 
 ## Exact next step
-Pick the next Lightroom gap and enter Plan Mode first, per this
-project's workflow rules. Nothing is blocking.
-
-Also available: Chromatic Aberration removal and Manual Transform
-Scale/Aspect (remaining unstarted Tier-1 gaps); Auto Tone/Auto Settings,
-Enhance/Super Resolution, History panel, and Copy/Paste-and-Sync
-(unstarted Tier-2 items); Color Grading Slice B's own follow-ups —
-live-verifying the `AngularGradient` painted-wheel convention on screen
-(flagged DERIVED, not measured, in `ColorWheelGeometry.angularGradientFraction`'s
-doc comment) and IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout);
-IMPROVEMENTS.md D22 (Point Color's missing luminance-selection axis,
-needs its own design pass); and the now-6-site mutual-exclusion mode
-enum IMPROVEMENTS.md logs as overdue.
+Commit Manual Transform Scale/Aspect — it's fully implemented, reviewed
+to APPROVE-equivalent (4 rounds, FIX FIRST x4, all fixed and confirmed),
+and all 1144 tests pass. Commit in logical increments (EditState fields
++ pipeline stage + tests → UI + ContentView/ImageDocumentModel wiring →
+docs), matching this session's own established pattern for prior
+features. A scoped live-verification pass is worth doing afterward (ask
+for screen-automation permission first): dial in real keystone
+correction on a test photo and confirm Scale actually clears the
+wedges, and eyeball whether `kMaxTransformAspectStretch` (±30% at the
+extremes) feels right — it's a principled starting constant, not yet
+visually tuned. Not currently blocking anything.
 
 Once that's committed, pick the next Lightroom gap and enter Plan Mode
 first, per this project's workflow rules.
 
-Also available: Chromatic Aberration removal and Manual Transform
-Scale/Aspect (remaining unstarted Tier-1 gaps); Auto Tone/Auto Settings,
-Enhance/Super Resolution, History panel, and Copy/Paste-and-Sync
-(unstarted Tier-2 items); Color Grading Slice B's own follow-ups —
-live-verifying the `AngularGradient` painted-wheel convention on screen
-(flagged DERIVED, not measured, in `ColorWheelGeometry.angularGradientFraction`'s
-doc comment) and IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout);
-and IMPROVEMENTS.md D22 (Point Color's missing luminance-selection axis,
-needs its own design pass before Slice B or independently).
+Also available: Chromatic Aberration removal (remaining unstarted
+Tier-1 gap); Auto Tone/Auto Settings, Enhance/Super Resolution, History
+panel, and Copy/Paste-and-Sync (unstarted Tier-2 items); Color Grading
+Slice B's own follow-ups — live-verifying the `AngularGradient`
+painted-wheel convention on screen (flagged DERIVED, not measured, in
+`ColorWheelGeometry.angularGradientFraction`'s doc comment) and
+IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout); IMPROVEMENTS.md
+D22 (Point Color's missing luminance-selection axis, needs its own
+design pass); IMPROVEMENTS.md D23 (Transform Scale/Aspect's
+minification-aliasing gap); and the now-6-site mutual-exclusion mode
+enum IMPROVEMENTS.md logs as overdue.

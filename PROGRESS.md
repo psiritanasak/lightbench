@@ -599,21 +599,47 @@ convention; verified live instead).
 
 ## In progress / blocked
 None. Point Color Slice B (the eyedropper UI) is fully shipped,
-reviewed (2 rounds, FIX FIRST → APPROVE), and committed in 5 logical
-commits — see the "Done"/"Current phase" entries above. Everything else
-(Color Grading in full, and Point Color Slice A) was already shipped,
-reviewed, and committed.
+reviewed (2 rounds, FIX FIRST → APPROVE), committed in 5 logical
+commits, and now live-verified too — see the "Done"/"Current phase"
+entries above. Everything else (Color Grading in full, and Point Color
+Slice A) was already shipped, reviewed, and committed.
+
+**Live-verified (2026-09-21)**, with explicit user permission for this
+session to drive the app via synthetic mouse/keyboard events, against
+`pointcolor_test.jpg` — a scratch synthetic solid-red fixture created
+and destroyed within this session in a `livetest` folder (NOT the
+user's real photo library; opened via File > Open, never imported into
+the catalog, and deleted afterward along with its sidecar). Confirmed
+the exact scenario the new end-to-end unit test proves in isolation:
+with Brilliance +80% and Black & White both active (image visibly
+rendering as neutral gray), arming the eyedropper and picking a point
+correctly read the REAL underlying color (swatch + readout: Hue 360°,
+Sat 88%) rather than the neutral gray the user actually sees on
+screen — the whole reason this slice's pipeline-truncation design
+exists. Also confirmed: applying a nonzero Hue adjustment to the picked
+target visibly changed the render (a lighter gray), matching this
+codebase's own documented Hue/B&W interaction (hue rotation changes the
+resulting gray VALUE even though the output stays fully desaturated).
+
+One real, worth-recording finding along the way: the mouse tap-capture
+layer (`Color.clear.gesture(SpatialTapGesture())`, `.accessibilityHidden(true)`)
+did NOT respond to synthetic clicks issued via `System Events click at`
+(AppleScript's UI-coordinate click) — the click was silently a no-op,
+while the SAME mechanism worked reliably for every real AX control
+(buttons, checkboxes, click-to-type fields). Worked around by using the
+KEYBOARD crosshair path instead (arrow-key nudge + Return commit) — this
+slice's own accessibility feature, and arguably a better test of it
+anyway. Matches this project's own established pattern of "don't assume
+one synthetic-input finding transfers to a new gesture without
+checking" (Curves v2 slice 2B found the opposite result for ITS own
+drag gesture) — logged here rather than in IMPROVEMENTS.md since it
+didn't block verification and no code changed as a result. The
+`cliclick`/raw-CGEvent path was blocked by this session's own
+permission classifier before it could be tried as an alternative.
 
 ## Exact next step
 Pick the next Lightroom gap and enter Plan Mode first, per this
 project's workflow rules. Nothing is blocking.
-
-A scoped live-verification pass on Point Color Slice B is worth doing
-before or alongside whatever's picked next (ask the user for screen-
-automation permission first, per this project's own rule): picking a
-color on a photo with Brilliance AND Black & White both active is the
-exact scenario the new end-to-end unit test proves in isolation but has
-not been confirmed on screen. Not currently blocking anything.
 
 Also available: Chromatic Aberration removal and Manual Transform
 Scale/Aspect (remaining unstarted Tier-1 gaps); Auto Tone/Auto Settings,

@@ -1572,6 +1572,211 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(pixel.b, 0.05, accuracy: accuracy)
     }
 
+    // MARK: - Point Color truncated sampling (`truncatingColorAt:`)
+    //
+    // `EditPipeline.apply(_:to:truncatingColorAt:)` is the eyedropper's own
+    // sampling mechanism (`ImageDocumentModel.pickPointColorTarget`) — it
+    // must stop the pipeline exactly at a Point Color instance's own kernel
+    // invocation, from INSIDE the real `applyPerceptualAdjustments`, not via
+    // a hand-maintained "zero the downstream fields" list (see
+    // `pickPointColorTarget`'s own doc comment for why that technique
+    // can't work here).
+
+    /// Reviewer-caught: comparing the implicit-default call against an
+    /// explicit `truncatingColorAt: nil` call is near-tautological — both
+    /// resolve to the IDENTICAL call once Swift substitutes the default
+    /// argument, so that comparison could never detect a regression in the
+    /// non-truncated path (e.g. the new `truncation != nil ||` guard term
+    /// firing when it shouldn't). Pinned against a real measured value
+    /// instead, this suite's own established style (see `linearPixel`'s
+    /// other callers), so a future change to the untruncated path's own
+    /// behavior would actually be caught.
+    func testTruncatingColorAtNilMatchesPinnedUntruncatedOutput() {
+        let input = solidColorImage(r: 0.6, g: 0.05, b: 0.05)
+        var state = EditState(contrast: 0.3, vibrance: 0.4)
+        state.pointColors = [PointColor(hasTarget: true, targetHue: 0, targetSaturation: 0.5762, range: 0.5, hue: 1)]
+
+        let explicitNil = linearPixel(of: EditPipeline.apply(state, to: input, truncatingColorAt: nil))
+
+        XCTAssertEqual(explicitNil.r, 0.84042245, accuracy: accuracy)
+        XCTAssertEqual(explicitNil.g, 0.048948657, accuracy: accuracy)
+        XCTAssertEqual(explicitNil.b, 0.019295674, accuracy: accuracy)
+        XCTAssertEqual(explicitNil.a, 1.0, accuracy: accuracy)
+    }
+
+    /// Cross-checks the truncated-and-decoded sample against the real,
+    /// untruncated pipeline output with NO independent hand-derived
+    /// numbers: with every OTHER perceptual stage inactive, truncating
+    /// right after the last Point Color instance and then decoding back to
+    /// linear (the same `sRGBToneCurveToLinear` filter `EditPipeline.
+    /// decodeToLinear` uses) must reproduce the full pipeline's own output
+    /// exactly, since nothing else runs before or after Point Color in
+    /// this configuration.
+    func testFullPointColorTruncationMatchesUntruncatedOutput() {
+        let input = solidColorImage(r: 0.6, g: 0.05, b: 0.05)
+        var state = EditState()
+        state.pointColors = [
+            PointColor(hasTarget: true, targetHue: 0, targetSaturation: 0.5762, range: 0.5, hue: 1),
+            PointColor(hasTarget: true, targetHue: 0, targetSaturation: 0.5762, range: 0.5, luminance: 1),
+        ]
+
+        let truncated = EditPipeline.apply(state, to: input, truncatingColorAt: .pointColor(index: state.pointColors.count))
+        let decode = CIFilter.sRGBToneCurveToLinear()
+        decode.inputImage = truncated
+        let actual = linearPixel(of: decode.outputImage!)
+        let expected = linearPixel(of: EditPipeline.apply(state, to: input))
+
+        XCTAssertEqual(actual.r, expected.r, accuracy: accuracy)
+        XCTAssertEqual(actual.g, expected.g, accuracy: accuracy)
+        XCTAssertEqual(actual.b, expected.b, accuracy: accuracy)
+    }
+
+    /// Truncating at index N includes exactly the first N instances' own
+    /// effect, no more and no less — each successive index differs from the
+    /// last as exactly one more instance's kernel pass is included.
+    func testTruncationIndexIncludesExactlyThePrecedingInstances() {
+        let input = solidColorImage(r: 0.6, g: 0.05, b: 0.05)
+        var state = EditState()
+        state.pointColors = [
+            PointColor(hasTarget: true, targetHue: 0, targetSaturation: 0.5762, range: 0.5, hue: 1),
+            PointColor(hasTarget: true, targetHue: 0, targetSaturation: 0.5762, range: 0.5, luminance: 1),
+        ]
+
+        let beforeAny = linearPixel(of: EditPipeline.apply(state, to: input, truncatingColorAt: .pointColor(index: 0)))
+        let afterFirst = linearPixel(of: EditPipeline.apply(state, to: input, truncatingColorAt: .pointColor(index: 1)))
+        let afterBoth = linearPixel(of: EditPipeline.apply(state, to: input, truncatingColorAt: .pointColor(index: 2)))
+
+        XCTAssertNotEqual(beforeAny.g, afterFirst.g, "index 1 must include the 1st (hue) instance's effect")
+        XCTAssertNotEqual(afterFirst.b, afterBoth.b, "index 2 must additionally include the 2nd (luminance) instance's effect")
+    }
+
+    /// The real bug this design exists to prevent: `EditPipeline.
+    /// effectiveTone(_:)` blends `brilliance` into BOTH the upstream
+    /// contrast/shadows/highlights (which Point Color's own pipeline
+    /// position sits AFTER) and the downstream saturation (which it sits
+    /// BEFORE). A truncated sample must reflect the former (WYSIWYG — the
+    /// user's current view up to this point) but never the latter (that
+    /// stage hasn't run yet at this position) — and no static list of
+    /// zeroed `EditState` fields can produce that split, since both halves
+    /// come from the same slider.
+    func testBrillianceUpstreamContributionAppliesButDownstreamSaturationDoesNotLeakIntoTruncatedSample() {
+        let input = solidColorImage(r: 0.6, g: 0.05, b: 0.05)
+        let plain = EditState()
+        let brilliant = EditState(brilliance: 0.8)
+
+        let plainTruncated = linearPixel(of: decoded(
+            EditPipeline.apply(plain, to: input, truncatingColorAt: .pointColor(index: 0))
+        ))
+        let brilliantTruncated = linearPixel(of: decoded(
+            EditPipeline.apply(brilliant, to: input, truncatingColorAt: .pointColor(index: 0))
+        ))
+        // Brilliance's upstream contrast/shadow/highlight terms DO change
+        // what a truncated sample reads — this is correct, not the bug.
+        XCTAssertNotEqual(plainTruncated.r, brilliantTruncated.r)
+
+        let brilliantFull = linearPixel(of: EditPipeline.apply(brilliant, to: input))
+        // But the FULL pipeline additionally runs Vibrance/Saturation with
+        // brilliance's own blended saturation term, a real further change
+        // the truncated sample must NOT also show.
+        XCTAssertNotEqual(brilliantTruncated.g, brilliantFull.g)
+    }
+
+    /// Geometry (straighten/perspective/flip/crop) still runs before a
+    /// truncation request takes effect, so the returned extent matches
+    /// `ContentView.currentFitRect`'s (computed from a full, untruncated
+    /// render) and a normalized tap maps onto the identical pixel grid.
+    func testTruncatedSampleStillAppliesGeometrySoExtentMatchesFullRender() {
+        let input = solidColorImage(r: 0.6, g: 0.05, b: 0.05, a: 1, size: 100)
+        let state = EditState(straightenAngle: 5)
+
+        let truncated = EditPipeline.apply(state, to: input, truncatingColorAt: .pointColor(index: 0))
+        let full = EditPipeline.apply(state, to: input)
+
+        XCTAssertEqual(truncated.extent, full.extent)
+    }
+
+    /// The central, end-to-end claim this whole design exists to satisfy
+    /// (`PointColor.swift`'s own doc comment): a color sampled at Point
+    /// Color's own pipeline position must land inside ITS OWN instance's
+    /// narrow selection window (`PointColorTuning`'s saturation window is
+    /// 0.05...0.5) — and, on a photo where sampling the wrong way would
+    /// actually give a different answer, a color sampled from the FINAL
+    /// displayed pixel instead must NOT reliably land inside that window.
+    /// Reviewer-caught: `PointColorSelectionTests` only checks the Swift
+    /// mirror against hand-derived HSL constants — every test there would
+    /// still pass even if `apply(_:to:truncatingColorAt:)` fed the kernel
+    /// garbage, since none of them touch the kernel at all. This test
+    /// closes that gap by running the REAL kernel both ways and checking
+    /// whether the render actually changes — the kernel's own selection
+    /// weight is the ground truth, not a hand-derived distance number.
+    func testTruncatedSampleLandsInsideItsOwnSelectionWindowUnlikeFinalPixelSample() {
+        let input = solidColorImage(r: 0.6, g: 0.05, b: 0.05)
+        // Black & White forces full desaturation AFTER Point Color's own
+        // pipeline position (`EditPipeline.applyPointColors`'s own doc
+        // comment: Point Color runs "before B&W's forced desaturation, so
+        // a Point Color instance is correctly erased by Black & White
+        // rather than needing special interaction with it") — the sharpest
+        // available case of "the final displayed pixel is NOT what this
+        // stage's own kernel invocation sees." Brilliance + an active
+        // Selective Color band are included too (part of this design's
+        // original motivation — Brilliance blends into both the upstream
+        // contrast/shadows/highlights and, ordinarily, the downstream
+        // saturation), but MEASURED (a temporary diagnostic harness,
+        // deleted after use) that Brilliance's own downstream saturation
+        // term alone is too weak here to push the wrong target outside a
+        // range-0.5 window (0.0589 gap against a 0.275 window) — B&W's
+        // full desaturation is what supplies the decisive, unambiguous
+        // margin this test needs (a 0.5958 gap).
+        var state = EditState(brilliance: 0.8, redHue: 0.5)
+        state.blackAndWhite = true
+        state.pointColors = [PointColor()]
+        let baseline = linearPixel(of: EditPipeline.apply(state, to: input))
+
+        func changesRender(targetHue: Double, targetSaturation: Double) -> Bool {
+            var withTarget = state
+            withTarget.pointColors = [PointColor(hasTarget: true, targetHue: targetHue, targetSaturation: targetSaturation, range: 0.5, hue: 1)]
+            let pixel = linearPixel(of: EditPipeline.apply(withTarget, to: input))
+            return abs(pixel.g - baseline.g) > 0.01 || abs(pixel.b - baseline.b) > 0.01
+        }
+
+        // The RIGHT technique: sample at this instance's own (index 0)
+        // pipeline position.
+        let truncated = linearPixel(of: EditPipeline.apply(state, to: input, truncatingColorAt: .pointColor(index: 0)))
+        let (truncatedHue, truncatedSat) = PointColorSelection.hueSaturation(
+            forPerceptualRGB: Double(truncated.r), Double(truncated.g), Double(truncated.b)
+        )
+        XCTAssertTrue(
+            changesRender(targetHue: truncatedHue, targetSaturation: truncatedSat),
+            "sampling at Point Color's own pipeline position must land inside its own window and actually change the render"
+        )
+
+        // The WRONG technique: sample the FINAL displayed pixel, re-encoded
+        // to the same perceptual domain the kernel itself expects (the only
+        // way to give this comparison a fair chance at all).
+        let finalLinear = linearPixel(of: EditPipeline.apply(state, to: input))
+        let encode = CIFilter.linearToSRGBToneCurve()
+        encode.inputImage = solidColorImage(r: Double(finalLinear.r), g: Double(finalLinear.g), b: Double(finalLinear.b))
+        let finalPerceptual = linearPixel(of: encode.outputImage!)
+        let (finalHue, finalSat) = PointColorSelection.hueSaturation(
+            forPerceptualRGB: Double(finalPerceptual.r), Double(finalPerceptual.g), Double(finalPerceptual.b)
+        )
+        XCTAssertFalse(
+            changesRender(targetHue: finalHue, targetSaturation: finalSat),
+            "sampling the FINAL displayed pixel lands outside the window on this Brilliance+Selective-Color configuration and must NOT change the render"
+        )
+    }
+
+    /// Decodes a perceptual-domain image back to linear using the same
+    /// filter `EditPipeline.decodeToLinear` uses internally (private, so
+    /// not directly callable from a test) — lets these tests compare a
+    /// truncated (necessarily perceptual) sample against ordinary linear
+    /// pixel expectations without duplicating pinned magic numbers.
+    private func decoded(_ image: CIImage) -> CIImage {
+        let filter = CIFilter.sRGBToneCurveToLinear()
+        filter.inputImage = image
+        return filter.outputImage ?? image
+    }
+
     // MARK: - Vibrance math
     //
     // Vibrance is a selective saturation (CIVibrance) that boosts muted

@@ -48,15 +48,51 @@ import CoreImage.CIFilterBuiltins
 /// grain would amplify/halo it, and NR running after grain would eat it.
 /// See `applyGrain`'s own doc comment.
 enum EditPipeline {
-    static func apply(_ state: EditState, to input: CIImage) -> CIImage {
+    /// A request to stop the pipeline early, mid-color-stage, for an
+    /// eyedropper that must sample at a specific stage's OWN input rather
+    /// than the final displayed pixel — `ImageDocumentModel.
+    /// pickPointColorTarget`'s reason for existing. `.pointColor(index:)`
+    /// stops just before the Point Color instance at `index` runs (so
+    /// instances at `0..<index` still apply, matching what that instance's
+    /// own kernel invocation actually sees), and leaves the image in the
+    /// PERCEPTUAL domain — `applyPointColors` runs there, unlike
+    /// `Mask.colorRange`'s scene-linear sampling.
+    enum ColorSampleTruncation: Equatable {
+        case pointColor(index: Int)
+    }
+
+    static func apply(
+        _ state: EditState, to input: CIImage, truncatingColorAt truncation: ColorSampleTruncation? = nil
+    ) -> CIImage {
         var image = input
         image = applyWhiteBalance(state, to: image)           // scene-linear, first
         image = applyExposure(state.exposureEV, to: image)    // scene-linear
-        image = applyPerceptualAdjustments(state, to: image)  // sRGB-gamma domain
+        image = applyPerceptualAdjustments(state, to: image, truncatingColorAt: truncation)  // sRGB-gamma domain
         image = applyStraighten(state, to: image)             // geometric, before perspective
         image = applyPerspective(state, to: image)            // geometric, before flip
         image = applyFlip(state, to: image)                   // geometric, before crop
         image = applyCrop(state, to: image)                   // geometric
+        // Truncated color sampling stops HERE, after geometry but before
+        // any further color stage — so the returned extent still matches
+        // `ContentView.currentFitRect`'s (which is computed from a FULL,
+        // untruncated render) and a normalized tap maps onto the identical
+        // pixel grid. Every stage below is either localized/post-crop
+        // color (Red-Eye onward) or itself geometric-adjacent; none of it
+        // belongs to what a truncated color sample is answering.
+        //
+        // Reviewer-caught, worth stating rather than leaving implied: this
+        // guarantees EXTENT-matching unconditionally, but VALUE-exactness
+        // (the sampled pixel being bit-identical to what the real,
+        // untruncated pipeline would show at this point) only holds when
+        // geometry is at identity. Straighten/perspective/crop resample —
+        // here, on GAMMA-ENCODED data (this truncated path never reaches
+        // `decodeToLinear`), vs. LINEAR data on the normal path — and the
+        // kernel itself evaluates PRE-geometry pixels while the sample is
+        // taken POST-geometry. Same class of limitation the RAW WB
+        // eyedropper's own `rawWhiteBalanceNeutralPoints` doc comment
+        // already names ("identity-geometry only"), not newly introduced
+        // here — just not yet re-measured for a non-identity case.
+        guard truncation == nil else { return image }
         image = applyRedEye(state, to: image)                 // localized, scene-linear
         image = applyMasks(state, to: image)                  // local adjustments, own perceptual sandwich
         image = applyDehaze(state, to: image)                 // scene restoration, scene-linear, before vignette/local contrast
@@ -204,9 +240,18 @@ enum EditPipeline {
     /// exact weights; it's this app's own approximation of the "brilliance"
     /// concept, not a reproduction of Apple's (undocumented, proprietary)
     /// Photos algorithm.
-    private static func applyPerceptualAdjustments(_ state: EditState, to image: CIImage) -> CIImage {
+    private static func applyPerceptualAdjustments(
+        _ state: EditState, to image: CIImage, truncatingColorAt truncation: ColorSampleTruncation? = nil
+    ) -> CIImage {
         let effective = effectiveTone(state)
-        guard levelsActive(state)
+        // `truncation != nil` is its own term, not folded into an existing
+        // one: without it, an otherwise-fully-identity state would take the
+        // early-return branch below and hand a truncated caller back the
+        // LINEAR input unchanged, while every other state takes the active
+        // path and returns PERCEPTUAL — making the sampler's domain depend
+        // on unrelated sliders instead of being unconditional.
+        guard truncation != nil
+            || levelsActive(state)
             || state.brightness != 0
             || effective.contrast != 0
             || curvesActive(effective, state.blackPoint)
@@ -312,7 +357,22 @@ enum EditPipeline {
         // (0.6, 0.05756, 0.05); reversing the two stages gives
         // (0.6, 0.05, 0.18564) — a 0.13564 gap on blue, ~68x this suite's
         // 0.002 tolerance. See testPointColorRunsAfterSelectiveColor.
-        if pointColorsActive(state) { img = applyPointColors(state, to: img) }
+        // A truncation request stops exactly HERE, before this instance's
+        // own kernel pass — `applyPointColors` below then runs only the
+        // PREFIX of instances that precede it, matching what that
+        // instance's own kernel invocation actually sees. Returns WITHOUT
+        // `decodeToLinear`: staying in the perceptual domain is the whole
+        // point of this mode (see `PointColor.cikernel`'s own domain note).
+        if case .pointColor(let index) = truncation {
+            // `max(0, index)`: `prefix(_:)` traps on a negative count.
+            // Unreachable via the real caller (`ImageDocumentModel.
+            // pickPointColorTarget` only ever constructs this from a real
+            // `firstIndex(where:)`), but `ColorSampleTruncation` itself is
+            // constructible with any `Int` from anywhere in this module —
+            // defensive, not load-bearing for today's one call site.
+            return applyPointColors(Array(state.pointColors.prefix(max(0, index))), to: img)
+        }
+        if pointColorsActive(state) { img = applyPointColors(state.pointColors, to: img) }
         if state.vibrance != 0 { img = applyVibrance(state.vibrance, to: img) }
         // `blackAndWhite` FORCES full desaturation (factor 0, i.e. the same
         // call `applySaturation` already makes at hslSaturation's own -1
@@ -811,10 +871,10 @@ enum EditPipeline {
     /// pass sees the PREVIOUS instances' output, so two instances
     /// targeting overlapping colors stack (the same `applyMasks`-style
     /// sequential accumulation, not `applyRedEye`'s union).
-    private static func applyPointColors(_ state: EditState, to image: CIImage) -> CIImage {
+    private static func applyPointColors(_ instances: [PointColor], to image: CIImage) -> CIImage {
         guard let kernel = pointColorKernel else { return image }
         var img = image
-        for pointColorInstance in state.pointColors {
+        for pointColorInstance in instances {
             guard !pointColorInstance.isIdentity, pointColorInstance.hasTarget else { continue }
             let hueWindow = PointColorTuning.hueWindow(forRange: pointColorInstance.range)
             let saturationWindow = PointColorTuning.saturationWindow(forRange: pointColorInstance.range)

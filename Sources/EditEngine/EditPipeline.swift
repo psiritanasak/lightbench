@@ -13,11 +13,19 @@ import CoreImage.CIFilterBuiltins
 /// four additional controls (Brightness, Black Point, Brilliance, Vibrance)
 /// folded into the existing perceptual sandwich rather than the fixed order
 /// list, since they're refinements of/companions to stages that already
-/// exist there. Straighten, Perspective, and Flip are "transform/distort"
-/// stages: pure geometry, run after the perceptual sandwich and BEFORE crop,
-/// matching the fixed order — Straighten runs first, then Perspective, then
-/// Flip (matching the Photos reference panel order; none of these commute
-/// with each other in general, so this order is a real, tested requirement).
+/// exist there. Straighten, Perspective, Transform Scale/Aspect, and Flip
+/// are "transform/distort" stages: pure geometry, run after the perceptual
+/// sandwich and BEFORE crop, matching the fixed order — Straighten runs
+/// first, then Perspective, then Transform Scale/Aspect, then Flip
+/// (matching the Photos reference panel order for the first three; Scale/
+/// Aspect's own position is NOT interchangeable with Perspective's — it
+/// exists specifically to clean up wedges Perspective just created, see
+/// `applyTransformScale`'s own doc comment and
+/// `testTransformScaleClearsPerspectiveWedges` — but IS interchangeable
+/// with Flip: a diagonal scale and a mirror about the SAME center
+/// mathematically commute, unlike the other pairs in this group, which do
+/// not commute with each other in general and are real, tested
+/// requirements).
 /// Red-Eye removal runs AFTER crop, BEFORE Vignette: like Vignette, its
 /// stored normalized correction points must map against the CURRENT
 /// (post-crop) extent, not the original frame. MEASURED to commute with
@@ -69,7 +77,8 @@ enum EditPipeline {
         image = applyExposure(state.exposureEV, to: image)    // scene-linear
         image = applyPerceptualAdjustments(state, to: image, truncatingColorAt: truncation)  // sRGB-gamma domain
         image = applyStraighten(state, to: image)             // geometric, before perspective
-        image = applyPerspective(state, to: image)            // geometric, before flip
+        image = applyPerspective(state, to: image)            // geometric, before transform scale/aspect
+        image = applyTransformScale(state, to: image)         // geometric, before flip
         image = applyFlip(state, to: image)                   // geometric, before crop
         image = applyCrop(state, to: image)                   // geometric
         // Truncated color sampling stops HERE, after geometry but before
@@ -84,11 +93,11 @@ enum EditPipeline {
         // guarantees EXTENT-matching unconditionally, but VALUE-exactness
         // (the sampled pixel being bit-identical to what the real,
         // untruncated pipeline would show at this point) only holds when
-        // geometry is at identity. Straighten/perspective/crop resample —
-        // here, on GAMMA-ENCODED data (this truncated path never reaches
-        // `decodeToLinear`), vs. LINEAR data on the normal path — and the
-        // kernel itself evaluates PRE-geometry pixels while the sample is
-        // taken POST-geometry. Same class of limitation the RAW WB
+        // geometry is at identity. Straighten/perspective/transform-scale/
+        // crop resample — here, on GAMMA-ENCODED data (this truncated path
+        // never reaches `decodeToLinear`), vs. LINEAR data on the normal
+        // path — and the kernel itself evaluates PRE-geometry pixels while
+        // the sample is taken POST-geometry. Same class of limitation the RAW WB
         // eyedropper's own `rawWhiteBalanceNeutralPoints` doc comment
         // already names ("identity-geometry only"), not newly introduced
         // here — just not yet re-measured for a non-identity case.
@@ -1140,6 +1149,124 @@ enum EditPipeline {
         filter.bottomLeft = bottomLeft
         filter.bottomRight = bottomRight
         return filter.outputImage ?? image
+    }
+
+    // MARK: - Transform Scale/Aspect
+
+    /// Fractional stretch `transformAspect` applies at its `+1` extreme —
+    /// e.g. `0.3` means the Y axis grows to `1.3x` at `transformAspect: 1`.
+    /// A PRINCIPLED STARTING CONSTANT, not a measured match to Lightroom's
+    /// own (undocumented, unconfirmed) curve — see `EditState.
+    /// transformAspect`'s own doc comment. Retune once this is visually
+    /// checked against a real render; do not treat as settled.
+    ///
+    /// REVIEWER-CAUGHT, self-corrected: `aspectFactor` below is `pow(1 +
+    /// kMaxTransformAspectStretch, aspect)`, NOT a linear `1 + aspect *
+    /// kMaxTransformAspectStretch` (an earlier draft's formula). The linear
+    /// version was measurably ASYMMETRIC — at `aspect: -1` it gave `sx =
+    /// 1/0.7 ≈ 1.4286` (+42.9%), not the mirror of `aspect: +1`'s `sx =
+    /// 1/1.3 ≈ 0.7692` (-23.1%) the "±30%" naming implied. The `pow` form
+    /// is exactly symmetric in LOG space by construction — `aspectFactor`
+    /// at `-1` is the exact reciprocal of `aspectFactor` at `+1`
+    /// (`pow(1.3, -1) == 1/1.3` exactly) — matching domain research's own
+    /// best guess for Lightroom's real curve shape
+    /// ("most likely exponential... so that +a and -a are exact inverses"),
+    /// not just a bug patch.
+    private static let kMaxTransformAspectStretch: Double = 0.3
+
+    private static func transformScaleActive(_ state: EditState) -> Bool {
+        state.transformScale != 1 || state.transformAspect != 0
+    }
+
+    /// Lightroom's own Transform-panel "Scale"/"Aspect" (Aspect labeled
+    /// "Stretch" in this app's UI — see `EditState.transformAspect`'s own
+    /// doc comment for why). Both are diagonal affine scales about the
+    /// SAME center, so they're combined into ONE `CGAffineTransform` before
+    /// a single resample — diagonal matrices commute, so unlike this
+    /// pipeline's non-commuting COLOR stages, no swap-and-remeasure is
+    /// needed to justify combining them; it's a provable fact, not a
+    /// measured one. For any FINITE `state.transformScale`/`transformAspect`
+    /// (the only inputs this struct's fields can ever hold — a `NaN` could
+    /// only arrive via a hand-corrupted sidecar `JSONDecoder` would already
+    /// reject), `sx`/`sy` can never be zero: `aspectFactor` is bounded to
+    /// `[1/1.3, 1.3]` by the clamps below (now log-symmetric — see
+    /// `kMaxTransformAspectStretch`'s own doc comment), so division is
+    /// always safe.
+    ///
+    /// Runs AFTER Perspective, not before: Scale exists specifically to
+    /// zoom in and clear the empty corner wedges Perspective correction
+    /// reveals, so it must operate on Perspective's OUTPUT — running it
+    /// first would just be a pre-zoom that Perspective immediately re-warps,
+    /// leaving the wedges it was meant to clear (see
+    /// `testTransformScaleClearsPerspectiveWedges`). Runs BEFORE Crop, same
+    /// as every other stage in this Transform/Distort group — a real,
+    /// undocumented-until-now divergence from Lightroom (reviewer-caught):
+    /// with an off-center crop, this stage still zooms about the FULL
+    /// FRAME's center, not the visible crop's own center, so Scale/Stretch
+    /// and an asymmetric crop interact by shifting content within the crop
+    /// rather than zooming about what the user actually sees. Not fixed
+    /// here — consistent with Straighten/Perspective's own pre-crop
+    /// position, and a real design question (which stage's "center" should
+    /// win) worth its own session, not a silent scope decision.
+    ///
+    /// KNOWN, UNFIXED LIMITATION (reviewer-caught): `.transformed(by:)` is a
+    /// plain affine resample with no prefiltering. At the clamp extremes
+    /// this stage can minify by up to ~2.6x on one axis (`transformScale:
+    /// 0.5, transformAspect: 1` gives `sx ≈ 0.385`) — unlike Straighten/
+    /// Perspective, which never minify, this is the first stage in the
+    /// Transform/Distort group that can alias a full-resolution photo.
+    /// `CILanczosScaleTransform`-style prefiltering would fix it; not done
+    /// here — the common case (Scale near 1.0, clearing a modest keystone
+    /// wedge) is a mild zoom, not a strong minify, so this is scoped as a
+    /// follow-up rather than blocking v1.
+    ///
+    /// UNLIKE Perspective/Flip (which preserve extent by construction —
+    /// corners move inward, or land back on the identical rect) and UNLIKE
+    /// Straighten (which lets the extent grow), this stage explicitly forces
+    /// its output back to its OWN INPUT extent after transforming — a scale
+    /// transform otherwise grows/shrinks the bounding box, and the whole
+    /// point of Scale/Aspect is to reshape content WITHIN the existing
+    /// frame, not change the photo's own output dimensions (matching
+    /// Lightroom's own behavior: the frame size never changes, only what's
+    /// visible inside it). Scale below 1.0 therefore exposes transparent
+    /// margin at the edges (composited black downstream, same as
+    /// Straighten/Perspective's own revealed corners); Scale above 1.0 crops
+    /// away the zoomed content's excess.
+    ///
+    /// REVIEWER-CAUGHT-CLASS BUG, self-caught before review: a lone
+    /// `.cropped(to: extent)` is NOT enough to guarantee that — `CIImage
+    /// .cropped(to:)`'s own extent is the INTERSECTION of its input's
+    /// extent and the requested rect, not the requested rect unconditionally
+    /// padded to. A shrink (`transformScale < 1`, or an aspect axis
+    /// compressed below 1) produces a transformed image whose NATURAL
+    /// extent is already smaller than `extent`, so cropping it to `extent`
+    /// is a no-op intersection that leaves the SMALLER extent as-is — this
+    /// was caught live by `testTransformScalePreservesExtentExactly`
+    /// actually failing (measured `(25,25,50,50)` at scale 0.5 against an
+    /// expected `(0,0,100,100)`), not reasoned about in advance. Fixed by
+    /// compositing the cropped result OVER a fully transparent canvas of
+    /// the exact `extent` size — `composited(over:)`'s own extent is the
+    /// UNION of its two operands, so the result is unconditionally padded
+    /// back out to `extent` regardless of how much the transform shrank the
+    /// actual content, while genuinely uncovered pixels stay transparent
+    /// (not opaque black — `ImageRenderer`'s own background composites that
+    /// downstream, same as every other stage's revealed corners).
+    private static func applyTransformScale(_ state: EditState, to image: CIImage) -> CIImage {
+        guard transformScaleActive(state) else { return image }
+
+        let extent = image.extent
+        let scale = min(max(state.transformScale, 0.5), 1.5)
+        let aspect = min(max(state.transformAspect, -1), 1)
+        let aspectFactor = pow(1 + kMaxTransformAspectStretch, aspect)
+        let sx = scale / aspectFactor
+        let sy = scale * aspectFactor
+
+        let transform = CGAffineTransform(translationX: -extent.midX, y: -extent.midY)
+            .concatenating(CGAffineTransform(scaleX: sx, y: sy))
+            .concatenating(CGAffineTransform(translationX: extent.midX, y: extent.midY))
+        let transformed = image.transformed(by: transform).cropped(to: extent)
+        let transparentCanvas = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: extent)
+        return transformed.composited(over: transparentCanvas)
     }
 
     // MARK: - Flip

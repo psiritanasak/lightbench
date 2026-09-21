@@ -657,6 +657,8 @@ final class CatalogDatabaseTests: XCTestCase {
         s.redEyePoints = [RedEyePoint(x: 0.3, y: 0.4), RedEyePoint(x: 0.6, y: 0.5)]
         s.pointColors = [PointColor(hasTarget: true, targetHue: 30, targetSaturation: 0.5, range: 0.4, hue: 0.2)]
         s.straightenAngle = 12
+        s.transformScale = 1.2
+        s.transformAspect = 0.3
         s.cropInsetTop = 0.1
         s.flipHorizontal = true
         return s

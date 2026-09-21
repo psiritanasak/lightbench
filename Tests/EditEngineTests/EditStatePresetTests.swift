@@ -82,6 +82,8 @@ final class EditStatePresetTests: XCTestCase {
         s.straightenAngle = 12
         s.verticalPerspective = 0.2
         s.horizontalPerspective = -0.15
+        s.transformScale = 1.2
+        s.transformAspect = 0.3
         s.flipHorizontal = true
         s.flipVertical = true
         s.cropInsetTop = 0.1
@@ -154,15 +156,18 @@ final class EditStatePresetTests: XCTestCase {
     }
 
     /// The real regression guard: a preset must NEVER move the target
-    /// photo's crop/straighten/perspective/flip, or reposition its red-eye
-    /// correction markers — both are specific to the TARGET photo's own
-    /// composition, not part of a reusable "look".
+    /// photo's crop/straighten/perspective/transformScale/transformAspect/
+    /// flip, or reposition its red-eye correction markers — both are
+    /// specific to the TARGET photo's own composition, not part of a
+    /// reusable "look".
     func testTargetsGeometryAndRedEyePointsSurviveUntouched() {
         let preset = fullyEditedState() // preset's OWN geometry is non-identity too
         var target = EditState.identity
         target.straightenAngle = -7
         target.verticalPerspective = 0.05
         target.horizontalPerspective = -0.05
+        target.transformScale = 1.1
+        target.transformAspect = -0.2
         target.flipHorizontal = false
         target.flipVertical = true
         target.cropInsetTop = 0.02
@@ -176,6 +181,8 @@ final class EditStatePresetTests: XCTestCase {
         XCTAssertEqual(result.straightenAngle, target.straightenAngle)
         XCTAssertEqual(result.verticalPerspective, target.verticalPerspective)
         XCTAssertEqual(result.horizontalPerspective, target.horizontalPerspective)
+        XCTAssertEqual(result.transformScale, target.transformScale)
+        XCTAssertEqual(result.transformAspect, target.transformAspect)
         XCTAssertEqual(result.flipHorizontal, target.flipHorizontal)
         XCTAssertEqual(result.flipVertical, target.flipVertical)
         XCTAssertEqual(result.cropInsetTop, target.cropInsetTop)

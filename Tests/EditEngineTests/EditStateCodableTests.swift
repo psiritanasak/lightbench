@@ -42,6 +42,8 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.boostAmount, 1.0)
         XCTAssertEqual(state.rawExposureEV, 0)
         XCTAssertEqual(state.shadowBoostScale, 1.0)
+        XCTAssertEqual(state.transformScale, 1.0)
+        XCTAssertEqual(state.transformAspect, 0)
         XCTAssertEqual(state.rawWhiteBalanceNeutralPoints, [])
         XCTAssertEqual(state.rawLuminanceNoiseReductionAdjust, 0)
         XCTAssertEqual(state.rawColorNoiseReductionScale, 1.0)
@@ -1076,6 +1078,21 @@ final class EditStateCodableTests: XCTestCase {
         """)
 
         XCTAssertEqual(state.grain, 0)
+        XCTAssertEqual(state.sharpness, 0.3)
+    }
+
+    /// The specific hazard this feature's own plan called out: `1.0`, not
+    /// `0`, is `transformScale`'s identity — decoding a missing key to `0`
+    /// would scale every pre-existing sidecar's photo to zero size the
+    /// moment it's opened. `transformAspect`'s identity IS `0`, included
+    /// here for contrast, not because it shares the hazard.
+    func testTransformScaleAndAspectAbsentFromAnOlderSidecarDefaultToIdentity() throws {
+        let state = try decode("""
+        { "sharpness": 0.3 }
+        """)
+
+        XCTAssertEqual(state.transformScale, 1.0)
+        XCTAssertEqual(state.transformAspect, 0)
         XCTAssertEqual(state.sharpness, 0.3)
     }
 

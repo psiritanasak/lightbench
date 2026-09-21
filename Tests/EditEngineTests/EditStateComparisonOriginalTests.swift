@@ -86,6 +86,8 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         s.straightenAngle = 12
         s.verticalPerspective = 0.2
         s.horizontalPerspective = -0.15
+        s.transformScale = 1.2
+        s.transformAspect = 0.3
         s.flipHorizontal = true
         s.flipVertical = true
         s.cropInsetTop = 0.1
@@ -184,6 +186,8 @@ final class EditStateComparisonOriginalTests: XCTestCase {
         XCTAssertEqual(original.straightenAngle, edited.straightenAngle)
         XCTAssertEqual(original.verticalPerspective, edited.verticalPerspective)
         XCTAssertEqual(original.horizontalPerspective, edited.horizontalPerspective)
+        XCTAssertEqual(original.transformScale, edited.transformScale)
+        XCTAssertEqual(original.transformAspect, edited.transformAspect)
         XCTAssertEqual(original.flipHorizontal, edited.flipHorizontal)
         XCTAssertEqual(original.flipVertical, edited.flipVertical)
         XCTAssertEqual(original.cropInsetTop, edited.cropInsetTop)

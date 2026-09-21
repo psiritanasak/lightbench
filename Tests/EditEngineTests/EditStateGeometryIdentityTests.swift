@@ -32,6 +32,18 @@ final class EditStateGeometryIdentityTests: XCTestCase {
         XCTAssertFalse(s.isGeometryAtIdentity)
     }
 
+    func testFalseWhenTransformScaleIsNonOne() {
+        var s = EditState.identity
+        s.transformScale = 1.2
+        XCTAssertFalse(s.isGeometryAtIdentity)
+    }
+
+    func testFalseWhenTransformAspectIsNonZero() {
+        var s = EditState.identity
+        s.transformAspect = 0.1
+        XCTAssertFalse(s.isGeometryAtIdentity)
+    }
+
     func testFalseWhenFlipHorizontalIsTrue() {
         var s = EditState.identity
         s.flipHorizontal = true

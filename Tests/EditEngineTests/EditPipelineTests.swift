@@ -1681,8 +1681,8 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertNotEqual(brilliantTruncated.g, brilliantFull.g)
     }
 
-    /// Geometry (straighten/perspective/flip/crop) still runs before a
-    /// truncation request takes effect, so the returned extent matches
+    /// Geometry (straighten/perspective/transform scale/aspect/flip/crop)
+    /// still runs before a truncation request takes effect, so the returned extent matches
     /// `ContentView.currentFitRect`'s (computed from a full, untruncated
     /// render) and a normalized tap maps onto the identical pixel grid.
     func testTruncatedSampleStillAppliesGeometrySoExtentMatchesFullRender() {
@@ -2225,6 +2225,217 @@ final class EditPipelineTests: XCTestCase {
         let output = EditPipeline.apply(EditState(exposureEV: 1, verticalPerspective: 1), to: input)
 
         XCTAssertEqual(pixel(of: output, at: 50, 20).r, 0.4, accuracy: accuracy)
+    }
+
+    // MARK: - Transform Scale/Aspect geometry
+    //
+    // Scale and Aspect ("Stretch" in this app's UI) are both diagonal affine
+    // scales about the extent's own center, combined into ONE
+    // `CGAffineTransform` then cropped back to the ORIGINAL extent — see
+    // `EditPipeline.applyTransformScale`'s own doc comment. Because
+    // `quadrantImage`'s quadrant boundaries sit exactly AT the transform
+    // center, a pure scale about that center can never move a boundary
+    // across a sample point (provable: the boundary's own offset from
+    // center is always zero, and zero divided/multiplied by anything is
+    // still zero) — so unlike Straighten/Perspective/Flip's own direction
+    // proofs, these tests prove direction via ALPHA (the crop-back margin a
+    // shrink/compress axis exposes), not a color crossing.
+
+    func testTransformScaleIdentityIsNoOp() {
+        let input = quadrantImage()
+        let output = EditPipeline.apply(EditState(transformScale: 1, transformAspect: 0), to: input)
+
+        XCTAssertEqual(output.extent, input.extent)
+        XCTAssertEqual(describeColor(of: output, at: CGPoint(x: 25, y: 75)), "red")
+    }
+
+    func testTransformScalePreservesExtentExactly() {
+        // Unlike Straighten (grows) but like Perspective/Flip (preserve),
+        // Scale/Aspect must never change the photo's own output size — the
+        // whole point is reshaping content WITHIN the existing frame. This
+        // holds by construction (`.cropped(to:)` THEN `.composited(over:)` a
+        // transparent canvas sized to the input extent — see
+        // `applyTransformScale`'s own doc comment for why the crop alone is
+        // NOT sufficient), not by luck the way Perspective's "corners only
+        // move inward" argument works. Checked at a zoom-in, a zoom-out, a
+        // pure Stretch, two combined-extreme cases where BOTH axes move the
+        // SAME direction at different magnitudes (reviewer-caught: an
+        // earlier version of this comment overclaimed these two as the
+        // "opposite directions" case — they aren't, see each one's own
+        // inline math), and — the case that actually IS opposite-direction
+        // — scale 1.2/aspect 1: sx = 1.2/1.3 ≈ 0.9231 (SHRINKS) while
+        // sy = 1.2*1.3 = 1.56 (GROWS) simultaneously. All of this on a
+        // non-square extent, so the width/height-equal case isn't doing any
+        // of the work here.
+        let input = quadrantImage(width: 120, height: 80)
+
+        XCTAssertEqual(EditPipeline.apply(EditState(transformScale: 1.5), to: input).extent, input.extent)
+        XCTAssertEqual(EditPipeline.apply(EditState(transformScale: 0.5), to: input).extent, input.extent)
+        XCTAssertEqual(EditPipeline.apply(EditState(transformAspect: 1), to: input).extent, input.extent)
+        // Both axes shrink at once (same direction, different magnitude):
+        // sx = 0.5/1.3 ≈ 0.385, sy = 0.5*1.3 = 0.65.
+        XCTAssertEqual(
+            EditPipeline.apply(EditState(transformScale: 0.5, transformAspect: 1), to: input).extent, input.extent
+        )
+        // Both axes grow at once (same direction, different magnitude):
+        // sx = 1.5*1.3 = 1.95, sy = 1.5/1.3 ≈ 1.154.
+        XCTAssertEqual(
+            EditPipeline.apply(EditState(transformScale: 1.5, transformAspect: -1), to: input).extent, input.extent
+        )
+        // Genuinely OPPOSITE directions: sx ≈ 0.9231 shrinks, sy = 1.56
+        // grows, at the same time — the case the two cases above don't
+        // actually cover, per the reviewer catch above.
+        XCTAssertEqual(
+            EditPipeline.apply(EditState(transformScale: 1.2, transformAspect: 1), to: input).extent, input.extent
+        )
+    }
+
+    func testTransformScaleBelowOneExposesTransparentMargin() {
+        // At scale 0.5, the transformed content spans only [25,75] on both
+        // axes (hand-derived: center ± 50*0.5) before being cropped back to
+        // the full [0,100] frame — so a corner OUTSIDE that span must be
+        // transparent, while an interior point stays opaque. The color
+        // assertion is deliberately just a sanity check, not a direction
+        // proof — reviewer-caught: (40,60) and its own source (30,70) are
+        // BOTH inside the top-left quadrant, so this assertion alone would
+        // pass identically even with `applyTransformScale` deleted; the
+        // alpha assertions above are what actually discriminate scale-below-
+        // one from a no-op.
+        let input = quadrantImage(width: 100, height: 100)
+        let output = EditPipeline.apply(EditState(transformScale: 0.5), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 2, 2).a, 0, "corner falls outside the shrunk content's span")
+
+        let interior = pixel(of: output, at: 40, 60)
+        XCTAssertEqual(interior.a, 1, "interior point stays covered")
+        XCTAssertEqual(
+            describeColor(of: overBlack(output), at: CGPoint(x: 40, y: 60)), "red",
+            "sanity check only — (40,60) and its source (30,70) are both top-left, so this can't discriminate scale from a no-op"
+        )
+    }
+
+    func testTransformStretchDirection() {
+        // At the maximum Stretch (+1), aspectFactor = pow(1.3, 1) = 1.3:
+        // sy = 1.3 (Y grows, content overflows the frame and gets cropped ->
+        // NO margin at a Y edge), sx = 1/1.3 ≈ 0.7692 (X shrinks -> a REAL
+        // margin at an X edge). Hand-derived X-content span: center ±
+        // 50*0.7692 = [11.54, 88.46], so x=2 falls outside it; the Y span
+        // (center ± 50*1.3 = [-15, 115]) fully covers the frame, so y=2
+        // stays inside. This is the test that actually pins the sign
+        // convention this feature's own design doc calls out as unconfirmed
+        // against Lightroom's real (undocumented) behavior — it only needs
+        // to prove THIS app's own code does what THIS app's own docs claim.
+        //
+        // Reviewer-caught (round 2), with real teeth this time: the round-1
+        // version of this test only checked the DIRECTION at -1 (which
+        // margin/axis), not the MAGNITUDE — and direction alone is
+        // reviewer-PROVEN not to discriminate the log-symmetric `pow`
+        // formula from the rejected linear one: at `aspect: -1` the old
+        // linear formula gives `sy = 0.7` (Y span `[15,85]`) vs. `pow`'s
+        // `sy = 1/1.3 ≈ 0.7692` (Y span `[11.54,88.46]`) — both are
+        // "Y shrinks, X grows," the same DIRECTION, just a different
+        // magnitude. The reviewer confirmed empirically (temporarily
+        // reverting the formula and re-running the full suite) that the
+        // direction-only assertions below still passed unchanged. `y=13`
+        // and `y=87` are the actual discriminator: inside `pow`'s wider
+        // span (covered, alpha 1) but outside the linear span (uncovered,
+        // alpha 0) — this pair is what actually pins `pow`, not "some
+        // sign-odd formula."
+        //
+        // `EditState.transformAspect`'s own doc comment claims "negative
+        // stretches WIDER/shorter" — the direction assertions below verify
+        // that sign convention landed in code; the magnitude assertions
+        // verify the SPECIFIC log-symmetric formula landed, not just any
+        // formula with the right sign.
+        let input = quadrantImage(width: 100, height: 100)
+
+        let plusOutput = EditPipeline.apply(EditState(transformAspect: 1), to: input)
+        XCTAssertEqual(pixel(of: plusOutput, at: 2, 50).a, 0, "positive Stretch compresses X, exposing a margin there")
+        XCTAssertEqual(pixel(of: plusOutput, at: 50, 2).a, 1, "positive Stretch grows Y, so no margin appears there")
+
+        let minusOutput = EditPipeline.apply(EditState(transformAspect: -1), to: input)
+        XCTAssertEqual(pixel(of: minusOutput, at: 2, 50).a, 1, "negative Stretch grows X, so no margin appears there")
+        XCTAssertEqual(pixel(of: minusOutput, at: 50, 2).a, 0, "negative Stretch compresses Y, exposing a margin there")
+        // Magnitude discriminator: covered under pow's wider [11.54,88.46]
+        // Y span, but would read alpha 0 under the rejected linear
+        // formula's narrower [15,85] span.
+        XCTAssertEqual(pixel(of: minusOutput, at: 50, 13).a, 1, "log-symmetric factor covers y=13; the linear formula would not")
+        XCTAssertEqual(pixel(of: minusOutput, at: 50, 87).a, 1, "log-symmetric factor covers y=87; the linear formula would not")
+    }
+
+    func testTransformScaleAndStretchNeverProduceNaN() {
+        let input = quadrantImage(width: 100, height: 100)
+        for scale in [0.5, 0.75, 1.0, 1.25, 1.5] {
+            for aspect in [-1.0, -0.5, 0.0, 0.5, 1.0] {
+                let output = EditPipeline.apply(EditState(transformScale: scale, transformAspect: aspect), to: input)
+                let center = pixel(of: output, at: 50, 50)
+                XCTAssertFalse(center.r.isNaN, "scale \(scale), aspect \(aspect)")
+                XCTAssertFalse(center.a.isNaN, "scale \(scale), aspect \(aspect)")
+            }
+        }
+    }
+
+    func testTransformScaleIsGeometryOnly() {
+        let input = solidColorImage(0.5, size: 100)
+        let output = EditPipeline.apply(EditState(transformScale: 0.8, transformAspect: 0.3), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 50, 50).r, 0.5, accuracy: accuracy)
+    }
+
+    func testTransformScalePreservesAlpha() {
+        let input = solidColorImage(r: 0.3, g: 0.3, b: 0.3, a: 0.5, size: 100)
+        let output = EditPipeline.apply(EditState(transformScale: 1.2), to: input)
+        let center = pixel(of: output, at: 50, 50)
+
+        XCTAssertEqual(center.r, 0.15, accuracy: accuracy)
+        XCTAssertEqual(center.a, 0.5, accuracy: accuracy)
+    }
+
+    /// Reviewer-caught gap: every other geometry stage in this file carries
+    /// a headroom-preservation test (see `testPerspectivePreservesHighlightHeadroom`);
+    /// this one didn't. MEASURED (a temporary harness, run then deleted),
+    /// not assumed: at the maximum combined Scale (1.5) + Stretch (1), a
+    /// linear 1.4 highlight reads back EXACTLY 1.4 at the center — the
+    /// `.transformed(by:)`/`.cropped(to:)`/`.composited(over:)` chain this
+    /// stage adds is pure geometry/compositing with no clamp anywhere in it.
+    func testTransformScalePreservesHighlightHeadroom() {
+        let input = solidColorImage(r: 1.4, g: 0.5, b: 0.2, a: 1, size: 100)
+        let output = EditPipeline.apply(EditState(transformScale: 1.5, transformAspect: 1), to: input)
+        let center = pixel(of: output, at: 50, 50)
+
+        XCTAssertEqual(center.r, 1.4, accuracy: accuracy)
+        XCTAssertGreaterThan(center.r, 1.0, "should not be clamped, unlike curves")
+    }
+
+    func testTransformScalePreservesColorMath() {
+        let input = solidColorImage(0.2, size: 100)
+        let output = EditPipeline.apply(EditState(exposureEV: 1, transformScale: 1.2), to: input)
+
+        XCTAssertEqual(pixel(of: output, at: 50, 50).r, 0.4, accuracy: accuracy)
+    }
+
+    func testTransformScaleClearsPerspectiveWedges() {
+        // The real reason Scale must run AFTER Perspective, proven with
+        // actual pixels, not just asserted: at the maximum vertical
+        // keystone alone, (10,90) sits outside the tapered quad (hand-
+        // derived in `testPerspectiveVerticalDirection`: the quad's left
+        // edge at y=90 is x=22.5) and reads transparent/black. Adding the
+        // maximum Scale (1.5) on top magnifies that already-warped image by
+        // 1.5x about center — the SAME boundary maps (hand-derived via the
+        // inverse: output x=10 -> warped-space x = 50+(10-50)/1.5 ≈ 23.33,
+        // which is now PAST the 22.5 boundary) to a point now INSIDE the
+        // quad, so the wedge that was there is gone. If Scale ran BEFORE
+        // Perspective instead, Perspective would re-carve a fresh wedge at
+        // its own fixed 0.25-of-width taper regardless, and this same point
+        // would still read transparent — so this test also fails under the
+        // wrong stage order, not just under a broken formula.
+        let input = quadrantImage(width: 100, height: 100)
+
+        let perspectiveOnly = EditPipeline.apply(EditState(verticalPerspective: 1), to: input)
+        XCTAssertEqual(pixel(of: perspectiveOnly, at: 10, 90).a, 0, "the wedge exists with Perspective alone")
+
+        let withScale = EditPipeline.apply(EditState(verticalPerspective: 1, transformScale: 1.5), to: input)
+        XCTAssertEqual(pixel(of: withScale, at: 10, 90).a, 1, "Scale, running after Perspective, clears the same wedge")
     }
 
     // MARK: - Flip geometry
@@ -5665,6 +5876,8 @@ final class EditPipelineTests: XCTestCase {
             straightenAngle: 12.5,
             verticalPerspective: 0.3,
             horizontalPerspective: -0.4,
+            transformScale: 1.2,
+            transformAspect: 0.3,
             flipHorizontal: true,
             flipVertical: false,
             cropInsetTop: 0.1,

@@ -424,6 +424,42 @@ struct EditState: Equatable, Codable {
     /// `CIPerspectiveTransform` call — see `EditPipeline`.
     var horizontalPerspective: Double = 0
 
+    // MARK: - Transform Scale/Aspect
+
+    /// Manual uniform zoom, 0.5...1.5 (50%...150%), 1.0 is identity. Applied
+    /// about the CURRENT extent's own center, AFTER Perspective — Lightroom's
+    /// own Transform-panel "Scale": exists specifically to zoom in and clear
+    /// the empty corner wedges Perspective correction reveals, WITHOUT
+    /// changing the photo's own output dimensions (the transformed content
+    /// is cropped back to its pre-transform extent — see `EditPipeline.
+    /// applyTransformScale`). Values below 1.0 also legal — the content
+    /// shrinks and letterboxes within the SAME frame size, exposing
+    /// transparent margin at the edges (this stage runs after Straighten/
+    /// Perspective, whose own corner-revealing already happened; a value
+    /// below 1.0 here doesn't "reveal" anything new about the source photo,
+    /// it just shrinks what's already been placed in the frame). Clamped to
+    /// this range in the pipeline; this struct does not itself enforce it
+    /// (matches crop insets/perspective's own convention).
+    var transformScale: Double = 1.0
+
+    /// Manual anisotropic stretch, -1...1, 0 is identity. Applied as an
+    /// independent X/Y scale about the CURRENT extent's own center, composed
+    /// into the SAME transform as `transformScale` (diagonal scales commute,
+    /// so both are combined into one `CGAffineTransform` — see
+    /// `EditPipeline.applyTransformScale`). Lightroom's own Transform-panel
+    /// "Aspect" — deliberately labeled "Stretch" in this app's UI instead:
+    /// `CropTabView`'s existing "Aspect" section is the unrelated crop
+    /// aspect-RATIO preset list (Freeform/Square/16:9/...), and reusing the
+    /// word here would collide. Positive stretches TALLER/narrower, negative
+    /// stretches WIDER/shorter — this app's own v1 mapping
+    /// (`EditPipeline.kMaxTransformAspectStretch`, area-preserving), NOT a
+    /// reverse-engineered match to Lightroom's own undocumented curve/sign
+    /// convention (domain research was only moderately confident on
+    /// Lightroom's own sign and not confident at all on its exact formula).
+    /// Clamped to this range in the pipeline; this struct does not itself
+    /// enforce it.
+    var transformAspect: Double = 0
+
     // MARK: - Flip
 
     /// Mirror the image horizontally (left-right) / vertically (top-bottom).
@@ -1122,8 +1158,9 @@ struct EditState: Equatable, Codable {
     /// re-decoding.
     var rawDecoderVersionPin: String = ""
 
-    /// True when every geometric transform (straighten/perspective/crop/
-    /// flip) is at its identity value — the exact field GROUP already
+    /// True when every geometric transform (straighten/perspective/
+    /// transform-scale/crop/flip) is at its identity value — the exact
+    /// field GROUP already
     /// named together in `comparisonOriginal()`/`applyingPreset()`'s own
     /// comments. Pure and independently testable without a RAW fixture,
     /// unlike most of this feature — used by
@@ -1134,6 +1171,8 @@ struct EditState: Equatable, Codable {
         straightenAngle == 0
             && verticalPerspective == 0
             && horizontalPerspective == 0
+            && transformScale == 1
+            && transformAspect == 0
             && !flipHorizontal
             && !flipVertical
             && cropInsetTop == 0
@@ -1189,7 +1228,8 @@ struct EditState: Equatable, Codable {
     }
 
     /// The "original" side for the Compare feature: the CURRENT geometry
-    /// (crop/straighten/perspective/flip) is KEPT — copied via `var s =
+    /// (crop/straighten/perspective/transformScale/transformAspect/flip) is
+    /// KEPT — copied via `var s =
     /// self` below — so both compared images share one extent and align
     /// pixel-for-pixel, while every color/tone adjustment is reset to its
     /// identity value. Same field list as `ContentView`'s
@@ -1275,8 +1315,9 @@ struct EditState: Equatable, Codable {
         // argument this method's own doc comment makes for masks.
         s.pointColors.removeAll()
         // geometry (cropInset*, straightenAngle, verticalPerspective,
-        // horizontalPerspective, flipHorizontal, flipVertical) is left
-        // untouched — inherited from `self` via `var s = self` above.
+        // horizontalPerspective, transformScale, transformAspect,
+        // flipHorizontal, flipVertical) is left untouched — inherited from
+        // `self` via `var s = self` above.
         // `boostAmount`/`rawExposureEV`/`shadowBoostScale`/
         // `rawWhiteBalanceNeutralPoints`/`rawLuminanceNoiseReductionAdjust`/
         // `rawColorNoiseReductionScale`/`rawSharpnessScale`/
@@ -1293,8 +1334,9 @@ struct EditState: Equatable, Codable {
     /// Applies `self` as a saved preset onto `target`, returning the merged
     /// result. Every field `comparisonOriginal()` resets to identity gets
     /// copied from `self` (the preset) instead; everything that method
-    /// leaves untouched — crop/straighten/perspective/flip geometry, and
-    /// `redEyePoints` itself — is preserved from `target`, since both are
+    /// leaves untouched — crop/straighten/perspective/transformScale/
+    /// transformAspect/flip geometry, and `redEyePoints` itself — is
+    /// preserved from `target`, since both are
     /// specific to ONE photo's composition/face positions, never part of a
     /// reusable "look". Deliberately reuses `comparisonOriginal()`'s exact
     /// field partition (see its own doc comment for the full reasoning)
@@ -1357,9 +1399,10 @@ struct EditState: Equatable, Codable {
         result.redEyeSize = redEyeSize
         result.redEyeStrength = redEyeStrength
         // geometry (cropInset*, straightenAngle, verticalPerspective,
-        // horizontalPerspective, flipHorizontal, flipVertical),
-        // redEyePoints, AND masks are NOT copied — they stay `target`'s
-        // own via `var result = target` above. `masks` joins `redEyePoints`
+        // horizontalPerspective, transformScale, transformAspect,
+        // flipHorizontal, flipVertical), redEyePoints, AND masks are NOT
+        // copied — they stay `target`'s own via `var result = target`
+        // above. `masks` joins `redEyePoints`
         // here for the identical reason: an ellipse placed on THIS photo's
         // subject is meaningless dropped onto another photo's target.
         // `boostAmount`/`rawExposureEV`/`shadowBoostScale`/
@@ -1430,6 +1473,7 @@ extension EditState {
         case highlightHue, highlightSaturation, highlightLuminance
         case straightenAngle
         case verticalPerspective, horizontalPerspective
+        case transformScale, transformAspect
         case flipHorizontal, flipVertical
         case cropInsetTop, cropInsetBottom, cropInsetLeft, cropInsetRight
         case redEyePoints, redEyeSize, redEyeStrength
@@ -1543,6 +1587,11 @@ extension EditState {
         straightenAngle = try container.decodeIfPresent(Double.self, forKey: .straightenAngle) ?? 0
         verticalPerspective = try container.decodeIfPresent(Double.self, forKey: .verticalPerspective) ?? 0
         horizontalPerspective = try container.decodeIfPresent(Double.self, forKey: .horizontalPerspective) ?? 0
+        // `?? 1.0`, NOT `?? 0` — transformScale's identity is 1.0, not 0.
+        // A sidecar predating this field must decode to "no scale applied",
+        // not "scale the image to zero size."
+        transformScale = try container.decodeIfPresent(Double.self, forKey: .transformScale) ?? 1.0
+        transformAspect = try container.decodeIfPresent(Double.self, forKey: .transformAspect) ?? 0
         flipHorizontal = try container.decodeIfPresent(Bool.self, forKey: .flipHorizontal) ?? false
         flipVertical = try container.decodeIfPresent(Bool.self, forKey: .flipVertical) ?? false
         cropInsetTop = try container.decodeIfPresent(Double.self, forKey: .cropInsetTop) ?? 0

@@ -2263,8 +2263,13 @@ final class EditPipelineTests: XCTestCase {
         // earlier version of this comment overclaimed these two as the
         // "opposite directions" case — they aren't, see each one's own
         // inline math), and — the case that actually IS opposite-direction
-        // — scale 1.2/aspect 1: sx = 1.2/1.3 ≈ 0.9231 (SHRINKS) while
-        // sy = 1.2*1.3 = 1.56 (GROWS) simultaneously. All of this on a
+        // — scale 1.2/aspect 1: sx = 1.2/1.6 = 0.75 (SHRINKS) while
+        // sy = 1.2*1.6 = 1.92 (GROWS) simultaneously (numbers at the
+        // current kMaxTransformAspectStretch = 0.6 — reviewer-caught,
+        // round 2 of this retune: this header comment still quoted the
+        // pre-retune 1.3/0.9231/1.56 numbers after the inline comment
+        // 40 lines below it had already been updated to 0.6's own
+        // values, a same-function internal contradiction). All of this on a
         // non-square extent, so the width/height-equal case isn't doing any
         // of the work here.
         let input = quadrantImage(width: 120, height: 80)
@@ -2272,19 +2277,37 @@ final class EditPipelineTests: XCTestCase {
         XCTAssertEqual(EditPipeline.apply(EditState(transformScale: 1.5), to: input).extent, input.extent)
         XCTAssertEqual(EditPipeline.apply(EditState(transformScale: 0.5), to: input).extent, input.extent)
         XCTAssertEqual(EditPipeline.apply(EditState(transformAspect: 1), to: input).extent, input.extent)
+        // NOTE: `kMaxTransformAspectStretch` is live-tuned to `0.6` (see its
+        // own doc comment) — every sx/sy number below is derived from THAT
+        // current value, not whatever it was when this test was first
+        // written; a future retune needs these re-derived too, since a
+        // large-enough constant change can flip which combination is
+        // same-direction vs. opposite-direction (as it already did once:
+        // `transformScale: 1.5, transformAspect: -1` used to be the "both
+        // grow" case at the smaller original constant, but at `0.6` its own
+        // `sy` no longer exceeds 1 even at the max `transformScale` — see
+        // the case actually used below instead).
+        //
         // Both axes shrink at once (same direction, different magnitude):
-        // sx = 0.5/1.3 ≈ 0.385, sy = 0.5*1.3 = 0.65.
+        // aspectFactor = pow(1.6, 1) = 1.6, sx = 0.5/1.6 = 0.3125,
+        // sy = 0.5*1.6 = 0.8.
         XCTAssertEqual(
             EditPipeline.apply(EditState(transformScale: 0.5, transformAspect: 1), to: input).extent, input.extent
         )
         // Both axes grow at once (same direction, different magnitude):
-        // sx = 1.5*1.3 = 1.95, sy = 1.5/1.3 ≈ 1.154.
+        // aspectFactor = pow(1.6, -0.5) ≈ 0.7906, sx = 1.5/0.7906 ≈ 1.897,
+        // sy = 1.5*0.7906 ≈ 1.186. (A full `transformAspect: -1` here would
+        // make `sy` shrink below 1 at the current constant — an OPPOSITE-
+        // direction case, not this one's intended same-direction case — so
+        // this uses a smaller `-0.5` magnitude instead, still valid at the
+        // max `transformScale: 1.5`.)
         XCTAssertEqual(
-            EditPipeline.apply(EditState(transformScale: 1.5, transformAspect: -1), to: input).extent, input.extent
+            EditPipeline.apply(EditState(transformScale: 1.5, transformAspect: -0.5), to: input).extent, input.extent
         )
-        // Genuinely OPPOSITE directions: sx ≈ 0.9231 shrinks, sy = 1.56
-        // grows, at the same time — the case the two cases above don't
-        // actually cover, per the reviewer catch above.
+        // Genuinely OPPOSITE directions: aspectFactor = pow(1.6, 1) = 1.6,
+        // sx = 1.2/1.6 = 0.75 shrinks, sy = 1.2*1.6 = 1.92 grows, at the
+        // same time — the case the two cases above don't actually cover,
+        // per the reviewer catch above.
         XCTAssertEqual(
             EditPipeline.apply(EditState(transformScale: 1.2, transformAspect: 1), to: input).extent, input.extent
         )
@@ -2315,32 +2338,36 @@ final class EditPipelineTests: XCTestCase {
     }
 
     func testTransformStretchDirection() {
-        // At the maximum Stretch (+1), aspectFactor = pow(1.3, 1) = 1.3:
-        // sy = 1.3 (Y grows, content overflows the frame and gets cropped ->
-        // NO margin at a Y edge), sx = 1/1.3 ≈ 0.7692 (X shrinks -> a REAL
+        // At the maximum Stretch (+1), aspectFactor = pow(1.6, 1) = 1.6:
+        // sy = 1.6 (Y grows, content overflows the frame and gets cropped ->
+        // NO margin at a Y edge), sx = 1/1.6 = 0.625 (X shrinks -> a REAL
         // margin at an X edge). Hand-derived X-content span: center ±
-        // 50*0.7692 = [11.54, 88.46], so x=2 falls outside it; the Y span
-        // (center ± 50*1.3 = [-15, 115]) fully covers the frame, so y=2
+        // 50*0.625 = [18.75, 81.25], so x=2 falls outside it; the Y span
+        // (center ± 50*1.6 = [-30, 130]) fully covers the frame, so y=2
         // stays inside. This is the test that actually pins the sign
         // convention this feature's own design doc calls out as unconfirmed
         // against Lightroom's real (undocumented) behavior — it only needs
         // to prove THIS app's own code does what THIS app's own docs claim.
+        // NOTE: `kMaxTransformAspectStretch` was live-tuned from `0.3` to
+        // `0.6` after user feedback that ±100% felt weak — every number in
+        // this comment is derived from the CURRENT `0.6`, not the original
+        // shipped value; re-derive again if the constant changes further.
         //
         // Reviewer-caught (round 2), with real teeth this time: the round-1
         // version of this test only checked the DIRECTION at -1 (which
         // margin/axis), not the MAGNITUDE — and direction alone is
         // reviewer-PROVEN not to discriminate the log-symmetric `pow`
         // formula from the rejected linear one: at `aspect: -1` the old
-        // linear formula gives `sy = 0.7` (Y span `[15,85]`) vs. `pow`'s
-        // `sy = 1/1.3 ≈ 0.7692` (Y span `[11.54,88.46]`) — both are
-        // "Y shrinks, X grows," the same DIRECTION, just a different
-        // magnitude. The reviewer confirmed empirically (temporarily
-        // reverting the formula and re-running the full suite) that the
-        // direction-only assertions below still passed unchanged. `y=13`
-        // and `y=87` are the actual discriminator: inside `pow`'s wider
-        // span (covered, alpha 1) but outside the linear span (uncovered,
-        // alpha 0) — this pair is what actually pins `pow`, not "some
-        // sign-odd formula."
+        // linear formula gives `sy = 0.4` (Y span `[30,70]` at the current
+        // `0.6`) vs. `pow`'s `sy = 1/1.6 = 0.625` (Y span `[18.75,81.25]`)
+        // — both are "Y shrinks, X grows," the same DIRECTION, just a
+        // different magnitude. The reviewer confirmed empirically
+        // (temporarily reverting the formula and re-running the full suite)
+        // that the direction-only assertions below still passed unchanged.
+        // `y=22` and `y=78` are the actual discriminator: inside `pow`'s
+        // wider span (covered, alpha 1) but outside the linear span
+        // (uncovered, alpha 0) — this pair is what actually pins `pow`, not
+        // "some sign-odd formula."
         //
         // `EditState.transformAspect`'s own doc comment claims "negative
         // stretches WIDER/shorter" — the direction assertions below verify
@@ -2356,11 +2383,11 @@ final class EditPipelineTests: XCTestCase {
         let minusOutput = EditPipeline.apply(EditState(transformAspect: -1), to: input)
         XCTAssertEqual(pixel(of: minusOutput, at: 2, 50).a, 1, "negative Stretch grows X, so no margin appears there")
         XCTAssertEqual(pixel(of: minusOutput, at: 50, 2).a, 0, "negative Stretch compresses Y, exposing a margin there")
-        // Magnitude discriminator: covered under pow's wider [11.54,88.46]
+        // Magnitude discriminator: covered under pow's wider [18.75,81.25]
         // Y span, but would read alpha 0 under the rejected linear
-        // formula's narrower [15,85] span.
-        XCTAssertEqual(pixel(of: minusOutput, at: 50, 13).a, 1, "log-symmetric factor covers y=13; the linear formula would not")
-        XCTAssertEqual(pixel(of: minusOutput, at: 50, 87).a, 1, "log-symmetric factor covers y=87; the linear formula would not")
+        // formula's narrower [30,70] span (both at the current 0.6).
+        XCTAssertEqual(pixel(of: minusOutput, at: 50, 22).a, 1, "log-symmetric factor covers y=22; the linear formula would not")
+        XCTAssertEqual(pixel(of: minusOutput, at: 50, 78).a, 1, "log-symmetric factor covers y=78; the linear formula would not")
     }
 
     func testTransformScaleAndStretchNeverProduceNaN() {

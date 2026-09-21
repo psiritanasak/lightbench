@@ -662,20 +662,14 @@ didn't block verification and no code changed as a result. The
 permission classifier before it could be tried as an alternative.
 
 ## Exact next step
-Commit Manual Transform Scale/Aspect — it's fully implemented, reviewed
-to APPROVE-equivalent (4 rounds, FIX FIRST x4, all fixed and confirmed),
-and all 1144 tests pass. Commit in logical increments (EditState fields
-+ pipeline stage + tests → UI + ContentView/ImageDocumentModel wiring →
-docs), matching this session's own established pattern for prior
-features. A scoped live-verification pass is worth doing afterward (ask
-for screen-automation permission first): dial in real keystone
-correction on a test photo and confirm Scale actually clears the
-wedges, and eyeball whether `kMaxTransformAspectStretch` (±30% at the
-extremes) feels right — it's a principled starting constant, not yet
-visually tuned. Not currently blocking anything.
-
-Once that's committed, pick the next Lightroom gap and enter Plan Mode
-first, per this project's workflow rules.
+Ask the user whether `kMaxTransformAspectStretch: 0.6` now feels right
+in the Release build (the retune from `0.3`, done in response to their
+own live feedback, is implemented, reviewed to FIX FIRST → fixes
+applied, all 1144 tests pass, and ready to commit — see CLAUDE.md's
+Manual Transform Scale/Aspect entry for the retune's own write-up).
+Commit it, then either tune further based on their answer or pick the
+next Lightroom gap and enter Plan Mode first, per this project's
+workflow rules.
 
 Also available: Chromatic Aberration removal (remaining unstarted
 Tier-1 gap); Auto Tone/Auto Settings, Enhance/Super Resolution, History

@@ -133,7 +133,35 @@ Reviewer: FIX FIRST → APPROVE. Round 1 caught, by adversarial re-measurement (
 
   Reviewer: 4 rounds, FIX FIRST → FIX FIRST → FIX FIRST → FIX FIRST (round 4 was a single one-line fix explicitly judged not to need a 5th round). Round 1 (self-caught before review, via a failing test, not reasoned about in advance): the extent-preservation design's first draft used only `.cropped(to:)`, which is NOT sufficient — fixed with the composite-over-transparent-canvas technique described above. Round 1's own review then caught 4 stale doc-comment enumerations of the geometry field group (missed after adding 2 new fields to it) and a non-finite "sx/sy can never be zero/NaN" overclaim. Round 2 caught, and PROVED empirically (patched the fix back to a rejected linear `aspectFactor` formula and re-ran the full suite — it still passed): the original `1 + aspect * kMaxTransformAspectStretch` formula was measurably ASYMMETRIC (+42.9% at aspect −1 vs. the −23.1% "±30%" naming implied for +1) and — the real finding — completely unguarded by any test, since the existing direction-only assertions can't distinguish a sign-odd formula's exact shape from another. Fixed with the `pow`-based log-symmetric formula plus 2 magnitude-discriminating test assertions chosen specifically to fail under the old formula (verified: they do). Round 2 also caught 2 more stale doc enumerations, a missing proxy-vs-full-res ledger entry, a contradictory test-header claim ("opposite directions" describing two same-direction cases), and the undocumented minification-aliasing limitation (now IMPROVEMENTS.md D23). Round 3 (independently re-ran round 2's own falsification technique to confirm it, rather than trusting the diff) caught 1 more stale doc enumeration plus a missing cross-reference between the new proxy ledger entry and D23. Round 4 caught the fixed pipeline's own file-header comment, which still described the Transform/Distort group as exactly 3 stages — fixed with care not to blanket-extend the header's own "none of these commute" claim, since Scale/Aspect genuinely DOES commute with Flip (unlike its relationship with Perspective). All 1144 tests pass throughout. Committed in logical increments (EditState fields + pipeline stage + tests, UI + ContentView/ImageDocumentModel wiring, docs).
 
-  Not live-verified — this session's screen-automation permission was scoped to Point Color Slice B, not re-requested for this feature. Worth a future pass: dial in real keystone correction on a test photo and confirm Scale actually clears the wedges as designed, and eyeball whether `kMaxTransformAspectStretch` (±30% at the extremes) feels right, since it's a principled starting constant, not yet visually tuned against a real render.
+  Live-verified in part (2026-09-21): the user built and ran a Release
+  build, tried Straighten/Vertical/Horizontal/Scale directly (working as
+  designed), then reported the Stretch effect at ±100% felt weak.
+  `kMaxTransformAspectStretch` was live-tuned from `0.3` to `0.6` in
+  response (doubling the effect strength at the extremes) — every
+  numeric example in `applyTransformScale`'s own doc comment and in
+  `EditPipelineTests`'s Transform Scale/Aspect block was re-derived for
+  the new value, not left stale (one test case's own qualitative
+  framing — "both axes grow" — actually flipped to "opposite
+  directions" at the larger constant and needed a different input
+  combination, not just updated numbers; documented inline). Reviewer:
+  1 round, FIX FIRST — caught 3 numbers the retune missed: a stale
+  header comment 40 lines above an already-updated inline comment in
+  the SAME test function (a same-function internal contradiction), and
+  the minification-limitation doc comment plus IMPROVEMENTS.md D23 both
+  still quoting the OLD worst-case minification figure (`sx ≈ 0.385`,
+  ~2.6x) — the retune actually WORSENED that figure (`sx = 0.3125`,
+  ~3.2x), the opposite direction from what D23 would want, so this
+  wasn't just staleness, it was staleness pointing the wrong way. All
+  fixed and reverified (1144 tests). Not yet re-confirmed on screen at
+  the new `0.6` value — worth a follow-up
+  Release-build check, and the constant may need further tuning based
+  on that. Note for the record: `kMaxTransformAspectStretch` is baked
+  into the RENDERER, not stored per-photo, so this retune is NOT
+  replay-identical for any photo whose sidecar already has a non-zero
+  `transformAspect` — it will render with roughly double the stretch it
+  did before this change. Not a bug (this is exactly what "live-tune
+  the constant" means), but worth knowing so a visual difference on an
+  old edit doesn't get mistaken for a regression.
 - RAW-native AI Denoise — cross-reference only, overlaps the already-shipped RAW NR fields in Phase 6
 
 **Tier 2 (genuinely new architecture — don't underscope):**

@@ -1201,9 +1201,16 @@ moves content, never shrinks the sampling density below 1:1), so this
 is the FIRST stage in the Transform/Distort group that can. At the
 clamp extremes (`transformScale: 0.5, transformAspect: 1`, i.e. the
 maximum simultaneous zoom-out plus maximum Stretch compression on one
-axis) `sx ≈ 0.385` — a ~2.6x minification on that axis with no
-prefiltering, a real aliasing risk on high-frequency content (fine
-texture, a brick wall, moiré-prone fabric).
+axis) `sx = 0.3125` at the current `kMaxTransformAspectStretch = 0.6`
+— a ~3.2x minification on that axis with no prefiltering, a real
+aliasing risk on high-frequency content (fine texture, a brick wall,
+moiré-prone fabric). UPDATE (2026-09-21): `kMaxTransformAspectStretch`
+was live-tuned from `0.3` to `0.6` after live user feedback that
+Stretch felt too weak at the original value — this WORSENED the worst
+case from ~2.6x (`sx ≈ 0.385` at `0.3`) to ~3.2x, the opposite
+direction from what this entry would want; worth weighing against the
+prefiltering fix below sooner rather than later if Stretch gets tuned
+stronger again.
 
 Not fixed here: the common real-world case (Scale near 1.0, nudged up
 just enough to clear a modest keystone wedge) is a mild zoom, not a

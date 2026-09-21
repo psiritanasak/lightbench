@@ -1154,25 +1154,34 @@ enum EditPipeline {
     // MARK: - Transform Scale/Aspect
 
     /// Fractional stretch `transformAspect` applies at its `+1` extreme —
-    /// e.g. `0.3` means the Y axis grows to `1.3x` at `transformAspect: 1`.
-    /// A PRINCIPLED STARTING CONSTANT, not a measured match to Lightroom's
-    /// own (undocumented, unconfirmed) curve — see `EditState.
-    /// transformAspect`'s own doc comment. Retune once this is visually
-    /// checked against a real render; do not treat as settled.
+    /// e.g. `0.6` means the Y axis grows to `1.6x` at `transformAspect: 1`
+    /// (and, by the log-symmetric formula below, X shrinks to `1/1.6 ≈
+    /// 0.625x` at the same extreme). LIVE-TUNED (2026-09-21): shipped at
+    /// `0.3`, then doubled to `0.6` after the user tried it in a Release
+    /// build and reported the effect at ±100% felt weak — this is now a
+    /// once-adjusted starting point, not a from-scratch guess, but still
+    /// not claimed as a measured match to Lightroom's own (undocumented)
+    /// curve — see `EditState.transformAspect`'s own doc comment. Retune
+    /// again if it still doesn't feel right; do not treat as settled.
     ///
-    /// REVIEWER-CAUGHT, self-corrected: `aspectFactor` below is `pow(1 +
-    /// kMaxTransformAspectStretch, aspect)`, NOT a linear `1 + aspect *
-    /// kMaxTransformAspectStretch` (an earlier draft's formula). The linear
-    /// version was measurably ASYMMETRIC — at `aspect: -1` it gave `sx =
+    /// REVIEWER-CAUGHT, self-corrected (this reasoning holds at ANY value
+    /// of this constant, independent of the live-tune above): `aspectFactor`
+    /// below is `pow(1 + kMaxTransformAspectStretch, aspect)`, NOT a linear
+    /// `1 + aspect * kMaxTransformAspectStretch` (an earlier draft's
+    /// formula). The linear version was measurably ASYMMETRIC — at the
+    /// value shipped when this was caught (`0.3`), `aspect: -1` gave `sx =
     /// 1/0.7 ≈ 1.4286` (+42.9%), not the mirror of `aspect: +1`'s `sx =
-    /// 1/1.3 ≈ 0.7692` (-23.1%) the "±30%" naming implied. The `pow` form
-    /// is exactly symmetric in LOG space by construction — `aspectFactor`
-    /// at `-1` is the exact reciprocal of `aspectFactor` at `+1`
-    /// (`pow(1.3, -1) == 1/1.3` exactly) — matching domain research's own
-    /// best guess for Lightroom's real curve shape
-    /// ("most likely exponential... so that +a and -a are exact inverses"),
-    /// not just a bug patch.
-    private static let kMaxTransformAspectStretch: Double = 0.3
+    /// 1/1.3 ≈ 0.7692` (-23.1%) the "±30%" naming implied — and the
+    /// asymmetry only gets WORSE at a larger constant (at the current
+    /// `0.6`, the rejected linear form would give `-1`'s `sx = 1/0.4 = 2.5`
+    /// vs. `+1`'s mirror `sx = 1/1.6 = 0.625`, a +150% vs. -37.5% split).
+    /// The `pow` form is exactly symmetric in LOG space by construction —
+    /// `aspectFactor` at `-1` is the exact reciprocal of `aspectFactor` at
+    /// `+1` (`pow(1.6, -1) == 1/1.6` exactly, at whatever the constant
+    /// currently is) — matching domain research's own best guess for
+    /// Lightroom's real curve shape ("most likely exponential... so that
+    /// +a and -a are exact inverses"), not just a bug patch.
+    private static let kMaxTransformAspectStretch: Double = 0.6
 
     private static func transformScaleActive(_ state: EditState) -> Bool {
         state.transformScale != 1 || state.transformAspect != 0
@@ -1189,9 +1198,10 @@ enum EditPipeline {
     /// (the only inputs this struct's fields can ever hold — a `NaN` could
     /// only arrive via a hand-corrupted sidecar `JSONDecoder` would already
     /// reject), `sx`/`sy` can never be zero: `aspectFactor` is bounded to
-    /// `[1/1.3, 1.3]` by the clamps below (now log-symmetric — see
+    /// `[1/(1 + kMaxTransformAspectStretch), 1 + kMaxTransformAspectStretch]`
+    /// by the clamps below (now log-symmetric — see
     /// `kMaxTransformAspectStretch`'s own doc comment), so division is
-    /// always safe.
+    /// always safe regardless of that constant's current tuned value.
     ///
     /// Runs AFTER Perspective, not before: Scale exists specifically to
     /// zoom in and clear the empty corner wedges Perspective correction
@@ -1211,14 +1221,18 @@ enum EditPipeline {
     ///
     /// KNOWN, UNFIXED LIMITATION (reviewer-caught): `.transformed(by:)` is a
     /// plain affine resample with no prefiltering. At the clamp extremes
-    /// this stage can minify by up to ~2.6x on one axis (`transformScale:
-    /// 0.5, transformAspect: 1` gives `sx ≈ 0.385`) — unlike Straighten/
+    /// this stage can minify by up to ~3.2x on one axis (`transformScale:
+    /// 0.5, transformAspect: 1` gives `sx = 0.5/(1 + kMaxTransformAspectStretch)
+    /// = 0.3125` at the current `kMaxTransformAspectStretch = 0.6` — this
+    /// figure moves with that constant and was re-derived, not left stale,
+    /// when the constant was live-tuned from `0.3`; the retune measurably
+    /// WORSENED this worst case from ~2.6x) — unlike Straighten/
     /// Perspective, which never minify, this is the first stage in the
     /// Transform/Distort group that can alias a full-resolution photo.
     /// `CILanczosScaleTransform`-style prefiltering would fix it; not done
     /// here — the common case (Scale near 1.0, clearing a modest keystone
     /// wedge) is a mild zoom, not a strong minify, so this is scoped as a
-    /// follow-up rather than blocking v1.
+    /// follow-up rather than blocking v1 (see IMPROVEMENTS.md D23).
     ///
     /// UNLIKE Perspective/Flip (which preserve extent by construction —
     /// corners move inward, or land back on the identical rect) and UNLIKE

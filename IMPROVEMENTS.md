@@ -691,6 +691,16 @@ say so explicitly instead of claiming coverage that doesn't exist.
 
 ### D14. No keyboard/AT path to pick a Color Range mask's target color (Phase 7 slice 5, second half)
 
+**Update (Point Color Slice B, 2026-09-18):** the routing this entry
+describes was built, but for Point Color's OWN eyedropper, not this
+one — Point Color's picker is wired into the exact crosshair machinery
+named below (`isPickingPointColor` alongside `isPickingWhiteBalance`/
+`isPlacingRedEyeCorrections`, cyan `EditorCrosshairOverlay` tint,
+`ImageDocumentModel.pickPointColorTarget` from `commitPointPlacement`),
+confirming this entry's own "mostly a routing change" prediction. The
+Color Range mask eyedropper this entry is actually about is still
+mouse-only — not touched, still open below.
+
 `ColorRange` mask's Tolerance/Feather are labeled, AT-adjustable
 `EditSliderRow`s exactly like `.luminanceRange`'s own params — but
 PICKING the color itself (`ContentView.pointAndZoomOverlays`'s new
@@ -716,16 +726,39 @@ logged as the next candidate D8-style follow-up, not forgotten.
 **Two smaller follow-ups noted while building this slice, neither
 built:**
 - **A shared mutual-exclusion mode enum is now genuinely worth it.**
-  `AdjustTabView` hand-rolls WB/Red-Eye/mask-selection/brush-paint/
-  color-pick mutual exclusion at 5 separate sites (`select(_:)`, the WB
-  button, the Red-Eye button, `beginBrushStroke`, `beginColorPick`) —
-  each one individually clearing the other four's armed state. A fifth
-  copy of the same pattern is the point where a `enum EditorInteractionMode
-  { case none, pickingWhiteBalance, placingRedEye, editingMask(UUID),
-  paintingBrush(UUID), pickingColorRange(UUID) }` (one piece of state
-  instead of five booleans/optionals that must always agree) would
+  `AdjustTabView`/`ContentView` hand-roll WB/Red-Eye/mask-selection/
+  brush-paint/color-pick/point-color-pick mutual exclusion at 6 separate
+  sites (`select(_:)`, the WB button, the Red-Eye button,
+  `beginBrushStroke`, `beginColorPick`, `beginPointColorPick`) — each one
+  individually clearing the other five's armed state (Point Color Slice
+  B, 2026-09-18, added the 6th without building the enum, per this
+  entry's own prediction). A sixth copy of the same pattern is the point
+  where a `enum EditorInteractionMode { case none, pickingWhiteBalance,
+  placingRedEye, editingMask(UUID), paintingBrush(UUID),
+  pickingColorRange(UUID), pickingPointColor(UUID) }` (one piece of state
+  instead of six booleans/optionals that must always agree) would
   measurably simplify this file — a real refactor, not a rename, so
   scoped as its own future session rather than folded into this one.
+  Reviewer-caught (Point Color Slice B round 2, 2026-09-18): the
+  DETAIL-PANEL SELECTION half of this same state (`selectedMaskID`/
+  `selectedPointColorID`, distinct from the PICKING-armed half above) is
+  now a three-valued mix across the 6 sites — WB/Red-Eye clear BOTH
+  selections, mask `select(_:)` clears the point-color PICKING id but not
+  its SELECTION, `selectPointColor` clears the mask's picking id
+  (`colorPickingMaskID`) but not `selectedMaskID`. No functional
+  consequence found (both are presentation-only, and Escape already
+  routes mask-first then point-color, so a double-Escape is the worst
+  case) — but it's the same underlying disease the enum above would cure,
+  not a separate one.
+- **`PixelSampler` doesn't unpremultiply, `PointColor.cikernel` does.**
+  Reviewer-caught (Point Color Slice B round 2): for a sampled pixel with
+  0.5 ≤ alpha < 1 (only reachable once geometry is non-identity and a
+  transform reveals a partial-alpha edge — already inside that eyedropper's
+  own documented "identity-geometry only" caveat), hue survives the
+  mismatch but saturation and the `max(maxChannel,1)` headroom scale
+  diverge from what the kernel actually sees. Pre-existing class, shared
+  with the WB and Color Range eyedroppers (same gap, same root cause,
+  never fixed there either) — noted for completeness, not a new hazard.
 - **`SelectiveColor.cikernel`'s `rgb2hsl` has no negative-channel
   clamp.** `ColorRangeSelection.hueSaturation(forLinearRGB:_:_:)`
   (this slice) clamps negative channels to 0 before headroom-

@@ -10,7 +10,37 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
 ✅ FULLY COMPLETE, Curves v2 (Tier-2 Lightroom gap) is fully shipped,
 reviewed, and live-verified, and **Grain** (Tier-1 Lightroom gap) is
-shipped. **Color Grading (Tier-1 Lightroom gap) is now FULLY SHIPPED** —
+shipped. **Point Color (Tier-1 Lightroom gap) is now FULLY SHIPPED** —
+both Slice A (backend, 2026-09-18) and **Slice B (the eyedropper UI,
+2026-09-18)**. Slice B needed `EditPipeline.apply(_:to:truncatingColorAt:)`,
+a new pipeline-internal truncation mechanism, because the existing
+`pickColorRangeTarget` "zero the downstream fields" technique cannot work
+here — `EditPipeline.effectiveTone(_:)` blends `brilliance` into both the
+upstream contrast/shadows/highlights (before Point Color's own pipeline
+position) and the downstream saturation (after it), so no field
+assignment can neutralize one half without erasing the other. New
+`PointColorSelection.swift` mirrors `PointColor.cikernel`'s own headroom-
+normalize + `rgb2hsl` on PERCEPTUAL (not scene-linear) RGB, matching the
+domain Point Color's kernel actually selects in. See CLAUDE.md's Point
+Color entry for the full write-up, including this slice's own 6th-
+mutual-exclusion-site count and its keyboard-crosshair wiring (closing
+this feature's own share of IMPROVEMENTS.md D14, distinct from the Color
+Range mask's own still-open, still-mouse-only eyedropper). 1131 tests
+(24 new). Reviewer: 2 rounds, FIX FIRST → APPROVE. Round 1 caught two
+missed mutual-exclusion sites, an asymmetric Compare-mode handler, a
+non-finite-target integrity gap, and (the substantive one) that the new
+tests never actually exercised the real kernel — all fixed. Round 2
+independently re-derived all 8 fixes (including an adversarial test —
+temporarily neutering the truncation feature and confirming the new
+end-to-end test actually fails without it) and logged 2 small non-
+blocking follow-ups (a stale `targetSaturation` doc-comment range claim,
+now fixed; a `PixelSampler`/kernel premultiply-domain nuance shared with
+the WB/Color-Range eyedroppers, added to IMPROVEMENTS.md's mode-enum
+entry) — see CLAUDE.md's Point Color entry for the full write-up.
+Committed in 5 logical commits (pipeline truncation, selection math,
+eyedropper model call + binding, sidebar UI + ContentView wiring, docs).
+
+**Color Grading (Tier-1 Lightroom gap) is FULLY SHIPPED** —
 both Slice A (backend: 9 `EditState` fields, `ColorGrading.cikernel`, the
 `applyColorGrading` pipeline stage) and Slice B (the color-wheel UI:
 `ColorWheelGeometry`, `ColorGradingWheelView`, `ColorGradingRange`, wired
@@ -568,20 +598,36 @@ interaction glue with no unit-test precedent, per this codebase's own
 convention; verified live instead).
 
 ## In progress / blocked
-None. Color Grading (Slice A backend, Slice B UI, and the Slice B
-post-ship bug-fix round) and Point Color Slice A (backend) are fully
-shipped, reviewed (APPROVE throughout), and committed — see the "Done"
-entries above.
+None. Point Color Slice B (the eyedropper UI) is fully shipped,
+reviewed (2 rounds, FIX FIRST → APPROVE), and committed in 5 logical
+commits — see the "Done"/"Current phase" entries above. Everything else
+(Color Grading in full, and Point Color Slice A) was already shipped,
+reviewed, and committed.
 
 ## Exact next step
 Pick the next Lightroom gap and enter Plan Mode first, per this
-project's workflow rules. **Point Color Slice B (the eyedropper UI)**
-is the natural continuation of the just-shipped backend — it needs its
-own session per this project's "one feature per session" rule, and per
-`PointColor.swift`'s own doc comment the eyedropper must sample at this
-stage's own pipeline position (immediately after Selective Color), not
-the final displayed pixel, since the narrow saturation window can
-otherwise reject a validly-picked color.
+project's workflow rules. Nothing is blocking.
+
+A scoped live-verification pass on Point Color Slice B is worth doing
+before or alongside whatever's picked next (ask the user for screen-
+automation permission first, per this project's own rule): picking a
+color on a photo with Brilliance AND Black & White both active is the
+exact scenario the new end-to-end unit test proves in isolation but has
+not been confirmed on screen. Not currently blocking anything.
+
+Also available: Chromatic Aberration removal and Manual Transform
+Scale/Aspect (remaining unstarted Tier-1 gaps); Auto Tone/Auto Settings,
+Enhance/Super Resolution, History panel, and Copy/Paste-and-Sync
+(unstarted Tier-2 items); Color Grading Slice B's own follow-ups —
+live-verifying the `AngularGradient` painted-wheel convention on screen
+(flagged DERIVED, not measured, in `ColorWheelGeometry.angularGradientFraction`'s
+doc comment) and IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout);
+IMPROVEMENTS.md D22 (Point Color's missing luminance-selection axis,
+needs its own design pass); and the now-6-site mutual-exclusion mode
+enum IMPROVEMENTS.md logs as overdue.
+
+Once that's committed, pick the next Lightroom gap and enter Plan Mode
+first, per this project's workflow rules.
 
 Also available: Chromatic Aberration removal and Manual Transform
 Scale/Aspect (remaining unstarted Tier-1 gaps); Auto Tone/Auto Settings,

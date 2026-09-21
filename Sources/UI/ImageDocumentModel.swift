@@ -602,7 +602,8 @@ final class ImageDocumentModel: ObservableObject {
     ///
     /// Samples a GEOMETRY-ONLY render — an `EditState()` with every color/
     /// tone field (including WB itself) left at identity, only straighten/
-    /// perspective/flip/crop copied from the real `editState` — rather than
+    /// perspective/transformScale/transformAspect/flip/crop copied from the
+    /// real `editState` — rather than
     /// "the displayed image with just WB reset." White balance is pipeline
     /// stage 1, so what matters for neutralizing it is the RAW
     /// front-of-pipeline chromaticity at that point, not what it looks like
@@ -663,6 +664,8 @@ final class ImageDocumentModel: ObservableObject {
         samplingState.straightenAngle = editState.straightenAngle
         samplingState.verticalPerspective = editState.verticalPerspective
         samplingState.horizontalPerspective = editState.horizontalPerspective
+        samplingState.transformScale = editState.transformScale
+        samplingState.transformAspect = editState.transformAspect
         samplingState.flipHorizontal = editState.flipHorizontal
         samplingState.flipVertical = editState.flipVertical
         samplingState.cropInsetTop = editState.cropInsetTop
@@ -908,6 +911,8 @@ final class ImageDocumentModel: ObservableObject {
         samplingState.straightenAngle = editState.straightenAngle
         samplingState.verticalPerspective = editState.verticalPerspective
         samplingState.horizontalPerspective = editState.horizontalPerspective
+        samplingState.transformScale = editState.transformScale
+        samplingState.transformAspect = editState.transformAspect
         samplingState.flipHorizontal = editState.flipHorizontal
         samplingState.flipVertical = editState.flipVertical
         samplingState.cropInsetTop = editState.cropInsetTop

@@ -706,8 +706,9 @@ struct ContentView: View {
     }
 
     /// Resets everything in the Crop tab back to identity — Straighten,
-    /// Vertical/Horizontal perspective, Flip, the crop rectangle, and the
-    /// aspect lock. A real, implementable analog to the screenshot's
+    /// Vertical/Horizontal perspective, Scale/Stretch, Flip, the crop
+    /// rectangle, and the aspect lock. A real, implementable analog to the
+    /// screenshot's
     /// "Reset" button. ("Auto" is deliberately not implemented — it would
     /// need actual auto-straighten/auto-crop detection, which doesn't
     /// exist in this app; skipped rather than faked.)
@@ -715,6 +716,8 @@ struct ContentView: View {
         document.editState.straightenAngle = 0
         document.editState.verticalPerspective = 0
         document.editState.horizontalPerspective = 0
+        document.editState.transformScale = 1.0
+        document.editState.transformAspect = 0
         document.editState.flipHorizontal = false
         document.editState.flipVertical = false
         document.editState.cropInsetTop = 0

@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The Editor's Crop tab: geometry adjustments (straighten, perspective,
-/// flip), the Aspect preset list, and the four crop-inset sliders.
+/// scale/stretch, flip), the Aspect preset list, and the four crop-inset
+/// sliders.
 ///
 /// The aspect LOGIC deliberately stays in `ContentView` and arrives here as
 /// closures: `selectAspect(_:)`/`resetCropTab()` both need `currentFitRect`,
@@ -26,6 +27,14 @@ struct CropTabView: View {
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Horizontal", value: $document.editState.horizontalPerspective,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Scale", value: $document.editState.transformScale,
+                range: 0.5...1.5, identity: 1.0, displayMultiplier: 100
+            ) { String(format: "%.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Stretch", value: $document.editState.transformAspect,
                 range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditToggleRow(label: "Flip Horizontal", value: $document.editState.flipHorizontal)

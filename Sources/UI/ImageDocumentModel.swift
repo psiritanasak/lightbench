@@ -823,6 +823,72 @@ final class ImageDocumentModel: ObservableObject {
         editState.masks[maskIndex] = mask
     }
 
+    /// Point Color's own eyedropper. Same shape as `pickColorRangeTarget`
+    /// just above (guards, `1 - v` y-flip, `PixelSampler.averageColor`, one
+    /// batched `editState` write, the shared `whiteBalanceSampleMessage`
+    /// failure surface) but with a structurally different sampling
+    /// technique: `pickColorRangeTarget` hand-zeroes a maintained list of
+    /// downstream fields, which only works because every one of those
+    /// fields is INDEPENDENT of what runs before the sampling point. That
+    /// does not hold here — `EditPipeline.effectiveTone(_:)` blends
+    /// `brilliance` into BOTH the upstream contrast/shadows/highlights Point
+    /// Color's own position sits after AND the downstream saturation, so no
+    /// assignment of `EditState` fields can neutralize the downstream half
+    /// while preserving the upstream one. Instead this calls `EditPipeline
+    /// .apply(_:to:truncatingColorAt:)`, which stops the pipeline exactly at
+    /// this instance's own kernel invocation from INSIDE the real
+    /// `applyPerceptualAdjustments` — structurally guaranteed to match, not
+    /// a hand-maintained list that can go stale (that list has already gone
+    /// stale twice for `pickColorRangeTarget`, see PROGRESS.md).
+    ///
+    /// `PointColor` stores no target luminance (IMPROVEMENTS.md D22), so
+    /// only `PointColorSelection.hueSaturation(forPerceptualRGB:)` is
+    /// needed — NOT `ColorRangeSelection.hueSaturation(forLinearRGB:)`,
+    /// which operates on the wrong domain (scene-linear, not this stage's
+    /// own perceptual/headroom-normalized one — see `PointColorSelection`'s
+    /// own doc comment).
+    func pickPointColorTarget(pointColorID: UUID, normalizedX u: Double, normalizedY v: Double) {
+        guard let currentImage else { return }
+        guard let index = editState.pointColors.firstIndex(where: { $0.id == pointColorID }) else { return }
+
+        let sampled = EditPipeline.apply(editState, to: currentImage, truncatingColorAt: .pointColor(index: index))
+        let extent = sampled.extent
+        guard extent.width > 0, extent.height > 0 else { return }
+
+        let point = CGPoint(
+            x: extent.minX + CGFloat(u) * extent.width,
+            y: extent.minY + CGFloat(1 - v) * extent.height
+        )
+        guard let sample = PixelSampler.averageColor(in: sampled, at: point) else {
+            whiteBalanceSampleMessage = "Couldn't read a color sample at that point."
+            return
+        }
+        whiteBalanceSampleMessage = nil
+
+        let (hue, saturation) = PointColorSelection.hueSaturation(forPerceptualRGB: sample.r, sample.g, sample.b)
+        // Reviewer-caught: `PointColorSelection.hueSaturation` deliberately
+        // mirrors the kernel's own non-clamping of negative channels (see
+        // its own doc comment) — correct for matching the kernel, but its
+        // result is PERSISTED here, unlike the kernel's own transient one.
+        // A sampled pixel with a negative channel and `L` landing at
+        // exactly 0 or 1 with nonzero chroma makes `saturation` `+inf`;
+        // writing that into `EditState` would make it un-round-trippable
+        // (`JSONEncoder` throws on non-finite `Double`, failing every
+        // sidecar/catalog write from this point on). Guarded HERE, not
+        // inside `PointColorSelection` itself — a clamp there would break
+        // the intentional kernel-parity this type exists for.
+        guard hue.isFinite, saturation.isFinite else {
+            whiteBalanceSampleMessage = "Couldn't read a color sample at that point."
+            return
+        }
+
+        var pointColor = editState.pointColors[index]
+        pointColor.targetHue = hue
+        pointColor.targetSaturation = saturation
+        pointColor.hasTarget = true
+        editState.pointColors[index] = pointColor
+    }
+
     // MARK: - Color Cast
 
     /// Analyzes the WHOLE image's gray-world average color and sets

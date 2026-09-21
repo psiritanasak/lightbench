@@ -47,7 +47,17 @@ struct PointColor: Identifiable, Equatable, Codable {
     /// irrelevant-at-degenerate-saturation shape `EditState.shadowHue`
     /// already documents for Color Grading's own wheels.
     var targetHue: Double = 0
-    /// 0...1.
+    /// Nominally 0...1, but NOT clamped to it: `PointColorSelection.
+    /// hueSaturation(forPerceptualRGB:)` (Slice B's eyedropper) deliberately
+    /// mirrors `PointColor.cikernel`'s own un-clamped `rgb2hsl` rather than
+    /// `ColorRangeSelection`'s clamping one, so a picked pixel with a
+    /// negative channel can legitimately store a value above 1 here
+    /// (`PointColorSelectionTests.testHueSaturationDoesNotClampNegativeChannels`
+    /// pins this). Reviewer-caught (round 2): render behavior stays correct
+    /// either way (the kernel computes the identical value for the
+    /// identical pixel, so the selection distance is unaffected), but
+    /// `PointColorDetailView`'s swatch/readout DOES clamp to 1 for display
+    /// and would under-report in that case.
     var targetSaturation: Double = 0
     /// 0...1, shared hue+saturation falloff width for THIS instance —
     /// mirrors `EditState.selectiveColorRange`'s own shared-dial

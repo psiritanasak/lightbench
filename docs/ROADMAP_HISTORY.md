@@ -2344,9 +2344,125 @@ shipped slider already follows):
   targeting model, not a duplicate — likely needs a variable-length collection
   field (like `redEyePoints`, this app's only existing precedent for that shape)
   since the user picks arbitrary colors, not fixed bands.
-- **Chromatic Aberration removal — WANTED.** A single checkbox in Lightroom's
-  Optics panel, separate from lens distortion correction (already tracked above
-  under Transform/Distort, blocked on camera-profile data). Purely additive.
+- **Chromatic Aberration removal / "Defringe" — ✅ SHIPPED (2026-09-22).**
+  Lightroom's Optics panel actually has TWO separate chromatic-aberration
+  mechanisms: an automatic "Remove Chromatic Aberration" checkbox (needs
+  per-lens profile calibration data this app has no source for and won't
+  build a database for) and manual Defringe sliders (a LOCAL, hue-selective
+  chroma suppression at high-contrast edges, no lens metadata needed).
+  Scoped deliberately to Defringe alone — not a future slice of the same
+  feature, a fundamentally different mechanism this app can't build.
+  - Two new `EditState` fields, `defringePurple`/`defringeGreen` (0...1,
+    identity 0), matching `dehaze`/`clarity`/`texture`'s own
+    single-Amount-per-effect v1 convention. The hue windows that define
+    "what counts as purple/green" are fixed tuned constants in
+    `EditPipeline` (`kDefringePurpleHueCenter`/`kDefringeGreenHueCenter`/
+    `kDefringeHueWindow`), not exposed — same precedent as Dehaze's own
+    prior parameters.
+  - **The 10th custom kernel** (`Defringe.cikernel`), built the same
+    two-part way Dehaze is: `CIMorphologyMaximum`/`Minimum` on a luma image
+    (built via `LuminanceRangeSelection`'s own weights, reused not
+    reinvented) supply a local edge/contrast signal a `CIColorKernel`
+    cannot compute itself, then one per-pixel kernel does hue-selection +
+    edge-gated desaturation — headroom-normalize before `rgb2hsl` and a
+    saturation-gated hue axis, both proven fixes reused from
+    `SelectiveColor`/`ColorRange`/`PointColor`'s own history.
+  - **Domain: perceptual** (gamma-encoded), matching the hue-selecting
+    kernel family (`SelectiveColor`/`ColorGrading`/`PointColor`), unlike
+    Dehaze's physically-modeled scene-linear domain — "what looks purple"
+    is a display-referred judgment.
+  - **Ordering: one real requirement, one convention — and the story took
+    THREE corrections to get right**, worth recording in full since each
+    correction was caught by a DIFFERENT independent reviewer re-measurement,
+    not by re-reading the existing diff. (1) A first draft of the
+    Sharpen/Defringe ordering test built its "reversed" case with a nesting
+    bug that accidentally applied Sharpen before Defringe BOTH times —
+    comparing an order against itself, "measuring" a false commute that
+    every doc comment then repeated. (2) Fixing that bug produced a test
+    that sampled only x=400/401 — the two pixels where the shipped order
+    happens to win — and the doc comments then claimed a "measured
+    requirement." A wider 9-point sweep (independently reproduced, not
+    just trusted from the reviewer's own numbers) shows the REVERSED order
+    actually wins at 4 columns, shipped at 3, ties at the 2 pixels
+    carrying real input fringe, and leaves ~46% LESS residual chroma in
+    AGGREGATE. The mechanism claim was ALSO wrong: at most sampled pixels
+    the input is already perfectly neutral (chroma 0), so Sharpen mostly
+    MANUFACTURES fresh fringing next to a misregistered edge rather than
+    "shifting" an existing fringe's hue. Per CLAUDE.md's own rule for a
+    measurement that comes back weak, this ships as a CONVENTION (Sharpen
+    is a documented fringing producer elsewhere in this codebase, so
+    Defringe naturally reads as the cleanup step), NOT a requirement — see
+    `testSharpenBeforeDefringeIsAConventionNotARequirement`, which now
+    asserts the aggregate finding directly rather than two favorable
+    pixels. (3) A SEPARATE, genuinely unconditional requirement was found
+    investigating Defringe's relationship to Grain: Grain's per-pixel
+    noise, if it ran BEFORE Defringe, fools the edge gate into treating
+    FLAT content as a real edge EVERYWHERE, breaking the
+    flat-subject-protection guarantee across the whole image (measured: a
+    flat saturated purple region desaturates almost to gray) — Defringe
+    running before Grain avoids this entirely
+    (`testDefringeMustRunBeforeGrainOrTheFlatGuardBreaks`, a real,
+    MEASURED, unconditional requirement, unlike the Sharpen ordering).
+    Final order: `... Sharpen -> Defringe -> Grain` (true final stage) —
+    kept, but for a mix of reasons (convention + requirement), not
+    because both legs are equally proven.
+  - **A real image-math bug, not just a doc/test issue**: the luma image
+    `applyDefringe` feeds to the morphology filters is built via a
+    `CIColorMatrix` with a forced-opaque alpha bias (`biasVector.w = 1`),
+    which makes Core Image report its extent as INFINITE — the exact same
+    hazard `luminanceRangeMaskImage`'s own doc comment already documents
+    in detail. `.clampedToExtent()` on an ALREADY-infinite image is a
+    no-op, so without an explicit `.cropped(to: extent)` first, the
+    morphology filters read true zero just outside the real frame,
+    desaturating a resolution-dependent ring around the ENTIRE border of
+    every image (measured before the fix: a flat saturated purple 400x400
+    desaturated to chroma ~0.015 in the border ring vs. the correct 0.55
+    interior). Fixed and locked in with a permanent test,
+    `testDefringeDoesNotDesaturateTheFrameBorder`.
+  - **Known limitation, reviewer-caught**: the edge gate protects FLAT
+    purple/green subjects (a flower, a lawn — the structural guarantee it's
+    designed for) but NOT TEXTURED ones in the target hue. A real
+    foliage-against-sky green region reads as a genuine edge and gets
+    desaturated too (measured: chroma 0.270 -> 0.022). Inherent to any
+    hue-band defringe approach without a separate selection axis —
+    Lightroom's own Defringe exposes a Hue Range control for exactly this
+    reason, not built here. IMPROVEMENTS.md D24.
+  - Reviewer: FIX FIRST → FIX FIRST (round 2 caught the ordering
+    overclaim above, the border extent bug above, and a stale
+    downstream-field list — see below) → [status at time of writing:
+    round 3 pending]. Round 1's most serious catch was the vacuous
+    ordering-test bug above; it also caught two test fixtures
+    (`testDefringePreservesHighlightHeadroom`/
+    `testDefringePreservesExtentAndAlpha`) that sampled FLAT content where
+    the kernel's edge gate never engages, so they'd pass even with the
+    active code path broken (fixed to sample inside a real fringe band —
+    the alpha fixture fix surfaced a second real finding, that
+    `CIColorMatrix`'s implicit premultiply-on-output behavior, the SAME
+    mechanism this file's own Grain entry documents, means scaling ONLY
+    `inputAVector` is the correct way to build an alpha<1 fixture, not a
+    manual all-four-channel rescale, which looked more obviously correct
+    and is actually wrong — double-scales), an overclaiming "two halves"
+    test comment (only one half was ever asserted), a 5°-off hue-label
+    comment, and two stale pipeline-stage enumerations. Round 2 caught, in
+    addition to the ordering overclaim and the border bug above: a stale
+    downstream-field list (`ImageDocumentModel.pickColorRangeTarget`, the
+    Color Range mask eyedropper's own sampling helper, zeroes every global
+    stage that runs after the mask stage so its sample matches what
+    `ColorRange.cikernel` actually sees — `defringePurple`/`defringeGreen`
+    were missing, the THIRD time this exact list has gone stale, per
+    CLAUDE.md's own standing note); a misleading test-fixture comment
+    (`misregisteredEdgeImage`'s alpha-reset step does NOT leave RGB
+    untouched as claimed — the same implicit-premultiply mechanism divides
+    it by 3, so the fixture's `lo`/`hi` arguments don't describe its
+    actual on-screen contrast, though every numeric assertion using it
+    remains correct since it's derived from the real render); and three
+    more stale structural proxy/thumbnail-divergence enumerations
+    (`ProxyScale.swift`, `ImageRenderer.swift` x2) missing Defringe's own
+    extent-fraction radius. All fixed and reverified; 1155 tests pass
+    (round 2's border-bug fix added one permanent regression test). NOT
+    yet committed — see PROGRESS.md for current status before assuming
+    this shipped cleanly in one pass. NOT yet live-verified against a
+    real photo — see PROGRESS.md's "Exact next step".
 - **Manual Transform Scale/Aspect — WANTED.** Lightroom's Geometry panel has
   Scale/Aspect sliders alongside Vertical/Horizontal perspective; this app has
   the perspective sliders but not the follow-up Scale/Aspect fine-tuning. Purely

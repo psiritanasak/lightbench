@@ -1220,6 +1220,29 @@ blocking v1. Worth a prefiltered resample (or at minimum measuring how
 bad the aliasing actually looks at the clamp extremes on real photo
 content) before this feature is considered fully polished.
 
+### D24. Defringe's edge gate protects flat subjects, not textured ones (reviewer-caught)
+
+`Defringe.cikernel`'s edge gate (`smoothstep` on local luma range) exists
+specifically to protect a genuinely purple/green FLAT subject (a flower,
+a lawn) from being desaturated. It does NOT protect a TEXTURED subject
+in the target hue — a high-contrast textured area (foliage against sky
+is the common real case) reads as a real edge and gets desaturated too,
+same as an actual fringe would. Measured (temporary harness, deleted): foliage green `(0.08, 0.35, 0.10)`
+at a high-contrast sky boundary with `defringeGreen = 1` fully
+desaturates (chroma 0.270 -> 0.022, from `(0.08, 0.35, 0.10)` to
+`(0.236, 0.259, 0.239)`). The `defringeGreen` hue window
+(120° ± 40°, i.e. 80°-160°) covers most real foliage hues.
+
+This is inherent to any hue-band defringe approach without a separate
+selection axis — Lightroom's own Defringe exposes a Hue Range control
+for exactly this reason, which this app's v1 does not build (see
+`EditState.defringePurple`'s own "v1 scope" paragraph: the hue windows
+are fixed tuned constants, not exposed). Not fixed here — a genuine,
+known divergence from Lightroom's own feature, not a bug in this
+implementation. Worth a Hue Range slider (or narrower default windows)
+if foliage-adjacent false-positives turn out to matter in practice on
+real photos.
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

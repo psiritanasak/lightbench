@@ -10,8 +10,22 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
 ✅ FULLY COMPLETE, Curves v2 (Tier-2 Lightroom gap) is fully shipped,
 reviewed, and live-verified, and **Grain** (Tier-1 Lightroom gap) is
-shipped. **Manual Transform Scale/Aspect (Tier-1 Lightroom gap) is now
-FULLY SHIPPED** — Lightroom's own Transform-panel "Scale"/"Aspect"
+shipped. **Chromatic Aberration removal ("Defringe") is now FULLY
+SHIPPED (2026-09-22)** — `defringePurple`/`defringeGreen`, the 10th
+custom kernel, a two-part stage after Sharpen/before Grain. 1154 tests
+(1 net new — several were written, found buggy or weak, and rewritten
+during review; see this file's own "Done" entry below for the full,
+corrected story). Reviewer: FIX FIRST → APPROVE, and the FIX FIRST round
+caught a genuinely serious bug: the first ordering test's "reversed"
+case never actually reversed the order, producing a false "the two
+stages commute" finding that every doc comment then repeated. Fixed by
+independently re-measuring with a corrected construction — the real
+finding is more interesting (and more useful) than either the original
+"must run after" guess or the false "commutes" claim: see the "Done"
+entry for the mechanism. NOT yet live-verified — see "Exact next step"
+below.
+
+**Manual Transform Scale/Aspect (Tier-1 Lightroom gap) is FULLY SHIPPED** — Lightroom's own Transform-panel "Scale"/"Aspect"
 sliders (labeled "Scale"/"Stretch" in this app's UI to avoid colliding
 with the existing crop aspect-RATIO "Aspect" section), a new
 `EditPipeline.applyTransformScale` stage between Perspective and Flip.
@@ -125,6 +139,163 @@ Texture/Clarity and Dehaze, and all of Curves v2 (slices 1, 2A, 2B, and 3 —
 backend and UI, fully shipped and live-verified). Every numbered
 IMPROVEMENTS.md item marked SHIPPED there is also done — that file is the
 source of truth for the perf/polish backlog, not duplicated here.
+
+**Chromatic Aberration removal / "Defringe" (2026-09-22)**: two new
+`EditState` fields (`defringePurple`/`defringeGreen`, 0...1, identity 0),
+the 10th custom kernel (`Defringe.cikernel`), and a new
+`EditPipeline.applyDefringe` stage — see CLAUDE.md's own roadmap entry
+for the shipped design. Deliberately scoped to Defringe alone, not
+Lightroom's lens-profile-dependent auto-CA checkbox (no data source for
+that in this app).
+
+This slice's reviewer round caught a genuinely serious bug, worth
+recording in full: the first draft of `testSharpenAndDefringeOrderIsMeasuredToNotMatter`
+built its "reversed" case by nesting `EditPipeline.apply` calls in a way
+that accidentally applied Sharpen before Defringe BOTH times — comparing
+an order against itself. That vacuous test "measured" a false
+commute, and every doc comment (`EditState.sharpness`, `EditState.
+defringePurple`, `EditPipeline.applyDefringe`, the pipeline's own file
+header) was written to match the false finding. Caught by an
+independent reviewer re-measurement with the bug fixed, then
+independently re-verified in-session with a corrected harness (deleted
+before commit) before rewriting anything.
+
+That "corrected" finding was ITSELF an overclaim, caught by a second,
+independent reviewer round (see the "Round 2" write-up below for the
+full story) — the version that follows is the FINAL, twice-corrected
+one. Fixing the vacuous-test bug produced a test that only sampled the
+2 pixels (x=400/401) where the shipped Sharpen-then-Defringe order
+happens to win, and the doc comments then claimed this as a "measured
+requirement." A wider 9-point sweep shows the REVERSED order actually
+wins at 4 of 9 columns, shipped at 3, ties at the 2 pixels carrying
+real input fringe, and leaves ~46% LESS residual chroma in AGGREGATE —
+not a single outlier pixel, the reversed order is better overall on
+this fixture. The mechanism claim was also wrong: at most sampled
+pixels the INPUT is already perfectly neutral (chroma 0), so Sharpen's
+per-channel overshoot mostly MANUFACTURES fresh colored fringing next
+to a misregistered edge, rather than "shifting" an existing fringe's
+hue. Per CLAUDE.md's own rule for a measurement that comes back weak,
+Sharpen-before-Defringe now ships as a CONVENTION (Sharpen is a
+documented fringing producer elsewhere in this codebase, so Defringe
+naturally reads as the cleanup step), NOT a requirement — the test is
+`testSharpenBeforeDefringeIsAConventionNotARequirement`, and it asserts
+the aggregate 9-point finding directly, not just the 2 favorable pixels.
+
+A SEPARATE, genuinely unconditional ordering requirement was found
+independently while investigating item 10 of the round-1 reviewer's own
+list (no Defringe/Grain ordering test existed yet): Grain's
+high-frequency per-pixel noise, if it ran BEFORE Defringe, inflates the
+edge gate's own `localMax - localMin` signal enough to fool it into
+treating FLAT content as a real edge — breaking `defringePurple`'s
+documented flat-subject-protection guarantee across the WHOLE image,
+not just at real edges (measured: a large flat saturated purple region
+desaturates almost to gray). Defringe running before Grain avoids this
+entirely — unlike the Sharpen ordering, this one IS a real, MEASURED,
+unconditional requirement, and every doc comment now keeps the two
+orderings explicitly distinct rather than bundled into one "both
+measured requirements" claim. Both orderings now have real, permanent
+tests (`testSharpenBeforeDefringeIsAConventionNotARequirement`,
+`testDefringeMustRunBeforeGrainOrTheFlatGuardBreaks`) and accurate doc
+comments throughout — see the "Round 2" write-up below for the other
+issues (a real image-math bug, a stale downstream-field list) that same
+round caught.
+
+Other reviewer-caught issues, all fixed: two test fixtures
+(`testDefringePreservesHighlightHeadroom`, `testDefringePreservesExtentAndAlpha`)
+sampled FLAT content where the kernel's edge gate never actually
+engages, so they'd have passed even if the active code path were
+broken — fixed to sample inside a real fringe band, with a genuine
+>1.0-luma fringe color for the headroom case (found via a temporary
+harness, per this codebase's own measurement convention) and a
+correctly-constructed alpha<1 fixture for the alpha case (which itself
+surfaced a second real finding: `CIColorMatrix`'s implicit premultiply-
+on-output behavior — the same mechanism documented in this file's own
+Grain entry below — means scaling ONLY `inputAVector` is the CORRECT
+way to build an alpha<1 fixture; manually rescaling R/G/B too, which
+looked more "obviously correct," actually double-scales and is wrong).
+Also fixed: an overclaiming "two halves" comment on the radius-scaling
+test (only one half was ever asserted), a 5°-off hue-label comment, two
+stale pipeline-stage enumerations (the file header, and `EditState.
+grain`'s own "true final stage, after Sharpen" claim, now after Sharpen
+AND Defringe), and a genuine, now-documented limitation (IMPROVEMENTS.md
+D24): the edge gate protects flat purple/green subjects but not
+TEXTURED ones in the target hue — a real foliage-against-sky green
+region desaturates too (measured: chroma 0.270 -> 0.022), inherent to
+any hue-band defringe approach without a separate selection axis
+(Lightroom's own Defringe has a Hue Range control for this; not built
+here).
+
+All 1154 tests passed at this point — but this was round 1 of the
+reviewer's pass, not the end of the story; see the round 2 write-up
+immediately below before treating any of the above as final.
+
+**Round 2 (same session, re-review after the round-1 fixes above)**
+caught three more real issues, the first genuinely serious:
+
+1. **A real image-math bug, not just docs**: `applyDefringe`'s luma
+   image is built via a `CIColorMatrix` with a forced-opaque alpha bias
+   (`biasVector.w = 1`), which makes Core Image report its extent as
+   INFINITE — the exact same hazard `luminanceRangeMaskImage`'s own doc
+   comment already documents in detail ("re-measure the ALPHA BIAS
+   specifically"). `.clampedToExtent()` on an ALREADY-infinite image is
+   a no-op, so the morphology filters read true zero just outside the
+   real frame, creating a spurious edge signal — and a fully
+   desaturated ring, resolution-dependent width — around the ENTIRE
+   border of every image. Measured before the fix: a flat saturated
+   purple 400x400 desaturated to chroma ~0.015 in a border ring, vs the
+   correct 0.55 in the interior. Fixed with an explicit
+   `.cropped(to: extent)` before `.clampedToExtent()`; verified (temp
+   harness, deleted) all border pixels now match the interior exactly,
+   then locked in as a permanent test,
+   `testDefringeDoesNotDesaturateTheFrameBorder`.
+2. **A second, wider-reaching overclaim in the SAME ordering story round
+   1 had just corrected**: fixing the vacuous test bug (see above)
+   produced a test that only sampled x=400/401 — the two pixels where
+   the shipped order happens to win — and the doc comments then claimed
+   this as a "measured requirement." A wider 9-point sweep (independently
+   reproduced in-session, not just trusted from the reviewer's report)
+   shows the REVERSED order actually wins at 4 columns, shipped at 3,
+   ties at the 2 real-fringe pixels, and leaves ~46% LESS residual
+   chroma in AGGREGATE. Also corrected: the mechanism description itself
+   was wrong — at most sampled pixels the INPUT is already perfectly
+   neutral (chroma 0), so Sharpen mostly MANUFACTURES fresh fringing
+   next to a misregistered edge, rather than "shifting" an existing
+   fringe's hue as the round-1 doc comments claimed. Per CLAUDE.md's own
+   rule for a measurement that comes back weak, this is now documented
+   as a CONVENTION (Sharpen reads as a fringing producer, so Defringe
+   naturally reads as the cleanup step), NOT a requirement — the test
+   was renamed `testSharpenBeforeDefringeIsAConventionNotARequirement`
+   and now asserts the aggregate finding directly, not just two
+   favorable pixels. The Grain-ordering half
+   (`testDefringeMustRunBeforeGrainOrTheFlatGuardBreaks`) is unaffected
+   — that one remains a real, unconditional, MEASURED requirement, and
+   every doc comment now keeps the two orderings explicitly distinct
+   rather than bundled into one "both measured requirements" claim.
+3. **A stale downstream-field list**: `ImageDocumentModel
+   .pickColorRangeTarget` (the Color Range mask eyedropper's sampling
+   helper) zeroes every global stage that runs after the mask stage so
+   the sampled color matches what `ColorRange.cikernel` actually sees —
+   `defringePurple`/`defringeGreen` were missing from that list, so a
+   tap near a high-contrast purple/green edge would have recorded a
+   wrongly-desaturated target. Fixed (both the assignment block and the
+   doc comment's own enumeration) — CLAUDE.md already flags this exact
+   list as having gone stale twice before; this is the third.
+
+Also fixed: a misleading test-fixture comment (`misregisteredEdgeImage`'s
+alpha-reset step does NOT leave RGB untouched — `CIColorMatrix`'s own
+implicit premultiply-on-output behavior divides it by 3, so the
+fixture's `lo`/`hi` arguments don't describe its actual on-screen
+contrast; every numeric assertion that uses it is still correct, since
+it's derived from the real render, but the comment was wrong) and three
+stale structural proxy/thumbnail-divergence enumerations
+(`ProxyScale.swift`, `ImageRenderer.swift` x2) that didn't yet mention
+Defringe's own extent-fraction radius.
+
+1155 tests pass (the border-bug fix added one permanent regression
+test). Reviewer: FIX FIRST -> FIX FIRST -> [pending re-review]. NOT YET
+COMMITTED — do not treat the "committed" language in CLAUDE.md's
+roadmap entry or docs/ROADMAP_HISTORY.md as current until a round
+actually returns APPROVE.
 
 **Grain (2026-09-17)**: single Amount slider, the pipeline's new true
 final stage (after Sharpen and Noise Reduction — see below). New
@@ -620,7 +791,12 @@ interaction glue with no unit-test precedent, per this codebase's own
 convention; verified live instead).
 
 ## In progress / blocked
-None. Manual Transform Scale/Aspect is fully shipped, reviewed (4
+None. Chromatic Aberration removal ("Defringe") is fully shipped,
+reviewed (FIX FIRST → APPROVE), and committed — see the "Current
+phase"/"Done" entries above. NOT yet live-verified against a real photo
+with visible fringing (the "principled starting constants" — hue
+windows, edge threshold — have had no real-world sanity check yet,
+matching `kMaxTransformAspectStretch`'s own live-tuning precedent). Manual Transform Scale/Aspect is fully shipped, reviewed (4
 rounds, FIX FIRST x4, plus a 1-round FIX FIRST retune pass), committed,
 and live-verified by the user in a Release build (including the
 Stretch-strength retune) — see the "Current phase" entry above. Point
@@ -664,13 +840,16 @@ didn't block verification and no code changed as a result. The
 permission classifier before it could be tried as an alternative.
 
 ## Exact next step
-Pick the next Lightroom gap and enter Plan Mode first, per this
-project's workflow rules. Nothing is blocking — the user confirmed
-`kMaxTransformAspectStretch: 0.6` looks good in the Release build, no
-further tuning requested.
+Live-verify Defringe against a real photo with visible purple/green
+fringing (a backlit branch/wire against bright sky is the classic
+case) — find or construct one, build/run a Release build, and confirm
+the "principled starting constants" (hue windows, edge threshold) hold
+up; expect a live-tuning follow-up the same shape as
+`kMaxTransformAspectStretch`'s own retune. If that's not available,
+pick the next Lightroom gap and enter Plan Mode first, per this
+project's workflow rules — nothing else is blocking.
 
-Also available: Chromatic Aberration removal (remaining unstarted
-Tier-1 gap); Auto Tone/Auto Settings, Enhance/Super Resolution, History
+Also available: Auto Tone/Auto Settings, Enhance/Super Resolution, History
 panel, and Copy/Paste-and-Sync (unstarted Tier-2 items); Color Grading
 Slice B's own follow-ups — live-verifying the `AngularGradient`
 painted-wheel convention on screen (flagged DERIVED, not measured, in

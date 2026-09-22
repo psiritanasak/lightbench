@@ -11,19 +11,42 @@ Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
 ✅ FULLY COMPLETE, Curves v2 (Tier-2 Lightroom gap) is fully shipped,
 reviewed, and live-verified, and **Grain** (Tier-1 Lightroom gap) is
 shipped. **Chromatic Aberration removal ("Defringe") is now FULLY
-SHIPPED (2026-09-22)** — `defringePurple`/`defringeGreen`, the 10th
-custom kernel, a two-part stage after Sharpen/before Grain. 1154 tests
-(1 net new — several were written, found buggy or weak, and rewritten
-during review; see this file's own "Done" entry below for the full,
-corrected story). Reviewer: FIX FIRST → APPROVE, and the FIX FIRST round
-caught a genuinely serious bug: the first ordering test's "reversed"
-case never actually reversed the order, producing a false "the two
-stages commute" finding that every doc comment then repeated. Fixed by
-independently re-measuring with a corrected construction — the real
-finding is more interesting (and more useful) than either the original
-"must run after" guess or the false "commutes" claim: see the "Done"
-entry for the mechanism. NOT yet live-verified — see "Exact next step"
-below.
+SHIPPED AND LIVE-VERIFIED (2026-09-22)** — `defringePurple`/
+`defringeGreen`, the 10th custom kernel, a two-part stage after Sharpen/
+before Grain. 1155 tests. Reviewer: 4 rounds, FIX FIRST x3 → APPROVE —
+round 1 caught a genuinely serious bug (the first ordering test's
+"reversed" case never actually reversed the order, producing a false
+"the two stages commute" finding that every doc comment then repeated);
+round 2 caught a real image-math bug (a forced-opaque alpha bias made
+Core Image report an infinite extent, silently defeating
+`.clampedToExtent()` and desaturating a ring around the entire image
+border) plus a second ordering overclaim (the corrected test still only
+sampled 2 favorable pixels; a wider sweep showed the reversed order
+actually wins in aggregate, so the Sharpen ordering is now honestly
+documented as a convention, not a requirement); round 3 verified round
+2's fixes by independent re-measurement and found 2 more comment-only
+staleness issues; round 4 confirmed those and caught one more stale
+doc paragraph in this very file. See the "Done" entry below for the
+full corrected story.
+
+**Live-verified (2026-09-22)**, with explicit user permission for this
+session to drive the app via synthetic screen automation, against a
+constructed `fringe_test.jpg` (a scratch synthetic image with real
+lateral chromatic-aberration fringing — purple/magenta on one edge,
+green on the other, built via Python/PIL and opened via File > Open,
+NOT imported into the catalog; deleted afterward along with its
+sidecar). Confirmed on a real Release-build render: `defringePurple`
+alone cleanly removes the purple fringe while leaving the green fringe
+completely untouched (independence confirmed visually, not just in
+unit tests); adding `defringeGreen` removes the green fringe too, down
+to a clean edge with no visible residual color on trunk/branch/wire
+edges of varying widths (3-14px); the strength ramps smoothly from a
+faint residual tint at 10% to full removal by ~40-100%, with no visible
+over-aggressive artifacts on the flat sky background or the dark
+branch cores. Unlike Transform Scale/Aspect's own live-verification
+(which surfaced a real "too weak" finding needing a retune), Defringe's
+"principled starting constants" (hue windows, edge threshold, radius
+fraction) held up well on first try — no retune indicated at this time.
 
 **Manual Transform Scale/Aspect (Tier-1 Lightroom gap) is FULLY SHIPPED** — Lightroom's own Transform-panel "Scale"/"Aspect"
 sliders (labeled "Scale"/"Stretch" in this app's UI to avoid colliding
@@ -792,11 +815,11 @@ convention; verified live instead).
 
 ## In progress / blocked
 None. Chromatic Aberration removal ("Defringe") is fully shipped,
-reviewed (FIX FIRST → APPROVE), and committed — see the "Current
-phase"/"Done" entries above. NOT yet live-verified against a real photo
-with visible fringing (the "principled starting constants" — hue
-windows, edge threshold — have had no real-world sanity check yet,
-matching `kMaxTransformAspectStretch`'s own live-tuning precedent). Manual Transform Scale/Aspect is fully shipped, reviewed (4
+reviewed (4 rounds, FIX FIRST x3 → APPROVE), committed, and
+live-verified — see the "Current phase"/"Done" entries above. The
+"principled starting constants" (hue windows, edge threshold) held up
+well on a real render; no retune needed, unlike
+`kMaxTransformAspectStretch`'s own live-tuning precedent. Manual Transform Scale/Aspect is fully shipped, reviewed (4
 rounds, FIX FIRST x4, plus a 1-round FIX FIRST retune pass), committed,
 and live-verified by the user in a Release build (including the
 Stretch-strength retune) — see the "Current phase" entry above. Point
@@ -839,15 +862,55 @@ didn't block verification and no code changed as a result. The
 `cliclick`/raw-CGEvent path was blocked by this session's own
 permission classifier before it could be tried as an alternative.
 
+**Live-verified (2026-09-22)**, with explicit user permission for this
+session to drive the app via screen automation, against a constructed
+`fringe_test.jpg` — a scratch synthetic image built with Python/PIL in
+a `livetest` folder (NOT the user's real photo library; opened via
+File > Open, never imported into the catalog, and deleted afterward
+along with its sidecar). The fixture: a bright sky gradient with dark
+backlit "branch" silhouettes of varying widths (3-14px) plus a thin
+wire, with real lateral chromatic aberration applied by shifting the
+R and B channels together (+2,+1 px) relative to a fixed G channel —
+the textbook mechanism, producing genuine purple/magenta fringe on one
+edge and green fringe on the other (confirmed by sampling raw pixel
+values before opening the file, not just eyeballing it). A first
+attempt shifted R and B in OPPOSITE directions, which produces
+yellow/blue fringing instead — not the purple/green pair Defringe's
+hue bands actually target — caught by sampling pixels before trusting
+the fixture, then fixed.
+
+Confirmed on a real Release-build render, via the Effects section's
+click-to-type numeric fields (the custom `ThinSlider` control doesn't
+expose a standard `AXSlider` role, so the numeric text field — this
+app's own "click-to-type numeric entry on sliders" feature — was the
+reliable way to set values via automation): `defringePurple` alone
+cleanly removes the purple fringe while leaving the green fringe
+completely untouched (independence confirmed visually, not just in
+unit tests); adding `defringeGreen` removes the green fringe too, down
+to a clean edge with no visible residual color on ANY of the sampled
+edge widths (thick trunks, thin branches, the wire); the strength
+ramps smoothly (a faint residual tint still visible at 10%, fully
+clean by 40-100%) rather than snapping on/off; no visible
+over-aggressive artifacts on the flat sky background or the dark
+branch cores at full strength. Unlike Transform Scale/Aspect's own
+live-verification (which surfaced a real "too weak" finding needing a
+retune), Defringe's constants held up well on first try.
+
+One navigation finding worth recording: the app's own AdjustTabView
+sections are `DisclosureGroup`s that don't mount their child content
+in the accessibility tree until expanded (confirmed: expanding the
+wrong section by index first, per a wrong guess at section order,
+produced zero new AX elements — not a bug, just unmounted SwiftUI
+content). The reliable fix was reading `AdjustTabView.swift`'s actual
+`body` source to get the exact section order (Light, Curve, Color,
+Selective Color, Point Color, Black & White, Color Grading, Effects,
+Red-Eye, Masks, Presets — Effects is #8) rather than guessing from
+icons or trial-and-error expansion, which had already produced a false
+lead (accidentally landing on Masks at guessed index 10).
+
 ## Exact next step
-Live-verify Defringe against a real photo with visible purple/green
-fringing (a backlit branch/wire against bright sky is the classic
-case) — find or construct one, build/run a Release build, and confirm
-the "principled starting constants" (hue windows, edge threshold) hold
-up; expect a live-tuning follow-up the same shape as
-`kMaxTransformAspectStretch`'s own retune. If that's not available,
-pick the next Lightroom gap and enter Plan Mode first, per this
-project's workflow rules — nothing else is blocking.
+Nothing blocking. Pick the next Lightroom gap and enter Plan Mode
+first, per this project's workflow rules.
 
 Also available: Auto Tone/Auto Settings, Enhance/Super Resolution, History
 panel, and Copy/Paste-and-Sync (unstarted Tier-2 items); Color Grading

@@ -620,13 +620,15 @@ interaction glue with no unit-test precedent, per this codebase's own
 convention; verified live instead).
 
 ## In progress / blocked
-None. Manual Transform Scale/Aspect is fully shipped and reviewed (4
-rounds, FIX FIRST x4), but NOT YET committed — see "Exact next step"
-below. Point Color Slice B (the eyedropper UI) is fully shipped,
-reviewed (2 rounds, FIX FIRST → APPROVE), committed in 5 logical
-commits, and live-verified — see the "Done"/"Current phase" entries
-above. Everything else (Color Grading in full, and Point Color
-Slice A) was already shipped, reviewed, and committed.
+None. Manual Transform Scale/Aspect is fully shipped, reviewed (4
+rounds, FIX FIRST x4, plus a 1-round FIX FIRST retune pass), committed,
+and live-verified by the user in a Release build (including the
+Stretch-strength retune) — see the "Current phase" entry above. Point
+Color Slice B (the eyedropper UI) is fully shipped, reviewed (2 rounds,
+FIX FIRST → APPROVE), committed in 5 logical commits, and live-verified
+— see the "Done"/"Current phase" entries above. Everything else (Color
+Grading in full, and Point Color Slice A) was already shipped,
+reviewed, and committed.
 
 **Live-verified (2026-09-21)**, with explicit user permission for this
 session to drive the app via synthetic mouse/keyboard events, against
@@ -662,14 +664,10 @@ didn't block verification and no code changed as a result. The
 permission classifier before it could be tried as an alternative.
 
 ## Exact next step
-Ask the user whether `kMaxTransformAspectStretch: 0.6` now feels right
-in the Release build (the retune from `0.3`, done in response to their
-own live feedback, is implemented, reviewed to FIX FIRST → fixes
-applied, all 1144 tests pass, and ready to commit — see CLAUDE.md's
-Manual Transform Scale/Aspect entry for the retune's own write-up).
-Commit it, then either tune further based on their answer or pick the
-next Lightroom gap and enter Plan Mode first, per this project's
-workflow rules.
+Pick the next Lightroom gap and enter Plan Mode first, per this
+project's workflow rules. Nothing is blocking — the user confirmed
+`kMaxTransformAspectStretch: 0.6` looks good in the Release build, no
+further tuning requested.
 
 Also available: Chromatic Aberration removal (remaining unstarted
 Tier-1 gap); Auto Tone/Auto Settings, Enhance/Super Resolution, History

@@ -152,10 +152,9 @@ Reviewer: FIX FIRST → APPROVE. Round 1 caught, by adversarial re-measurement (
   ~2.6x) — the retune actually WORSENED that figure (`sx = 0.3125`,
   ~3.2x), the opposite direction from what D23 would want, so this
   wasn't just staleness, it was staleness pointing the wrong way. All
-  fixed and reverified (1144 tests). Not yet re-confirmed on screen at
-  the new `0.6` value — worth a follow-up
-  Release-build check, and the constant may need further tuning based
-  on that. Note for the record: `kMaxTransformAspectStretch` is baked
+  fixed and reverified (1144 tests). Live-verified (2026-09-21): the
+  user tried the retuned `0.6` in a fresh Release build and confirmed
+  it looks good — no further tuning requested. Note for the record: `kMaxTransformAspectStretch` is baked
   into the RENDERER, not stored per-photo, so this retune is NOT
   replay-identical for any photo whose sidecar already has a non-zero
   `transformAspect` — it will render with roughly double the stretch it

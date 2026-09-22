@@ -5273,6 +5273,418 @@ final class EditPipelineTests: XCTestCase {
             0.4, "Dehaze and Clarity do not commute — measured 0.42790 apart")
     }
 
+    // MARK: - Defringe (Chromatic Aberration) math
+    //
+    // Defringe is a real implementation (Core Image ships no defringe
+    // filter), so — like Dehaze — every value here is measured against the
+    // running pipeline, not derived by hand.
+    //
+    // The fixture: a grayscale step edge (reused from `stepEdgeImage`) with
+    // a thin colored band composited exactly at the transition — the
+    // textbook "colored fringe riding a high-contrast edge" case Defringe
+    // exists to clean up. Fringe colors are chosen so their GAMMA-ENCODED
+    // hue (the domain this kernel actually selects in) lands well inside
+    // this stage's own fixed hue windows: linear (0.6, 0.05, 0.6) encodes
+    // to gamma hue 300° — 5° from `kDefringePurpleHueCenter`'s 295° (not
+    // exactly on it, comfortably inside the ±40° window); linear
+    // (0.05, 0.6, 0.05) encodes to gamma hue 120°, exactly
+    // `kDefringeGreenHueCenter` — verified by the encode math itself, not
+    // assumed.
+
+    private func fringedEdgeImage(
+        lo: Double, hi: Double, fringeColor: (r: Double, g: Double, b: Double), bandWidth: Int, size: Int
+    ) -> CIImage {
+        let base = stepEdgeImage(lo: lo, hi: hi, size: size)
+        let color = CIColor(red: fringeColor.r, green: fringeColor.g, blue: fringeColor.b, alpha: 1, colorSpace: linearSpace)!
+        let band = CIImage(color: color).cropped(to: CGRect(
+            x: size / 2 - bandWidth / 2, y: 0, width: bandWidth, height: size
+        ))
+        return band.composited(over: base)
+    }
+
+    private let defringePurpleFringe = (r: 0.6, g: 0.05, b: 0.6)
+    private let defringeGreenFringe = (r: 0.05, g: 0.6, b: 0.05)
+
+    private func chroma(_ pixel: (r: Float, g: Float, b: Float, a: Float)) -> Float {
+        max(pixel.r, max(pixel.g, pixel.b)) - min(pixel.r, min(pixel.g, pixel.b))
+    }
+
+    func testDefringeDoesNotDesaturateTheFrameBorder() {
+        // Reviewer-caught real bug, now fixed: the luma `CIColorMatrix`'s
+        // forced-opaque alpha bias (`biasVector.w = 1`) makes Core Image
+        // report its extent as INFINITE — the same hazard
+        // `luminanceRangeMaskImage`'s own doc comment documents in detail
+        // ("re-measure the ALPHA BIAS specifically"). `.clampedToExtent()`
+        // on an ALREADY-infinite image is a no-op, so without an explicit
+        // `.cropped(to: extent)` FIRST, the morphology filters read true
+        // zero just outside the real frame, creating a spurious edge
+        // signal — and a fully desaturated ring — around every border of
+        // the image, resolution-dependent (wider at higher resolution,
+        // since the radius is `kDefringeEdgeRadiusFraction * min(extent)`).
+        // Verified (temporary harness, deleted): a flat saturated purple
+        // frame desaturated to chroma ~0.015 at every border pixel before
+        // the fix (`applyDefringe`'s `lumaImage` now explicitly crops to
+        // `extent` before `.clampedToExtent()`); all border pixels now
+        // read the same protected chroma as the interior.
+        let flatPurple = solidColorImage(r: 0.6, g: 0.05, b: 0.6, a: 1, size: 400)
+        let out = EditPipeline.apply(EditState(defringePurple: 1, defringeGreen: 1), to: flatPurple)
+        let interiorChroma = chroma(pixel(of: out, at: 200, 200))
+        for (x, y) in [(0, 200), (399, 200), (200, 0), (200, 399), (2, 2), (397, 397)] {
+            XCTAssertEqual(
+                chroma(pixel(of: out, at: x, y)), interiorChroma, accuracy: accuracy,
+                "border pixel (\(x),\(y)) must be protected exactly like the interior, not desaturated by a spurious edge signal"
+            )
+        }
+    }
+
+    func testDefringeMustRunBeforeGrainOrTheFlatGuardBreaks() {
+        // Defringe runs BEFORE Grain — a real, MEASURED requirement, not
+        // just positional. Grain adds high-frequency per-pixel noise
+        // EVERYWHERE, including flat content; if it ran before Defringe,
+        // that noise alone would inflate `localMax - localMin` (the edge
+        // gate's own signal) enough to fool it into treating flat content
+        // as a real edge — breaking `defringePurple`'s own documented
+        // "a genuinely purple/green FLAT subject is structurally protected
+        // regardless of amount" guarantee across the WHOLE image, not just
+        // at edges.
+        //
+        // Measured on a large flat, fully saturated purple region (no real
+        // edge anywhere) at (defringePurple: 1, defringeGreen: 1, grain: 1):
+        // the counterfactual "grain first" pipeline desaturates it almost
+        // to gray (chroma ~0.02 at every sampled point); the shipped order
+        // (Defringe first) correctly preserves the strong purple (chroma
+        // ~0.6-0.7, matching the untouched saturation, plus grain's own
+        // small per-pixel variation layered on top afterward).
+        let flatPurple = solidColorImage(r: 0.6, g: 0.05, b: 0.6, a: 1, size: 400)
+
+        // EditPipeline has no flag to reverse its own fixed stage order, so
+        // the counterfactual is built by calling the two stages as
+        // separate `apply()` passes in the REVERSED order, exactly the
+        // same technique `testSharpenBeforeDefringeIsAConventionNotARequirement` uses
+        // for Sharpen/Defringe.
+        let grainedFirst = EditPipeline.apply(EditState(grain: 1), to: flatPurple)
+        let grainFirstCounterfactual = EditPipeline.apply(EditState(defringePurple: 1, defringeGreen: 1), to: grainedFirst)
+        let shipped = EditPipeline.apply(EditState(defringePurple: 1, defringeGreen: 1, grain: 1), to: flatPurple)
+
+        for (x, y) in [(50, 50), (200, 200), (350, 350)] {
+            XCTAssertLessThan(
+                chroma(pixel(of: grainFirstCounterfactual, at: x, y)), 0.05,
+                "if grain ran before defringe, flat purple would be wrongly desaturated at (\(x),\(y))"
+            )
+            XCTAssertGreaterThan(
+                chroma(pixel(of: shipped, at: x, y)), 0.4,
+                "the shipped order must actually preserve the flat purple's saturation at (\(x),\(y))"
+            )
+        }
+    }
+
+    func testDefringeZeroIsExactAndTheGateIsWhatMakesItSo() {
+        // VERIFIED BY FAULT INJECTION, not argument, matching Dehaze's own
+        // precedent: commenting out `guard defringeActive(state)` in
+        // `applyDefringe` makes this test fail — the assertion genuinely
+        // covers the gate.
+        let fringed = fringedEdgeImage(lo: 0.2, hi: 0.9, fringeColor: defringePurpleFringe, bandWidth: 4, size: 800)
+        let output = EditPipeline.apply(EditState(defringePurple: 0, defringeGreen: 0), to: fringed)
+
+        for x in [100, 200, 300, 400, 401, 500, 700] {
+            XCTAssertEqual(edgePixel(of: output, x: x, size: 800).r,
+                           edgePixel(of: fringed, x: x, size: 800).r, accuracy: 0)
+        }
+    }
+
+    func testDefringePurpleReducesChromaAtTheFringeBand() {
+        // The signature test: a known purple fringe band must lose chroma
+        // (move toward gray) at full strength, while a point far from the
+        // edge (flat content, no fringe) stays untouched.
+        let fringed = fringedEdgeImage(lo: 0.2, hi: 0.9, fringeColor: defringePurpleFringe, bandWidth: 4, size: 800)
+        let output = EditPipeline.apply(EditState(defringePurple: 1), to: fringed)
+
+        let atBand = chroma(edgePixel(of: output, x: 400, size: 800))
+        let beforeAtBand = chroma(edgePixel(of: fringed, x: 400, size: 800))
+        XCTAssertLessThan(atBand, beforeAtBand, "the purple fringe band must lose chroma")
+        XCTAssertLessThan(atBand, 0.05, "at full strength the band should read as nearly gray")
+
+        // Flat content far from the edge: untouched (no edge signal there).
+        XCTAssertEqual(edgePixel(of: output, x: 100, size: 800).r,
+                       edgePixel(of: fringed, x: 100, size: 800).r, accuracy: accuracy)
+    }
+
+    func testDefringeAmountRampsMonotonically() {
+        let fringed = fringedEdgeImage(lo: 0.2, hi: 0.9, fringeColor: defringePurpleFringe, bandWidth: 4, size: 800)
+        let values = [0.0, 0.25, 0.5, 0.75, 1.0].map {
+            chroma(edgePixel(of: EditPipeline.apply(EditState(defringePurple: $0), to: fringed), x: 400, size: 800))
+        }
+        for (higher, lower) in zip(values, values.dropFirst()) {
+            XCTAssertGreaterThanOrEqual(higher, lower, "more Defringe Purple must mean less (or equal) chroma at every step")
+        }
+        XCTAssertGreaterThan(values.first!, values.last!, "the full sweep must show a real reduction, not a flat line")
+    }
+
+    func testDefringePurpleAndGreenAreIndependent() {
+        // Purple-only strength must not touch a green fringe, and vice
+        // versa — the two-fixed-band independence a kernel like this needs
+        // proven, matching SelectiveColor's own per-band independence tests.
+        let purpleFringed = fringedEdgeImage(lo: 0.2, hi: 0.9, fringeColor: defringePurpleFringe, bandWidth: 4, size: 800)
+        let greenFringed = fringedEdgeImage(lo: 0.2, hi: 0.9, fringeColor: defringeGreenFringe, bandWidth: 4, size: 800)
+
+        let greenOnlyOnPurpleFringe = EditPipeline.apply(EditState(defringeGreen: 1), to: purpleFringed)
+        XCTAssertEqual(
+            chroma(edgePixel(of: greenOnlyOnPurpleFringe, x: 400, size: 800)),
+            chroma(edgePixel(of: purpleFringed, x: 400, size: 800)), accuracy: accuracy,
+            "Defringe Green must not touch a purple fringe"
+        )
+
+        let purpleOnlyOnGreenFringe = EditPipeline.apply(EditState(defringePurple: 1), to: greenFringed)
+        XCTAssertEqual(
+            chroma(edgePixel(of: purpleOnlyOnGreenFringe, x: 400, size: 800)),
+            chroma(edgePixel(of: greenFringed, x: 400, size: 800)), accuracy: accuracy,
+            "Defringe Purple must not touch a green fringe"
+        )
+
+        // Each band DOES affect its own matching fringe, so the test above
+        // is proving independence, not that the whole stage is inert.
+        let greenOnlyOnGreenFringe = EditPipeline.apply(EditState(defringeGreen: 1), to: greenFringed)
+        XCTAssertLessThan(
+            chroma(edgePixel(of: greenOnlyOnGreenFringe, x: 400, size: 800)),
+            chroma(edgePixel(of: greenFringed, x: 400, size: 800)),
+            "sanity check: Defringe Green must still reduce chroma on ITS OWN matching fringe"
+        )
+    }
+
+    func testDefringeProtectsFlatSaturatedContent() {
+        // The actual point of the edge gate: a large FLAT purple region (no
+        // high-contrast edge nearby — a stand-in for a real purple flower
+        // or a painted wall) must survive at FULL strength. This is the
+        // test that proves the edge gate is doing real work, not just the
+        // hue match — a hue-only kernel would desaturate this too.
+        let flatPurple = solidColorImage(
+            r: defringePurpleFringe.r, g: defringePurpleFringe.g, b: defringePurpleFringe.b, a: 1, size: 400
+        )
+        let output = EditPipeline.apply(EditState(defringePurple: 1, defringeGreen: 1), to: flatPurple)
+
+        XCTAssertEqual(pixel(of: output, at: 200, 200).r, pixel(of: flatPurple, at: 200, 200).r, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: output, at: 200, 200).g, pixel(of: flatPurple, at: 200, 200).g, accuracy: accuracy)
+        XCTAssertEqual(pixel(of: output, at: 200, 200).b, pixel(of: flatPurple, at: 200, 200).b, accuracy: accuracy)
+    }
+
+    func testDefringePreservesExtentAndAlpha() {
+        let fringed = fringedEdgeImage(lo: 0.2, hi: 0.9, fringeColor: defringePurpleFringe, bandWidth: 4, size: 800)
+        XCTAssertEqual(EditPipeline.apply(EditState(defringePurple: 1), to: fringed).extent, fringed.extent)
+
+        // Sample INSIDE the fringe band (x=400), not flat content — the
+        // premultiply/unpremultiply round trip (`rgb / a` then `* a` in
+        // `Defringe.cikernel`) is only exercised where the desaturation
+        // path actually runs; a flat sample would pass this test even if
+        // that math were broken.
+        //
+        // Only `inputAVector` is set here — NOT a manual R/G/B rescale too.
+        // Verified (temporary harness, deleted): `CIColorMatrix`'s own
+        // family-wide implicit premultiply-on-output behavior (the same
+        // mechanism `EditPipeline.kGrainZeroPoint`'s own doc comment
+        // documents as a real, previously-caught bug source in this
+        // codebase) ALREADY rescales the stored premultiplied RGB to match
+        // the new alpha — setting R/G/B vectors too would double-scale it.
+        let alphaInput = fringedEdgeImage(lo: 0.2, hi: 0.9, fringeColor: defringePurpleFringe, bandWidth: 4, size: 800)
+            .applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0.75)])
+        let alphaOutput = EditPipeline.apply(EditState(defringePurple: 1), to: alphaInput)
+        XCTAssertEqual(alphaOutput.extent, alphaInput.extent)
+        let beforePx = edgePixel(of: alphaInput, x: 400, size: 800)
+        let afterPx = edgePixel(of: alphaOutput, x: 400, size: 800)
+        XCTAssertEqual(afterPx.a, 0.75, accuracy: accuracy, "alpha must be preserved exactly through the desaturation path")
+        XCTAssertLessThan(chroma(afterPx), chroma(beforePx), "the band must still desaturate correctly at alpha < 1")
+    }
+
+    func testDefringePreservesHighlightHeadroom() {
+        // A fringe color whose LUMA itself exceeds 1.0 (not just individual
+        // channels) — full desaturation mixes toward luma, so this is the
+        // real proof headroom survives, unlike sampling a flat >1.0 region
+        // the kernel's edge gate never touches at all (a coverage gap the
+        // reviewer caught in this test's first draft). Measured (temporary
+        // harness, deleted): (1.6, 1.0, 1.6) at defringePurple=1 desaturates
+        // chroma 0.6 -> 0.0215 while landing at (1.1697, 1.1482, 1.1697) —
+        // still well above 1.0.
+        let input = fringedEdgeImage(lo: 0.8, hi: 1.4, fringeColor: (1.6, 1.0, 1.6), bandWidth: 4, size: 800)
+        let output = EditPipeline.apply(EditState(defringePurple: 1), to: input)
+
+        let px = edgePixel(of: output, x: 400, size: 800)
+        XCTAssertGreaterThan(px.r, 1.0, "defringe must not clamp highlight headroom")
+        XCTAssertGreaterThan(px.g, 1.0, "defringe must not clamp highlight headroom")
+        XCTAssertLessThan(chroma(px), 0.05, "sanity check: this pixel really was desaturated, not just left alone")
+    }
+
+    func testDefringeRadiusScalesWithResolution() {
+        // CIMorphologyMaximum/Minimum's radius is in ABSOLUTE PIXELS —
+        // the same resolution trap `kDehazeRadiusFraction`/
+        // `kSharpenRadiusFraction` already document. This proves the
+        // FRACTIONAL half only: the same fraction-of-width band gives
+        // comparably-strong desaturation across resolutions (the OTHER
+        // half — a fixed-pixel band failing to scale — is not separately
+        // asserted here; `kDefringeEdgeRadiusFraction`'s own use of
+        // `min(extent)` is what prevents that case, by construction, not
+        // by a second measurement in this test).
+        func chromaAtBand(size: Int, bandWidth: Int) -> Float {
+            let fringed = fringedEdgeImage(lo: 0.2, hi: 0.9, fringeColor: defringePurpleFringe, bandWidth: bandWidth, size: size)
+            let output = EditPipeline.apply(EditState(defringePurple: 1), to: fringed)
+            return chroma(edgePixel(of: output, x: size / 2, size: size))
+        }
+
+        // A band scaled with the image (roughly 0.5% of width, comparable
+        // to the edge radius itself) should desaturate comparably at every
+        // resolution.
+        let small = chromaAtBand(size: 400, bandWidth: 2)
+        let large = chromaAtBand(size: 1600, bandWidth: 8)
+        XCTAssertEqual(small, large, accuracy: 0.05, "a resolution-scaled fringe band should desaturate comparably at every size")
+    }
+
+    /// A per-channel MISREGISTERED step edge — R/G/B each step from `lo` to
+    /// `hi` at their OWN x position (`redShift`/`greenShift`/`blueShift`
+    /// pixels from center) — the textbook definition of chromatic
+    /// aberration (different wavelengths refract differently, so channels
+    /// land at slightly different positions), unlike `fringedEdgeImage`'s
+    /// simpler "solid color band over a gray step" fixture.
+    private func misregisteredEdgeImage(
+        lo: Double, hi: Double, redShift: Int, greenShift: Int, blueShift: Int, size: Int
+    ) -> CIImage {
+        func channelStep(shift: Int, r: CGFloat, g: CGFloat, b: CGFloat) -> CIImage {
+            let step = stepEdgeImage(lo: lo, hi: hi, size: size)
+                .transformed(by: CGAffineTransform(translationX: CGFloat(shift), y: 0))
+            let matrix = CIFilter.colorMatrix()
+            matrix.inputImage = step
+            matrix.rVector = CIVector(x: r, y: 0, z: 0, w: 0)
+            matrix.gVector = CIVector(x: 0, y: g, z: 0, w: 0)
+            matrix.bVector = CIVector(x: 0, y: 0, z: b, w: 0)
+            matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+            matrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+            return matrix.outputImage!.cropped(to: CGRect(x: 0, y: 0, width: size, height: size))
+        }
+        let r = channelStep(shift: redShift, r: 1, g: 0, b: 0)
+        let g = channelStep(shift: greenShift, r: 0, g: 1, b: 0)
+        let b = channelStep(shift: blueShift, r: 0, g: 0, b: 1)
+        let rg = r.applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: g])
+        let rgb = rg.applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: b])
+
+        // CIAdditionCompositing sums ALPHA too (each channel image is
+        // alpha=1 by construction above), so two additions leave alpha=3
+        // with the premultiplied RGB still at each channel's own TRUE
+        // value — an inconsistent premultiplied representation (straight
+        // color would read as trueRGB/3, far too dark). This matrix's job
+        // is to reset alpha to 1; reviewer-caught, corrected here: it does
+        // NOT do so "without touching RGB" — `CIColorMatrix`'s identity
+        // R/G/B vectors pass through the STRAIGHT (unpremultiplied) input,
+        // which Core Image computes by dividing by the INPUT alpha (3)
+        // before the matrix runs, then RE-premultiplies the result by the
+        // NEW alpha (1) for storage — net effect, measured: stored RGB
+        // ends up at trueRGB/3, not trueRGB. This is the SAME implicit
+        // premultiply-on-output mechanism this file's own alpha<1 fixture
+        // comment (`testDefringePreservesExtentAndAlpha`, below) correctly
+        // documents — the two are not in conflict, this one is simply
+        // dividing by 3 where that one multiplies by 0.75. Consequence:
+        // `misregisteredEdgeImage(lo: 0.2, hi: 0.9, ...)` does NOT actually
+        // render at a 0.2/0.9 contrast — measured, it renders at
+        // 0.2/3 ≈ 0.0667 / 0.9/3 ≈ 0.3. Every numeric assertion in this
+        // file that uses this fixture was derived from the REAL (scaled)
+        // render, so nothing is wrong there — only the "lo/hi" ARGUMENT
+        // NAMES are misleading about the actual on-screen contrast; not
+        // renamed here to avoid re-deriving every pinned measurement in
+        // this file, but flagged so a future reader isn't misled.
+        let fixAlpha = CIFilter.colorMatrix()
+        fixAlpha.inputImage = rgb
+        fixAlpha.rVector = CIVector(x: 1, y: 0, z: 0, w: 0)
+        fixAlpha.gVector = CIVector(x: 0, y: 1, z: 0, w: 0)
+        fixAlpha.bVector = CIVector(x: 0, y: 0, z: 1, w: 0)
+        fixAlpha.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        fixAlpha.biasVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        return fixAlpha.outputImage!.cropped(to: CGRect(x: 0, y: 0, width: size, height: size))
+    }
+
+    func testSharpenBeforeDefringeIsAConventionNotARequirement() {
+        // Sharpen runs before Defringe in the shipped pipeline — a
+        // CONVENTION, backed by a real measurement, NOT a requirement.
+        // (Two corrections behind this framing, both self-documented so a
+        // future session doesn't repeat either: an earlier version of this
+        // test had a bug where its "reversed" case accidentally applied
+        // Sharpen before Defringe too, comparing an order against itself
+        // and "measuring" a false commute; fixing that bug then produced a
+        // SECOND overclaim — that the shipped order was a "measured
+        // requirement" because it hit exact-zero residual at x=400/401 —
+        // which a wider sample sweep below disproves. Reviewer-caught,
+        // both times, by independent re-measurement.)
+        //
+        // Measured on `misregisteredEdgeImage` (chromatic aberration's own
+        // textbook definition — R/B channels shifted -2px from G; note the
+        // fixture's own `lo`/`hi` arguments do NOT describe its actual
+        // on-screen contrast — see that helper's own `fixAlpha` comment):
+        // at MOST sampled x positions the INPUT is already perfectly
+        // neutral (chroma 0) — only x=398/399 carry real input fringe. So
+        // Sharpen's per-channel overshoot here mostly MANUFACTURES fresh
+        // colored fringing at previously-neutral pixels next to the
+        // misregistered edge, rather than shifting an existing fringe's
+        // hue — the "Sharpen amplifies/creates fringing, so Defringe
+        // cleans up last" framing, not a hue-shift-dodging one.
+        //
+        // Sampling BOTH bands engaged (`defringePurple`=1, `defringeGreen`
+        // =1) across x = 394, 396, 397, 398, 399, 400, 401, 402, 404,
+        // residual chroma:
+        //   x     shipped    reversed   winner
+        //   394   0.00735    0.00030    reversed
+        //   396   0.01613    0.00125    reversed
+        //   397   0.00000    0.00159    shipped
+        //   398   0.01331    0.01330    tie (real fringe pixel)
+        //   399   0.00992    0.00986    tie (real fringe pixel)
+        //   400   0.00000    0.00758    shipped
+        //   401   0.00000    0.00436    shipped
+        //   402   0.02247    0.00196    reversed
+        //   404   0.00598    0.00023    reversed
+        //   sum   0.07517    0.04043
+        // Reversed wins at 4 of 9 columns, shipped at 3, ties at the 2 real
+        // fringe pixels — and reversed leaves ~46% LESS residual chroma in
+        // aggregate. This is NOT a case for the shipped order dominating;
+        // per CLAUDE.md's own rule for a measurement that comes back weak
+        // ("call the decision a convention... rather than dressing it up
+        // as a measured necessity"), Sharpen-before-Defringe ships as the
+        // more intuitive READING (Sharpen is documented elsewhere as a
+        // fringing producer, so Defringe naturally reads as the cleanup
+        // step), not because the numbers prove it's the better choice.
+        //
+        // Contrast with `testDefringeMustRunBeforeGrainOrTheFlatGuardBreaks`,
+        // which IS a real, unconditional, MEASURED requirement — Defringe
+        // must run before Grain or the flat-subject guard breaks
+        // completely, not just "on balance."
+        let misreg = misregisteredEdgeImage(lo: 0.2, hi: 0.9, redShift: -2, greenShift: 0, blueShift: -2, size: 800)
+
+        func renderInOrder(sharpenFirst: Bool, purple: Double, green: Double) -> CIImage {
+            let defringeState = EditState(defringePurple: purple, defringeGreen: green)
+            let sharpenState = EditState(sharpness: 1)
+            if sharpenFirst {
+                return EditPipeline.apply(defringeState, to: EditPipeline.apply(sharpenState, to: misreg))
+            } else {
+                return EditPipeline.apply(sharpenState, to: EditPipeline.apply(defringeState, to: misreg))
+            }
+        }
+
+        let shipped = renderInOrder(sharpenFirst: true, purple: 1, green: 1)
+        let reversed = renderInOrder(sharpenFirst: false, purple: 1, green: 1)
+
+        // The two orders genuinely differ (not a commute) — proven at a
+        // pixel where shipped is exact-zero and reversed is not.
+        XCTAssertEqual(chroma(edgePixel(of: shipped, x: 400, size: 800)), 0, accuracy: accuracy)
+        XCTAssertGreaterThan(chroma(edgePixel(of: reversed, x: 400, size: 800)), 0.003)
+
+        // The honest full picture: sum residual chroma across the sweep
+        // above and confirm REVERSED is actually lower in aggregate — the
+        // real reason this test is named "convention not requirement."
+        var sumShipped: Float = 0
+        var sumReversed: Float = 0
+        for x in [394, 396, 397, 398, 399, 400, 401, 402, 404] {
+            sumShipped += chroma(edgePixel(of: shipped, x: x, size: 800))
+            sumReversed += chroma(edgePixel(of: reversed, x: x, size: 800))
+        }
+        XCTAssertLessThan(
+            sumReversed, sumShipped,
+            "reversed order leaves less residual chroma in aggregate on this fixture — the shipped order is a readability convention, not a proven-better ordering"
+        )
+    }
+
     // MARK: - Clarity + Texture (local contrast) math
     //
     // Clarity is CIUnsharpMask at a much larger radius than Sharpen, so

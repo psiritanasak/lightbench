@@ -60,6 +60,8 @@ final class EditStatePresetTests: XCTestCase {
         s.clarity = 0.4
         s.sharpness = 0.6
         s.noiseReduction = 0.3
+        s.defringePurple = 0.4
+        s.defringeGreen = 0.35
         s.grain = 0.2
         // red-eye
         s.redEyeSize = 0.8
@@ -150,6 +152,8 @@ final class EditStatePresetTests: XCTestCase {
         XCTAssertEqual(result.clarity, preset.clarity)
         XCTAssertEqual(result.sharpness, preset.sharpness)
         XCTAssertEqual(result.noiseReduction, preset.noiseReduction)
+        XCTAssertEqual(result.defringePurple, preset.defringePurple)
+        XCTAssertEqual(result.defringeGreen, preset.defringeGreen)
         XCTAssertEqual(result.grain, preset.grain)
         XCTAssertEqual(result.redEyeSize, preset.redEyeSize)
         XCTAssertEqual(result.redEyeStrength, preset.redEyeStrength)

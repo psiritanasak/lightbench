@@ -1,0 +1,126 @@
+// Defringe (Chromatic Aberration) — Lightroom-style purple/green fringe
+// removal at high-contrast edges. This is the TENTH custom Core Image
+// kernel in this codebase, and the per-pixel half of a two-part stage
+// (see EditPipeline.applyDefringe for the Swift-side wrapper and why this
+// kernel receives PRE-COMPUTED local luma max/min images rather than
+// sampling neighbors itself — a CIColorKernel structurally cannot sample
+// neighboring pixels, so that neighborhood work runs as built-in
+// CIMorphologyMaximum/CIMorphologyMinimum filters before this kernel ever
+// runs, the same two-part shape DehazeDarkChannel.cikernel/
+// DehazeRecover.cikernel already established for the identical structural
+// reason).
+//
+// Algorithm: gate a hue-selective desaturation by a local edge/contrast
+// signal (localMax - localMin, near zero in flat regions, large at sharp
+// edges) so a genuinely purple/green FLAT subject (a flower, a lawn) is
+// structurally protected regardless of amount — only pixels that are BOTH
+// near a sharp edge AND the target fringe hue get desaturated. Two FIXED
+// hue bands (purple, green), matching SelectiveColor.cikernel's own
+// fixed-band precedent, not a general color picker. Desaturation is PLAIN
+// (mix toward the pixel's own luma) — the simpler v1 choice, not neighbor-
+// color replacement.
+//
+// Known limitation (measured, see EditState.defringePurple's own doc
+// comment): the edge gate protects FLAT subjects, not TEXTURED ones — a
+// high-contrast TEXTURED subject in the target hue (foliage against sky)
+// reads as a real edge and gets desaturated too. Inherent to any hue-band
+// approach without a separate selection axis; not fixed here.
+//
+// rgb2hsl and the headroom-normalize-before-HSL fix are byte-identical in
+// shape to PointColor.cikernel/SelectiveColor.cikernel's own — HSL's
+// 1-|2L-1| saturation denominator goes negative for L>1, which would
+// otherwise make this kernel a silent no-op on bright saturated highlight
+// fringing (a real, common case: fringing is worst exactly at blown
+// highlight edges). The hue axis is gated by the pixel's own saturation
+// (kHueMeaningfulSaturation below), matching PointColor.cikernel's own
+// reviewer-caught fix: rgb2hsl returns a FABRICATED hue of 0 for any
+// achromatic pixel, and without this gate a pixel with no real hue could
+// spuriously match a fixed hue band by coincidence.
+
+vec3 rgb2hsl(vec3 c) {
+    float M = max(c.r, max(c.g, c.b));
+    float m = min(c.r, min(c.g, c.b));
+    float C = M - m;
+    float L = 0.5 * (M + m);
+    float S = (C == 0.0) ? 0.0 : C / (1.0 - abs(2.0*L - 1.0));
+    float H = 0.0;
+    if (C > 0.0) {
+        if (M == c.r)      H = mod((c.g - c.b)/C, 6.0);
+        else if (M == c.g) H = (c.b - c.r)/C + 2.0;
+        else               H = (c.r - c.g)/C + 4.0;
+        H *= 60.0;
+        if (H < 0.0) H += 360.0;
+    }
+    return vec3(H, S, L);
+}
+
+// Raised-cosine falloff over a 1-D distance `d`, window `W`. 1.0 at d=0,
+// smoothly 0.0 at d=W. Same shape as SelectiveColor.cikernel's/
+// PointColor.cikernel's own hue falloff.
+float raisedCosine(float d, float W) {
+    if (d >= W) { return 0.0; }
+    return 0.5 * (1.0 + cos(3.14159265 * d / W));
+}
+
+kernel vec4 defringe(
+    __sample s, __sample localMax, __sample localMin,
+    float purpleAmount, float greenAmount,
+    float edgeThresholdLow, float edgeThresholdHigh,
+    float purpleHueCenter, float greenHueCenter, float hueWindow
+) {
+    float a = s.a;
+    vec3 rgb = (a > 0.0) ? s.rgb / a : s.rgb;
+
+    // Edge/contrast signal: localMax and localMin are both luma images
+    // (R=G=B=luma by construction — see applyDefringe's own CIColorMatrix
+    // collapse), so reading the red channel of each is exactly the local
+    // luma range.
+    float edgeStrength = localMax.r - localMin.r;
+    float edgeWeight = smoothstep(edgeThresholdLow, edgeThresholdHigh, edgeStrength);
+
+    if (edgeWeight < 0.0001) {
+        // Flat content: exact passthrough, no hue math needed at all —
+        // this is the actual protection for a flat purple/green subject.
+        return s;
+    }
+
+    // Headroom-normalize before rgb2hsl — see this file's own header
+    // comment for why (the already-shipped SelectiveColor/PointColor fix).
+    float M = max(rgb.r, max(rgb.g, rgb.b));
+    float scale = max(M, 1.0);
+    vec3 normalizedRGB = rgb / scale;
+    vec3 hslv = rgb2hsl(normalizedRGB);
+
+    // Hue axis gated by the pixel's own saturation — see this file's own
+    // header comment (PointColor.cikernel's own reviewer-caught fix).
+    float kHueMeaningfulSaturation = 0.1;
+    float satGate = smoothstep(0.0, kHueMeaningfulSaturation, hslv.y);
+
+    float purpleDist = abs(hslv.x - purpleHueCenter);
+    purpleDist = min(purpleDist, 360.0 - purpleDist);
+    float purpleHueWeight = raisedCosine(purpleDist, hueWindow) * satGate;
+
+    float greenDist = abs(hslv.x - greenHueCenter);
+    greenDist = min(greenDist, 360.0 - greenDist);
+    float greenHueWeight = raisedCosine(greenDist, hueWindow) * satGate;
+
+    float purpleWeight = edgeWeight * purpleHueWeight * purpleAmount;
+    float greenWeight = edgeWeight * greenHueWeight * greenAmount;
+    float totalWeight = clamp(purpleWeight + greenWeight, 0.0, 1.0);
+
+    if (totalWeight < 0.0001) {
+        // Untouched: exact passthrough, including headroom and
+        // premultiplied alpha, unchanged — matches every other hue kernel
+        // in this codebase's own zero-weight guard.
+        return s;
+    }
+
+    // Plain desaturation: mix the UN-normalized pixel toward its own luma
+    // — headroom-preserving (no rescale-by-`scale` needed here, unlike a
+    // hue/saturation ADJUSTMENT kernel, since this never reconstructs RGB
+    // from HSL at all).
+    float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    vec3 desaturated = mix(rgb, vec3(luma), totalWeight);
+
+    return vec4(desaturated * a, a);
+}

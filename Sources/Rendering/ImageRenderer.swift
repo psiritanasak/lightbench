@@ -105,9 +105,12 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     //     Texture's do, AND its atmospheric light is a whole-frame statistic
     //     the proxy estimates from different pixels entirely.
     //     See IMPROVEMENTS.md D18 for the measured matrix.
-    //   - Sharpen / Clarity / Texture: radii are extent FRACTIONS, so the
-    //     on-screen halo is right at fit zoom, but the absolute pixel
-    //     radius quantizes differently on a downscaled image.
+    //   - Sharpen / Clarity / Texture / Defringe: radii are extent
+    //     FRACTIONS, so the on-screen halo/edge-detection patch is right
+    //     at fit zoom, but the absolute pixel radius quantizes differently
+    //     on a downscaled image. Defringe's own edge-detection radius is
+    //     STRUCTURALLY the same class (not separately measured — not part
+    //     of D18's matrix, same hedge already used for Texture there).
     //   - Red-eye at aggressive proxy scales: radius is a fraction of
     //     `min(extent)`, so a pupil circle gets fewer pixels — least
     //     severe, only visible on an already-small image at a low
@@ -191,7 +194,8 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     /// input within one `draw(in:)` call, Compare gets the proxy for BOTH
     /// halves for free from this single key — costing nothing in quality,
     /// since `EditState.comparisonOriginal()` already zeroes
-    /// `clarity`/`texture`/`dehaze`/`sharpness`/`noiseReduction`/`grain`, so
+    /// `clarity`/`texture`/`dehaze`/`sharpness`/`defringePurple`/
+    /// `defringeGreen`/`noiseReduction`/`grain`, so
     /// the original half has no PROXY-DIVERGENT stage left to diverge in the
     /// first place. (Not "no convolution stage" — Dehaze is not a
     /// convolution, and its dominant divergence mechanism is a whole-frame

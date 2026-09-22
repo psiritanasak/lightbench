@@ -50,11 +50,18 @@ import CoreImage.CIFilterBuiltins
 /// afterward. Sharpen: measured to commute with Vignette (order between
 /// those two specifically doesn't matter), but it must come after Noise
 /// Reduction or it would re-amplify noise NR would otherwise have removed.
-/// Grain is now the true FINAL stage, after Sharpen — both orderings
-/// (grain-after-sharpen, grain-after-NR) are MEASURED requirements, not
-/// conventions, being the pipeline's only stochastic stage: sharpening
-/// grain would amplify/halo it, and NR running after grain would eat it.
-/// See `applyGrain`'s own doc comment.
+/// Defringe runs right after Sharpen (a CONVENTION backed by a real but
+/// genuinely mixed measurement, NOT a requirement — a wider pixel sweep
+/// shows the reversed order actually leaves LESS residual chroma in
+/// aggregate; see `EditState.defringePurple`'s own doc comment for the
+/// full story) and right before Grain (a real, MEASURED, unconditional
+/// requirement: Grain's own noise, if it ran first, would fool Defringe's
+/// edge gate into treating flat content as a real edge everywhere). Grain
+/// is the true FINAL stage, after Sharpen and Defringe — both of Grain's own
+/// orderings (grain-after-sharpen, grain-after-NR) are MEASURED
+/// requirements, not conventions, being the pipeline's only stochastic
+/// stage: sharpening grain would amplify/halo it, and NR running after
+/// grain would eat it. See `applyGrain`'s own doc comment.
 enum EditPipeline {
     /// A request to stop the pipeline early, mid-color-stage, for an
     /// eyedropper that must sample at a specific stage's OWN input rather
@@ -109,7 +116,8 @@ enum EditPipeline {
         image = applyClarity(state, to: image)                // wide local contrast, perceptual, before detail pair
         image = applyTexture(state, to: image)                // fine local contrast, perceptual, coarse->fine after clarity
         image = applyNoiseReduction(state, to: image)         // detail, scene-linear, before sharpen
-        image = applySharpen(state, to: image)                // detail, perceptual, before grain
+        image = applySharpen(state, to: image)                // detail, perceptual, before defringe
+        image = applyDefringe(state, to: image)               // fringe cleanup, perceptual, after sharpen (convention, not a requirement) and before grain (real measured requirement) — see EditState.defringePurple
         image = applyGrain(state, to: image)                  // stochastic, perceptual, truly last
         return image
     }
@@ -3024,6 +3032,154 @@ enum EditPipeline {
         filter.radius = Float(radius)
         let sharpened = filter.outputImage ?? encoded
         return decodeToLinear(sharpened)
+    }
+
+    // MARK: - Defringe (Chromatic Aberration)
+
+    /// Patch radius for the local edge/contrast signal, as a fraction of
+    /// `min(extent)` — the same resolution trap `kDehazeRadiusFraction`/
+    /// `kSharpenRadiusFraction` already document (a fixed absolute-pixel
+    /// radius would give a 24MP photo and its thumbnail different fringe
+    /// estimates). PRINCIPLED STARTING CONSTANT (no UI existed yet to
+    /// visually tune against when this shipped) — retune once checked
+    /// against a real fringed photo, do not treat as settled.
+    private static let kDefringeEdgeRadiusFraction: Double = 0.004
+
+    /// Smoothstep gate on the local luma range (`localMax - localMin`):
+    /// below `kDefringeEdgeThresholdLow` reads as flat content (ZERO
+    /// desaturation regardless of amount — this is what structurally
+    /// protects a genuinely purple/green flat subject, a real flower or
+    /// lawn, from being touched), above `kDefringeEdgeThresholdHigh` reads
+    /// as a full-strength edge. PRINCIPLED STARTING CONSTANTS, not measured.
+    private static let kDefringeEdgeThresholdLow: Double = 0.05
+    private static let kDefringeEdgeThresholdHigh: Double = 0.25
+
+    /// Fixed hue centers (degrees, matching `rgb2hsl`'s own 0..<360 domain)
+    /// for the two fringe colors Lightroom's own Defringe targets — violet/
+    /// magenta for Purple, green for Green — plus the shared half-window
+    /// width both bands use. FIXED, not user-positioned, matching
+    /// `SelectiveColor.cikernel`'s own 8-fixed-band precedent (this is 2
+    /// fixed bands, not a general color picker). PRINCIPLED STARTING
+    /// CONSTANTS.
+    private static let kDefringePurpleHueCenter: Double = 295
+    private static let kDefringeGreenHueCenter: Double = 120
+    private static let kDefringeHueWindow: Double = 40
+
+    /// The tenth custom Core Image kernel in this codebase. Same lazy,
+    /// bundled, fail-soft-to-`nil` load shape as `dehazeDarkChannelKernel`/
+    /// `dehazeRecoverKernel` above.
+    private static let defringeKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "Defringe", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
+    private static func defringeActive(_ state: EditState) -> Bool {
+        state.defringePurple != 0 || state.defringeGreen != 0
+    }
+
+    /// Purple/Green fringe removal — Lightroom's own "Defringe" (see
+    /// `EditState.defringePurple`'s own doc comment for why this app builds
+    /// Defringe alone and deliberately not the OTHER, lens-profile-
+    /// dependent chromatic-aberration mechanism). Core Image ships no
+    /// defringe filter, so this is assembled the same TWO-PART way
+    /// `applyDehaze` above is: a `CIColorKernel` cannot sample neighboring
+    /// pixels, so the NEIGHBORHOOD half (a local edge/contrast signal) runs
+    /// as built-in filters first, then one per-pixel kernel does the actual
+    /// hue-selection + edge-gated desaturation.
+    ///
+    /// Runs AFTER Sharpen — a CONVENTION backed by a real but genuinely
+    /// mixed measurement, NOT a requirement
+    /// (`testSharpenBeforeDefringeIsAConventionNotARequirement`: a wider
+    /// pixel sweep shows the reversed order actually leaves LESS residual
+    /// chroma in aggregate on a real test fixture) — and BEFORE Grain, a
+    /// real, MEASURED, unconditional requirement
+    /// (`testDefringeMustRunBeforeGrainOrTheFlatGuardBreaks`: Grain's own
+    /// high-frequency noise, if it ran first, would fool Defringe's edge
+    /// gate into treating FLAT content as a real edge everywhere). See
+    /// `EditState.defringePurple`'s own doc comment for the full story on
+    /// both — they are NOT the same kind of claim, kept deliberately
+    /// distinct here rather than bundled together the way an earlier draft
+    /// of this comment wrongly did.
+    ///
+    /// Applied in the PERCEPTUAL sRGB-gamma
+    /// domain — "what looks purple" is a display-referred hue judgment, matching
+    /// `SelectiveColor`/`ColorGrading`/`PointColor`'s own domain, unlike
+    /// `Dehaze`'s physically-modeled scene-linear one — in its OWN
+    /// encode/decode sandwich (self-contained, matching `applySharpen`'s
+    /// own precedent immediately above, NOT nested inside the early shared
+    /// sandwich in `applyPerceptualAdjustments`).
+    private static func applyDefringe(_ state: EditState, to image: CIImage) -> CIImage {
+        guard defringeActive(state) else { return image }
+        guard let kernel = defringeKernel else { return image }
+
+        let encoded = encodeToPerceptual(image)
+        let extent = encoded.extent
+        guard !extent.isInfinite, !extent.isEmpty else { return image }
+        let minDimension = Double(min(extent.width, extent.height))
+
+        // Luma image — the EXACT construction `luminanceRangeMaskImage`
+        // already uses, reused rather than reinvented.
+        let lumaWeights = CIVector(
+            x: LuminanceRangeSelection.lumaRed, y: LuminanceRangeSelection.lumaGreen,
+            z: LuminanceRangeSelection.lumaBlue, w: 0
+        )
+        let luma = CIFilter.colorMatrix()
+        luma.inputImage = encoded
+        luma.rVector = lumaWeights
+        luma.gVector = lumaWeights
+        luma.bVector = lumaWeights
+        luma.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        luma.biasVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        guard let lumaImageRaw = luma.outputImage else { return image }
+
+        // `luma`'s own forced-opaque alpha bias (`biasVector.w = 1`, needed
+        // so the morphology filters below stay premultiply-neutral) makes
+        // Core Image report an INFINITE extent for `lumaImageRaw` — the
+        // exact same hazard `luminanceRangeMaskImage`'s own doc comment
+        // documents in detail (re-measure the ALPHA BIAS specifically, not
+        // just whether `CIColorMatrix` is in the chain). Reviewer-caught:
+        // `.clampedToExtent()` on an ALREADY-infinite image is a no-op, so
+        // without this explicit `.cropped(to: extent)` FIRST, the
+        // morphology filters below would read true zero just outside the
+        // real frame, creating a spurious edge ring at the image border
+        // (measured: a flat saturated color fully desaturated in a
+        // radius-wide ring around every edge of the frame). Cropping to
+        // `extent` first makes it finite, so `.clampedToExtent()` then
+        // correctly edge-replicates the border pixels outward instead.
+        let lumaImage = lumaImageRaw.cropped(to: extent)
+
+        // Local max/min of luma over the patch — their difference is the
+        // edge/contrast signal, near zero in flat regions, large at sharp
+        // edges. Same `.clampedToExtent()` -> set radius -> `.cropped(to:)`
+        // shape `applyDehaze`'s own `CIMorphologyMinimum` call uses (that
+        // call clamps an already-finite kernel output, so its own clamp is
+        // effective there; `lumaImage` needed the explicit crop above
+        // first for the same clamp to do anything here).
+        let radius = Float(kDefringeEdgeRadiusFraction * minDimension)
+        let maxFilter = CIFilter.morphologyMaximum()
+        maxFilter.inputImage = lumaImage.clampedToExtent()
+        maxFilter.radius = radius
+        guard let localMax = maxFilter.outputImage?.cropped(to: extent) else { return image }
+
+        let minFilter = CIFilter.morphologyMinimum()
+        minFilter.inputImage = lumaImage.clampedToExtent()
+        minFilter.radius = radius
+        guard let localMin = minFilter.outputImage?.cropped(to: extent) else { return image }
+
+        let arguments: [Any] = [
+            encoded, localMax, localMin,
+            NSNumber(value: state.defringePurple),
+            NSNumber(value: state.defringeGreen),
+            NSNumber(value: kDefringeEdgeThresholdLow),
+            NSNumber(value: kDefringeEdgeThresholdHigh),
+            NSNumber(value: kDefringePurpleHueCenter),
+            NSNumber(value: kDefringeGreenHueCenter),
+            NSNumber(value: kDefringeHueWindow),
+        ]
+        guard let result = kernel.apply(extent: extent, arguments: arguments) else { return image }
+        return decodeToLinear(result)
     }
 
     // MARK: - Grain

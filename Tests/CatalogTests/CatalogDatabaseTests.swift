@@ -651,6 +651,8 @@ final class CatalogDatabaseTests: XCTestCase {
         s.clarity = 0.4
         s.sharpness = 0.6
         s.noiseReduction = 0.3
+        s.defringePurple = 0.4
+        s.defringeGreen = 0.35
         s.grain = 0.2
         s.redEyeSize = 0.8
         s.redEyeStrength = 0.9

@@ -17,8 +17,9 @@ import CoreGraphics
 /// FRACTION of the current extent (crop insets, vignette center + half-
 /// diagonal radius, straighten around the extent's own center, perspective
 /// corner shifts as fractions of width/height, red-eye radius as a fraction
-/// of `min(extent)`, Clarity/Texture/Sharpen radii and Dehaze's
-/// patch and atmosphere-blur radii as `fraction * min(extent)`) —
+/// of `min(extent)`, Clarity/Texture/Sharpen radii, Dehaze's
+/// patch and atmosphere-blur radii, and Defringe's edge-detection radius,
+/// all as `fraction * min(extent)`) —
 /// the same argument `ThumbnailGenerator.thumbnail(for:maxPixelSize:
 /// editState:)` already documents and ships. So running the pipeline on a
 /// proportionally-downscaled source is APPROXIMATELY correct — but
@@ -34,8 +35,10 @@ import CoreGraphics
 /// band-limited (photo-like) content Dehaze leads at every scale measured.
 /// Dehaze additionally estimates its atmospheric light as a whole-frame
 /// STATISTIC, which the "geometry as a fraction of extent" premise above does
-/// not cover at all. Texture appears in the geometry enumeration above but
-/// was NOT part of D18's measurements, so no divergence claim is made for it.
+/// not cover at all. Texture and Defringe both appear in the geometry
+/// enumeration above but were NOT part of D18's measurements, so no
+/// divergence claim is made for either — structurally the same class,
+/// just not separately measured.
 /// See IMPROVEMENTS.md D18 for the measured matrix.
 enum ProxyScale {
     /// Proxy pixels per DRAWABLE pixel. `MTKView.drawableSize` is device

@@ -761,9 +761,15 @@ struct EditState: Equatable, Codable {
     /// Detail/edge sharpening amount, 0...1, default 0 (identity).
     /// One-directional (0 = none, positive = sharpen) — unlike the bipolar
     /// tone/color sliders — matching Crop insets/Vignette Radius's 0...1
-    /// convention rather than the -1...1 family. Applied as the pipeline's
-    /// TRUE FINAL stage, AFTER Vignette, in the perceptual sRGB-gamma
-    /// domain, via Core Image's `CISharpenLuminance` — see `EditPipeline`.
+    /// convention rather than the -1...1 family. Applied AFTER Vignette, in
+    /// the perceptual sRGB-gamma domain, via Core Image's
+    /// `CISharpenLuminance` — see `EditPipeline`. NOT the pipeline's final
+    /// stage (stale claim, corrected here): Defringe runs right after it —
+    /// a CONVENTION backed by a real measurement, not a requirement (a
+    /// wider measurement shows the reversed order actually leaves LESS
+    /// residual chroma in aggregate on a real test fixture — see
+    /// `EditState.defringePurple`'s own doc comment for the full,
+    /// corrected story). Grain is the true final stage.
     ///
     /// MEASURED findings (this app's extendedLinearSRGB/RGBAf working
     /// space, not assumed):
@@ -792,14 +798,116 @@ struct EditState: Equatable, Codable {
     /// pattern as Vignette's Softness and Black & White's tone/grain.
     var sharpness: Double = 0
 
+    // MARK: - Defringe (Chromatic Aberration)
+
+    /// Purple fringe removal amount, 0...1, default 0 (identity).
+    /// Lightroom's own "Defringe" (Lens Corrections panel) — this app's
+    /// answer to the roadmap's "Chromatic Aberration removal" gap, scoped
+    /// deliberately to Defringe alone: Lightroom's OTHER chromatic-
+    /// aberration mechanism, the automatic "Remove Chromatic Aberration"
+    /// checkbox, needs per-lens profile calibration data this app has no
+    /// source for and won't build a database for. Defringe needs none —
+    /// it's a LOCAL, hue-selective chroma suppression at high-contrast
+    /// edges (purple/green fringing on a backlit branch or wire against
+    /// bright sky is the textbook case), not a geometric per-channel
+    /// realignment, so it works on every photo regardless of lens.
+    ///
+    /// Runs AFTER Sharpen (a CONVENTION, backed by a real but genuinely
+    /// mixed measurement — NOT a requirement) and BEFORE Grain (a real,
+    /// MEASURED, unconditional requirement). The two orderings are NOT the
+    /// same kind of claim — kept deliberately distinct below rather than
+    /// bundled into one "both measured requirements" statement, which an
+    /// earlier draft of this comment wrongly did.
+    ///
+    /// AFTER Sharpen (`testSharpenBeforeDefringeIsAConventionNotARequirement`):
+    /// Sharpen's own doc comment documents (MEASURED) that it overshoots
+    /// PER-CHANNEL in this working space; measured here (on a genuinely
+    /// per-channel misregistered edge — chromatic aberration's own
+    /// textbook definition) that this overshoot mostly MANUFACTURES fresh
+    /// colored fringing at previously-neutral pixels next to a
+    /// misregistered edge, rather than shifting an existing fringe's hue
+    /// (at most sampled pixels on this fixture, the INPUT is already
+    /// perfectly neutral). Sampling a 9-point sweep with BOTH bands
+    /// engaged: shipped order wins at 3 pixels, reversed wins at 4, ties
+    /// at the 2 pixels carrying real input fringe — and reversed leaves
+    /// ~46% LESS residual chroma in AGGREGATE across the sweep. This is a
+    /// genuinely weak/mixed measurement, not a case for the shipped order
+    /// — per CLAUDE.md's own rule for exactly this situation ("call the
+    /// decision a convention... rather than dressing it up as a measured
+    /// necessity"), Sharpen-before-Defringe ships because it reads more
+    /// intuitively (Sharpen is a documented fringing producer elsewhere in
+    /// this file, so Defringe naturally reads as the cleanup step), not
+    /// because the numbers prove it. An earlier version of this same doc
+    /// comment claimed the OPPOSITE — a "measured requirement" — based on
+    /// a test that only sampled the 2 pixels where the shipped order
+    /// happens to win; reviewer-caught, by independently re-measuring a
+    /// wider pixel sweep, not by re-reading the existing test.
+    ///
+    /// BEFORE Grain (`testDefringeMustRunBeforeGrainOrTheFlatGuardBreaks`):
+    /// a much more dramatic, unconditional finding. Grain adds
+    /// high-frequency per-pixel noise EVERYWHERE, including flat content;
+    /// measured that if it ran before Defringe, that noise alone inflates
+    /// the edge gate's own `localMax - localMin` signal enough to fool it
+    /// into treating FLAT content as a real edge — breaking this field's
+    /// own "a genuinely purple/green FLAT subject is structurally
+    /// protected regardless of amount" guarantee across the WHOLE image
+    /// (measured: a large flat saturated purple region desaturates almost
+    /// to gray). Defringe running before Grain avoids this entirely.
+    ///
+    /// Core Image ships no defringe filter, so this is a real
+    /// implementation: a local edge/contrast signal (the difference between
+    /// `CIMorphologyMaximum`/`CIMorphologyMinimum` on a luma image — near
+    /// zero in flat regions, large at sharp edges) gates a hue-selective
+    /// desaturation, so a genuinely purple/green FLAT subject (a flower, a
+    /// lawn) is structurally protected regardless of amount — see
+    /// `EditPipeline.applyDefringe` and
+    /// `Sources/Rendering/Shaders/Defringe.cikernel`.
+    ///
+    /// Real, known limitation (measured, not just theoretical): the gate
+    /// protects FLAT subjects but NOT textured ones — a high-contrast
+    /// TEXTURED subject in the target hue (foliage against sky is the
+    /// common case) reads as a real edge and gets desaturated too. Measured:
+    /// foliage green (0.08, 0.35, 0.10) at a high-contrast sky boundary with
+    /// `defringeGreen = 1` fully desaturates (chroma 0.27 -> 0.022). This is
+    /// inherent to any hue-band defringe approach without a separate
+    /// selection mechanism (Lightroom's own Defringe exposes a Hue Range
+    /// control for exactly this reason — not built here, see v1 scope
+    /// below), not a bug in this implementation. See IMPROVEMENTS.md.
+    ///
+    /// v1 scope: two Amount sliders (this one, and `defringeGreen`), the
+    /// SAME "single Amount, sophistication deferred" pattern `dehaze`/
+    /// `clarity`/`texture` already established here. The hue windows that
+    /// define "what counts as purple/green" (`EditPipeline`'s
+    /// `kDefringePurpleHueCenter`/`kDefringeGreenHueCenter`/
+    /// `kDefringeHueWindow`) are tuned constants, not exposed — matching
+    /// `dehaze`'s own "the prior's own parameters ... are tuned constants
+    /// in `EditPipeline`, not exposed" precedent. Desaturation is PLAIN
+    /// (pulls saturation toward the pixel's own luma), not neighbor-color
+    /// replacement — a known, deliberately simpler v1 choice than
+    /// Lightroom's own likely-fancier behavior, not claimed to match it.
+    ///
+    /// Purely additive: no predecessor in any shipped sidecar, so there is
+    /// NO migration and no `LegacyCodingKeys` entry. Absent keys already
+    /// default to 0 via the schema-tolerant decoder.
+    var defringePurple: Double = 0
+
+    /// Green fringe removal amount, 0...1, default 0 (identity). Same
+    /// mechanism/domain/ordering/scope as `defringePurple` — see that
+    /// field's own doc comment for the full story. Selects a DIFFERENT
+    /// fixed hue band (`EditPipeline.kDefringeGreenHueCenter`) and is
+    /// otherwise fully independent: picking Purple never touches a green
+    /// fringe and vice versa (see `testDefringePurpleAndGreenAreIndependent`).
+    var defringeGreen: Double = 0
+
     // MARK: - Grain
 
     /// Film grain simulation amount, 0...1, default 0 (identity).
     /// One-directional (0 = none, positive = grain) — matching Sharpen/
     /// Noise Reduction's 0...1 family, not the bipolar tone/color sliders.
-    /// Applied as the pipeline's new TRUE FINAL stage, AFTER Sharpen (see
-    /// `EditPipeline` — Sharpen's own doc comment previously called ITSELF
-    /// the final stage; that claim now belongs here), in the perceptual
+    /// Applied as the pipeline's new TRUE FINAL stage, AFTER Sharpen AND
+    /// Defringe (see `EditPipeline` — Sharpen's own doc comment previously
+    /// called ITSELF the final stage, then Defringe was inserted between
+    /// the two; this claim now belongs here), in the perceptual
     /// sRGB-gamma domain, via a custom kernel (`FilmGrain.cikernel`) blending
     /// a `CIRandomGenerator` noise field — see `EditPipeline.applyGrain`.
     ///
@@ -1295,6 +1403,8 @@ struct EditState: Equatable, Codable {
         s.dehaze = 0
         s.sharpness = 0
         s.noiseReduction = 0
+        s.defringePurple = 0
+        s.defringeGreen = 0
         s.grain = 0
         // red-eye: reset sliders AND clear points (see doc comment above)
         s.redEyeSize = 0.5
@@ -1393,6 +1503,8 @@ struct EditState: Equatable, Codable {
         result.dehaze = dehaze
         result.sharpness = sharpness
         result.noiseReduction = noiseReduction
+        result.defringePurple = defringePurple
+        result.defringeGreen = defringeGreen
         result.grain = grain
         // red-eye correction INTENSITY only — `redEyePoints` (where the
         // corrections sit) stays `target`'s own, untouched.
@@ -1483,6 +1595,7 @@ extension EditState {
         case texture, clarity, dehaze
         case noiseReduction
         case sharpness
+        case defringePurple, defringeGreen
         case grain
         case boostAmount
         case rawExposureEV, shadowBoostScale, rawWhiteBalanceNeutralPoints
@@ -1616,6 +1729,8 @@ extension EditState {
         dehaze = try container.decodeIfPresent(Double.self, forKey: .dehaze) ?? 0
         noiseReduction = try container.decodeIfPresent(Double.self, forKey: .noiseReduction) ?? 0
         sharpness = try container.decodeIfPresent(Double.self, forKey: .sharpness) ?? 0
+        defringePurple = try container.decodeIfPresent(Double.self, forKey: .defringePurple) ?? 0
+        defringeGreen = try container.decodeIfPresent(Double.self, forKey: .defringeGreen) ?? 0
         grain = try container.decodeIfPresent(Double.self, forKey: .grain) ?? 0
         boostAmount = try container.decodeIfPresent(Double.self, forKey: .boostAmount) ?? 1.0
         rawExposureEV = try container.decodeIfPresent(Double.self, forKey: .rawExposureEV) ?? 0

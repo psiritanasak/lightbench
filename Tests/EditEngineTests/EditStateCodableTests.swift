@@ -35,6 +35,8 @@ final class EditStateCodableTests: XCTestCase {
         // every one of the ~58 others — must fall back to its own default,
         // not throw.
         XCTAssertEqual(state.sharpness, 0)
+        XCTAssertEqual(state.defringePurple, 0)
+        XCTAssertEqual(state.defringeGreen, 0)
         XCTAssertEqual(state.levelsWhitePoint, 1)
         XCTAssertEqual(state.vignetteRadius, 0.5)
         XCTAssertEqual(state.redEyeStrength, 0.7)

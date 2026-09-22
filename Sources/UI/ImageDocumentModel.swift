@@ -738,13 +738,14 @@ final class ImageDocumentModel: ObservableObject {
     ///    edited display: `applyMasks` reads the running `img` — the
     ///    result of every EARLIER mask in the array, but BEFORE the later
     ///    global stages (Dehaze, Vignette, Clarity, Texture, Noise Reduction,
-    ///    Sharpen, Grain)
+    ///    Sharpen, Defringe, Grain)
     ///    that run AFTER it in the fixed pipeline order. Sampling the
     ///    fully-edited image would record a color the kernel never
     ///    actually sees there (e.g. under a vignette, a tapped dark
     ///    corner would read darker than what the kernel measures),
     ///    misaligning the selection. So this zeros out `vignetteStrength`/
-    ///    `clarity`/`texture`/`dehaze`/`noiseReduction`/`sharpness`/`grain`
+    ///    `clarity`/`texture`/`dehaze`/`noiseReduction`/`sharpness`/
+    ///    `defringePurple`/`defringeGreen`/`grain`
     ///    and truncates `masks`
     ///    to only those BEFORE this one in the array, then renders exactly
     ///    that truncated state — structurally guaranteed to match what
@@ -793,6 +794,8 @@ final class ImageDocumentModel: ObservableObject {
         samplingState.dehaze = 0
         samplingState.noiseReduction = 0
         samplingState.sharpness = 0
+        samplingState.defringePurple = 0
+        samplingState.defringeGreen = 0
         samplingState.grain = 0
         samplingState.masks = Array(editState.masks[..<maskIndex])
 

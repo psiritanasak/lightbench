@@ -7,7 +7,50 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
-**Auto Tone (Tier-2 Lightroom gap) is now FULLY SHIPPED (2026-09-23)** —
+**History panel (Tier-2 Lightroom gap) is now FULLY SHIPPED (2026-09-23)** —
+a browsable/scrubbable edit list, not just linear undo. `EditHistory`
+(`Sources/EditEngine/EditHistory.swift`) rewritten from a two-stack
+past/future model to a single `entries: [HistoryEntry]` + `currentIndex`
+timeline-with-cursor, adding `jump(to id:)` (by stable `UUID`, not array
+index — `ImageDocumentModel.jumpToHistory(id:)`'s own
+`finalizePendingCommit()` flush can trim/truncate the array first, which
+would invalidate a captured index). New `EditStateDiff.swift`, a
+`Mirror`-based generic field-differ (not a hand-maintained field list —
+this codebase's own repeatedly-documented stale-enumeration bug class),
+computes each row's summary from whichever fields actually changed.
+`ImageDocumentModel` publishes `historyEntries`/`currentHistoryIndex`,
+and the 4 pre-existing direct-commit call sites (Revert, apply Preset,
+Reset Curve, Auto Tone) now pass an explicit `summary:`. New "History"
+`AdjustTabView` section (after Presets): newest-first, current row bold,
+abandoned-redo rows secondary-styled, a flat `ForEach` (not a nested
+`ScrollView`, matching the Presets/Masks sections' own precedent).
+
+1226 tests (27 new: `EditHistoryTests` extended, new
+`EditStateDiffTests.swift`). Reviewer: 2 rounds, FIX FIRST → APPROVE.
+Round 1 (scoped to the data layer only, before the UI-wiring commit
+existed) caught a vacuous mask-diff test (passed from an incidental
+`UUID` difference, not the field difference it claimed to test), two
+doc comments describing not-yet-written UI-layer code as already
+existing, a real `displayName` algorithm bug (an acronym immediately
+followed by a new word stayed wrongly fused — `"rawEVBias"` would have
+rendered `"Raw EVBias"` instead of `"Raw EV Bias"`; no real field was
+affected, but the algorithm and its doc were both wrong), a missing
+test that the diff actually agrees with `EditState`'s own `==`, a
+trim-math test missing an assertion that could have let an off-by-one
+in `commit`'s `currentIndex -= overflow` line pass by coincidence, and a
+theoretical Unicode crash risk in `displayName`'s uppercase-casting. All
+7 fixed. Round 2 (the full diff, now including the UI-wiring commit)
+independently re-verified all 7 fixes and fully reviewed the two new UI
+files for the first time — no correctness bugs found; APPROVE, with 3
+non-blocking nits logged as IMPROVEMENTS.md D27 (a debounce-window edge
+case tapping the current row mid-burst, dead "no history yet" UI code
+since `entries` can never be empty, one one-sided test assertion). See
+CLAUDE.md's own History panel entry for the full write-up. NOT yet
+live-verified — see "Exact next step" below.
+
+**Auto Tone (Tier-2 Lightroom gap) shipped and live-verified earlier this
+session (2026-09-23)**, including a real-photo check (below) beyond the
+two synthetic fixtures already documented —
 a one-click "Auto" button (first row of the Light section) that solves
 Exposure/Black Point/Highlights/Shadows/Contrast/Vibrance from a new
 whole-image tonal-statistics sampler (`ToneStatistics`/
@@ -89,9 +132,22 @@ catalog, and deleted afterward along with their sidecars):
   file on the Desktop during this session) — untouched by this session,
   which worked exclusively in the scratch `livetest` folder throughout.
 
+**Also tried against a real photo from the user's own library
+(2026-09-23, same session)**: `~/Pictures/Bolivia_trip/group_photo/
+IMG_6564.jpeg`, which already had a pre-existing sidecar from a prior
+Curves v2 testing session. The existing sidecar was backed up to
+`/tmp/IMG_6564_baseline.json` before touching it. Auto solved
+`exposureEV = 0.200`, `blackPoint = -0.5` (saturated, matching D26),
+`curvesHighlights = -0.091`, `curvesShadows = 0`, `contrast = 0.0146`,
+`vibrance = 0`; White Balance was untouched, matching the design. The
+app was quit and the backed-up sidecar restored via `cp`, then verified
+byte-identical via `diff` — the real photo's own edit state was left
+exactly as found.
+
 See "Exact next step" below — Auto Tone's own tuning constants are
 still unmeasured starting points; nothing found in this live-
-verification pass currently motivates changing any of them.
+verification pass (synthetic fixtures OR the real photo) currently
+motivates changing any of them.
 
 Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
 ✅ FULLY COMPLETE, Curves v2 (Tier-2 Lightroom gap) is fully shipped,
@@ -1054,36 +1110,55 @@ icons or trial-and-error expansion, which had already produced a false
 lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
-Nothing blocking. Auto Tone is fully shipped, reviewed, committed, AND
-live-verified (dark + bright synthetic fixtures; Exposure direction and
-clamping, Black Point's documented saturation, idempotence, and
-one-step undo all confirmed against the saved sidecar — see the
-"Current phase" entry's own write-up). NOT yet tried against a real
-photo from the user's own library (only synthetic fixtures so far) —
-worth doing opportunistically, not urgently.
+Nothing blocking. History panel is fully shipped, reviewed (2 rounds,
+FIX FIRST → APPROVE), and committed — see the "Current phase" entry's
+own write-up. **NOT yet live-verified** — the natural next step for a
+resuming session is exactly the plan's own verification checklist: make
+several distinct edits (a slider, a crop, Auto Tone) on a scratch photo,
+expand the new "History" Adjust-tab section, confirm each row's summary
+reads sensibly and the current row is bold; click an OLDER row and
+confirm the image/sliders actually jump there; make a NEW edit from that
+point and confirm the abandoned "redo" rows disappear from the list;
+click the current row a SECOND time and confirm via the sidecar file
+that NO save/permission-prompt fires (the no-op-jump guard actually
+works end to end, not just unit-tested); confirm toolbar Undo/Redo still
+interleave correctly with a manual jump. Use a scratch photo (File >
+Open, not imported into the catalog), matching this session's own Auto
+Tone live-verification precedent — see that entry above for the exact
+screen-automation workflow that worked in this environment (Release
+build, reposition the window onto the main display before
+screenshotting, expand `DisclosureGroup` sections via their
+`AXDisclosureTriangle` before searching for child controls, treat the
+saved sidecar JSON as the reliable verification source of truth over
+screenshots).
+
+Auto Tone is ALSO fully shipped, reviewed, committed, AND live-verified
+(dark + bright synthetic fixtures, plus a real photo from the user's own
+library — see the "Current phase" entry's own write-up).
 `kBlackTargetPerceptual`/`kMaxAutoBlackPoint`/`kShadowFloorPerceptual`
 and the other `AutoToneSolver` tuning constants are explicitly
 principled-but-unmeasured starting points (per that file's own doc
-comments) — live-tuning them against a variety of real photos, the same
-process `kMaxTransformAspectStretch` went through, is the natural
-follow-up if a real photo ever produces a visually wrong-looking
-result; nothing found in this session's own live-verification currently
-motivates a retune. IMPROVEMENTS.md D26 (Black Point saturating to its
-own maximum for nearly any photo) is the one specific open design
-question to weigh while doing that — this session's own two fixtures
-both independently confirmed that saturation happening exactly as
-D26 describes.
+comments) — live-tuning them against a wider variety of real photos, the
+same process `kMaxTransformAspectStretch` went through, is a natural
+future follow-up if a real photo ever produces a visually wrong-looking
+result; nothing found in this session's own live-verification (2
+synthetic fixtures + 1 real photo) currently motivates a retune.
+IMPROVEMENTS.md D26 (Black Point saturating to its own maximum for
+nearly any photo) is the one specific open design question to weigh
+while doing that — all 3 of this session's own test cases independently
+confirmed that saturation happening exactly as D26 describes.
 
-Otherwise, pick the next Lightroom gap and enter Plan Mode first, per
-this project's workflow rules. Available: Enhance/Super Resolution,
-History panel, and Copy/Paste-and-Sync (unstarted Tier-2 items); Color
-Grading Slice B's own follow-ups — live-verifying the `AngularGradient`
-painted-wheel convention on screen (flagged DERIVED, not measured, in
-`ColorWheelGeometry.angularGradientFraction`'s doc comment) and
-IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout); IMPROVEMENTS.md
-D22 (Point Color's missing luminance-selection axis, needs its own
-design pass); IMPROVEMENTS.md D23 (Transform Scale/Aspect's
-minification-aliasing gap); IMPROVEMENTS.md D25 (the same premultiplied-
-alpha read bug `ImageToneStatistics` fixed for itself, still latent in
-`ImageAverageColor`/`PixelSampler`); and the now-6-site mutual-exclusion
-mode enum IMPROVEMENTS.md logs as overdue.
+Otherwise, once History panel is live-verified, pick the next Lightroom
+gap and enter Plan Mode first, per this project's workflow rules.
+Available: Enhance/Super Resolution and Copy/Paste-and-Sync (unstarted
+Tier-2 items); Color Grading Slice B's own follow-ups — live-verifying
+the `AngularGradient` painted-wheel convention on screen (flagged
+DERIVED, not measured, in `ColorWheelGeometry.angularGradientFraction`'s
+doc comment) and IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout);
+IMPROVEMENTS.md D22 (Point Color's missing luminance-selection axis,
+needs its own design pass); IMPROVEMENTS.md D23 (Transform Scale/
+Aspect's minification-aliasing gap); IMPROVEMENTS.md D25 (the same
+premultiplied-alpha read bug `ImageToneStatistics` fixed for itself,
+still latent in `ImageAverageColor`/`PixelSampler`); IMPROVEMENTS.md D27
+(the 3 History panel nits logged this session); and the now-6-site
+mutual-exclusion mode enum IMPROVEMENTS.md logs as overdue.

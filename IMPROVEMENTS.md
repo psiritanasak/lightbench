@@ -1297,6 +1297,38 @@ hand"? Worth live-tuning against real photos (the same process
 mean lowering `kMaxAutoBlackPoint` further, adding a second, gentler dead
 zone, or leaving it as-is if it looks fine in practice.
 
+### D27. History panel: 3 reviewer nits (non-blocking, all APPROVE-round observations)
+
+From the History panel feature's own reviewer round (APPROVE, no fixes
+required — these were logged as nits, not FIX FIRST items):
+
+1. `ImageDocumentModel.jumpToHistory(id:)` calls `finalizePendingCommit()`
+   before looking up `id` — correct in general (matches `undo()`/`redo()`'s
+   own established pattern), but means tapping the BOLD "current" row while
+   an edit is still inside its ~350ms debounce window first commits that
+   pending edit, so the tapped row is no longer current by the time the
+   lookup runs, and the jump then effectively undoes the edit just
+   committed. Nothing is lost (it's redoable), but it's a surprising result
+   for a row that visually reads as "already here." Tapping a greyed
+   "undone" row in the same timing window silently does nothing at all,
+   because the just-committed pending edit discards every entry after the
+   old cursor, including the one just tapped. Not fixed — worth a sentence
+   in `jumpToHistory`'s own doc comment if this surfaces as a real report
+   rather than a theoretical timing window.
+2. `AdjustTabView.historySection`'s "No history yet" empty-state branch is
+   dead code: `EditHistory.entries` always has at least 1 entry (the
+   `"Opened"` checkpoint from `init`), so `document.historyEntries.isEmpty`
+   can never be true in practice. Harmless — costs nothing, and guards
+   against a future `EditHistory` change that DID allow an empty
+   `entries` — but currently unreachable.
+3. `EditStateDiffTests.testChangedFieldNamesAgreesWithEditStateEquality`
+   only asserts the "changed" (not-equal) side at each step after the
+   first; the "equal" side is checked once, at identity. A fully two-sided
+   version would also assert equality after setting a field back to its
+   OLD value at each step. The separate `testNegativeZeroIsNotADifference`
+   test partly covers the equal-side intent already. Not fixed — a test
+   quality nit, not a correctness gap in the reviewed code.
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

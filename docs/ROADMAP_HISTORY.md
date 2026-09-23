@@ -2564,14 +2564,172 @@ global pipeline):
   (Lightroom's successor to manual Spot Removal/Healing Brush). Needs inpainting,
   not achievable with this app's current Core Image filter-chain approach without
   a new model/algorithm. Not present in any form.
-- **Auto Tone / Auto Settings — WANTED.** One-click starting-point adjustment.
-  This app already has ONE precedent for exactly this shape — "Fix Color Cast"
-  (`ImageDocumentModel.fixColorCast()`, whole-image gray-world statistical
-  analysis feeding existing WB fields, no ML) — a full Auto Tone likely follows
-  the same "compute stats off the already-decoded image, write several existing
-  `EditState` fields at once, one button" pattern rather than needing genuine ML,
-  at least for a v1 (histogram-driven heuristics for exposure/contrast/black-
-  white points). Worth scoping a heuristic-only v1 before assuming ML is required.
+- **Auto Tone / Auto Settings — ✅ SHIPPED (2026-09-23).** One-click
+  starting-point adjustment. Followed the anticipated shape exactly: "Fix
+  Color Cast" (`ImageDocumentModel.fixColorCast()`, whole-image gray-world
+  statistical analysis feeding existing WB fields, no ML) was the precedent,
+  and Auto Tone follows the same "compute stats off the already-decoded
+  image, write several existing `EditState` fields at once, one button"
+  pattern — a heuristic v1, no ML needed.
+  - **`Sources/EditEngine/ToneStatistics.swift`/`Sources/Rendering/
+    ImageToneStatistics.swift`** (the statistics layer, committed first):
+    linear-luma percentiles at 0.5/5/50/95/99.5%, a Reinhard log-average
+    scene key, and a perceptual chroma proxy — structurally mirrors
+    `ImageAverageColor` but deliberately does NOT apply that type's own
+    min/max-luma exclusion band, since Auto Tone's whole job is to
+    characterize exactly the shadows/highlights that filter exists to
+    throw away for gray-world WB averaging's different purpose.
+    Reviewer-caught, round 1: `CIContext.render`'s PREMULTIPLIED output
+    was being read as if straight — a resample's edge row/column commonly
+    lands at a fractional alpha (still passing the `>= 0.5` qualifying
+    guard) whose RGB had therefore been scaled down by that alpha.
+    MEASURED: on a uniform 0.18-gray 3000x2000 bitmap, this alone pulled
+    `percentile0_5` down to 0.134 — an entirely fabricated "lifted black."
+    Fixed by dividing by alpha; `ImageAverageColor`/`PixelSampler` share
+    the identical latent bug, logged as IMPROVEMENTS.md D25 (out of scope
+    to fix in this diff). Round 1 also caught that every constant-color-
+    generator test fixture (`CIImage(color:).cropped`) is structurally
+    incapable of exercising this bug at all — Core Image folds a constant
+    generator through the resample with no real edge to bleed across —
+    so the regression tests needed genuine bitmap-backed fixtures
+    (`CIImage(bitmapData:...)`), a distinction worth remembering for any
+    future test in this statistics family. Round 2 caught that the new
+    rank-pinning test's own tolerance (0.01, ~2.5 column-steps on a
+    256-column ramp fixture) was loose enough to silently accept a wrong
+    nearest-rank convention — tightened to 0.001, re-verified exact.
+  - **`Sources/EditEngine/AutoToneSolver.swift`**: solves Exposure/Black
+    Point/Highlights/Shadows/Contrast/Vibrance from a `ToneStatistics`.
+    Only Exposure has a genuine closed-form solve (`log2(targetKey /
+    logAverageLuma)`, a pure linear-light multiplicative gain, clamped to
+    ±3 EV); every other field is a proportional-error heuristic against a
+    target, clamped to a conservative maximum. Deliberately does NOT
+    solve for Brilliance (would double-count with Contrast/Shadows/
+    Highlights via `EditPipeline.effectiveTone`'s own render-time blend),
+    Brightness, Levels, or the point curve — v1 scope, touching only the
+    parametric Light-section fields a real Auto-Tone workflow most
+    directly maps to. Also does NOT write White Balance — Fix Color Cast
+    stays its own separate button, matching Lightroom's own Auto/WB-Auto
+    split (user-confirmed scope decision). Reviewer: 5 rounds, FIX FIRST
+    x4 → APPROVE, the deepest review chain of this session:
+    - **Round 1 — Black Point's "closed-form inverse" was wrong.** The
+      first draft set `point0.x = predictedP0_5 / kBlackPointSpan`
+      directly, inverting `EditPipeline.curveControlPoints`'s own
+      `point0.x = max(0, -blackPoint) * kBlackPointSpan` — reasoning that
+      moving point0.x to exactly the measured floor would clip that level
+      to 0. It does not: `ToneCurve.cikernel`'s own `toneCurveValue`
+      re-encodes its input a SECOND time before comparing against
+      `point0.x` (that kernel's own header comment already documents this
+      exact hazard — "the encode here is the filter's OWN and is a SECOND
+      encode" — for `applyCurves`' callers generally), so `point0.x` lives
+      in double-encoded space while `predictedP0_5` is only single-encoded.
+      MEASURED: the first draft's `point0.x` undershot the pixel's own
+      double-encoded position by 3-7x across several realistic floors,
+      never actually clipping the level it claimed to target. Fixed by
+      encoding a second time, matching the kernel exactly — which then
+      revealed a real, accepted STRUCTURAL limit, not a further bug:
+      `kBlackPointSpan`'s own 0.20 reach (tuned for the SLIDER's own feel,
+      not for this solver) means `point0.x`'s own maximum, even at
+      `blackPoint = -1`, maps back through the double encode to only
+      linear ~0.003 — this mechanism can only ever clip a floor already
+      very close to true black. `kBlackTargetPerceptual` was re-derived
+      (0.02 → 0.005) to sit inside that narrow reachable window instead of
+      past it — MEASURED, the non-saturating response window is only
+      about linear 0.000387 (trigger) to 0.000776 (full saturation);
+      outside that razor-thin band the mechanism is effectively binary
+      (0 or `-kMaxAutoBlackPoint`), an honest v1 characteristic now
+      documented as such rather than hidden behind a formula that looks
+      more graduated than it really is. Logged as IMPROVEMENTS.md D26: given
+      this, Black Point saturates to its own maximum for nearly any real,
+      well-exposed photo (MEASURED: even a plain 0.18-gray fixture with no
+      distinct shadow region solves to exactly -0.5) — a genuine v1 design
+      question (is a consistent moderate deep-shadow crush a reasonable
+      Auto default, the way some real "Auto" presets do?) worth live-tuning
+      against real photos, not a bug.
+    - **Rounds 2-4 — the session's deepest finding: Contrast can
+      independently crush the very shadow floor Shadows is trying to
+      lift, in TWO separate stages.** Found entirely by the end-to-end
+      tests (`AutoToneEndToEndTests`, which render synthetic fixtures
+      through the REAL `EditPipeline` and re-measure) — the pure solver
+      tests alone never exercised the actual pipeline interaction and
+      would not have caught either stage. STAGE 1: `EditPipeline`'s
+      `CIColorControls` Contrast stage runs BEFORE Curves (where Shadows/
+      Black Point actually operate), pivoting at 0.5 —
+      `output = (input - 0.5) * (1 + contrast) + 0.5`. On a real
+      crushed-shadow fixture, an uncapped Contrast solve pushed
+      `predictedP5` NEGATIVE, and any negative value clips HARD to 0 in
+      the curve stage (`point0.x` is never negative) — MEASURED, the full
+      solve's `percentile5` came out at `4.96e-11`, essentially zero,
+      DARKER than doing nothing at all, on a fixture Auto Tone had
+      correctly diagnosed as needing a Shadows LIFT. First fix attempt:
+      cap Contrast to stay merely non-negative, and suppress Black Point
+      outright whenever Shadows triggers (the two fields have directly
+      contradictory goals whenever both trigger on the same pixels, since
+      `kBlackTargetPerceptual` sits far below `kShadowFloorPerceptual`).
+      That FIRST fix attempt itself broke 2 pre-existing, already-passing
+      tests (`testPunchyHighSpreadImageGivesNegativeContrast`,
+      `testContrastNeverExceedsItsClampOnThePunchySide`) — a blanket
+      "suppress Contrast whenever Shadows triggers" also zeroed out a
+      genuinely NEGATIVE, beneficial Contrast solve on a punchy/
+      high-spread image, since negative Contrast only ever pulls a value
+      TOWARD the pivot (helps), never away from it (crushes). Corrected to
+      `min(contrast, 0)` — block only the crushing (positive) direction.
+      STAGE 2, caught by re-review AFTER stage 1's fix: a floor just ABOVE
+      `kShadowFloorPerceptual` (where Shadows itself does NOT trigger, but
+      Black Point still can) reproduced the IDENTICAL `4.96e-11` symptom
+      via a different path — capping Contrast to merely non-negative
+      still left it small enough to land inside Black Point's own
+      double-encoded clip zone. FINAL fix: a single, correctly-derived cap
+      — `maxSafeContrast = max(0, (predictedP5 - kShadowFloorPerceptual) /
+      (0.5 - predictedP5))`, solving for the Contrast value that keeps the
+      POST-CONTRAST output at or above `kShadowFloorPerceptual` itself
+      (not just non-negative) — MEASURED, `srgbEncode(0.05) ≈ 0.248`,
+      comfortably (~2.5x) clear of Black Point's own maximum possible
+      reach (0.10 double-encoded). This one formula subsumes the earlier
+      `min(contrast, 0)` override entirely (below the shadow threshold the
+      cap itself evaluates to 0, reproducing that exact behavior) — the
+      separate override was removed. Round 5 (independent re-derivation
+      plus a 95-fixture sweep — 5 midtone levels × 19 floor levels — through
+      the REAL pipeline) confirmed the final math and found only stale doc
+      comments left over from the earlier fix attempts.
+  - **`ImageDocumentModel.autoTone()`** (the UI wiring, committed last):
+    samples geometry + white balance (`geometryOnlySamplingState()` plus
+    an explicit Temperature/Tint copy — Auto Tone measures the
+    WB-corrected image without ever writing WB itself), guarded by the
+    same `analysisGeneration` stale-write token `fixColorCast()`'s own
+    bug fix (below) introduced, and commits all 6 solved fields as ONE
+    atomic undo step (`finalizePendingCommit(); ...; history.commit(next);
+    applyHistoryState(...)`, the same pattern `applyPreset(_:)`/
+    `revertToOriginal()` already use) rather than through the debounced
+    `editState` `didSet` path `fixColorCast()` uses — `fixColorCast()` can
+    get away with debouncing because it only ever writes 2 tightly-coupled
+    fields; Auto Tone writes 6, and letting them merge into an in-flight
+    burst (or split across two commits if a slider drag lands in the
+    debounce window) would make a single ⌘Z behave inconsistently
+    depending on timing. A new "Auto" button, the first row of the Light
+    section, styled identically to the pre-existing "Fix Color Cast"
+    button. No new `EditState` fields, so `isAdjustTabAtIdentity`/
+    `resetAdjustmentsButton` needed no changes. Reviewer: APPROVE, no
+    issues found.
+  - **A real, pre-existing bug fix, discovered while planning this
+    feature and shipped as its own first commit**: `fixColorCast()`'s
+    background analysis had NO guard against a stale result landing on a
+    DIFFERENT photo than the one it analyzed (switch photos mid-analysis
+    → the old photo's Temperature/Tint silently writes onto the new
+    photo). Fixed with the same `analysisGeneration` token Auto Tone now
+    also uses — bumped once per SUCCESSFUL photo switch, in
+    `resetHistory()` (deliberately NOT `loadGeneration`, which also bumps
+    on a RAW-native re-decode and would wrongly invalidate an in-flight
+    analysis of the SAME photo). Also extracted `fixColorCast()`'s own
+    inline geometry-field-copy block into a new, reusable
+    `EditState.geometryOnlySamplingState()` — a pure refactor Auto Tone
+    then reused directly rather than duplicating.
+  - 1199 tests (55 new across the 3 commits: 9 `ImageToneStatisticsTests`,
+    25 `AutoToneSolverTests` including a Black Point regression run
+    through the real `ToneCurveSpline` kernel twin, 5
+    `AutoToneEndToEndTests` exercising the actual measure → solve →
+    render → re-measure loop, 2 new `EditStateGeometryIdentityTests` tying
+    `geometryOnlySamplingState()` to `isGeometryAtIdentity`). NOT yet
+    live-verified.
 - **Enhance / Super Resolution — WANTED.** AI upscaling; unrelated to this app's
   current edit-parameter model entirely — this is a new RENDER/EXPORT capability
   (an upscaled output image), not an `EditState` field, so it doesn't fit the

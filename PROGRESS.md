@@ -7,6 +7,26 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
+**Auto Tone (Tier-2 Lightroom gap) is now FULLY SHIPPED (2026-09-23)** —
+a one-click "Auto" button (first row of the Light section) that solves
+Exposure/Black Point/Highlights/Shadows/Contrast/Vibrance from a new
+whole-image tonal-statistics sampler (`ToneStatistics`/
+`ImageToneStatistics`) via a new `AutoToneSolver`, all wired through
+`ImageDocumentModel.autoTone()`. A heuristic v1, no ML — only Exposure
+has a genuine closed-form solve. 3 commits (statistics layer, solver,
+UI wiring), reviewer APPROVE on all 3 (the solver commit took 5 rounds,
+the deepest review chain of this session — see CLAUDE.md's own Auto
+Tone entry and `docs/ROADMAP_HISTORY.md` for the full story, including
+a double-encode bug in Black Point's first-draft "closed-form inverse"
+and a genuinely serious Contrast/Black-Point/Shadows interaction found
+only by end-to-end tests that render through the real pipeline, not the
+pure solver tests). Also shipped as part of the same session, ahead of
+Auto Tone itself: a real pre-existing bug fix in `fixColorCast()` (its
+background analysis had no guard against a stale result landing on the
+wrong photo after a mid-analysis photo switch) plus a pure refactor
+extracting `EditState.geometryOnlySamplingState()`, which Auto Tone then
+reused. 1199 tests. NOT yet live-verified — see "Exact next step" below.
+
 Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
 ✅ FULLY COMPLETE, Curves v2 (Tier-2 Lightroom gap) is fully shipped,
 reviewed, and live-verified, and **Grain** (Tier-1 Lightroom gap) is
@@ -163,6 +183,57 @@ backend and UI, fully shipped and live-verified). Every numbered
 IMPROVEMENTS.md item marked SHIPPED there is also done — that file is the
 source of truth for the perf/polish backlog, not duplicated here.
 
+**Auto Tone (2026-09-23)**: a one-click "Auto" button (first row of the
+Light section) solving Exposure/Black Point/Highlights/Shadows/Contrast/
+Vibrance from a new whole-image tonal-statistics sampler. No new
+`EditState` fields — writes 6 existing ones. 3 commits, each its own
+reviewer round:
+
+1. **Statistics layer** (`ToneStatistics`/`ImageToneStatistics`) — 2
+   rounds, FIX FIRST → committing (round 3 would only re-confirm an
+   already-verified tolerance fix). Round 1 caught a real bug:
+   `CIContext.render`'s premultiplied output was read as straight,
+   skewing percentiles near a resampled edge (MEASURED: `percentile0_5`
+   read 0.134 instead of 0.18 on a uniform-gray 3000x2000 bitmap) — fixed
+   by dividing by alpha, plus new bitmap-backed test fixtures, since
+   constant-color-generator fixtures can't exercise this bug at all.
+   Logged as IMPROVEMENTS.md D25: `ImageAverageColor`/`PixelSampler`
+   share the identical latent bug, not fixed there (out of scope).
+2. **`AutoToneSolver`** — 5 rounds, FIX FIRST x4 → APPROVE, the deepest
+   review chain of this session. Round 1 caught Black Point's
+   "closed-form inverse" was wrong (a double-encode bug in
+   `ToneCurve.cikernel`'s own second `srgbEncode`), which once fixed
+   correctly revealed the mechanism's own narrow reach (only floors
+   already very close to true black are reachable at all) — logged as
+   IMPROVEMENTS.md D26. Rounds 2-4 found and fixed a genuinely serious
+   full-pipeline bug, in two stages, entirely via the end-to-end tests
+   (the pure solver tests never caught it): Contrast, which runs before
+   Curves, could independently crush the very shadow floor Shadows was
+   trying to lift — first by pushing it negative (clipping hard to 0),
+   then, after a first fix, by a subtler variant on a floor just above
+   Shadows' own trigger threshold. A first fix attempt (blanket-suppress
+   Contrast whenever Shadows triggers) itself broke 2 pre-existing tests
+   by also zeroing a genuinely beneficial NEGATIVE Contrast solve.
+   Final fix: one cap, derived to keep the post-Contrast value at or
+   above `kShadowFloorPerceptual` (not just non-negative), which
+   subsumes the earlier override entirely. Round 5 (independent
+   re-derivation plus a 95-fixture sweep through the real pipeline)
+   confirmed the math and found only stale doc comments. See CLAUDE.md's
+   own Auto Tone entry and `docs/ROADMAP_HISTORY.md` for the full,
+   measured story.
+3. **UI wiring** (`ImageDocumentModel.autoTone()` + the Light-section
+   button) — reviewer APPROVE, no issues. Commits all 6 fields as one
+   atomic undo step (`applyPreset(_:)`'s own pattern), not the debounced
+   path `fixColorCast()` uses.
+
+Also shipped in this same session, ahead of Auto Tone itself: a real
+pre-existing bug fix in `fixColorCast()` (no guard against a stale
+background-analysis result landing on the wrong photo after a
+mid-analysis photo switch — fixed with a new `analysisGeneration` token
+Auto Tone also uses) and a pure refactor extracting
+`EditState.geometryOnlySamplingState()`. 1199 tests (55 new). NOT yet
+live-verified.
+
 **Chromatic Aberration removal / "Defringe" (2026-09-22)**: two new
 `EditState` fields (`defringePurple`/`defringeGreen`, 0...1, identity 0),
 the 10th custom kernel (`Defringe.cikernel`), and a new
@@ -315,10 +386,12 @@ stale structural proxy/thumbnail-divergence enumerations
 Defringe's own extent-fraction radius.
 
 1155 tests pass (the border-bug fix added one permanent regression
-test). Reviewer: FIX FIRST -> FIX FIRST -> [pending re-review]. NOT YET
-COMMITTED — do not treat the "committed" language in CLAUDE.md's
-roadmap entry or docs/ROADMAP_HISTORY.md as current until a round
-actually returns APPROVE.
+test). Reviewer round 2 of 2 this paragraph describes; the full 4-round
+story (rounds 3-4 were doc-comment-accuracy only) and final APPROVE are
+recorded in the "Current phase" section above — this paragraph is
+stale, corrected 2026-09-23: Defringe IS committed (see recent commit
+log), same as CLAUDE.md's own roadmap entry and docs/ROADMAP_HISTORY.md
+already say.
 
 **Grain (2026-09-17)**: single Amount slider, the pipeline's new true
 final stage (after Sharpen and Noise Reduction — see below). New
@@ -814,7 +887,11 @@ interaction glue with no unit-test precedent, per this codebase's own
 convention; verified live instead).
 
 ## In progress / blocked
-None. Chromatic Aberration removal ("Defringe") is fully shipped,
+None. Auto Tone is fully shipped, reviewed (3 commits, 5 review rounds
+total — see the "Current phase"/"Done" entries above for the full
+story), and committed, but NOT yet live-verified — the one open item,
+tracked under "Exact next step" below, not a blocker. Chromatic
+Aberration removal ("Defringe") is fully shipped,
 reviewed (4 rounds, FIX FIRST x3 → APPROVE), committed, and
 live-verified — see the "Current phase"/"Done" entries above. The
 "principled starting constants" (hue windows, edge threshold) held up
@@ -909,16 +986,30 @@ icons or trial-and-error expansion, which had already produced a false
 lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
-Nothing blocking. Pick the next Lightroom gap and enter Plan Mode
-first, per this project's workflow rules.
+Nothing blocking. Auto Tone is fully shipped, reviewed, and committed
+but NOT yet live-verified — a good candidate for the next session's
+first task (try Auto on a dark, a bright, and a flat real photo; confirm
+one ⌘Z undoes the whole step; confirm pressing Auto twice is a no-op;
+confirm switching photos mid-analysis doesn't write onto the new photo).
+`kBlackTargetPerceptual`/`kMaxAutoBlackPoint`/`kShadowFloorPerceptual`
+and the other `AutoToneSolver` tuning constants are explicitly
+principled-but-unmeasured starting points (per that file's own doc
+comments) — live-tuning them against real photos, the same process
+`kMaxTransformAspectStretch` went through, is the natural follow-up
+once live-verification surfaces anything worth adjusting. IMPROVEMENTS.md
+D26 (Black Point saturating to its own maximum for nearly any photo) is
+the one specific open design question to weigh while doing that.
 
-Also available: Auto Tone/Auto Settings, Enhance/Super Resolution, History
-panel, and Copy/Paste-and-Sync (unstarted Tier-2 items); Color Grading
-Slice B's own follow-ups — live-verifying the `AngularGradient`
+Otherwise, pick the next Lightroom gap and enter Plan Mode first, per
+this project's workflow rules. Available: Enhance/Super Resolution,
+History panel, and Copy/Paste-and-Sync (unstarted Tier-2 items); Color
+Grading Slice B's own follow-ups — live-verifying the `AngularGradient`
 painted-wheel convention on screen (flagged DERIVED, not measured, in
 `ColorWheelGeometry.angularGradientFraction`'s doc comment) and
 IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout); IMPROVEMENTS.md
 D22 (Point Color's missing luminance-selection axis, needs its own
 design pass); IMPROVEMENTS.md D23 (Transform Scale/Aspect's
-minification-aliasing gap); and the now-6-site mutual-exclusion mode
-enum IMPROVEMENTS.md logs as overdue.
+minification-aliasing gap); IMPROVEMENTS.md D25 (the same premultiplied-
+alpha read bug `ImageToneStatistics` fixed for itself, still latent in
+`ImageAverageColor`/`PixelSampler`); and the now-6-site mutual-exclusion
+mode enum IMPROVEMENTS.md logs as overdue.

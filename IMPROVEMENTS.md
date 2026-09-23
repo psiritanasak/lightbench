@@ -1243,6 +1243,29 @@ implementation. Worth a Hue Range slider (or narrower default windows)
 if foliage-adjacent false-positives turn out to matter in practice on
 real photos.
 
+### D25. `ImageAverageColor`/`PixelSampler` read `CIContext.render`'s premultiplied output as if it were straight (reviewer-caught, Auto Tone planning session)
+
+Found while building `ImageToneStatistics` (Auto Tone's own statistics
+sampler, `Sources/Rendering/ImageToneStatistics.swift`): `CIContext.
+render(_:toBitmap:...)` returns PREMULTIPLIED RGBA, and a resample's edge
+row/column commonly lands at a fractional alpha (still passing a
+`>= 0.5` qualifying guard) whose RGB has therefore been scaled down by
+that alpha. `ImageToneStatistics` now divides by alpha before use (see
+its own doc comment for the measured before/after numbers) — `Sources/
+Rendering/ImageAverageColor.swift:70-85` (the gray-world mean behind Fix
+Color Cast) and `Sources/Rendering/PixelSampler.swift:50-59` (the WB
+eyedropper's box sample) read the same premultiplied buffer without
+un-premultiplying first, and share the identical latent bug.
+
+Not fixed here — out of scope for the diff that found it, and likely
+low real-world impact for both: `ImageAverageColor`'s own 0.05...0.95
+luma exclusion band already throws out most near-edge/near-transparent
+readings this would affect, and `PixelSampler`'s tiny 5x5 box sample is
+rarely centered exactly on a resampled edge. Worth a real measurement
+(the same "temporary harness, deleted" technique `ImageToneStatistics`'s
+own fix used) before deciding whether either is worth fixing — a
+plausible v1 read is "real but small," not "definitely fine."
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

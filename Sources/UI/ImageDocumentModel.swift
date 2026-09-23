@@ -965,6 +965,82 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    // MARK: - Auto Tone
+
+    /// Analyzes the whole image's tonal distribution and sets Exposure,
+    /// Black Point, Highlights, Shadows, Contrast and Vibrance in one shot
+    /// — a heuristic v1 "sensible starting point," not ML (see CLAUDE.md's
+    /// own Auto Tone roadmap entry and `AutoToneSolver`'s own doc comment
+    /// for the full design, including two genuinely serious reviewer-caught
+    /// bugs in that solver's own Contrast/Black Point/Shadows interaction).
+    ///
+    /// Structurally mirrors `fixColorCast()`: the same geometry-only
+    /// sampling render, the same `analysisGeneration` stale-write guard.
+    /// Two real differences:
+    /// - The sampling state ALSO copies Temperature/Tint (not just
+    ///   geometry) — Auto Tone solves against the image as WB already
+    ///   corrects it, since WB is pipeline stage 1 and runs before every
+    ///   field this solves for, but Auto Tone itself never writes WB
+    ///   (Fix Color Cast stays its own separate button — user-confirmed
+    ///   scope decision, matching Lightroom's own Auto/WB-Auto split).
+    /// - The result commits as ONE atomic undo step, like
+    ///   `applyPreset(_:)`/`revertToOriginal()`, NOT through the debounced
+    ///   `editState` `didSet` path `fixColorCast()` uses. `fixColorCast()`
+    ///   can get away with the debounced path because it only ever writes
+    ///   2 fields that logically belong together (Temperature+Tint); Auto
+    ///   Tone writes 6, and letting them merge into whatever burst happens
+    ///   to be in flight (or split across two separate commits if a slider
+    ///   drag lands in the debounce's own ~350ms window) would make a
+    ///   single ⌘Z behave inconsistently depending on timing.
+    ///
+    /// Idempotent by construction, not by any special-case logic: the
+    /// sampling state excludes every field this method itself writes (via
+    /// `geometryOnlySamplingState()`), so pressing Auto Tone again samples
+    /// the SAME underlying image and solves to the SAME result — see
+    /// `AutoToneEndToEndTests.testSolvingTwiceInARowGivesTheSameResult`.
+    func autoTone() {
+        guard let currentImage else { return }
+
+        var samplingState = editState.geometryOnlySamplingState()
+        samplingState.whiteBalanceTemperature = editState.whiteBalanceTemperature
+        samplingState.whiteBalanceTint = editState.whiteBalanceTint
+        // Captured before the hop below — see `analysisGeneration`'s own
+        // doc comment. If the user switches to a different photo while
+        // this is in flight, the write below is silently dropped instead
+        // of landing on the new photo.
+        let myGeneration = analysisGeneration
+
+        // Same cost-profile reasoning as `fixColorCast()`: a full-image
+        // 256px render plus a whole-buffer CPU scan (here, a full sort for
+        // percentiles, not just a running sum) must happen inside the
+        // detached task, not on the main actor before it.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let sampled = EditPipeline.apply(samplingState, to: currentImage)
+            guard let stats = ImageToneStatistics.compute(of: sampled) else {
+                await MainActor.run {
+                    guard let self, self.analysisGeneration == myGeneration else { return }
+                    self.whiteBalanceSampleMessage = "Couldn't analyze this image's tones."
+                }
+                return
+            }
+
+            let result = AutoToneSolver.solve(stats)
+            await MainActor.run {
+                guard let self, self.analysisGeneration == myGeneration else { return }
+                self.finalizePendingCommit()
+                var next = self.editState
+                next.exposureEV = result.exposureEV
+                next.blackPoint = result.blackPoint
+                next.curvesHighlights = result.curvesHighlights
+                next.curvesShadows = result.curvesShadows
+                next.contrast = result.contrast
+                next.vibrance = result.vibrance
+                self.history.commit(next)
+                self.applyHistoryState(self.history.current)
+            }
+        }
+    }
+
     // MARK: - Undo/Redo
 
     /// Called from `editState`'s `didSet` for every write that ISN'T an

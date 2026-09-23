@@ -337,6 +337,15 @@ struct AdjustTabView: View {
     /// disclosure chrome and its own `VStack(spacing: 14)` wrapper.
     private var lightSection: some View {
         Group {
+            Button {
+                document.autoTone()
+            } label: {
+                Label("Auto", systemImage: "wand.and.stars")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(document.currentImage == nil)
+            .help("Automatically set Exposure, Contrast, Highlights, Shadows, Black Point and Vibrance")
             EditSliderRow(
                 label: "Exposure", value: $document.editState.exposureEV,
                 range: -5...5, identity: 0

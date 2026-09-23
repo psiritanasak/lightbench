@@ -87,4 +87,56 @@ final class EditStateGeometryIdentityTests: XCTestCase {
         s.boostAmount = 0.5
         XCTAssertTrue(s.isGeometryAtIdentity)
     }
+
+    // MARK: - geometryOnlySamplingState
+
+    /// Reviewer-caught (Auto Tone planning session): without a test tying
+    /// `geometryOnlySamplingState()` to `isGeometryAtIdentity`, a future
+    /// geometry field added to one but not the other would go unnoticed —
+    /// the exact failure class that produced several stale field-list
+    /// enumerations during Transform Scale/Aspect. This test sets every
+    /// field `isGeometryAtIdentity` checks (the same values the false-case
+    /// tests above use) PLUS a non-geometry sentinel, and asserts the
+    /// result equals a state with ONLY those same 11 fields set — proving
+    /// `geometryOnlySamplingState()` copies exactly that field set, no more
+    /// and no less.
+    func testGeometryOnlySamplingStateCopiesExactlyTheGeometryFields() {
+        var full = EditState.identity
+        full.straightenAngle = 5
+        full.verticalPerspective = 0.1
+        full.horizontalPerspective = 0.1
+        full.transformScale = 1.2
+        full.transformAspect = 0.1
+        full.flipHorizontal = true
+        full.flipVertical = true
+        full.cropInsetTop = 0.1
+        full.cropInsetBottom = 0.1
+        full.cropInsetLeft = 0.1
+        full.cropInsetRight = 0.1
+        // Non-geometry sentinels — must NOT survive into the sampled state.
+        full.exposureEV = 1.5
+        full.contrast = 0.3
+        full.whiteBalanceTemperature = 9000
+        full.whiteBalanceTint = 50
+        full.boostAmount = 0.2
+
+        var expected = EditState.identity
+        expected.straightenAngle = 5
+        expected.verticalPerspective = 0.1
+        expected.horizontalPerspective = 0.1
+        expected.transformScale = 1.2
+        expected.transformAspect = 0.1
+        expected.flipHorizontal = true
+        expected.flipVertical = true
+        expected.cropInsetTop = 0.1
+        expected.cropInsetBottom = 0.1
+        expected.cropInsetLeft = 0.1
+        expected.cropInsetRight = 0.1
+
+        XCTAssertEqual(full.geometryOnlySamplingState(), expected)
+    }
+
+    func testGeometryOnlySamplingStateOfIdentityIsAtGeometryIdentity() {
+        XCTAssertTrue(EditState.identity.geometryOnlySamplingState().isGeometryAtIdentity)
+    }
 }

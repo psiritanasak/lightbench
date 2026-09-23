@@ -1289,6 +1289,33 @@ struct EditState: Equatable, Codable {
             && cropInsetRight == 0
     }
 
+    /// An `EditState()` with only THIS state's geometry (the same field
+    /// group `isGeometryAtIdentity` just above checks) copied over —
+    /// everything else, including white balance, left at identity. Used by
+    /// any whole-image statistical analysis (`ImageDocumentModel.
+    /// fixColorCast`/`autoTone`) that needs to sample the image as WB/
+    /// Exposure/tone would first see it: those stages don't change extent,
+    /// so a render of this state still shares the real render's exact
+    /// coordinate space, and geometry (crop especially) still needs to be
+    /// applied so the analysis doesn't include content the user already
+    /// cropped away. Extracted from `fixColorCast`'s own original inline
+    /// field list, which `autoTone` would otherwise have had to duplicate.
+    func geometryOnlySamplingState() -> EditState {
+        var s = EditState()
+        s.straightenAngle = straightenAngle
+        s.verticalPerspective = verticalPerspective
+        s.horizontalPerspective = horizontalPerspective
+        s.transformScale = transformScale
+        s.transformAspect = transformAspect
+        s.flipHorizontal = flipHorizontal
+        s.flipVertical = flipVertical
+        s.cropInsetTop = cropInsetTop
+        s.cropInsetBottom = cropInsetBottom
+        s.cropInsetLeft = cropInsetLeft
+        s.cropInsetRight = cropInsetRight
+        return s
+    }
+
     /// True if `other` differs from `self` in any field that can ONLY
     /// take effect by re-running `RawDecoder.decode` — i.e. that
     /// configures `CIRAWFilter` itself rather than being an

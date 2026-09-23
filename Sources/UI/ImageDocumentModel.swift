@@ -128,6 +128,20 @@ final class ImageDocumentModel: ObservableObject {
     /// "only the latest result wins" mechanism here, not task cancellation.
     private var histogramGeneration = 0
 
+    /// Guards a whole-image statistical analysis's background result
+    /// (`fixColorCast`/`autoTone`) against landing on a DIFFERENT photo than
+    /// the one it analyzed — bumped once per successful photo switch, in
+    /// `resetHistory()` (the one place already documented as "undo history
+    /// is per-photo too"; this token is the same idea applied to an
+    /// in-flight analysis instead of undo state). Deliberately NOT
+    /// `loadGeneration`: that one is also bumped by a RAW-native re-decode
+    /// (`redecodeForRawNativeChange`), which must NOT invalidate an
+    /// in-flight tone/cast analysis of the same photo — see that function's
+    /// own doc comment for why it shares `loadGeneration` with `load(from:)`
+    /// for a DIFFERENT reason (both write `currentImage`) that doesn't apply
+    /// here.
+    private var analysisGeneration = 0
+
     // MARK: - Undo/Redo state
 
     private var history = EditHistory()
@@ -910,18 +924,12 @@ final class ImageDocumentModel: ObservableObject {
     func fixColorCast() {
         guard let currentImage else { return }
 
-        var samplingState = EditState()
-        samplingState.straightenAngle = editState.straightenAngle
-        samplingState.verticalPerspective = editState.verticalPerspective
-        samplingState.horizontalPerspective = editState.horizontalPerspective
-        samplingState.transformScale = editState.transformScale
-        samplingState.transformAspect = editState.transformAspect
-        samplingState.flipHorizontal = editState.flipHorizontal
-        samplingState.flipVertical = editState.flipVertical
-        samplingState.cropInsetTop = editState.cropInsetTop
-        samplingState.cropInsetBottom = editState.cropInsetBottom
-        samplingState.cropInsetLeft = editState.cropInsetLeft
-        samplingState.cropInsetRight = editState.cropInsetRight
+        let samplingState = editState.geometryOnlySamplingState()
+        // Captured before the hop below — see `analysisGeneration`'s own
+        // doc comment. If the user switches to a different photo while this
+        // is in flight, every write below is silently dropped instead of
+        // landing on the new photo.
+        let myGeneration = analysisGeneration
 
         // Unlike `pickWhiteBalance`'s trivial 5x5-pixel box sample, this is a
         // full-image 256px render plus a whole-buffer CPU scan — the same
@@ -933,14 +941,15 @@ final class ImageDocumentModel: ObservableObject {
             let geometryOnly = EditPipeline.apply(samplingState, to: currentImage)
             guard let sample = ImageAverageColor.compute(of: geometryOnly) else {
                 await MainActor.run {
-                    self?.whiteBalanceSampleMessage = "Couldn't analyze this image's colors."
+                    guard let self, self.analysisGeneration == myGeneration else { return }
+                    self.whiteBalanceSampleMessage = "Couldn't analyze this image's colors."
                 }
                 return
             }
 
             let outcome = WhiteBalanceSolver.solve(sampleLinearRGB: sample)
             await MainActor.run {
-                guard let self else { return }
+                guard let self, self.analysisGeneration == myGeneration else { return }
                 switch outcome {
                 case .solved(let temperature, let tint):
                     self.editState.whiteBalanceTemperature = temperature
@@ -1003,13 +1012,19 @@ final class ImageDocumentModel: ObservableObject {
     /// Resets undo/redo history to empty — called on `load(from:)` since
     /// edits (and their history) are per-photo; also cancels/discards any
     /// burst that was mid-flight for the PREVIOUS photo so it can't leak a
-    /// stray commit into the new photo's fresh history.
+    /// stray commit into the new photo's fresh history. Also bumps
+    /// `analysisGeneration` — same "per-photo, not per-load-attempt" timing
+    /// this function already provides for undo history: only a SUCCESSFUL
+    /// photo switch should invalidate an in-flight `fixColorCast`/`autoTone`
+    /// analysis of the photo being left, not a failed load that leaves the
+    /// current photo on screen.
     private func resetHistory() {
         historyCommitWorkItem?.cancel()
         historyCommitWorkItem = nil
         isBurstPending = false
         history = EditHistory(editState)
         refreshUndoRedoFlags()
+        analysisGeneration += 1
     }
 
     /// Undoes the most recent undo step. First flushes any in-progress burst

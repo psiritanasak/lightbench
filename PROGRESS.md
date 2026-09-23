@@ -25,7 +25,73 @@ Auto Tone itself: a real pre-existing bug fix in `fixColorCast()` (its
 background analysis had no guard against a stale result landing on the
 wrong photo after a mid-analysis photo switch) plus a pure refactor
 extracting `EditState.geometryOnlySamplingState()`, which Auto Tone then
-reused. 1199 tests. NOT yet live-verified — see "Exact next step" below.
+reused. 1199 tests.
+
+**Live-verified (2026-09-23)**, with explicit user permission (given
+proactively for this task, not asked mid-session) to drive the app via
+screen automation, against a Release build and two scratch synthetic
+fixtures built with Python/PIL in a `livetest` folder (NOT the user's
+real photo library; opened via File > Open, never imported into the
+catalog, and deleted afterward along with their sidecars):
+- **A dark fixture** (a near-black floor, a small near-true-black
+  corner patch, a dim sky strip): Auto solved `exposureEV = 3` (clamped
+  to the max, correct direction), `blackPoint = -0.5` (saturated,
+  matching IMPROVEMENTS.md D26's own documented near-universal
+  saturation), `contrast = +0.138`, `vibrance = +0.239`, and correctly
+  left `curvesShadows`/`curvesHighlights` at `0` (the crushed corner is
+  a small enough fraction of the frame that it triggers Black Point's
+  own 0.5th-percentile threshold but not Shadows' own 5th-percentile
+  one — a real, sensible distinction, not an oversight).
+- **A bright fixture** (a near-white floor, a lighter near-white sky):
+  Auto solved `exposureEV = -1.548` (correct direction, reducing
+  exposure), `blackPoint = -0.5` again, `contrast = +0.291`,
+  `vibrance = +0.239`, and again `curvesHighlights = 0` — the solved
+  Exposure reduction alone already pulls the near-white content below
+  the Highlights trigger threshold, so Highlights correctly has nothing
+  left to do; not a bug.
+- Both fixtures: `whiteBalanceTemperature`/`whiteBalanceTint`,
+  `brightness`, `brilliance`, and all 3 `levels*` fields stayed exactly
+  at their identity defaults — confirmed Auto Tone touches only its own
+  6 documented fields.
+- **Idempotence**: clicking Auto twice on the dark fixture produced
+  bit-identical solved values (verified via an order-independent JSON
+  comparison of the saved sidecar, since `JSONEncoder`'s key order
+  itself isn't deterministic — a real, if harmless, difference between
+  the two raw files that a naive text diff would have misread as a
+  content change).
+- **Undo**: a single ⌘Z after Auto reverted all 6 fields to exactly `0`
+  in one step (confirmed via the sidecar, not just the UI), matching
+  the atomic-commit design.
+- **Not verified live**: the "switch photos mid-analysis" stale-write
+  guard — the analysis completes in well under a second, too fast to
+  reliably race via UI automation; treated as adequately covered by the
+  design review (the same `analysisGeneration` mechanism `fixColorCast()`
+  already uses) rather than chasing a flaky live race condition.
+- The Adjust sidebar's own content did not render in `screencapture`
+  output in this environment for reasons unrelated to the app itself —
+  worth recording since it cost real time this session: `screencapture`
+  reliably shows the window chrome and the Adjust/Filters/Crop/Clean Up
+  tab bar, but the sidebar's sliders/buttons never appeared in a
+  screenshot despite AX confirming they were mounted, clickable, and
+  producing correct results (cross-checked directly against the sidecar
+  file throughout). A SEPARATE, real finding worth its own note: this
+  Mac has two displays, and the app's window opened on the SECOND one
+  (`window position` returned a NEGATIVE x-coordinate) — `screencapture`
+  with no display argument only captures the main display, so the first
+  several screenshots this session appeared to show nothing happening
+  at all until the window was explicitly repositioned onto the main
+  display. Both quirks are worth remembering for the next live-
+  verification session in this environment, whatever the root cause
+  turns out to be.
+- One incidental discovery, not a bug: this Mac's real, personal
+  PhotoApp installation has previously been used on real photos outside
+  any test folder (a `.photoapp.json` sidecar was visible next to a real
+  file on the Desktop during this session) — untouched by this session,
+  which worked exclusively in the scratch `livetest` folder throughout.
+
+See "Exact next step" below — Auto Tone's own tuning constants are
+still unmeasured starting points; nothing found in this live-
+verification pass currently motivates changing any of them.
 
 Phase 2 (Edit engine) through Phase 7 (Local Adjustments/Masking) are all
 ✅ FULLY COMPLETE, Curves v2 (Tier-2 Lightroom gap) is fully shipped,
@@ -889,9 +955,11 @@ convention; verified live instead).
 ## In progress / blocked
 None. Auto Tone is fully shipped, reviewed (3 commits, 5 review rounds
 total — see the "Current phase"/"Done" entries above for the full
-story), and committed, but NOT yet live-verified — the one open item,
-tracked under "Exact next step" below, not a blocker. Chromatic
-Aberration removal ("Defringe") is fully shipped,
+story), committed, AND live-verified (against a dark and a bright
+scratch fixture, confirming correct Exposure direction/clamping, Black
+Point's documented saturation behavior, idempotence, and one-step
+undo — see the "Current phase" entry's own live-verification write-up).
+Chromatic Aberration removal ("Defringe") is fully shipped,
 reviewed (4 rounds, FIX FIRST x3 → APPROVE), committed, and
 live-verified — see the "Current phase"/"Done" entries above. The
 "principled starting constants" (hue windows, edge threshold) held up
@@ -986,19 +1054,25 @@ icons or trial-and-error expansion, which had already produced a false
 lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
-Nothing blocking. Auto Tone is fully shipped, reviewed, and committed
-but NOT yet live-verified — a good candidate for the next session's
-first task (try Auto on a dark, a bright, and a flat real photo; confirm
-one ⌘Z undoes the whole step; confirm pressing Auto twice is a no-op;
-confirm switching photos mid-analysis doesn't write onto the new photo).
+Nothing blocking. Auto Tone is fully shipped, reviewed, committed, AND
+live-verified (dark + bright synthetic fixtures; Exposure direction and
+clamping, Black Point's documented saturation, idempotence, and
+one-step undo all confirmed against the saved sidecar — see the
+"Current phase" entry's own write-up). NOT yet tried against a real
+photo from the user's own library (only synthetic fixtures so far) —
+worth doing opportunistically, not urgently.
 `kBlackTargetPerceptual`/`kMaxAutoBlackPoint`/`kShadowFloorPerceptual`
 and the other `AutoToneSolver` tuning constants are explicitly
 principled-but-unmeasured starting points (per that file's own doc
-comments) — live-tuning them against real photos, the same process
-`kMaxTransformAspectStretch` went through, is the natural follow-up
-once live-verification surfaces anything worth adjusting. IMPROVEMENTS.md
-D26 (Black Point saturating to its own maximum for nearly any photo) is
-the one specific open design question to weigh while doing that.
+comments) — live-tuning them against a variety of real photos, the same
+process `kMaxTransformAspectStretch` went through, is the natural
+follow-up if a real photo ever produces a visually wrong-looking
+result; nothing found in this session's own live-verification currently
+motivates a retune. IMPROVEMENTS.md D26 (Black Point saturating to its
+own maximum for nearly any photo) is the one specific open design
+question to weigh while doing that — this session's own two fixtures
+both independently confirmed that saturation happening exactly as
+D26 describes.
 
 Otherwise, pick the next Lightroom gap and enter Plan Mode first, per
 this project's workflow rules. Available: Enhance/Super Resolution,

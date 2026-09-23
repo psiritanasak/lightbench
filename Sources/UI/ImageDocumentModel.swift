@@ -106,6 +106,15 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
 
+    /// Mirrors `EditHistory`'s own `entries`/`currentIndex` as `@Published`
+    /// properties, for the History panel (`AdjustTabView`'s "History"
+    /// section) — same reasoning as `canUndo`/`canRedo` just above: SwiftUI
+    /// can't observe mutation of a plain struct property, so every history
+    /// operation republishes a fresh copy here too. Refreshed in the same
+    /// place `canUndo`/`canRedo` are, `refreshHistoryState()`.
+    @Published private(set) var historyEntries: [HistoryEntry] = []
+    @Published private(set) var currentHistoryIndex = 0
+
     /// Live Levels histogram — luminance plus per-channel R/G/B, each
     /// `HistogramComputer.binCount` values normalized 0...1. Empty (`.empty`)
     /// until the first debounced recompute finishes (or if no image is
@@ -1035,7 +1044,7 @@ final class ImageDocumentModel: ObservableObject {
                 next.curvesShadows = result.curvesShadows
                 next.contrast = result.contrast
                 next.vibrance = result.vibrance
-                self.history.commit(next)
+                self.history.commit(next, summary: "Auto Tone")
                 self.applyHistoryState(self.history.current)
             }
         }
@@ -1065,10 +1074,10 @@ final class ImageDocumentModel: ObservableObject {
         guard isBurstPending else { return }
         isBurstPending = false
         history.commit(editState)
-        refreshUndoRedoFlags()
+        refreshHistoryState()
     }
 
-    /// Applies `state` as the result of an undo/redo step. Guarded by
+    /// Applies `state` as the result of an undo/redo/jump step. Guarded by
     /// `isApplyingHistoryChange` so the resulting `editState` `didSet`
     /// doesn't re-record this as a new burst (which would immediately
     /// re-commit the very state just restored) — `scheduleHistogramUpdate()`
@@ -1077,12 +1086,21 @@ final class ImageDocumentModel: ObservableObject {
         isApplyingHistoryChange = true
         editState = state
         isApplyingHistoryChange = false
-        refreshUndoRedoFlags()
+        refreshHistoryState()
     }
 
-    private func refreshUndoRedoFlags() {
+    /// Republishes every `EditHistory`-derived `@Published` property —
+    /// `canUndo`/`canRedo` (the toolbar buttons) and `historyEntries`/
+    /// `currentHistoryIndex` (the History panel) — from the current
+    /// `history`. Named for what it now covers as a whole, not just the
+    /// undo/redo flags it originally published alone; called after every
+    /// operation that can change `history`'s shape or cursor (`commit` via
+    /// `finalizePendingCommit`, `applyHistoryState`, `resetHistory`).
+    private func refreshHistoryState() {
         canUndo = history.canUndo
         canRedo = history.canRedo
+        historyEntries = history.entries
+        currentHistoryIndex = history.currentIndex
     }
 
     /// Resets undo/redo history to empty — called on `load(from:)` since
@@ -1094,12 +1112,18 @@ final class ImageDocumentModel: ObservableObject {
     /// photo switch should invalidate an in-flight `fixColorCast`/`autoTone`
     /// analysis of the photo being left, not a failed load that leaves the
     /// current photo on screen.
+    ///
+    /// `initialSummary: "Opened"` is passed explicitly (it's also
+    /// `EditHistory.init`'s own default) because the state being loaded
+    /// here is frequently RESTORED from a photo's own sidecar, not literal
+    /// identity — labeling that first History row "Original" would
+    /// misdescribe an already-edited photo's own starting point.
     private func resetHistory() {
         historyCommitWorkItem?.cancel()
         historyCommitWorkItem = nil
         isBurstPending = false
-        history = EditHistory(editState)
-        refreshUndoRedoFlags()
+        history = EditHistory(editState, initialSummary: "Opened")
+        refreshHistoryState()
         analysisGeneration += 1
     }
 
@@ -1120,6 +1144,31 @@ final class ImageDocumentModel: ObservableObject {
     func redo() {
         finalizePendingCommit()
         history.redo()
+        applyHistoryState(history.current)
+    }
+
+    /// Jumps directly to an arbitrary past (or redone-but-not-yet-abandoned)
+    /// entry — the History panel's own row tap, unlike `undo()`/`redo()`'s
+    /// one-step-at-a-time moves. Flushes any in-progress burst FIRST, same
+    /// reasoning as `undo()`/`redo()`, and for the same reason must look the
+    /// entry up by `id` rather than a row index captured before the flush:
+    /// `finalizePendingCommit()` can itself trim the oldest entry or drop
+    /// every entry after the cursor, either of which would silently
+    /// invalidate an index captured beforehand.
+    ///
+    /// The `guard history.jump(to: id) else { return }` is load-bearing,
+    /// not decoration: every History row is tappable, including the
+    /// CURRENT one (unlike the toolbar's Undo/Redo buttons, already
+    /// disabled when unavailable) — `EditHistory.jump(to:)` returns `false`
+    /// for a tap on the already-current row specifically so this method can
+    /// skip `applyHistoryState`'s `editState` write. Without the guard, a
+    /// no-op tap would still fire `editState`'s `didSet` →
+    /// `scheduleSidecarSave()`, a real, user-visible bug (a spurious save,
+    /// possibly even a folder-access permission prompt, for a click that
+    /// changed nothing).
+    func jumpToHistory(id: HistoryEntry.ID) {
+        finalizePendingCommit()
+        guard history.jump(to: id) else { return }
         applyHistoryState(history.current)
     }
 
@@ -1151,7 +1200,7 @@ final class ImageDocumentModel: ObservableObject {
         // explicitly instead of reset.
         var identity = EditState()
         identity.rawDecoderVersionPin = editState.rawDecoderVersionPin
-        history.commit(identity)
+        history.commit(identity, summary: "Revert to Original")
         applyHistoryState(history.current)
     }
 
@@ -1165,7 +1214,7 @@ final class ImageDocumentModel: ObservableObject {
     /// wires that into the undo/sidecar-save machinery.
     func applyPreset(_ preset: Preset) {
         finalizePendingCommit()
-        history.commit(preset.editState.applyingPreset(onto: editState))
+        history.commit(preset.editState.applyingPreset(onto: editState), summary: "Preset: \(preset.name)")
         applyHistoryState(history.current)
     }
 
@@ -1187,7 +1236,11 @@ final class ImageDocumentModel: ObservableObject {
         case .green: next.toneCurvePointsGreen = []
         case .blue: next.toneCurvePointsBlue = []
         }
-        history.commit(next)
+        // Matches AdjustTabView's own "Reset Curve"/"Reset <Channel> Curve"
+        // button label phrasing exactly, so the History row reads as the
+        // same action the user just clicked.
+        let summary = "Reset \(channel == .composite ? "Curve" : "\(channel.rawValue) Curve")"
+        history.commit(next, summary: summary)
         applyHistoryState(history.current)
     }
 

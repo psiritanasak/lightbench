@@ -1266,6 +1266,37 @@ rarely centered exactly on a resampled edge. Worth a real measurement
 own fix used) before deciding whether either is worth fixing — a
 plausible v1 read is "real but small," not "definitely fine."
 
+### D26. Auto Tone's Black Point saturates to its own maximum for nearly every photo (reviewer-caught, design note, not blocking)
+
+`AutoToneSolver.solveBlackPoint`'s corrected math (see that function's own
+doc comment for the double-encode bug it fixes) reveals a real, accepted
+structural limit: given `kBlackPointSpan` (0.20, mirrored from
+`EditPipeline`, tuned for the SLIDER's own feel) and `kMaxAutoBlackPoint`
+(0.5), the mechanism can only ever clip a floor whose raw linear value is
+below roughly 0.000776 — i.e. already extremely close to true black.
+`solveBlackPoint` now also suppresses itself whenever Shadows triggers too
+(a separate, since-fixed bug — see this codebase's own Auto Tone
+implementation, `Sources/EditEngine/AutoToneSolver.swift`), which narrows
+Black Point's firing range further, but does NOT change this part: for any
+photo whose darkest 0.5% of pixels sits above that ~0.000776 floor, WHILE
+its darkest 5% is NOT itself crushed enough to trigger Shadows (i.e.
+Shadows' own suppression of Black Point doesn't apply) — which is most
+ordinary, well-exposed photos, since a real photo's true darkest pixel is
+rarely literally that close to 0 — Black Point saturates to exactly
+`-kMaxAutoBlackPoint` (currently -0.5), not a small graduated nudge.
+MEASURED (reviewer's own harness): a plain 0.18-gray test fixture with no
+distinct shadow region at all still solves Black Point to exactly -0.5.
+
+Not fixed here — a genuine v1 design question, not a bug: is a
+consistent, moderately strong deep-shadow crush actually a reasonable Auto
+Tone default (matching how some real photo-editing "Auto" presets do add
+a base contrast/black-point boost to most photos), or is it an
+overreach for a feature meant to read as "sensible defaults, not a heavy
+hand"? Worth live-tuning against real photos (the same process
+`kMaxTransformAspectStretch` went through) rather than guessing — could
+mean lowering `kMaxAutoBlackPoint` further, adding a second, gentler dead
+zone, or leaving it as-is if it looks fine in practice.
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

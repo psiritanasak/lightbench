@@ -7,7 +7,29 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
-**History panel (Tier-2 Lightroom gap) is now FULLY SHIPPED (2026-09-23)** —
+**Copy/Paste Settings (Tier-2 Lightroom gap) is now FULLY SHIPPED
+(2026-09-24)** — `PasteSettingsModel` owns "Copy Settings" (Editor
+toolbar + ⇧⌘C) and "Paste Settings" (Library toolbar + ⇧⌘V, batch onto
+the current selection). New `Sources/Rendering/SidecarStore.swift` +
+`Sources/UI/SidecarFolderAccess.swift` (sidecar file I/O + bookmark
+access extracted out of `ImageDocumentModel`'s own previously-private
+methods, behavior-preserving) and `PasteSettingsPlan` (pure planning
+logic, fully unit-tested). The merge reuses `EditState.
+applyingPreset(onto:)` unchanged — no new field-exclusion list. 3 code
+commits (sidecar extraction, Library grid live-refresh, the feature
+itself), each its own reviewer round — the feature commit alone took 6
+rounds (FIX FIRST × 5) to close a real async-load-vs-batch-write race;
+see CLAUDE.md's own roadmap entry for the full story, including
+IMPROVEMENTS.md D28 (one accepted, pre-existing, narrow residual
+exposure in `saveSidecarNow` itself, logged not fixed). 1254 tests (19
+new). **NOT yet live-verified** — see "Exact next step" below.
+
+Deliberate v1 scope cuts (all confirmed/accepted, not oversights): no
+RAW-native fields carried (matches Presets' own behavior); no granular
+"Sync Settings..." checkbox dialog; no copy-from-an-unopened-Library-
+photo entry point; no "Undo Paste" batch restore.
+
+**History panel (Tier-2 Lightroom gap) FULLY SHIPPED (2026-09-23)** —
 a browsable/scrubbable edit list, not just linear undo. `EditHistory`
 (`Sources/EditEngine/EditHistory.swift`) rewritten from a two-stack
 past/future model to a single `entries: [HistoryEntry]` + `currentIndex`
@@ -1163,17 +1185,38 @@ icons or trial-and-error expansion, which had already produced a false
 lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
-Nothing blocking. History panel is fully shipped, reviewed (2 rounds,
-FIX FIRST → APPROVE), committed, AND live-verified (2026-09-24) — every
-item on the plan's own verification checklist passed: sensible row
-summaries, correct current/abandoned/normal row styling, a jump that
-updates both the render and the sidecar, a no-op tap on the current row
-confirmed (via sidecar mtime) to genuinely skip the write, an abandoned-
-branch discard on a new edit from a jumped-to point, and correct toolbar
-Undo/Redo interleaving with a manual jump — see the "Current phase"
-entry's own write-up for full detail, including one automation-only gotcha
-(toolbar Undo/Redo expose their label via the `description` AX attribute,
-not `title`) worth remembering for the next live-verification session.
+Nothing blocking. Copy/Paste Settings is fully shipped, reviewed (3
+commits, the feature commit alone 6 rounds FIX FIRST × 5 → APPROVE), and
+committed — see the "Current phase" entry's own write-up. **NOT yet
+live-verified** — the natural next step for a resuming session is a
+live pass covering: Copy Settings on an edited photo (toolbar AND ⇧⌘C),
+disabled with nothing open; Paste Settings onto 3+ selected photos
+across 2+ folders (toolbar AND ⇧⌘V), confirming ONE bookmark prompt per
+not-yet-granted folder (not one per photo); checking each target's
+sidecar JSON — look/tone fields match the copied source, the target's
+OWN crop/masks/RAW fields survive untouched; grid thumbnails/edited-
+badges updating live without leaving the Library (the
+`thumbnailRevisions` mechanism from the 2nd commit); the open-photo path
+specifically — open a photo, edit it, select it plus others, paste,
+confirm the Editor shows the pasted look with a "Paste Settings" row in
+the History panel, Undo restores its pre-paste edit, other targets are
+unaffected; an identity-paste (copy from unedited, paste onto unedited)
+creates no sidecar and reports "already matched"; a declined folder
+reports skipped with no sidecar written, and re-prompts on the next
+attempt. Use scratch synthetic JPEGs (matching the Auto Tone/History
+panel sessions' own precedent), NOT the user's real library.
+
+History panel is ALSO fully shipped, reviewed (2 rounds, FIX FIRST →
+APPROVE), committed, AND live-verified (2026-09-24) — every item on the
+plan's own verification checklist passed: sensible row summaries,
+correct current/abandoned/normal row styling, a jump that updates both
+the render and the sidecar, a no-op tap on the current row confirmed
+(via sidecar mtime) to genuinely skip the write, an abandoned-branch
+discard on a new edit from a jumped-to point, and correct toolbar
+Undo/Redo interleaving with a manual jump — see its own "Current phase"
+entry for full detail, including one automation-only gotcha (toolbar
+Undo/Redo expose their label via the `description` AX attribute, not
+`title`) worth remembering for the next live-verification session.
 
 Auto Tone is ALSO fully shipped, reviewed, committed, AND live-verified
 (dark + bright synthetic fixtures, plus a real photo from the user's own
@@ -1191,10 +1234,10 @@ nearly any photo) is the one specific open design question to weigh
 while doing that — all 3 of this session's own test cases independently
 confirmed that saturation happening exactly as D26 describes.
 
-Otherwise, pick the next Lightroom gap and enter Plan Mode first, per
-this project's workflow rules. Available: Enhance/Super Resolution and
-Copy/Paste-and-Sync (unstarted
-Tier-2 items); Color Grading Slice B's own follow-ups — live-verifying
+Otherwise, once Copy/Paste Settings is live-verified, pick the next
+Lightroom gap and enter Plan Mode first, per this project's workflow
+rules. Available: Enhance/Super Resolution (the one remaining unstarted
+Tier-2 item); Color Grading Slice B's own follow-ups — live-verifying
 the `AngularGradient` painted-wheel convention on screen (flagged
 DERIVED, not measured, in `ColorWheelGeometry.angularGradientFraction`'s
 doc comment) and IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout);
@@ -1203,5 +1246,8 @@ needs its own design pass); IMPROVEMENTS.md D23 (Transform Scale/
 Aspect's minification-aliasing gap); IMPROVEMENTS.md D25 (the same
 premultiplied-alpha read bug `ImageToneStatistics` fixed for itself,
 still latent in `ImageAverageColor`/`PixelSampler`); IMPROVEMENTS.md D27
-(the 3 History panel nits logged this session); and the now-6-site
+(the 3 History panel nits logged this session); IMPROVEMENTS.md D28 (a
+pre-existing `saveSidecarNow` load-during-save race onto the wrong
+sidecar, found while closing Copy/Paste Settings' own race — affects
+every ordinary debounced save, not just batch paste); and the now-6-site
 mutual-exclusion mode enum IMPROVEMENTS.md logs as overdue.

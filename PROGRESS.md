@@ -8,9 +8,33 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
 **Enhance / Super Resolution — IN PROGRESS (started 2026-09-24).**
-Commit 2 of the plan (`Sources/Rendering/SuperResolutionUpscaler.swift`
-+ tests) is DONE — 3 reviewer rounds, FIX FIRST × 2 → APPROVE, all
-1279 tests passing, committed (`47bb678`). The two most substantive
+Commit 3 (`Sources/Rendering/PhotoEnhancer.swift` + the small
+`PhotoExporter` refactor it builds on + tests) is DONE — 5 reviewer
+rounds, FIX FIRST × 4 → APPROVE, all 1294 tests passing, committed
+(`adcc5f0`). This was the first thing to actually call
+`SuperResolutionUpscaler` at full photo resolution, and every round
+found something real: (1) no test checked which upscale method
+actually ran, and a genuine overwrite race — the destination name was
+picked before the multi-second upscale ran, so two concurrent Enhance
+calls could clobber each other; (2) the fix for that (write with
+`.withoutOverwriting`) introduced a NEW truncation regression on a
+crash/disk-full; (3) the fix for THAT (`FileManager.linkItem`, a hard
+link) is correct on APFS/HFS+ but fails outright with `ENOTSUP` on
+exFAT/FAT32 — common on SD cards and external drives, verified on real
+disk images via `hdiutil`, not theorized — which would have made
+Enhance silently unusable on that class of volume; (4) the
+reserve-then-rename fallback for exFAT/FAT32 had a force-unwrap
+(CLAUDE.md forbids these outside tests) and could leave an orphaned
+placeholder file if the rename itself failed. Every fix was
+independently re-verified against real exFAT/FAT32 disk images and/or
+mutation testing across rounds, not just re-read. Two known, narrow,
+accepted gaps logged as IMPROVEMENTS.md D29 (a killed process can
+leave a stale hidden temp file, or much more narrowly an empty
+placeholder file, behind in the user's photo folder).
+
+Commit 2 (`Sources/Rendering/SuperResolutionUpscaler.swift` + tests) is
+DONE — 3 reviewer rounds, FIX FIRST × 2 → APPROVE, committed
+(`47bb678`). The two most substantive
 catches: round 1 found (via a real probe, not theorized) that MetalFX
 silently forces output alpha to 1 regardless of input alpha while
 Lanczos correctly preserves it — a hardware-dependent correctness
@@ -1283,25 +1307,39 @@ icons or trial-and-error expansion, which had already produced a false
 lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
-**Resume Enhance / Super Resolution.** Plan approved, commits 1
-(MetalFX probe) and 2 (`SuperResolutionUpscaler`) both done, reviewed,
-and committed — see the "Current phase" entry above. Plan file (still
-valid, read it before continuing):
-`/Users/praween/.claude/plans/cheeky-whistling-teacup.md`. Remaining
-commits per that plan: (3) the small `PhotoExporter` refactor (shared
-`renderDevice`, `internal` visibility on `context`/`write`, extracted
-`uniqueFileURL` with the orphan-sidecar collision fix) + `PhotoEnhancer`
-+ tests — NEXT; (4) `CatalogDatabase.registerPhoto`/`photo(atPath:)` +
-`CatalogModel.catalogedPhoto`/`registerEnhancedPhoto` + tests; (5)
-`EnhanceModel` + `ContentView` toolbar wiring; (6) docs
-(CLAUDE.md/IMPROVEMENTS.md/PROGRESS.md) + live verification (checklist
-is in the plan file). Reviewer (`model: "opus"`) on `git diff HEAD`
-before every commit, per CLAUDE.md — only commit on APPROVE. Given how
-many real, hardware-verified bugs the reviewer caught in commit 2's
-MetalFX code specifically (3 rounds), budget for multiple rounds on
-commit 3 too — `PhotoEnhancer` is the thing that actually calls
-`SuperResolutionUpscaler.upscale` for real, at full photo resolution,
-through `RawDecoder.RenderGate` for RAW sources.
+**Resume Enhance / Super Resolution.** Plan approved, commits 1 (MetalFX
+probe), 2 (`SuperResolutionUpscaler`), and 3 (`PhotoEnhancer` + the
+`PhotoExporter` refactor) all done, reviewed, and committed — see the
+"Current phase" entry above. Plan file (still valid, read it before
+continuing): `/Users/praween/.claude/plans/cheeky-whistling-teacup.md`.
+
+Remaining commits per that plan: (4) `CatalogDatabase.registerPhoto`
+(insert-or-reuse a `Photo` row for a URL, join an EXISTING matching
+folder collection if one exists, never create one) + `photo(atPath:)`,
+`CatalogModel.catalogedPhoto(atPath:)` (queries the database directly,
+not the filtered `photos` array) + `registerEnhancedPhoto(at:)`
+(guards `database != nil`, calls `registerPhoto`, then
+`invalidateThumbnail(for:)`, then `refresh()`) + tests — NEXT; (5)
+`EnhanceModel` (mirrors `ExportModel`'s `Task.detached` shape,
+`SidecarFolderAccess` as its 3rd caller, the "photo must already be
+catalogued" guard, no cancellation/no batch) + `ContentView` toolbar
+wiring (new "Enhance" button in `editHistoryToolbarItems`, a small
+"Enhancing…" HUD, a status alert); (6) docs
+(CLAUDE.md/IMPROVEMENTS.md/PROGRESS.md) + live verification (the
+12-item checklist is in the plan file — includes confirming the
+enhanced photo thumbnails with no surprise second folder-access prompt,
+and a MetalFX-vs-Lanczos visual quality comparison that hasn't been
+done yet, only speed/feasibility has).
+
+Reviewer (`model: "opus"`) on `git diff HEAD` before every commit, per
+CLAUDE.md — only commit on APPROVE. Commit 3 took 5 rounds (4 of them
+real FIX FIRST findings, including a filesystem-compatibility bug only
+caught by testing against real exFAT/FAT32 disk images via `hdiutil`
+— see that commit's own message for the full story). Commits 4-5 are
+lower-risk (ordinary GRDB/SwiftUI wiring, no new frameworks or
+filesystem edge cases), but don't assume "no more surprises" — budget
+for at least 1-2 real rounds per commit as this session's own track
+record on this feature suggests.
 
 Copy/Paste Settings is fully shipped, reviewed (3 commits, the feature
 commit alone 6 rounds FIX FIRST × 5 → APPROVE), committed, AND

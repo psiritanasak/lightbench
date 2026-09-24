@@ -39,6 +39,24 @@ struct ExportProgressHUD: View {
     }
 }
 
+/// Same `.regularMaterial` HUD family as `ExportProgressHUD` — an
+/// indeterminate spinner, not a percentage bar, since `PhotoEnhancer
+/// .enhance` is one atomic async call with no incremental progress signal
+/// to report (unlike Export's own per-photo batch loop).
+struct EnhancingHUD: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Enhancing…")
+                .font(.caption)
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.bottom, 16)
+    }
+}
+
 /// Stand-in body for an `EditorTab` that has no implementation yet (Filters,
 /// Clean Up) — the tab bar mirrors Apple Photos' fixed tab set, so those tabs
 /// exist in the UI before their features do.

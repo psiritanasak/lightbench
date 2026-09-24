@@ -26,6 +26,12 @@ struct ContentView: View {
     /// view (no Scene-level command, no other view) needs to observe it.
     @StateObject private var exportModel = ExportModel()
 
+    /// Enhance/Super Resolution. Same scoping reasoning as `exportModel`
+    /// — v1 deliberately has no Photo-menu item (unlike `pasteModel`'s
+    /// ⇧⌘C/⇧⌘V, a Scene-level construct), so nothing outside this view
+    /// needs to observe it.
+    @StateObject private var enhanceModel = EnhanceModel()
+
     /// What "Export…" actually exports. A pure refinement on top of the
     /// existing filtered set: if 1+ photos are checked in the grid,
     /// export ONLY those (overriding whatever Collection/Folder is
@@ -1016,9 +1022,25 @@ struct ContentView: View {
                     exportModel.runExport(photos: photosToExport)
                 }
             }
+            .alert(
+                "Enhance",
+                isPresented: Binding(
+                    get: { enhanceModel.statusMessage != nil },
+                    set: { isPresented in
+                        if !isPresented { enhanceModel.statusMessage = nil }
+                    }
+                ),
+                presenting: enhanceModel.statusMessage
+            ) { _ in
+                Button("OK") {}
+            } message: { message in
+                Text(message)
+            }
             .overlay(alignment: .bottom) {
                 if let progress = exportModel.progress {
                     ExportProgressHUD(progress: progress)
+                } else if enhanceModel.isEnhancing {
+                    EnhancingHUD()
                 }
             }
     }
@@ -1386,6 +1408,23 @@ struct ContentView: View {
             // BOTH the Library and Editor panes; a new gate here would be
             // an inconsistency, not a safety improvement.
             .disabled(document.currentImage == nil)
+        }
+        ToolbarItem(placement: .automatic) {
+            Button {
+                // Snapshotted synchronously, same pattern as "Copy
+                // Settings" just above — `enhanceModel.enhance` reads
+                // exactly what's on screen right now, including an edit
+                // still inside its debounce window.
+                enhanceModel.enhance(sourceURL: document.currentURL, editState: document.editState, catalog: catalog)
+            } label: {
+                Label("Enhance", systemImage: "square.resize.up")
+            }
+            // `wand.and.stars` is already Auto Tone's icon (Light section,
+            // AdjustTabView) — `square.resize.up` avoids the collision.
+            // `isLoadInFlight`/`isEnhancing` both gate this: a photo
+            // switch or an enhance already in progress must not let a
+            // second click start a second one on top of it.
+            .disabled(document.currentImage == nil || document.isLoadInFlight || enhanceModel.isEnhancing)
         }
     }
 

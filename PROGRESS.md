@@ -7,7 +7,58 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
-**Copy/Paste Settings (Tier-2 Lightroom gap) is now FULLY SHIPPED
+**Enhance / Super Resolution — IN PROGRESS (started 2026-09-24).**
+Step 0 (the MetalFX feasibility probe, per CLAUDE.md's "never write
+measurement-shaped prose you have not run") is DONE, with a real, run
+measurement: `Tests/RenderingTests/SuperResolutionUpscalerTests.swift`'s
+`testMetalFXSpatialScalerProbe` constructs a real `MTLFXSpatialScaler`
+(64x64 -> 128x128, `.rgba16Float`, `.perceptual`), encodes, and confirms
+via a deliberately asymmetric red/blue fixture (plus a mid-gray patch,
+added after reviewer round 1 caught that pure red/blue alone can't
+detect a transfer-curve bug) that the
+`CIContext.render(_:to:commandBuffer:...)` → MetalFX → `CIImage(mtlTexture:)`
+round trip does NOT flip orientation and does NOT corrupt color — PASSED
+(not skipped) on this dev machine (Apple M1, confirmed via
+`system_profiler SPDisplaysDataType`). Reviewer round 1 (FIX FIRST) also
+caught that `.perceptual` mode requires gamma-encoded sRGB values, not
+this project's usual `extendedLinearSRGB` working space — the pairing is
+made correct by `context.render(_:to:commandBuffer:bounds:colorSpace:)`'s
+own `colorSpace:` argument (converts at render-into-texture time,
+independent of the context's working space), NOT by the working-space
+option — `SuperResolutionUpscaler.metalFXUpscale` (commit 2) must pass
+an sRGB `colorSpace:` to that specific call. A second, self-caught bug
+while addressing that round: deriving the probe's texture usage flags
+from `scaler.colorTextureUsage`/`outputTextureUsage` ALONE (dropping the
+hardcoded flags) broke the test SILENTLY — Core Image's own render into
+the input texture failed with no thrown error ("the destination is
+nil"), and every sample read back as flat black, which would look like
+a real color/orientation bug rather than a missing usage flag. Fixed by
+UNIONING the scaler's declared usage with Core Image's own separate
+requirements (`.shaderWrite`/`.renderTarget` on the input texture,
+`.shaderRead` on the output) rather than trusting the scaler's usage
+alone — same union approach `SuperResolutionUpscaler.metalFXUpscale`
+must use.
+
+A temporary timing harness (written, run once, then deleted — not kept as
+a permanent test) measured a synthetic 6016x4016 input (the D610's own
+RAW dimensions) upscaled to 12032x8032 in a single cold run (first-use
+shader/pipeline compilation is likely included in these numbers, not
+isolated out): scaler construction 0.013s, texture allocation 0.0003s,
+render+encode+commit+wait 0.433s, **total end-to-end 0.454s**. The
+96.6MP output texture allocated without issue. This measured SPEED and
+FEASIBILITY only — no output-quality comparison against Lanczos has been
+done yet (that's part of live verification, per the plan's own
+checklist). **Decision: MetalFX is the v1 upscale method** (not
+Lanczos-only) — real, fast, feasible, and correctly oriented on real
+hardware; whether it looks better than Lanczos on an actual photo is
+still open. Continuing with the rest of the plan
+(`SuperResolutionUpscaler`/`PhotoEnhancer`/`EnhanceModel` + catalog/UI
+wiring) — the live plan file, if resuming, is at
+`/Users/praween/.claude/plans/cheeky-whistling-teacup.md` (outside this
+repo; read it before continuing, since nothing in-repo currently
+duplicates its content).
+
+**Copy/Paste Settings (Tier-2 Lightroom gap) is FULLY SHIPPED
 (2026-09-24)** — `PasteSettingsModel` owns "Copy Settings" (Editor
 toolbar + ⇧⌘C) and "Paste Settings" (Library toolbar + ⇧⌘V, batch onto
 the current selection). New `Sources/Rendering/SidecarStore.swift` +
@@ -1214,12 +1265,26 @@ icons or trial-and-error expansion, which had already produced a false
 lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
-Nothing blocking. Copy/Paste Settings is fully shipped, reviewed (3
-commits, the feature commit alone 6 rounds FIX FIRST × 5 → APPROVE),
-committed, AND live-verified (2026-09-24) — see the "Current phase"
-entry's own write-up for the full checklist. Pick the next Lightroom
-gap and enter Plan Mode first, per this project's workflow rules (see
-the list at the end of this section).
+**Resume Enhance / Super Resolution.** Plan approved, Step 0 (MetalFX
+feasibility probe) done with a real measurement — see the "Current
+phase" entry above. Plan file (still valid, read it before continuing):
+`/Users/praween/.claude/plans/cheeky-whistling-teacup.md`. Remaining
+commits per that plan: (2) `SuperResolutionUpscaler` + its unit tests
+(`outputPixelSize`, `plannedMethod`, Lanczos path, MetalFX path,
+forced-fallback); (3) the small `PhotoExporter` refactor (shared
+`renderDevice`, `internal` visibility on `context`/`write`, extracted
+`uniqueFileURL` with the orphan-sidecar collision fix) + `PhotoEnhancer`
++ tests; (4) `CatalogDatabase.registerPhoto`/`photo(atPath:)` +
+`CatalogModel.catalogedPhoto`/`registerEnhancedPhoto` + tests; (5)
+`EnhanceModel` + `ContentView` toolbar wiring; (6) docs
+(CLAUDE.md/IMPROVEMENTS.md/PROGRESS.md) + live verification (checklist
+is in the plan file). Reviewer (`model: "opus"`) on `git diff HEAD`
+before every commit, per CLAUDE.md — only commit on APPROVE.
+
+Copy/Paste Settings is fully shipped, reviewed (3 commits, the feature
+commit alone 6 rounds FIX FIRST × 5 → APPROVE), committed, AND
+live-verified (2026-09-24) — see its own "Current phase" entry for the
+full checklist.
 
 History panel is ALSO fully shipped, reviewed (2 rounds, FIX FIRST →
 APPROVE), committed, AND live-verified (2026-09-24) — every item on the

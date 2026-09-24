@@ -1329,6 +1329,50 @@ required — these were logged as nits, not FIX FIRST items):
    test partly covers the equal-side intent already. Not fixed — a test
    quality nit, not a correctness gap in the reviewed code.
 
+### D28. `ImageDocumentModel.saveSidecarNow` can write a load-during-save race onto the WRONG sidecar (reviewer-caught, Paste Settings review round 4, pre-existing — not introduced by that feature)
+
+Found while adversarially re-verifying Paste Settings' own load/batch race
+(4 review rounds on that one) — this is a SEPARATE, PRE-EXISTING hazard in
+`saveSidecarNow` itself, not something Paste Settings introduced, and it
+affects every ordinary debounced sidecar save, not just batch pastes.
+
+`saveSidecarNow()` captures `currentURL` at its own top, then — if the
+containing folder's bookmark needs re-resolving — can show an `NSOpenPanel`
+(`SidecarFolderAccess.resolveOrRequest`), which pumps the AppKit modal run
+loop. If a NEW photo's `load(from:)` starts and finishes DURING that panel
+(the same "a modal panel pumps the run loop, letting an unrelated async
+load interleave" mechanism Paste Settings' own `canProceed` guard was
+built to close), `saveSidecarNow` resumes afterward, reads the NOW-CURRENT
+`editState` (the newly-loaded photo's), but still writes it to the
+ORIGINALLY-captured `currentURL`'s sidecar path — silently writing the
+new photo's edit state into the OLD photo's sidecar file.
+
+Narrow in practice (needs a folder-access prompt to actually appear at
+the exact moment a photo switch is also in flight — most sessions never
+re-prompt after the first grant per folder), but a real, silent data-
+integrity hazard, not a theoretical one — the exact mechanism is proven
+correct by this same session's own `PasteSettingsModel.performPaste`
+finding. Not fixed here — out of scope for the Paste Settings feature
+that surfaced it. A fix would need `saveSidecarNow` to re-capture (or
+re-verify) `currentURL`/`editState` together, atomically, AFTER any
+panel-showing step completes, not just at its own top.
+
+**Specifically under Paste Settings**: this is the one documented residual
+exposure `PasteSettingsModel.performPaste`'s own `canProceed` guard (see
+that method's doc comment) doesn't close — reached only via the open-photo
+branch's own `applyToOpenPhoto` → `pasteSettings` → `saveSidecarNow` call,
+which runs LAST (after the entire batch loop, a deliberate ordering — see
+that same doc comment). If this exact race fires there, the sidecar that
+gets silently overwritten with a DIFFERENT (newly-loaded) photo's edit
+state is the photo that was JUST pasted onto — the paste is lost, and
+that photo's undo history is already gone too (the load reset it). Needs
+two rare conditions at once (a bookmark that goes stale on every resolve,
+right after the pre-flight just granted it, AND a photo switch that
+happens to finish while that repeat panel is up) — accepted as an
+extremely narrow residual, not worth a further guard layer in this
+feature on top of the general `saveSidecarNow` fix this item already
+describes.
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

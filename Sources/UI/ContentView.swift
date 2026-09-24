@@ -14,6 +14,13 @@ struct ContentView: View {
     /// also observe.
     @ObservedObject var catalog: CatalogModel
 
+    /// Owns "Copy Settings"/"Paste Settings" (a Lightroom-style Copy/Paste
+    /// Edit Settings across a Library multi-selection). Owned by
+    /// `PhotoAppApp`, not this view — same reasoning as `document`/
+    /// `catalog`: the Photo menu's own ⇧⌘C/⇧⌘V (a Scene-level construct)
+    /// needs to act on the SAME instance the toolbar buttons below do.
+    @ObservedObject var pasteModel: PasteSettingsModel
+
     /// Phase 5 slice 1: batch export. Scoped to this view (not lifted to
     /// `PhotoAppApp`) — unlike `document`/`catalog`, nothing outside this
     /// view (no Scene-level command, no other view) needs to observe it.
@@ -40,6 +47,45 @@ struct ContentView: View {
     /// property) can share the exact same filter.
     private var selectedPhotosVisibleInGrid: [Photo] {
         catalog.selectedPhotos
+    }
+
+    /// Kept as a small helper, not inlined into the `.confirmationDialog`
+    /// closure below — this file's own `mainContent`/`body` have hit a
+    /// real Swift type-checker scaling limit before from too much packed
+    /// into one `@ViewBuilder` closure; string interpolation this size
+    /// stays out of that closure on principle, not because it's strictly
+    /// required here.
+    private var pasteConfirmationTitle: String {
+        let count = pasteModel.pendingTargets?.count ?? 0
+        return "Paste settings onto \(count) photo\(count == 1 ? "" : "s")?"
+    }
+
+    /// Names the copied source and states the irreversibility caveat —
+    /// only the currently-open photo (if included in `targets`) is
+    /// undoable; every other target is overwritten on disk directly.
+    /// Reviewer-caught: the original wording ("Crop, masks, and red-eye
+    /// corrections are kept") understated what `EditState.
+    /// applyingPreset(onto:)` — the merge this feature reuses — actually
+    /// leaves untouched on each target: geometry (crop, straighten,
+    /// perspective, scale/stretch, flip), masks, red-eye POINTS (their
+    /// correction intensity IS copied, matching how Presets already treat
+    /// this field), and every RAW-native field (white balance set via the
+    /// RAW eyedropper fast-path, Boost, RAW noise reduction/sharpness/
+    /// contrast/detail/moiré, the decoder version pin). A photo whose
+    /// White Balance was set via that RAW-native fast path won't get its
+    /// White Balance carried at all — a real, user-visible v1 gap this
+    /// message now names rather than implies is comprehensive.
+    private func pasteConfirmationMessage(for targets: [Photo]) -> String {
+        let source = pasteModel.copied?.sourceFileName ?? "the copied photo"
+        let openPath = document.currentURL?.path
+        let includesOpenPhoto = openPath != nil && targets.contains { $0.path == openPath }
+        let undoNote = includesOpenPhoto
+            ? "This can't be undone, except for the currently open photo."
+            : "This can't be undone."
+        return """
+        Settings copied from \(source). Each photo's own crop, geometry, masks, Point Color, and \
+        RAW-specific adjustments (including White Balance set with the RAW eyedropper) are kept. \(undoNote)
+        """
     }
 
     /// Phase 4 slice 2: toggles the main window between the single-photo
@@ -775,6 +821,109 @@ struct ContentView: View {
     }
 
     var body: some View {
+        // A SECOND split, same reasoning as `mainContent`'s own doc
+        // comment below: adding the Paste Settings alert + confirmation
+        // dialog pushed `contentWithExportAlerts.alert(...).
+        // confirmationDialog(...)` past what the compiler could
+        // type-check in reasonable time as ONE expression — splitting
+        // `contentWithExportAlerts` out as its own opaque `some View` is
+        // what fixed it (measured: reproduced the exact "unable to
+        // type-check this expression" failure by inlining it back in,
+        // confirmed the split resolves it).
+        contentWithExportAlerts
+            .alert(
+                "Paste Settings",
+                isPresented: Binding(
+                    get: { pasteModel.statusMessage != nil },
+                    set: { isPresented in
+                        if !isPresented { pasteModel.statusMessage = nil }
+                    }
+                ),
+                presenting: pasteModel.statusMessage
+            ) { _ in
+                Button("OK") {}
+            } message: { message in
+                Text(message)
+            }
+            // Irreversibility mitigation: only the currently-open photo
+            // (if it's among the targets) gets an undo step, via
+            // `ImageDocumentModel.pasteSettings(_:)`'s own `EditHistory`
+            // commit — every OTHER target photo is overwritten on disk
+            // directly, with no undo at all. This confirmation is v1's
+            // only safeguard against a batch paste onto the wrong
+            // selection.
+            .confirmationDialog(
+                pasteConfirmationTitle,
+                isPresented: Binding(
+                    get: { pasteModel.pendingTargets != nil },
+                    set: { isPresented in
+                        if !isPresented { pasteModel.pendingTargets = nil }
+                    }
+                ),
+                presenting: pasteModel.pendingTargets
+            ) { targets in
+                Button("Paste Settings", role: .destructive) {
+                    // Reviewer-caught (2 rounds on this exact race): the
+                    // `isLoadInFlight` guard on REQUESTING a paste (the
+                    // toolbar button/menu item's own `.disabled`) isn't
+                    // enough alone — the confirmation dialog can stay open
+                    // across a load that starts AFTER the request (⇧⌘V
+                    // isn't Library-scoped, so a user can open it, then
+                    // press ⌘→ to start opening a different photo, then
+                    // confirm). Re-check here too, at the moment of the
+                    // actual, mostly-irreversible write.
+                    guard !document.isLoadInFlight else {
+                        pasteModel.statusMessage = "A photo is still loading — try Paste Settings again in a moment."
+                        return
+                    }
+                    // Captured ONCE, synchronously, in the same step as
+                    // the guard above — `openPhotoPath` must name the
+                    // photo this exact confirm is acting on.
+                    let openPhotoPath = document.currentURL?.path
+                    pasteModel.performPaste(
+                        onto: targets,
+                        openPhotoPath: openPhotoPath,
+                        // Reviewer-caught, a THIRD round on this race: by
+                        // the time this runs, no load was in flight (the
+                        // guard above just confirmed it) — but
+                        // `performPaste`'s OWN folder-access pre-flight
+                        // can show `NSOpenPanel`, which pumps the AppKit
+                        // modal run loop and CAN let a NEW load start
+                        // during it (e.g. a Photo-menu shortcut firing
+                        // while the panel is up), not merely let an
+                        // already-in-flight one resume. `performPaste`
+                        // checks this ONCE, right after its own pre-flight
+                        // and before any write, aborting the whole batch
+                        // if it fails rather than risk writing over a
+                        // target that just became "the open photo" (or
+                        // vice versa) mid-batch.
+                        canProceed: { !document.isLoadInFlight && document.currentURL?.path == openPhotoPath },
+                        applyToOpenPhoto: { source in
+                            // Cheap backstop, not the primary guard (that's
+                            // `canProceed` above) — re-verified once more
+                            // at the point of actually applying the paste.
+                            guard document.currentURL?.path == openPhotoPath else { return .skipped }
+                            return document.pasteSettings(source)
+                        },
+                        onSidecarWritten: { catalog.invalidateThumbnail(for: $0) },
+                        clearDeclinedFolder: { document.clearDeclinedFolder($0) }
+                    )
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { targets in
+                Text(pasteConfirmationMessage(for: targets))
+            }
+            // Bridges these two otherwise fully-decoupled models (same
+            // direction of composition as `LibraryGridView`'s own
+            // `document.load(from:)` callback below) so editing a photo
+            // invalidates its stale Library thumbnail instead of leaving
+            // it showing the original forever.
+            .onAppear {
+                document.onSidecarSaved = { url in catalog.invalidateThumbnail(for: url) }
+            }
+    }
+
+    private var contentWithExportAlerts: some View {
         // Split out of `body` (into `mainContent` below) so the type
         // checker only has to solve the alert chain against ONE already-
         // opaque `some View` type, not the whole `HSplitView` tree AND
@@ -871,14 +1020,6 @@ struct ContentView: View {
                 if let progress = exportModel.progress {
                     ExportProgressHUD(progress: progress)
                 }
-            }
-            // Bridges these two otherwise fully-decoupled models (same
-            // direction of composition as `LibraryGridView`'s own
-            // `document.load(from:)` callback below) so editing a photo
-            // invalidates its stale Library thumbnail instead of leaving
-            // it showing the original forever.
-            .onAppear {
-                document.onSidecarSaved = { url in catalog.invalidateThumbnail(for: url) }
             }
     }
 
@@ -1163,6 +1304,31 @@ struct ContentView: View {
                     .disabled(selectedPhotosVisibleInGrid.isEmpty)
                 }
                 ToolbarItem(placement: .automatic) {
+                    Button("Paste Settings (\(selectedPhotosVisibleInGrid.count))…") {
+                        pasteModel.requestPaste(onto: selectedPhotosVisibleInGrid)
+                    }
+                    // `document.isLoadInFlight`, reviewer-caught: a photo
+                    // load is async and `document.currentURL` still names
+                    // the OUTGOING photo for its whole duration — a paste
+                    // confirmed during that window could target the
+                    // INCOMING photo without recognizing it as "the open
+                    // photo," write its sidecar directly, and then have
+                    // the load's own completion silently overwrite that
+                    // with pre-paste data. Disabling REQUESTING a paste
+                    // during the window narrows it — it is NOT the full
+                    // guard by itself (a load can still start AFTER a
+                    // request, while the confirmation dialog is open); see
+                    // `PasteSettingsModel.performPaste`'s own doc comment
+                    // for the complete, multi-layered story.
+                    .disabled(
+                        pasteModel.copied == nil || selectedPhotosVisibleInGrid.isEmpty || document.isLoadInFlight
+                    )
+                    .help(
+                        pasteModel.copied.map { "Paste settings copied from \($0.sourceFileName)" }
+                            ?? "Copy settings from a photo first (⇧⌘C in the Editor)"
+                    )
+                }
+                ToolbarItem(placement: .automatic) {
                     Button("Clear Selection") {
                         catalog.clearSelection()
                     }
@@ -1207,6 +1373,19 @@ struct ContentView: View {
             // review round 2). See `EditState.isEffectivelyIdentity`'s
             // own doc comment.
             .disabled(document.currentImage == nil || document.editState.isEffectivelyIdentity)
+        }
+        ToolbarItem(placement: .automatic) {
+            Button {
+                pasteModel.copy(document.editState, fileName: document.currentFileName ?? "photo")
+            } label: {
+                Label("Copy Settings", systemImage: "doc.on.doc")
+            }
+            // Same condition as "Revert to Original" just above, and
+            // deliberately NOT gated on `!showLibrary` — this whole
+            // toolbar group already renders (disabled as appropriate) in
+            // BOTH the Library and Editor panes; a new gate here would be
+            // an inconsistency, not a safety improvement.
+            .disabled(document.currentImage == nil)
         }
     }
 
@@ -1854,5 +2033,8 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView(document: ImageDocumentModel(), catalog: CatalogModel(), showLibrary: .constant(false))
+    ContentView(
+        document: ImageDocumentModel(), catalog: CatalogModel(), pasteModel: PasteSettingsModel(),
+        showLibrary: .constant(false)
+    )
 }

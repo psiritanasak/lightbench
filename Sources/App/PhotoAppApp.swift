@@ -13,6 +13,13 @@ struct PhotoAppApp: App {
     /// `ContentView` (and, later, any browsing UI) to observe.
     @StateObject private var catalog = CatalogModel()
 
+    /// Owns "Copy Settings"/"Paste Settings" (Copy/Paste Edit Settings
+    /// across a Library multi-selection). Owned here, same reasoning as
+    /// `document`/`catalog` — the Photo menu's own ⇧⌘C/⇧⌘V below (a
+    /// Scene-level construct) must act on the SAME instance the toolbar
+    /// buttons in `ContentView` do.
+    @StateObject private var pasteModel = PasteSettingsModel()
+
     /// Whether the window is showing the Library grid instead of the Editor.
     /// Presentation-only, and `ContentView`'s own `@State` until the Photo
     /// menu below needed it: prev/next is EDITOR navigation, so it must
@@ -23,7 +30,7 @@ struct PhotoAppApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(document: document, catalog: catalog, showLibrary: $showLibrary)
+            ContentView(document: document, catalog: catalog, pasteModel: pasteModel, showLibrary: $showLibrary)
         }
         .commands {
             // Replaces macOS's default (inert) Edit > Undo/Redo items —
@@ -61,6 +68,32 @@ struct PhotoAppApp: App {
                 Button("Next Photo") { open(neighbors.next) }
                     .keyboardShortcut(.rightArrow, modifiers: .command)
                     .disabled(neighbors.next == nil)
+                Divider()
+                // Copy/Paste Edit Settings — Lightroom's own Photo-menu
+                // placement and shortcuts. "Paste Settings" here shows the
+                // SAME confirmation dialog the Library toolbar's own
+                // button does (`ContentView`'s `.confirmationDialog`,
+                // bound to `pasteModel.pendingTargets`) — this item only
+                // calls `requestPaste`, never `performPaste` directly, so
+                // there is exactly one path into the actual (mostly
+                // irreversible) write, not two.
+                Button("Copy Settings") {
+                    pasteModel.copy(document.editState, fileName: document.currentFileName ?? "photo")
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(document.currentImage == nil)
+                Button("Paste Settings") {
+                    pasteModel.requestPaste(onto: catalog.selectedPhotos)
+                }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+                // Same `isLoadInFlight` guard as the Library toolbar's own
+                // Paste Settings button — see that call site's own doc
+                // comment for the race this closes. This shortcut isn't
+                // scoped to the Library pane, so it needs the SAME guard
+                // independently, not just the toolbar button's copy of it.
+                .disabled(
+                    pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight
+                )
             }
         }
     }

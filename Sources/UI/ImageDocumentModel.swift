@@ -221,7 +221,25 @@ final class ImageDocumentModel: ObservableObject {
     /// `loadGeneration` out from under the still-in-flight `load(from:)`
     /// — which then silently abandons itself via its own generation
     /// guard, so the tapped photo would simply never open.
-    private var isLoadInFlight = false
+    ///
+    /// `@Published`, not plain `private`, since Reviewer-caught: a batch
+    /// settings-paste (`PasteSettingsModel`) needs to know a load is
+    /// in-flight too, for exactly the same reason `redecodeForRawNativeChange`
+    /// does — `currentURL` still points at the OUTGOING photo for the
+    /// whole span this flag covers, so a paste confirmed during that
+    /// window would see the incoming target as an ordinary batch target
+    /// (not the special-cased "this is the open photo" one), write its
+    /// sidecar directly, and then have `load(from:)`'s own completion
+    /// silently overwrite the Editor's in-memory state with the
+    /// PRE-paste data moments later — the exact non-destructive-editing
+    /// integrity hazard this property's own doc comment already
+    /// describes for a different caller. `ContentView` disables
+    /// requesting a paste while this is true, which narrows the window
+    /// but is only one of several layers `PasteSettingsModel.performPaste`
+    /// needs — see that method's own doc comment for the complete story
+    /// (this alone does not close it: a load can still start AFTER a
+    /// paste is requested, while its confirmation dialog is open).
+    @Published private(set) var isLoadInFlight = false
 
     func load(from url: URL) async {
         loadGeneration += 1
@@ -1287,6 +1305,23 @@ final class ImageDocumentModel: ObservableObject {
     /// permanently blocking a folder from one accidental cancel.
     private var declinedFolders: Set<String> = []
 
+    /// Reviewer-caught: a batch settings-paste's own pre-flight uses a
+    /// SEPARATE `SidecarFolderAccess` instance from this one (see that
+    /// type's own doc comment for why sharing an instance isn't
+    /// necessary — the persisted bookmark store is the same either way).
+    /// But `declinedFolders` itself is NOT shared — it's this instance's
+    /// own session-scoped memory. Without this escape hatch, a folder
+    /// this instance already marked declined (from an earlier, unrelated
+    /// edit) would keep silently skipping THIS photo's own sidecar save
+    /// in `saveSidecarNow` even after the user just re-granted access to
+    /// that exact folder during the paste's own pre-flight prompt —
+    /// called from `PasteSettingsModel.performPaste` right before it
+    /// applies a paste to the currently-open photo, for exactly that
+    /// folder.
+    func clearDeclinedFolder(_ folderPath: String) {
+        declinedFolders.remove(folderPath)
+    }
+
     /// The sidecar path for a given photo URL — same directory, original
     /// filename with `.photoapp.json` appended. Forwards to
     /// `SidecarStore.sidecarURL(for:)` (`Sources/Rendering/`), where the
@@ -1397,6 +1432,27 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    /// What `pasteSettings(_:)` actually did, so a batch-paste summary can
+    /// count this photo accurately instead of assuming every call wrote.
+    /// Reviewer-caught: the ORIGINAL version returned `Void`, so
+    /// `PasteSettingsModel.performPaste` unconditionally counted the open
+    /// photo as "written" — wrong both for a true no-op merge (should
+    /// count as `unchanged`, same as any other target) and for a folder
+    /// already in `declinedFolders` this session (the in-memory edit still
+    /// applies, matching ordinary editing's own "declining persistence
+    /// doesn't block editing" behavior, but nothing reaches disk, so it
+    /// should count as `skipped`, not `written`). Does NOT distinguish a
+    /// genuine write failure after a GRANTED folder access from a real
+    /// success — those are rare, already surfaced separately via
+    /// `sidecarSaveErrorMessage`, and folding them in here would need
+    /// deeper plumbing than this fix's own scope; a documented, accepted
+    /// imprecision, not silently ignored.
+    enum PasteSettingsResult {
+        case written
+        case unchanged
+        case skipped
+    }
+
     /// Merges a copied photo's "look" onto the current `editState`
     /// (`EditState.applyingPreset(onto:)` — the SAME merge Presets already
     /// use, deliberately not a second hand-maintained field list) and
@@ -1419,7 +1475,18 @@ final class ImageDocumentModel: ObservableObject {
     /// directly to disk via `SidecarStore`/`SidecarFolderAccess` instead,
     /// precisely so this photo's own undo history/debounced-save path
     /// stays authoritative and never gets bypassed underneath it.
-    func pasteSettings(_ source: EditState) {
+    ///
+    /// Callers (`ContentView`'s confirmation-dialog button, via
+    /// `PasteSettingsModel.performPaste`'s own `canProceed`/
+    /// `applyToOpenPhoto` checks) re-verify this IS still the open photo
+    /// (`document.currentURL?.path ==` the path captured at confirm-time)
+    /// before calling this — a NEW load can start during `performPaste`'s
+    /// own folder-access `NSOpenPanel` prompting (which pumps the modal
+    /// run loop) even though `isLoadInFlight` was confirmed false at
+    /// confirm-time. See `PasteSettingsModel.performPaste`'s own doc
+    /// comment for the full, three-round story of this specific race.
+    @discardableResult
+    func pasteSettings(_ source: EditState) -> PasteSettingsResult {
         finalizePendingCommit()
         let merged = source.applyingPreset(onto: editState)
         guard merged != editState else {
@@ -1433,7 +1500,7 @@ final class ImageDocumentModel: ObservableObject {
             // window, since this whole method's own point is "write now,
             // don't make the caller wait."
             flushPendingSidecarSave()
-            return
+            return .unchanged
         }
         history.commit(merged, summary: "Paste Settings")
         applyHistoryState(history.current)
@@ -1442,5 +1509,9 @@ final class ImageDocumentModel: ObservableObject {
         // result (its own summary alert/thumbnail refresh should reflect
         // this photo's state immediately, not up to a second later).
         flushPendingSidecarSave()
+        if let currentURL, declinedFolders.contains(currentURL.deletingLastPathComponent().path) {
+            return .skipped
+        }
+        return .written
     }
 }

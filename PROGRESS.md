@@ -7,7 +7,29 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
-**Enhance / Super Resolution — IN PROGRESS (started 2026-09-24).**
+**Enhance / Super Resolution — all 5 code commits DONE (started/shipped
+2026-09-24), NOT yet live-verified.** Commit 5 (`Sources/UI/EnhanceModel.swift`
++ the "Enhance" toolbar button/HUD/status alert in `ContentView.swift`)
+is DONE — 5 reviewer rounds, FIX FIRST × 4 → APPROVE, all 1321 tests
+passing, committed (`360445e`). Every real finding across all 5 rounds
+was concentrated in ONE area — `SidecarFolderAccess`'s folder-identity
+handling — because Enhance was the first caller to actually check a
+granted folder against what it asked for: round 1 found a genuine
+double-click race (`isEnhancing` set too late) and an unchecked
+folder-mismatch risk; round 2 found the mismatch fix itself created a
+PERMANENT lockout (a bad bookmark got persisted before being checked,
+so every retry silently reused it); round 3 found the lockout fix's
+own exact-match requirement broke an already-shipped, already-working
+pattern (`ImageDocumentModel`'s sidecar saves granting a parent folder
+once, relying on macOS's own scoping extending that to every
+descendant); round 4 found the SAME lockout class one layer deeper —
+`resolvedURL` itself never validated a STORED bookmark, so pre-existing
+bad data (from code older than any of these fixes) could lock a folder
+out forever with no self-healing. Every fix across every round was
+independently verified via mutation testing (remove the fix, confirm
+the corresponding test fails), not just re-read. 12 new tests across
+2 new files.
+
 Commit 4 (`CatalogDatabase.registerPhoto`/`photo(atPath:)` +
 `CatalogModel.catalogedPhoto`/`registerEnhancedPhoto` + tests) is DONE
 — 3 reviewer rounds, FIX FIRST × 2 → APPROVE, all 1307 tests passing,
@@ -1327,37 +1349,61 @@ icons or trial-and-error expansion, which had already produced a false
 lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
-**Resume Enhance / Super Resolution.** Plan approved, commits 1 (MetalFX
-probe), 2 (`SuperResolutionUpscaler`), 3 (`PhotoEnhancer` + the
-`PhotoExporter` refactor), and 4 (catalog wiring) all done, reviewed,
-and committed — see the "Current phase" entry above. Plan file (still
-valid, read it before continuing):
+**Live-verify Enhance / Super Resolution.** All 5 code commits are
+done, reviewed, and committed — see the "Current phase" entry above.
+Plan file (still valid, read it before continuing, especially its own
+12-item live-verification checklist):
 `/Users/praween/.claude/plans/cheeky-whistling-teacup.md`.
 
-Remaining commits per that plan: (5) `EnhanceModel` (mirrors
-`ExportModel`'s `Task.detached` shape, `SidecarFolderAccess` as its 3rd
-caller, calls `catalog.catalogedPhoto(atPath:)` as the "photo must
-already be catalogued" guard before `PhotoEnhancer.enhance`, then
-`catalog.registerEnhancedPhoto(at:)` on success — no cancellation, no
-batch) + `ContentView` toolbar wiring (new "Enhance" button in
-`editHistoryToolbarItems`, a small "Enhancing…" HUD, a status alert) —
-NEXT; (6) docs (CLAUDE.md/IMPROVEMENTS.md/PROGRESS.md) + live
-verification (the 12-item checklist is in the plan file — includes
-confirming the enhanced photo thumbnails with no surprise second
-folder-access prompt — the "reasoned-through, not yet measured"
-expectation `registerEnhancedPhoto`'s own doc comment now explicitly
-flags as still outstanding — and a MetalFX-vs-Lanczos visual quality
-comparison that hasn't been done yet, only speed/feasibility has).
+Nothing left to CODE — commit 6 is docs (this file, CLAUDE.md,
+IMPROVEMENTS.md — already mostly kept current commit-by-commit, just
+needs a final roadmap-entry pass in CLAUDE.md once live verification
+finishes) + the live-verification pass itself. Use scratch synthetic
+photos first (matching every prior feature's own precedent this
+session — Copy/Paste Settings, History panel, Auto Tone), NOT the
+user's real library; ask for screen-automation permission again,
+scoped to this task, per project memory's "ask first, scoped per-task"
+rule; start `caffeinate` proactively.
 
-Reviewer (`model: "opus"`) on `git diff HEAD` before every commit, per
-CLAUDE.md — only commit on APPROVE. Commit 3 took 5 rounds (4 of them
-real FIX FIRST findings, including a filesystem-compatibility bug only
-caught by testing against real exFAT/FAT32 disk images via `hdiutil`
-— see that commit's own message for the full story). Commit 4 took 3
-rounds but found no production-correctness bugs (test-rigor/doc-only,
-as expected for ordinary GRDB/SwiftUI wiring). Commit 5 wires the two
-together into a real UI action — budget for at least 1-2 real rounds,
-same as every commit on this feature so far.
+Specific things this feature's own review process flagged as
+GENUINELY UNVERIFIED (not just "the standard checklist" — these are
+real open questions from the reviewer rounds, not boilerplate):
+- The enhanced photo's thumbnail must render in the Library grid with
+  NO surprise second `CatalogModel`-side folder-access prompt —
+  `CatalogModel.registerEnhancedPhoto`'s own doc comment explicitly
+  flags this as "a reasoned-through design expectation, NOT yet a
+  measured fact."
+- A MetalFX-vs-Lanczos VISUAL QUALITY comparison — only speed/
+  feasibility has been measured (the Step 0 probe). Force the Lanczos
+  path via a temporary, uncommitted `device: nil` change to compare
+  against MetalFX output at 100% zoom on the same photo.
+- The folder-access grant flow end to end with a REAL `NSOpenPanel`:
+  first-time grant, decline (no session-level decline memory — must
+  re-prompt on a second attempt), and — if practical to set up — a
+  parent-folder grant actually covering a child folder's Enhance
+  request (the round-3/round-4 fix this feature's own review process
+  went through 2 extra rounds to get right).
+- RAW source path (D610 fixture, if available) — confirm output is
+  JPEG, confirm the Library/Editor stay responsive during the render
+  (no `RawDecoder.RenderGate` deadlock).
+- The exFAT/FAT32 fallback path was verified via real `hdiutil` disk
+  images during development (see commit 3's own message), NOT via the
+  live-verification screen-automation pass — no need to repeat that
+  specific check live unless a real external/SD-card volume is handy.
+
+Reviewer (`model: "opus"`) on `git diff HEAD` was used before every
+commit, per CLAUDE.md — this feature is the most heavily reviewed
+slice of work in this project's history: commit 3 took 5 rounds (a
+real filesystem-compatibility bug only caught via `hdiutil` disk
+images), commit 5 took 5 rounds (every finding concentrated in
+`SidecarFolderAccess`'s folder-identity handling, each round's fix
+revealing a new, more subtle instance of the same lockout-class bug).
+Commit 4 took 3 rounds but found zero production bugs (test-rigor/doc
+issues only, as expected for ordinary GRDB/SwiftUI wiring) — a useful
+data point that NOT every commit needs to be a struggle; the ones that
+were had a genuine reason (new framework, new filesystem edge cases,
+new security-scope semantics), not a general pattern to expect
+everywhere.
 
 Copy/Paste Settings is fully shipped, reviewed (3 commits, the feature
 commit alone 6 rounds FIX FIRST × 5 → APPROVE), committed, AND

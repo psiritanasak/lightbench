@@ -124,10 +124,13 @@ actor ThumbnailCache {
     /// Clears `inFlight[path]` too: NOT to stop the old decode (it can't),
     /// but so the NEXT caller for this path starts a fresh request instead
     /// of awaiting the stale one already running. Does NOT proactively
-    /// regenerate anything; the next `thumbnail(for:)` call (naturally
-    /// triggered by returning to the Library, since `LibraryGridView` is
-    /// torn down and recreated on every Editor↔Library switch) will decode
-    /// fresh.
+    /// regenerate anything — the next `thumbnail(for:)` call decodes
+    /// fresh, triggered EITHER by naturally returning to the Library
+    /// (`LibraryGridView` is torn down and recreated on every Editor↔
+    /// Library switch) OR, while the grid is already on screen, by
+    /// `CatalogModel.invalidateThumbnail(for:)`'s own `thumbnailRevisions`
+    /// bump re-triggering an already-visible cell's `.task(id:)` — see
+    /// that method's own doc comment.
     func invalidate(path: String) {
         generation[path, default: 0] += 1
         cache.removeObject(forKey: path as NSString)

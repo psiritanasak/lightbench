@@ -564,17 +564,45 @@ final class CatalogModel: ObservableObject {
         importStatusMessage = summary
     }
 
-    /// Drops the cached thumbnail for the photo at `url` — called when
-    /// that photo's edits are saved (wired from `ImageDocumentModel.
-    /// onSidecarSaved` in `ContentView`), so the NEXT time it's decoded
-    /// (naturally triggered by returning to the Library) it reflects the
-    /// new edits instead of serving the stale pre-edit thumbnail forever.
-    /// Sync wrapper (matching this class's other mutators) — the actual
-    /// invalidation hops to the `ThumbnailCache` actor via a fire-and-
-    /// forget `Task`.
+    /// One monotonically-increasing counter per photo path, bumped every
+    /// time that photo's thumbnail is invalidated — lets a grid cell
+    /// re-fetch its thumbnail (and re-read `hasEdits`) WHILE the grid
+    /// stays on screen for the SAME path, not just the next time the grid
+    /// is rebuilt from scratch. Before this, the distinction didn't
+    /// matter: EVERY existing `invalidateThumbnail(for:)` call site
+    /// invalidates a path that either has no on-screen cell to refresh at
+    /// all (`removePhoto`'s own just-deleted photo) or invalidates the
+    /// OLD path of a photo that just moved (`relocatePhoto`/
+    /// `relocateSelectedPhotos`, whose cell is already re-keyed onto the
+    /// NEW path by the time this runs) — never the SAME path a
+    /// currently-visible cell is still showing. This exists for a
+    /// PLANNED batch-paste feature, which will be the first caller to
+    /// invalidate a path while a cell showing that EXACT path is on
+    /// screen, by writing sidecars for photos that can be visible in an
+    /// ALREADY-open grid.
+    @Published private(set) var thumbnailRevisions: [String: Int] = [:]
+
+    /// Drops the cached thumbnail for the photo at `url`. Existing callers
+    /// (`ImageDocumentModel.onSidecarSaved` via `ContentView`,
+    /// `relocatePhoto`/`relocateSelectedPhotos`, `removePhoto`) never
+    /// needed a same-path grid refresh — see `thumbnailRevisions`' own doc
+    /// comment for why. A planned batch-paste feature will be the first to
+    /// need one, and should call this once its own sidecar write for a
+    /// given photo has actually finished on disk — calling it any earlier
+    /// would let a cell's re-fetch race ahead of the write and read the
+    /// OLD sidecar. Sync wrapper (matching this class's other mutators) —
+    /// the actual invalidation hops to the `ThumbnailCache` actor via a
+    /// `Task`, which then bumps `thumbnailRevisions` AFTER that
+    /// invalidation completes (not before) — bumping first would let a
+    /// cell's own concurrent re-fetch run ahead of the cache actually
+    /// being cleared and simply SERVE the still-cached stale bitmap under
+    /// the new revision number, rather than re-decoding.
     func invalidateThumbnail(for url: URL) {
         let path = url.path
-        Task { await thumbnailCache.invalidate(path: path) }
+        Task {
+            await thumbnailCache.invalidate(path: path)
+            thumbnailRevisions[path, default: 0] += 1
+        }
     }
 
     // MARK: - Selection (Phase 5 slice 1 follow-up — export a hand-picked subset)
@@ -593,6 +621,35 @@ final class CatalogModel: ObservableObject {
     func isSelected(_ photo: Photo) -> Bool {
         guard let id = photo.id else { return false }
         return selectedPhotoIDs.contains(id)
+    }
+
+    /// The actual `Photo` values behind `selectedPhotoIDs`, intersected
+    /// with `photos` — NOT `selectedPhotoIDs.count`/a raw ID lookup,
+    /// because `selectedPhotoIDs` can hold "ghost" ids: `toggleMembership`
+    /// does NOT prune a photo's selection when it removes that photo from
+    /// the currently-viewed collection's grid, so a photo toggled OUT of
+    /// the collection being viewed can stay in `selectedPhotoIDs` while no
+    /// longer part of the current Collection/Folder source set (see
+    /// `addSelectedPhotos(to:)`'s own doc comment for the full story).
+    ///
+    /// This intersects against `photos` (the current Collection/Folder
+    /// scope), NOT `displayedPhotos` (which ALSO applies the search/
+    /// rating/flag filters) — matching `ContentView.photosToExport`'s own
+    /// `photos`-not-`displayedPhotos` scope (that property additionally
+    /// falls back to ALL of `photos` when nothing is selected, which this
+    /// one deliberately does not — see this feature's own planning notes
+    /// on why a batch paste must never silently default to "everything").
+    /// A photo hidden by an active search but still checked is therefore
+    /// still included here, same as it already is for Export/"Add to
+    /// Collection" today; this property doesn't change that, only names
+    /// it.
+    ///
+    /// `ContentView.selectedPhotosVisibleInGrid` forwards to this;
+    /// intended to eventually replace `addSelectedPhotos(to:)`/
+    /// `relocateSelectedPhotos()`'s own ad hoc copies of the same filter
+    /// too, not done here to keep this change scoped.
+    var selectedPhotos: [Photo] {
+        photos.filter { isSelected($0) }
     }
 
     func clearSelection() {

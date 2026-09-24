@@ -193,7 +193,8 @@ struct LibraryGridView: View {
                                 ForEach(catalog.displayedPhotos) { photo in
                                     LibraryThumbnailCell(
                                         catalog: catalog, photo: photo, cellSize: cellSize,
-                                        isFocused: catalog.focusedPhotoPath == photo.path
+                                        isFocused: catalog.focusedPhotoPath == photo.path,
+                                        thumbnailRevision: catalog.thumbnailRevisions[photo.path, default: 0]
                                     ) {
                                         onOpen(photo)
                                     } onRequestRemoval: {
@@ -558,11 +559,27 @@ struct LibraryGridView: View {
     }
 }
 
+/// `LibraryThumbnailCell`'s own `.task(id:)` key — path ALONE used to be
+/// enough (a cell only ever needed to re-fetch when scrolled onto a
+/// different photo), but a batch settings-paste can invalidate a cell's
+/// thumbnail WHILE it's already on screen showing the SAME photo, which a
+/// path-only key can't detect (SwiftUI only re-runs `.task(id:)` when the
+/// id itself actually changes). Including `revision` makes a same-photo
+/// invalidation a real identity change too.
+private struct ThumbnailTaskKey: Equatable {
+    let path: String
+    let revision: Int
+}
+
 /// One grid cell: fetches its own thumbnail lazily (`.task(id:)`, keyed on
-/// the photo's path so scrolling a recycled cell onto a different photo
-/// re-fetches). `catalog` is `let`, not `@ObservedObject` here — this cell
-/// only ever calls `catalog.thumbnail(for:)`, it doesn't need to
-/// re-render when unrelated `@Published` properties change.
+/// the photo's path AND its `thumbnailRevision` — see `ThumbnailTaskKey` —
+/// so scrolling a recycled cell onto a different photo re-fetches, and so
+/// does a same-photo revision bump from a batch settings paste).
+/// `catalog` is `let`, not `@ObservedObject` here — this cell only ever
+/// calls `catalog.thumbnail(for:)`, it doesn't need to re-render when
+/// unrelated `@Published` properties change (which is exactly why
+/// `thumbnailRevision` must be passed in from the PARENT rather than read
+/// from `catalog` directly here — see that property's own doc comment).
 ///
 /// D3 (IMPROVEMENTS.md): also checks for a sidecar file (`hasEdits`) in
 /// the SAME `.task`, deliberately NOT inside `ThumbnailCache` itself —
@@ -584,6 +601,16 @@ private struct LibraryThumbnailCell: View {
     /// `EditorFilmstripView`'s `FilmstripCell` receives `isCurrent` as a
     /// parameter instead of comparing against a published property itself.
     let isFocused: Bool
+    /// `catalog.thumbnailRevisions[photo.path, default: 0]`, read and
+    /// passed down by the PARENT grid view (which IS `@ObservedObject`),
+    /// for the exact same reason `isFocused` is a parameter rather than a
+    /// direct `catalog` read: this cell's own `catalog` is a plain `let`,
+    /// so a change to `catalog.thumbnailRevisions` alone would never
+    /// re-trigger this view's `body`/`.task(id:)` if read from `catalog`
+    /// directly here. Bumped by `CatalogModel.invalidateThumbnail(for:)` —
+    /// see `.task(id:)` below for why this needs to be part of the task's
+    /// own identity, not just re-read inside an unchanged task.
+    let thumbnailRevision: Int
     let onTap: () -> Void
     let onRequestRemoval: () -> Void
 
@@ -877,7 +904,7 @@ private struct LibraryThumbnailCell: View {
         // `photo.filename` (it's both the thumbnail child's label AND the
         // visible `Text(photo.filename)` row below, both already children).
         .accessibilityElement(children: .contain)
-        .task(id: photo.path) {
+        .task(id: ThumbnailTaskKey(path: photo.path, revision: thumbnailRevision)) {
             // Reset immediately: a reused cell carries over `@State` from
             // whatever photo it PREVIOUSLY showed (same as `image`/
             // `hasEdits` below), and a stale "Missing" is more alarming
@@ -902,15 +929,19 @@ private struct LibraryThumbnailCell: View {
             let thumb = await thumbnail
             let missing = await missingCheck
             // A superseded `.task` (this cell recycled onto a different
-            // photo before these awaits returned) must not write ITS
-            // stale result over the NEW photo's own in-flight task —
-            // neither `catalog.thumbnail(for:)` nor
-            // `isPhotoConfirmedMissing(_:)` checks `Task.isCancelled`
-            // internally (`ThumbnailCache`'s own doc comment covers why
-            // for the decode), so this guard is this cell's only defense
-            // against that race. `photo.path` driving `.task(id:)` means
-            // a cell only recycles onto a genuinely different path, so
-            // this is defense-in-depth, not a routinely-hit case.
+            // photo, OR re-triggered by a `thumbnailRevision` bump on the
+            // SAME photo, before these awaits returned) must not write ITS
+            // stale result over the newer in-flight task — neither
+            // `catalog.thumbnail(for:)` nor `isPhotoConfirmedMissing(_:)`
+            // checks `Task.isCancelled` internally (`ThumbnailCache`'s own
+            // doc comment covers why for the decode), so this guard is
+            // this cell's only defense against that race. Load-bearing,
+            // not defense-in-depth, for the revision case specifically: a
+            // batch settings-paste bumping `thumbnailRevision` on a photo
+            // whose decode is ALREADY mid-flight is exactly the scenario
+            // this guard exists to catch — see `ThumbnailCache.
+            // generation`'s own doc comment for the matching actor-side
+            // generation guard this pairs with.
             guard !Task.isCancelled else { return }
             image = thumb
             isMissing = missing

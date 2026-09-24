@@ -34,9 +34,12 @@ struct ContentView: View {
     /// `CatalogModel.addSelectedPhotos` itself computes internally, so the
     /// menu can't be left enabled for a selection that would silently do
     /// nothing (e.g. a photo toggled out of the collection being viewed,
-    /// which stays selected — see that method's own doc comment).
+    /// which stays selected — see that method's own doc comment). Forwards
+    /// to `CatalogModel.selectedPhotos`, so a planned batch-paste feature's
+    /// own Scene-level shortcut (which has no access to this private
+    /// property) can share the exact same filter.
     private var selectedPhotosVisibleInGrid: [Photo] {
-        catalog.photos.filter { catalog.isSelected($0) }
+        catalog.selectedPhotos
     }
 
     /// Phase 4 slice 2: toggles the main window between the single-photo

@@ -8,6 +8,26 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
 **Enhance / Super Resolution — IN PROGRESS (started 2026-09-24).**
+Commit 4 (`CatalogDatabase.registerPhoto`/`photo(atPath:)` +
+`CatalogModel.catalogedPhoto`/`registerEnhancedPhoto` + tests) is DONE
+— 3 reviewer rounds, FIX FIRST × 2 → APPROVE, all 1307 tests passing,
+committed (`dce6ee6`). Lower-risk than commit 3 as expected (ordinary
+GRDB/SwiftUI wiring) — no production-correctness bugs across 2 rounds
+of real mutation testing; findings were entirely test-rigor (a test
+that couldn't actually distinguish "isFolder checked" from "isFolder
+not checked," since a user album's own `folderPath` is always nil
+either way — fixed with a new test-only seam and a test that
+constructs the one row shape production code can't produce) and
+documentation accuracy (a stale "planned" description of an
+already-shipped feature; and, the one item needing a second round, a
+doc comment that falsely claimed live verification had already
+confirmed something — this project's own "never write measurement-
+shaped prose you have not run" convention — fixed to accurately
+describe it as a reasoned-through expectation still to be confirmed
+during Enhance's own live-verification pass). One known, narrow,
+accepted gap logged as IMPROVEMENTS.md D30 (reusing a catalog path
+inherits the old row's stale metadata rather than resetting it).
+
 Commit 3 (`Sources/Rendering/PhotoEnhancer.swift` + the small
 `PhotoExporter` refactor it builds on + tests) is DONE — 5 reviewer
 rounds, FIX FIRST × 4 → APPROVE, all 1294 tests passing, committed
@@ -1308,38 +1328,36 @@ lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
 **Resume Enhance / Super Resolution.** Plan approved, commits 1 (MetalFX
-probe), 2 (`SuperResolutionUpscaler`), and 3 (`PhotoEnhancer` + the
-`PhotoExporter` refactor) all done, reviewed, and committed — see the
-"Current phase" entry above. Plan file (still valid, read it before
-continuing): `/Users/praween/.claude/plans/cheeky-whistling-teacup.md`.
+probe), 2 (`SuperResolutionUpscaler`), 3 (`PhotoEnhancer` + the
+`PhotoExporter` refactor), and 4 (catalog wiring) all done, reviewed,
+and committed — see the "Current phase" entry above. Plan file (still
+valid, read it before continuing):
+`/Users/praween/.claude/plans/cheeky-whistling-teacup.md`.
 
-Remaining commits per that plan: (4) `CatalogDatabase.registerPhoto`
-(insert-or-reuse a `Photo` row for a URL, join an EXISTING matching
-folder collection if one exists, never create one) + `photo(atPath:)`,
-`CatalogModel.catalogedPhoto(atPath:)` (queries the database directly,
-not the filtered `photos` array) + `registerEnhancedPhoto(at:)`
-(guards `database != nil`, calls `registerPhoto`, then
-`invalidateThumbnail(for:)`, then `refresh()`) + tests — NEXT; (5)
-`EnhanceModel` (mirrors `ExportModel`'s `Task.detached` shape,
-`SidecarFolderAccess` as its 3rd caller, the "photo must already be
-catalogued" guard, no cancellation/no batch) + `ContentView` toolbar
-wiring (new "Enhance" button in `editHistoryToolbarItems`, a small
-"Enhancing…" HUD, a status alert); (6) docs
-(CLAUDE.md/IMPROVEMENTS.md/PROGRESS.md) + live verification (the
-12-item checklist is in the plan file — includes confirming the
-enhanced photo thumbnails with no surprise second folder-access prompt,
-and a MetalFX-vs-Lanczos visual quality comparison that hasn't been
-done yet, only speed/feasibility has).
+Remaining commits per that plan: (5) `EnhanceModel` (mirrors
+`ExportModel`'s `Task.detached` shape, `SidecarFolderAccess` as its 3rd
+caller, calls `catalog.catalogedPhoto(atPath:)` as the "photo must
+already be catalogued" guard before `PhotoEnhancer.enhance`, then
+`catalog.registerEnhancedPhoto(at:)` on success — no cancellation, no
+batch) + `ContentView` toolbar wiring (new "Enhance" button in
+`editHistoryToolbarItems`, a small "Enhancing…" HUD, a status alert) —
+NEXT; (6) docs (CLAUDE.md/IMPROVEMENTS.md/PROGRESS.md) + live
+verification (the 12-item checklist is in the plan file — includes
+confirming the enhanced photo thumbnails with no surprise second
+folder-access prompt — the "reasoned-through, not yet measured"
+expectation `registerEnhancedPhoto`'s own doc comment now explicitly
+flags as still outstanding — and a MetalFX-vs-Lanczos visual quality
+comparison that hasn't been done yet, only speed/feasibility has).
 
 Reviewer (`model: "opus"`) on `git diff HEAD` before every commit, per
 CLAUDE.md — only commit on APPROVE. Commit 3 took 5 rounds (4 of them
 real FIX FIRST findings, including a filesystem-compatibility bug only
 caught by testing against real exFAT/FAT32 disk images via `hdiutil`
-— see that commit's own message for the full story). Commits 4-5 are
-lower-risk (ordinary GRDB/SwiftUI wiring, no new frameworks or
-filesystem edge cases), but don't assume "no more surprises" — budget
-for at least 1-2 real rounds per commit as this session's own track
-record on this feature suggests.
+— see that commit's own message for the full story). Commit 4 took 3
+rounds but found no production-correctness bugs (test-rigor/doc-only,
+as expected for ordinary GRDB/SwiftUI wiring). Commit 5 wires the two
+together into a real UI action — budget for at least 1-2 real rounds,
+same as every commit on this feature so far.
 
 Copy/Paste Settings is fully shipped, reviewed (3 commits, the feature
 commit alone 6 rounds FIX FIRST × 5 → APPROVE), committed, AND

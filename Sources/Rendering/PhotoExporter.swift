@@ -94,9 +94,10 @@ enum PhotoExporter {
     /// held for the whole process lifetime, no matching `stop`) — a
     /// design bet confirmed live (see PROGRESS.md), not assumed.
     static func loadEditState(for photo: Photo) -> EditState {
-        let sidecarURL = ImageDocumentModel.sidecarURL(for: URL(fileURLWithPath: photo.path))
-        guard let data = try? Data(contentsOf: sidecarURL) else { return .identity }
-        return (try? JSONDecoder().decode(EditState.self, from: data)) ?? .identity
+        guard case .decoded(let state) = SidecarStore.read(forPhotoAt: URL(fileURLWithPath: photo.path)) else {
+            return .identity
+        }
+        return state
     }
 
     /// Renders `photo` (decoded, EXIF-oriented, edited, optionally

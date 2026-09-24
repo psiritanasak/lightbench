@@ -1261,16 +1261,21 @@ final class ImageDocumentModel: ObservableObject {
 
     private var sidecarSaveWorkItem: DispatchWorkItem?
 
-    /// One resolvable, persisted security-scoped bookmark per folder the
-    /// user has granted sidecar access to — keyed by the folder's own path.
-    /// Backed by `UserDefaults` (small, simple; `Data` is a valid property-
-    /// list type, no new storage format needed for this). Not `@Published`
-    /// — purely internal bookkeeping, no UI reads it.
-    private var folderBookmarks: [String: Data] {
-        get { UserDefaults.standard.dictionary(forKey: Self.folderBookmarksDefaultsKey) as? [String: Data] ?? [:] }
-        set { UserDefaults.standard.set(newValue, forKey: Self.folderBookmarksDefaultsKey) }
-    }
-    private static let folderBookmarksDefaultsKey = "PhotoApp.sidecarFolderBookmarks"
+    /// The bookmark-resolve-or-request+`NSOpenPanel` logic this property
+    /// used to own directly now lives in `SidecarFolderAccess`
+    /// (`Sources/UI/`) — extracted so a planned batch paste feature can
+    /// request/reuse the SAME persisted per-folder grants (`UserDefaults`
+    /// key `"PhotoApp.sidecarFolderBookmarks"`, unchanged) for photos it
+    /// writes that were never opened here. This is a behavior-preserving
+    /// lift, not a rewrite — see that type's own doc comment.
+    private let folderAccess = SidecarFolderAccess()
+
+    /// The exact panel message `SidecarFolderAccess.resolveOrRequest`
+    /// shows on behalf of a save triggered from THIS type — unchanged
+    /// text from before the extraction, since live-verification of the
+    /// refactor depends on it staying byte-identical.
+    private static let sidecarFolderAccessMessage =
+        "PhotoApp would like to save your edits for photos in this folder. Choose the folder to grant access."
 
     /// Folders (by path) where the user CANCELLED a folder-access prompt
     /// this session — in-memory only, deliberately NOT persisted. Without
@@ -1283,75 +1288,32 @@ final class ImageDocumentModel: ObservableObject {
     private var declinedFolders: Set<String> = []
 
     /// The sidecar path for a given photo URL — same directory, original
-    /// filename with `.photoapp.json` appended (e.g. `MyPhoto.jpg` →
-    /// `MyPhoto.jpg.photoapp.json`). Pure and directly unit-testable;
-    /// `nonisolated` since it touches no actor-isolated state, so tests
-    /// don't need `@MainActor` context to call it.
+    /// filename with `.photoapp.json` appended. Forwards to
+    /// `SidecarStore.sidecarURL(for:)` (`Sources/Rendering/`), where the
+    /// actual logic now lives — this one-line forwarder exists so
+    /// `LibraryGridView`, `PhotoExporter`, and every existing test that
+    /// calls this exact entry point keep working unchanged. `nonisolated`
+    /// since it touches no actor-isolated state, so tests don't need
+    /// `@MainActor` context to call it.
     nonisolated static func sidecarURL(for url: URL) -> URL {
-        url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".photoapp.json")
-    }
-
-    /// Resolves an EXISTING bookmark for `folder`, if one is stored and
-    /// still valid. Drops (and returns `nil` for) a stale or unresolvable
-    /// entry rather than surfacing an error — the next save attempt will
-    /// simply re-prompt, self-healing rather than getting stuck. Never
-    /// prompts — that's `requestFolderAccess`'s job.
-    private func resolvedBookmarkURL(for folder: URL) -> URL? {
-        guard let data = folderBookmarks[folder.path] else { return nil }
-        var isStale = false
-        guard let resolved = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale),
-              !isStale
-        else {
-            folderBookmarks.removeValue(forKey: folder.path)
-            return nil
-        }
-        return resolved
-    }
-
-    /// Shows a directory-mode `NSOpenPanel` asking the user to grant access
-    /// to `folder` (pre-navigated there for convenience), and persists a
-    /// security-scoped bookmark for it on success. Returns `nil` if the
-    /// user cancels/declines — a normal, silent outcome, not an error —
-    /// and records the decline in `declinedFolders` so `saveSidecarNow`
-    /// doesn't re-show this same prompt on the next edit. If the user
-    /// GRANTS access but `bookmarkData(options:)` itself then fails (a
-    /// genuine, unexpected error, not a decline), that's surfaced via
-    /// `sidecarSaveErrorMessage` — silently returning `nil` here would
-    /// otherwise let an edit fail to save with zero feedback despite the
-    /// user having just said yes.
-    private func requestFolderAccess(for folder: URL) -> URL? {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = folder
-        panel.message = "PhotoApp would like to save your edits for photos in this folder. Choose the folder to grant access."
-        panel.prompt = "Grant Access"
-        guard panel.runModal() == .OK, let grantedURL = panel.url else {
-            declinedFolders.insert(folder.path)
-            return nil
-        }
-        do {
-            let bookmarkData = try grantedURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
-            folderBookmarks[folder.path] = bookmarkData
-            return grantedURL
-        } catch {
-            sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"
-            return nil
-        }
+        SidecarStore.sidecarURL(for: url)
     }
 
     /// Loads a photo's sidecar, if one exists AND we can currently reach
     /// it. Deliberately does NOT prompt for folder access — load must stay
     /// silent; only a real save attempt (via `saveSidecarNow`) may prompt.
     /// A missing bookmark, missing sidecar, or undecodable sidecar are all
-    /// treated identically: no saved edits to restore, not an error.
+    /// treated identically here: no saved edits to restore, not an error.
+    /// A read-modify-WRITE caller cannot collapse them the same way,
+    /// though — it must NOT treat "undecodable" as "identity," since that
+    /// would silently clobber an existing sidecar it couldn't parse; see
+    /// `SidecarStore.ReadResult`'s own doc comment.
     private func loadSidecarIfReachable(for url: URL) -> EditState? {
-        guard let folderURL = resolvedBookmarkURL(for: url.deletingLastPathComponent()) else { return nil }
+        guard let folderURL = folderAccess.resolvedURL(for: url.deletingLastPathComponent()) else { return nil }
         guard folderURL.startAccessingSecurityScopedResource() else { return nil }
         defer { folderURL.stopAccessingSecurityScopedResource() }
-        guard let data = try? Data(contentsOf: Self.sidecarURL(for: url)) else { return nil }
-        return try? JSONDecoder().decode(EditState.self, from: data)
+        guard case .decoded(let state) = SidecarStore.read(forPhotoAt: url) else { return nil }
+        return state
     }
 
     private func scheduleSidecarSave() {
@@ -1401,7 +1363,21 @@ final class ImageDocumentModel: ObservableObject {
         guard let currentURL else { return }
         let folder = currentURL.deletingLastPathComponent()
         guard !declinedFolders.contains(folder.path) else { return }
-        guard let folderURL = resolvedBookmarkURL(for: folder) ?? requestFolderAccess(for: folder) else {
+        let folderURL: URL
+        switch folderAccess.resolveOrRequest(for: folder, message: Self.sidecarFolderAccessMessage) {
+        case .granted(let url):
+            folderURL = url
+        case .declined:
+            declinedFolders.insert(folder.path)
+            return
+        case .failed(let error):
+            // Matches the original `requestFolderAccess`'s own behavior:
+            // this surfaces UNCONDITIONALLY, not gated by
+            // `suppressErrorMessage` — a genuine bookmark-creation failure
+            // AFTER the user already granted access is a real, unexpected
+            // error, not the "opening a photo shouldn't itself produce an
+            // error" case `suppressErrorMessage` exists for.
+            sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"
             return
         }
         guard folderURL.startAccessingSecurityScopedResource() else {
@@ -1412,13 +1388,59 @@ final class ImageDocumentModel: ObservableObject {
         }
         defer { folderURL.stopAccessingSecurityScopedResource() }
         do {
-            let data = try JSONEncoder().encode(editState)
-            try data.write(to: Self.sidecarURL(for: currentURL), options: .atomic)
+            try SidecarStore.write(editState, forPhotoAt: currentURL)
             onSidecarSaved?(currentURL)
         } catch {
             if !suppressErrorMessage {
                 sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// Merges a copied photo's "look" onto the current `editState`
+    /// (`EditState.applyingPreset(onto:)` — the SAME merge Presets already
+    /// use, deliberately not a second hand-maintained field list) and
+    /// commits the result as one atomic, immediately-saved undo step —
+    /// this is the "Paste Settings" path for whichever target photo is
+    /// ALSO the one currently open here, kept structurally identical to
+    /// `applyPreset(_:)` for exactly the same reason: an in-progress burst
+    /// must be flushed first, and the paste must be its own atomic commit,
+    /// not merged into a same-instant follow-up edit.
+    ///
+    /// Unlike `applyPreset(_:)`, this ALSO guards against a no-op
+    /// (`merged == editState`, e.g. pasting a photo's own copied settings
+    /// back onto itself): `EditHistory.commit`'s own no-op guard already
+    /// prevents a phantom UNDO step, but `applyHistoryState` unconditionally
+    /// assigns `editState`, firing `didSet` → a scheduled sidecar save even
+    /// when nothing actually changed — the exact spurious-write hazard
+    /// `EditHistory.jump(to:)`'s own doc comment already documents for the
+    /// History panel's no-op-tap case. Explicitly NEVER called by the
+    /// batch paste path for any OTHER target photo — those are written
+    /// directly to disk via `SidecarStore`/`SidecarFolderAccess` instead,
+    /// precisely so this photo's own undo history/debounced-save path
+    /// stays authoritative and never gets bypassed underneath it.
+    func pasteSettings(_ source: EditState) {
+        finalizePendingCommit()
+        let merged = source.applyingPreset(onto: editState)
+        guard merged != editState else {
+            // Reviewer-caught: even on this no-op-merge path, a burst still
+            // in flight just before this call (a slider drag settling)
+            // could have already scheduled its OWN ~1s-debounced sidecar
+            // save via `editState`'s own `didSet` — `finalizePendingCommit()`
+            // above only moves that burst into `history`, it does NOT
+            // itself write or reschedule a save. Flush now rather than
+            // silently leaving that earlier save sitting in its debounce
+            // window, since this whole method's own point is "write now,
+            // don't make the caller wait."
+            flushPendingSidecarSave()
+            return
+        }
+        history.commit(merged, summary: "Paste Settings")
+        applyHistoryState(history.current)
+        // Write NOW, not after the usual ~1s debounce — intended for a
+        // Library batch-paste action the caller is actively watching for a
+        // result (its own summary alert/thumbnail refresh should reflect
+        // this photo's state immediately, not up to a second later).
+        flushPendingSidecarSave()
     }
 }

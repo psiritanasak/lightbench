@@ -8,6 +8,24 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
 **Enhance / Super Resolution — IN PROGRESS (started 2026-09-24).**
+Commit 2 of the plan (`Sources/Rendering/SuperResolutionUpscaler.swift`
++ tests) is DONE — 3 reviewer rounds, FIX FIRST × 2 → APPROVE, all
+1279 tests passing, committed (`47bb678`). The two most substantive
+catches: round 1 found (via a real probe, not theorized) that MetalFX
+silently forces output alpha to 1 regardless of input alpha while
+Lanczos correctly preserves it — a hardware-dependent correctness
+divergence for any edit with a visible transparent margin — fixed by
+forcing full opacity (composite over opaque black) BEFORE either
+upscale path runs, inside `upscale()` itself, so both methods now
+behave identically. Round 2 found the round-1 fix for a vacuous
+headroom test had introduced ANOTHER vacuous test (a MetalFX midtone
+color-fidelity check that round-trips a self-consistently-wrong
+color-space constant invisibly on a flat field) — fixed by exposing
+`metalFXColorSpace` directly and asserting its identity rather than
+only inferring it behaviorally. Every fix in every round was verified
+by actually reintroducing the bug and confirming the corresponding
+test failed, then restoring and reconfirming a clean diff.
+
 Step 0 (the MetalFX feasibility probe, per CLAUDE.md's "never write
 measurement-shaped prose you have not run") is DONE, with a real, run
 measurement: `Tests/RenderingTests/SuperResolutionUpscalerTests.swift`'s
@@ -1265,21 +1283,25 @@ icons or trial-and-error expansion, which had already produced a false
 lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
-**Resume Enhance / Super Resolution.** Plan approved, Step 0 (MetalFX
-feasibility probe) done with a real measurement — see the "Current
-phase" entry above. Plan file (still valid, read it before continuing):
+**Resume Enhance / Super Resolution.** Plan approved, commits 1
+(MetalFX probe) and 2 (`SuperResolutionUpscaler`) both done, reviewed,
+and committed — see the "Current phase" entry above. Plan file (still
+valid, read it before continuing):
 `/Users/praween/.claude/plans/cheeky-whistling-teacup.md`. Remaining
-commits per that plan: (2) `SuperResolutionUpscaler` + its unit tests
-(`outputPixelSize`, `plannedMethod`, Lanczos path, MetalFX path,
-forced-fallback); (3) the small `PhotoExporter` refactor (shared
+commits per that plan: (3) the small `PhotoExporter` refactor (shared
 `renderDevice`, `internal` visibility on `context`/`write`, extracted
 `uniqueFileURL` with the orphan-sidecar collision fix) + `PhotoEnhancer`
-+ tests; (4) `CatalogDatabase.registerPhoto`/`photo(atPath:)` +
++ tests — NEXT; (4) `CatalogDatabase.registerPhoto`/`photo(atPath:)` +
 `CatalogModel.catalogedPhoto`/`registerEnhancedPhoto` + tests; (5)
 `EnhanceModel` + `ContentView` toolbar wiring; (6) docs
 (CLAUDE.md/IMPROVEMENTS.md/PROGRESS.md) + live verification (checklist
 is in the plan file). Reviewer (`model: "opus"`) on `git diff HEAD`
-before every commit, per CLAUDE.md — only commit on APPROVE.
+before every commit, per CLAUDE.md — only commit on APPROVE. Given how
+many real, hardware-verified bugs the reviewer caught in commit 2's
+MetalFX code specifically (3 rounds), budget for multiple rounds on
+commit 3 too — `PhotoEnhancer` is the thing that actually calls
+`SuperResolutionUpscaler.upscale` for real, at full photo resolution,
+through `RawDecoder.RenderGate` for RAW sources.
 
 Copy/Paste Settings is fully shipped, reviewed (3 commits, the feature
 commit alone 6 rounds FIX FIRST × 5 → APPROVE), committed, AND

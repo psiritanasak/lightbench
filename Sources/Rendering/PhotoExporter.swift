@@ -75,13 +75,27 @@ enum PhotoExporter {
         ?? CGColorSpaceCreateDeviceRGB()
     private static let outputColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
+    /// The Metal device backing `context`, when one is available — a
+    /// single shared instance rather than each caller making its own
+    /// `MTLCreateSystemDefaultDevice()` call, so `SuperResolutionUpscaler`
+    /// (`PhotoEnhancer`'s own upscale step) always builds its MetalFX
+    /// textures against the SAME device `context` itself renders with.
+    /// Not `private`: `PhotoEnhancer` needs it directly (a mismatched
+    /// device between the two would be a real, silent bug on a
+    /// multi-GPU Mac — see `SuperResolutionUpscaler`'s own doc comment
+    /// on that precondition).
+    static let renderDevice: MTLDevice? = MTLCreateSystemDefaultDevice()
+
     /// Built once (not per photo) — Metal-backed when a device is
     /// available (always, on any real Mac), falling back to a plain
     /// `CIContext` otherwise so export still degrades gracefully rather
-    /// than crashing.
-    private static let context: CIContext = {
+    /// than crashing. Not `private`: `PhotoEnhancer` reuses this exact
+    /// context for its own MetalFX/Lanczos upscale render, rather than
+    /// building a second one — same testability-driven visibility
+    /// widening as `resized`/`uniqueDestinationURL` below.
+    static let context: CIContext = {
         let options: [CIContextOption: Any] = [.workingColorSpace: workingColorSpace, .workingFormat: CIFormat.RGBAh]
-        if let device = MTLCreateSystemDefaultDevice() {
+        if let device = renderDevice {
             return CIContext(mtlDevice: device, options: options)
         }
         return CIContext(options: options)
@@ -154,7 +168,10 @@ enum PhotoExporter {
         return outputURL
     }
 
-    private static func write(_ image: CIImage, format: ExportFormat, quality: CGFloat, to url: URL) throws {
+    /// Not `private`: `PhotoEnhancer` reuses this exact writer for its own
+    /// output (always JPEG in v1, but this stays format-general rather
+    /// than duplicating the three `write*Representation` calls).
+    static func write(_ image: CIImage, format: ExportFormat, quality: CGFloat, to url: URL) throws {
         switch format {
         case .jpeg:
             try context.writeJPEGRepresentation(
@@ -192,14 +209,34 @@ enum PhotoExporter {
     /// `" (2)"`, `" (3)"`, etc. on a collision, so re-exporting into the
     /// same folder never silently overwrites a previous export. Internal
     /// (not `private`) for the same testability reason as `resized` above.
+    /// Delegates to `uniqueFileURL`, shared with `PhotoEnhancer`.
     static func uniqueDestinationURL(for photo: Photo, in folder: URL, format: ExportFormat) -> URL {
         let baseName = (photo.filename as NSString).deletingPathExtension
-        var candidate = folder.appendingPathComponent(baseName).appendingPathExtension(format.fileExtension)
+        return uniqueFileURL(baseName: baseName, fileExtension: format.fileExtension, in: folder)
+    }
+
+    /// `baseName.fileExtension` in `folder`, appending `" (2)"`, `" (3)"`,
+    /// etc. on a collision — shared by `uniqueDestinationURL` (above) and
+    /// `PhotoEnhancer.destinationURL`, so both features' naming stays
+    /// consistent and any future fix to this logic only needs to happen
+    /// once. Internal (not `private`) for the same testability reason as
+    /// `resized`/`uniqueDestinationURL`.
+    ///
+    /// A candidate is also rejected if `SidecarStore.sidecarURL(for:)`
+    /// already exists on disk for it, even when the candidate FILE itself
+    /// doesn't — a fix made alongside this extraction: an orphaned
+    /// sidecar left behind by an earlier, since-deleted export/enhance at
+    /// that same name would otherwise get silently ADOPTED the next time
+    /// that name is reused, applying its stale edits a second time onto a
+    /// brand-new file that was never associated with them.
+    static func uniqueFileURL(baseName: String, fileExtension: String, in folder: URL) -> URL {
+        var candidate = folder.appendingPathComponent(baseName).appendingPathExtension(fileExtension)
         var suffix = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
+        while FileManager.default.fileExists(atPath: candidate.path)
+            || FileManager.default.fileExists(atPath: SidecarStore.sidecarURL(for: candidate).path) {
             candidate = folder
                 .appendingPathComponent("\(baseName) (\(suffix))")
-                .appendingPathExtension(format.fileExtension)
+                .appendingPathExtension(fileExtension)
             suffix += 1
         }
         return candidate

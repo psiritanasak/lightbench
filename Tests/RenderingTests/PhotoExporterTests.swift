@@ -121,6 +121,23 @@ final class PhotoExporterTests: XCTestCase {
         XCTAssertEqual(url.lastPathComponent, "IMG_0001.png")
     }
 
+    /// Added alongside `uniqueFileURL`'s own extraction (shared with
+    /// `PhotoEnhancer`): a candidate whose FILE doesn't exist, but whose
+    /// SIDECAR does (an orphan left behind by an earlier, since-deleted
+    /// export/enhance at that name), must still be treated as taken —
+    /// otherwise the next write at that name would silently inherit the
+    /// orphan's stale edits.
+    func testUniqueDestinationURLSkipsACandidateWithOnlyAnOrphanedSidecar() throws {
+        let candidate = tempDir.appendingPathComponent("IMG_0001.jpg")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: candidate.path))
+        let orphanSidecar = SidecarStore.sidecarURL(for: candidate)
+        try JSONEncoder().encode(EditState()).write(to: orphanSidecar)
+
+        let url = PhotoExporter.uniqueDestinationURL(for: makePhoto(filename: "IMG_0001.jpg"), in: tempDir, format: .jpeg)
+
+        XCTAssertEqual(url.lastPathComponent, "IMG_0001 (2).jpg")
+    }
+
     // MARK: - loadEditState
 
     func testLoadEditStateReturnsIdentityWhenNoSidecarExists() {

@@ -1373,6 +1373,47 @@ extremely narrow residual, not worth a further guard layer in this
 feature on top of the general `saveSidecarNow` fix this item already
 describes.
 
+### D29. `PhotoEnhancer.enhance` can leave a stale hidden temp file behind on a crash/force-quit (reviewer-noted, Enhance/Super Resolution review round 3)
+
+`PhotoEnhancer.enhance`'s temp file lives IN the destination folder itself
+(a hidden, dot-prefixed name, e.g. `.3F2A1C9B-....jpg`), not the system
+temp directory — required by `commitExclusively`'s `FileManager.linkItem`
+mechanism, which needs the temp file and the final destination on the
+SAME volume. A `defer` removes it once `enhance` returns or throws, but if
+the process is killed between the temp write and that `defer` (a crash, a
+force-quit, a system restart mid-render), the hidden file is never
+cleaned up — unlike the system temp directory, which the OS sweeps
+periodically. The leftover is a full-size, fully-rendered 2x JPEG (easily
+tens of MB), silently sitting in the user's photo folder, invisible in
+Finder (dot-prefixed) and invisible to this app's own Library import
+(`PhotoImporter.imageFiles`/`scanNode` both use `.skipsHiddenFiles`).
+
+Not fixed in v1 — narrow in practice (needs a hard crash/kill at the
+exact wrong moment) and each individual leftover is harmless-if-orphaned
+(no risk of being silently adopted the way a leftover SIDECAR would be —
+see `PhotoExporter.uniqueFileURL`'s own orphan-sidecar protection, a
+different hazard class). A natural follow-up: a lightweight sweep (e.g.
+at app launch, or before the next Enhance in that same folder) that
+deletes any `.{uuid}.jpg` matching the exact temp-name pattern this
+feature produces, older than some threshold.
+
+**A second, narrower instance of the same class (reviewer-caught, round
+4)**: on a filesystem without hard-link support (exFAT/FAT32 — see
+`PhotoEnhancer.link`'s own fallback), the commit sequence is reserve
+(create an empty placeholder at the REAL, visible destination name) then
+`rename(2)` the temp file over it. Both steps are individually atomic,
+and a failed rename is cleaned up (the placeholder is always this
+process's own file, safe to remove). But a crash/kill in the
+microseconds-wide window BETWEEN a successful reserve and the rename
+that would have completed it — not caught by any `catch`, since nothing
+threw — leaves a permanently-empty, VISIBLE `<name>-Enhanced-SR.jpg` at
+the real name (unlike the hidden dot-prefixed temp file above). Narrower
+than round 2's original truncation risk (obviously broken at 0 bytes,
+not silently corrupt-looking) and even narrower in practice than the
+hidden-temp-file case above (this window is microseconds, not the whole
+upscale+render). Not fixed — the same sweep-based follow-up would cover
+both cases if ever built.
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

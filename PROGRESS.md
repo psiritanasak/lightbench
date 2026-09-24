@@ -45,8 +45,61 @@ files for the first time — no correctness bugs found; APPROVE, with 3
 non-blocking nits logged as IMPROVEMENTS.md D27 (a debounce-window edge
 case tapping the current row mid-burst, dead "no history yet" UI code
 since `entries` can never be empty, one one-sided test assertion). See
-CLAUDE.md's own History panel entry for the full write-up. NOT yet
-live-verified — see "Exact next step" below.
+CLAUDE.md's own History panel entry for the full write-up.
+
+**Live-verified (2026-09-24)**, with explicit user permission asked and
+granted for this specific task (screen automation permission is scoped
+per-task, not carried over from the earlier Auto Tone grant in this same
+session), against a scratch synthetic fixture (`history_test.jpg`, a
+Python/PIL-built orange-square/green-circle image in a scratch `/tmp`
+folder, opened via File > Open, never imported into the catalog, deleted
+afterward along with its sidecar) and a real Release build:
+- Unlike the Auto Tone session's unresolved screenshot quirk, the Adjust
+  sidebar — including the new "History" section — rendered correctly in
+  every screenshot this session, no workaround needed.
+- Made 4 distinct edits (a drag on Exposure, an interrupted then a
+  completed drag on Contrast — see below, and Auto Tone) and confirmed
+  the History list showed 5 sensible rows newest-first: "Opened",
+  "Exposure EV", "Contrast" (×2), "Auto Tone" — the explicit label for
+  Auto Tone, the generic `EditStateDiff`-derived label for the ordinary
+  slider edits.
+- **An unplanned real-world confirmation of the debounce/coalescing
+  design**: the first Contrast drag attempt was interrupted mid-drag by
+  the folder-access permission dialog (triggered by the just-prior
+  Exposure edit's own debounced sidecar save), and by the time a second,
+  complete Contrast drag was performed, enough wall-clock time had
+  passed that the two were NOT coalesced into one commit — they show as
+  two separate "Contrast" rows. Not a bug: this is exactly the debounce
+  design working as intended on a real, unplanned timing gap, not a
+  synthetic test of it.
+- Clicked an older row ("Exposure EV"): confirmed the render AND the
+  sidecar file (`exposureEV: 2.7287581699346406`, exactly matching the
+  slider) both updated to that historical state; the row went bold, the
+  rows above it (the abandoned Auto Tone/Contrast branch) went
+  secondary-styled, and "Opened" (below current, not abandoned) stayed
+  normal-styled — all three of `historySection`'s row states confirmed
+  distinct on screen.
+- **Tapped the now-current "Exposure EV" row a second time**: confirmed
+  via the sidecar file's mtime, unchanged before and after (not just a
+  visual check) — the no-op-jump guard genuinely suppresses the write
+  end to end, not just in the unit tests.
+- Made a NEW edit (Highlights, which writes `curvesHighlights`) from
+  that jumped-to point: confirmed the abandoned Auto Tone/Contrast/
+  Contrast rows disappeared from the list, replaced by a single new
+  "Curves Highlights" row.
+- Confirmed toolbar Undo, then Redo, correctly interleave with the
+  manual History jump — Undo stepped back to "Exposure EV" 's state
+  (`curvesHighlights` back to `0`), Redo stepped forward again
+  (`curvesHighlights` back to its edited value), both confirmed via the
+  Light section's own live slider readout.
+- One automation-only false start, not a product bug: an initial attempt
+  to click the toolbar's Undo/Redo buttons by their `title` AX attribute
+  silently no-opped both times (found zero matching elements, so the
+  clicks never landed) — these are the SAME toolbar buttons this
+  project's own AX-automation notes already document as exposing their
+  label via `description`, not `title`/`name`; switching to `description`
+  fixed it immediately. Recorded here so a future live-verification
+  session doesn't lose time rediscovering it.
 
 **Auto Tone (Tier-2 Lightroom gap) shipped and live-verified earlier this
 session (2026-09-23)**, including a real-photo check (below) beyond the
@@ -1111,26 +1164,16 @@ lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
 Nothing blocking. History panel is fully shipped, reviewed (2 rounds,
-FIX FIRST → APPROVE), and committed — see the "Current phase" entry's
-own write-up. **NOT yet live-verified** — the natural next step for a
-resuming session is exactly the plan's own verification checklist: make
-several distinct edits (a slider, a crop, Auto Tone) on a scratch photo,
-expand the new "History" Adjust-tab section, confirm each row's summary
-reads sensibly and the current row is bold; click an OLDER row and
-confirm the image/sliders actually jump there; make a NEW edit from that
-point and confirm the abandoned "redo" rows disappear from the list;
-click the current row a SECOND time and confirm via the sidecar file
-that NO save/permission-prompt fires (the no-op-jump guard actually
-works end to end, not just unit-tested); confirm toolbar Undo/Redo still
-interleave correctly with a manual jump. Use a scratch photo (File >
-Open, not imported into the catalog), matching this session's own Auto
-Tone live-verification precedent — see that entry above for the exact
-screen-automation workflow that worked in this environment (Release
-build, reposition the window onto the main display before
-screenshotting, expand `DisclosureGroup` sections via their
-`AXDisclosureTriangle` before searching for child controls, treat the
-saved sidecar JSON as the reliable verification source of truth over
-screenshots).
+FIX FIRST → APPROVE), committed, AND live-verified (2026-09-24) — every
+item on the plan's own verification checklist passed: sensible row
+summaries, correct current/abandoned/normal row styling, a jump that
+updates both the render and the sidecar, a no-op tap on the current row
+confirmed (via sidecar mtime) to genuinely skip the write, an abandoned-
+branch discard on a new edit from a jumped-to point, and correct toolbar
+Undo/Redo interleaving with a manual jump — see the "Current phase"
+entry's own write-up for full detail, including one automation-only gotcha
+(toolbar Undo/Redo expose their label via the `description` AX attribute,
+not `title`) worth remembering for the next live-verification session.
 
 Auto Tone is ALSO fully shipped, reviewed, committed, AND live-verified
 (dark + bright synthetic fixtures, plus a real photo from the user's own
@@ -1148,9 +1191,9 @@ nearly any photo) is the one specific open design question to weigh
 while doing that — all 3 of this session's own test cases independently
 confirmed that saturation happening exactly as D26 describes.
 
-Otherwise, once History panel is live-verified, pick the next Lightroom
-gap and enter Plan Mode first, per this project's workflow rules.
-Available: Enhance/Super Resolution and Copy/Paste-and-Sync (unstarted
+Otherwise, pick the next Lightroom gap and enter Plan Mode first, per
+this project's workflow rules. Available: Enhance/Super Resolution and
+Copy/Paste-and-Sync (unstarted
 Tier-2 items); Color Grading Slice B's own follow-ups — live-verifying
 the `AngularGradient` painted-wheel convention on screen (flagged
 DERIVED, not measured, in `ColorWheelGeometry.angularGradientFraction`'s

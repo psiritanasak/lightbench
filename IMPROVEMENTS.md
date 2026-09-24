@@ -1414,6 +1414,36 @@ hidden-temp-file case above (this window is microseconds, not the whole
 upscale+render). Not fixed — the same sweep-based follow-up would cover
 both cases if ever built.
 
+### D30. `CatalogDatabase.registerPhoto`'s reuse-on-same-path can inherit a stale row's metadata (reviewer-caught, Enhance/Super Resolution review, commit 4)
+
+`registerPhoto` (and the `insertPhotoIfNeeded` it shares with every other
+import path) treats "a row already exists at this path" as reuse, not
+replacement — returning the EXISTING row's `id`/`rating`/`isFlagged`/
+`fileSize`/`importedAt` unchanged, never re-reading the file's current
+metadata. This is the established, correct behavior for an ordinary
+re-import (the same file, unchanged) — see `insertPhotoIfNeeded`'s own
+doc comment — but has a narrow, real failure mode specific to Enhance:
+`PhotoExporter.uniqueFileURL`'s collision check only looks at what's
+ON DISK (a file, or its sidecar) at a candidate name — NOT at whether
+the catalog already has a row for that exact path. If a user deletes an
+enhanced output in Finder (outside this app) while its catalog row
+survives, then a LATER Enhance on the same source photo happens to
+collide onto that exact freed-up name again, the new image silently
+inherits the old, now-stale row's rating/flag/album memberships, and its
+`fileSize`/`importedAt` stop reflecting the new file at all.
+
+Not fixed — narrow (needs an out-of-app delete at exactly the reused
+name) and each individual occurrence is a metadata-staleness issue, not
+a data-loss or corruption one (the new image's own PIXELS are correct;
+only its catalog bookkeeping is inherited from the wrong prior file).
+Possible future fixes, not chosen for v1: have `uniqueFileURL` also
+check the catalog (would need `PhotoExporter`/`PhotoEnhancer`, currently
+UI-free `Rendering`-layer types, to gain a `CatalogDatabase` dependency
+— a real architectural cost for a narrow case); or have `registerPhoto`
+reset a reused row's rating/flag/fileSize/importedAt on every call
+(would also reset them on an ORDINARY harmless re-import, arguably the
+wrong tradeoff the other direction).
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

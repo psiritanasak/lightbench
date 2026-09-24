@@ -405,4 +405,42 @@ final class CatalogModelTests: XCTestCase {
             "an unreachable ROOT must not make its photos read as individually deleted"
         )
     }
+
+    // MARK: - catalogedPhoto / registerEnhancedPhoto (Enhance/Super Resolution)
+
+    func testCatalogedPhotoFindsAnAlreadyImportedPhoto() async throws {
+        let model = await makeModel()
+
+        let found = try await model.catalogedPhoto(atPath: Self.paths[0])
+
+        XCTAssertEqual(found?.path, Self.paths[0])
+    }
+
+    func testCatalogedPhotoReturnsNilForAPhotoNeverImported() async throws {
+        let model = await makeModel()
+
+        let found = try await model.catalogedPhoto(atPath: "/tmp/never-imported.jpg")
+
+        XCTAssertNil(found)
+    }
+
+    func testRegisterEnhancedPhotoMakesTheRowAppearInPhotos() async throws {
+        let model = await makeModel()
+        let newURL = URL(fileURLWithPath: "/tmp/cm/a-Enhanced-SR.jpg")
+        XCTAssertFalse(model.photos.contains { $0.path == newURL.path })
+
+        _ = try await model.registerEnhancedPhoto(at: newURL)
+
+        XCTAssertTrue(model.photos.contains { $0.path == newURL.path }, "registerEnhancedPhoto must refresh() so the new row shows up without a separate manual refresh")
+    }
+
+    func testCatalogedPhotoFindsAPhotoJustRegisteredByEnhance() async throws {
+        let model = await makeModel()
+        let newURL = URL(fileURLWithPath: "/tmp/cm/a-Enhanced-SR.jpg")
+
+        _ = try await model.registerEnhancedPhoto(at: newURL)
+        let found = try await model.catalogedPhoto(atPath: newURL.path)
+
+        XCTAssertEqual(found?.path, newURL.path)
+    }
 }

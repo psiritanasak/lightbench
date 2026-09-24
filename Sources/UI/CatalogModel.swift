@@ -314,6 +314,64 @@ final class CatalogModel: ObservableObject {
         }
     }
 
+    /// The catalogued row at `path`, or `nil` if there genuinely isn't
+    /// one — queries the database DIRECTLY, not the `photos` array (which
+    /// respects `selectedFilter` and would miss a photo outside the
+    /// currently-viewed collection). Used by `EnhanceModel` to guard
+    /// against enhancing a photo that was opened via `Open…` rather than
+    /// imported — see `registerEnhancedPhoto`'s own doc comment for why
+    /// that guard matters.
+    ///
+    /// Reviewer-caught: an earlier version collapsed "not catalogued"
+    /// and "database isn't ready yet" into the same `nil` — safe (the
+    /// caller-side guard still refuses either way), but it would have
+    /// shown the wrong diagnosis to the user in the "not ready" case
+    /// (narrow in practice: the Library grid, and therefore anything the
+    /// user could have clicked "Enhance" on, implies the database has
+    /// already loaded — but cheap to make exact while this API's shape
+    /// is still being set). `THROWS` for "not ready"/a genuine read
+    /// failure now, matching `registerEnhancedPhoto`'s own error
+    /// shape — only a clean, successful "no row at this path" read
+    /// returns `nil`.
+    func catalogedPhoto(atPath path: String) async throws -> Photo? {
+        guard let database else {
+            throw CatalogDatabaseError(message: "The photo catalog isn't ready yet — try again in a moment.")
+        }
+        return try await database.photo(atPath: path)
+    }
+
+    /// Registers `url` (a freshly-written `PhotoEnhancer` output) as a
+    /// new catalog entry, refreshes the Library grid to show it, and
+    /// invalidates any stale cached thumbnail for that exact path (a
+    /// reused path — see `PhotoExporter.uniqueFileURL`'s own collision
+    /// handling — could otherwise still be serving a thumbnail from
+    /// whatever USED to be at that name).
+    ///
+    /// Deliberately does NOT itself grant/verify folder browsing access
+    /// (`activeFolders`/`folderBookmarks`) — `EnhanceModel`'s own guard
+    /// (only ever enhancing an ALREADY-catalogued photo) means `url`'s
+    /// folder was necessarily already imported via `importFolder()`/
+    /// `importFolderTree()` at some point, which already activated that
+    /// browsing scope. This is a reasoned-through design expectation,
+    /// NOT yet a measured fact (reviewer-caught: an earlier version of
+    /// this comment overclaimed "live verification confirms this holds"
+    /// — that verification hasn't happened yet; `EnhanceModel`/the UI
+    /// wiring is a later commit, and PROGRESS.md's own live-verification
+    /// checklist for this feature is still outstanding). The live pass,
+    /// once it happens, must specifically confirm the enhanced photo's
+    /// thumbnail renders with no surprise second `CatalogModel`-side
+    /// prompt.
+    @discardableResult
+    func registerEnhancedPhoto(at url: URL) async throws -> Photo {
+        guard let database else {
+            throw CatalogDatabaseError(message: "The photo catalog isn't ready yet — try again in a moment.")
+        }
+        let photo = try await database.registerPhoto(at: url)
+        invalidateThumbnail(for: url)
+        await refresh()
+        return photo
+    }
+
     /// Returns a small thumbnail for `photo`, decoded (and cached) off the
     /// main thread. Requires `photo`'s containing folder to currently have
     /// active security scope — true for a folder imported this session,
@@ -569,28 +627,32 @@ final class CatalogModel: ObservableObject {
     /// re-fetch its thumbnail (and re-read `hasEdits`) WHILE the grid
     /// stays on screen for the SAME path, not just the next time the grid
     /// is rebuilt from scratch. Before this, the distinction didn't
-    /// matter: EVERY existing `invalidateThumbnail(for:)` call site
+    /// matter: EVERY earlier `invalidateThumbnail(for:)` call site
     /// invalidates a path that either has no on-screen cell to refresh at
     /// all (`removePhoto`'s own just-deleted photo) or invalidates the
     /// OLD path of a photo that just moved (`relocatePhoto`/
     /// `relocateSelectedPhotos`, whose cell is already re-keyed onto the
     /// NEW path by the time this runs) — never the SAME path a
-    /// currently-visible cell is still showing. This exists for a
-    /// PLANNED batch-paste feature, which will be the first caller to
-    /// invalidate a path while a cell showing that EXACT path is on
-    /// screen, by writing sidecars for photos that can be visible in an
-    /// ALREADY-open grid.
+    /// currently-visible cell is still showing. `PasteSettingsModel`'s
+    /// batch paste (shipped) was the first caller that DOES invalidate a
+    /// path while a cell showing that exact path can be on screen, by
+    /// writing sidecars for photos visible in an already-open grid;
+    /// `registerEnhancedPhoto` (above) is a second, different case — a
+    /// brand-new path the grid has never shown before, where this same
+    /// mechanism still matters for a reused path (see
+    /// `PhotoExporter.uniqueFileURL`'s own collision handling).
     @Published private(set) var thumbnailRevisions: [String: Int] = [:]
 
-    /// Drops the cached thumbnail for the photo at `url`. Existing callers
-    /// (`ImageDocumentModel.onSidecarSaved` via `ContentView`,
-    /// `relocatePhoto`/`relocateSelectedPhotos`, `removePhoto`) never
-    /// needed a same-path grid refresh — see `thumbnailRevisions`' own doc
-    /// comment for why. A planned batch-paste feature will be the first to
-    /// need one, and should call this once its own sidecar write for a
-    /// given photo has actually finished on disk — calling it any earlier
-    /// would let a cell's re-fetch race ahead of the write and read the
-    /// OLD sidecar. Sync wrapper (matching this class's other mutators) —
+    /// Drops the cached thumbnail for the photo at `url`. Callers:
+    /// `ImageDocumentModel.onSidecarSaved` via `ContentView`,
+    /// `relocatePhoto`/`relocateSelectedPhotos`, `removePhoto` (none of
+    /// these need a same-path grid refresh — see `thumbnailRevisions`'
+    /// own doc comment for why), `PasteSettingsModel`'s batch paste, and
+    /// `registerEnhancedPhoto` (above). Should be called once the actual
+    /// file write it's invalidating for has finished on disk — calling it
+    /// any earlier would let a cell's re-fetch race ahead of the write
+    /// and read stale data. Sync wrapper (matching this class's other
+    /// mutators) —
     /// the actual invalidation hops to the `ThumbnailCache` actor via a
     /// `Task`, which then bumps `thumbnailRevisions` AFTER that
     /// invalidation completes (not before) — bumping first would let a

@@ -774,4 +774,134 @@ final class CatalogDatabaseTests: XCTestCase {
 
         XCTAssertEqual(presets.map(\.name), ["Apple", "Zebra"])
     }
+
+    // MARK: - registerPhoto / photo(atPath:) (Enhance/Super Resolution)
+
+    func testRegisterPhotoInsertsANewRow() async throws {
+        let db = try makeDatabase()
+
+        let photo = try await db.registerPhoto(at: URL(fileURLWithPath: "/tmp/IMG_0001-Enhanced-SR.jpg"))
+
+        XCTAssertEqual(photo.filename, "IMG_0001-Enhanced-SR.jpg")
+        let count = try await db.photoCount()
+        XCTAssertEqual(count, 1)
+    }
+
+    func testRegisterPhotoIsIdempotentReturningTheSameRow() async throws {
+        let db = try makeDatabase()
+        let url = URL(fileURLWithPath: "/tmp/IMG_0001-Enhanced-SR.jpg")
+
+        let first = try await db.registerPhoto(at: url)
+        let second = try await db.registerPhoto(at: url)
+
+        XCTAssertEqual(first.id, second.id)
+        let count = try await db.photoCount()
+        XCTAssertEqual(count, 1, "re-registering the same path must not create a duplicate row")
+    }
+
+    func testRegisterPhotoJoinsAnExistingMatchingFolderCollection() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importFolderTree(yearTripDayTree())
+        let allCollections = try await db.allCollections()
+        let day = try XCTUnwrap(allCollections.first { $0.name == "Day1" })
+        let trip = try XCTUnwrap(allCollections.first { $0.name == "Trip" })
+        let year = try XCTUnwrap(allCollections.first { $0.name == "2024" })
+        let dayID = try XCTUnwrap(day.id)
+        let tripID = try XCTUnwrap(trip.id)
+        let yearID = try XCTUnwrap(year.id)
+
+        _ = try await db.registerPhoto(at: URL(fileURLWithPath: "/tmp/2024/Trip/Day1/2-Enhanced-SR.jpg"))
+
+        let dayPhotos = try await db.photos(inCollection: dayID)
+        XCTAssertEqual(Set(dayPhotos.map(\.filename)), ["1.jpg", "2-Enhanced-SR.jpg"])
+        // Reviewer-caught: only checking Day1's own members can't tell
+        // "joined the DIRECT parent only" apart from "joined every
+        // ancestor in the chain too" — Trip and 2024 (Day1's parent and
+        // grandparent) must be COMPLETELY unaffected.
+        let tripPhotos = try await db.photos(inCollection: tripID)
+        let yearPhotos = try await db.photos(inCollection: yearID)
+        XCTAssertEqual(tripPhotos.map(\.filename), ["group.jpg"], "must join ONLY the direct parent folder, not ancestors")
+        XCTAssertTrue(yearPhotos.isEmpty, "must join ONLY the direct parent folder, not ancestors")
+    }
+
+    func testRegisterPhotoDoesNotCreateANewFolderCollection() async throws {
+        let db = try makeDatabase()
+
+        _ = try await db.registerPhoto(at: URL(fileURLWithPath: "/tmp/untracked-folder/IMG_0001-Enhanced-SR.jpg"))
+
+        let collections = try await db.allCollections()
+        XCTAssertTrue(collections.isEmpty, "registerPhoto must never create a collection, only join an existing one")
+    }
+
+    func testRegisterPhotoDoesNotJoinAnUnrelatedFolderCollection() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importFolderTree(yearTripDayTree())
+        let allCollections = try await db.allCollections()
+        let trip = try XCTUnwrap(allCollections.first { $0.name == "Trip" })
+        let day = try XCTUnwrap(allCollections.first { $0.name == "Day1" })
+        let tripID = try XCTUnwrap(trip.id)
+        let dayID = try XCTUnwrap(day.id)
+
+        _ = try await db.registerPhoto(at: URL(fileURLWithPath: "/tmp/some-other-folder/IMG_0001-Enhanced-SR.jpg"))
+
+        let tripPhotos = try await db.photos(inCollection: tripID)
+        let dayPhotos = try await db.photos(inCollection: dayID)
+        XCTAssertEqual(tripPhotos.map(\.filename), ["group.jpg"])
+        XCTAssertEqual(dayPhotos.map(\.filename), ["1.jpg"])
+    }
+
+    /// A user album's own `folderPath` is always `nil` (`createCollection`
+    /// never sets it), so this only proves the `folderPath` EQUALITY
+    /// check itself works — it passes whether or not `registerPhoto`
+    /// separately checks `isFolder`, since a `nil` folderPath can never
+    /// match a real folder path either way. See
+    /// `testRegisterPhotoRefusesANonFolderCollectionWithAMatchingFolderPath`
+    /// below for the test that actually exercises the `isFolder` check.
+    func testRegisterPhotoDoesNotJoinAUserAlbum() async throws {
+        let db = try makeDatabase()
+        let album = try await db.createCollection(name: "My Favorites")
+        let albumID = try XCTUnwrap(album.id)
+
+        _ = try await db.registerPhoto(at: URL(fileURLWithPath: "/tmp/some-folder/IMG_0001-Enhanced-SR.jpg"))
+
+        let albumPhotos = try await db.photos(inCollection: albumID)
+        XCTAssertTrue(albumPhotos.isEmpty)
+    }
+
+    /// Reviewer-caught: no production code path can ever create an
+    /// `isFolder: false` row with a non-nil `folderPath` (only
+    /// `findOrCreateFolderCollection` sets `folderPath`, always alongside
+    /// `isFolder: true`), so without `insertCollectionForTesting`'s own
+    /// bypass, `registerPhoto`'s `isFolder == true` filter is untestable
+    /// through the public API — confirmed by mutation: deleting that
+    /// filter left every OTHER test in this group passing.
+    func testRegisterPhotoRefusesANonFolderCollectionWithAMatchingFolderPath() async throws {
+        let db = try makeDatabase()
+        let path = "/tmp/weird-collection"
+        let nonFolderCollection = PhotoCollection(id: nil, name: "Weird", createdAt: Date(), isFolder: false, folderPath: path)
+        let inserted = try await db.insertCollectionForTesting(nonFolderCollection)
+        let collectionID = try XCTUnwrap(inserted.id)
+
+        _ = try await db.registerPhoto(at: URL(fileURLWithPath: "\(path)/IMG_0001-Enhanced-SR.jpg"))
+
+        let members = try await db.photos(inCollection: collectionID)
+        XCTAssertTrue(members.isEmpty, "registerPhoto must check isFolder, not just a matching folderPath")
+    }
+
+    func testPhotoAtPathFindsAnExistingRow() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/IMG_0001.jpg")])
+
+        let found = try await db.photo(atPath: "/tmp/IMG_0001.jpg")
+
+        XCTAssertEqual(found?.filename, "IMG_0001.jpg")
+    }
+
+    func testPhotoAtPathReturnsNilForAnUnknownPath() async throws {
+        let db = try makeDatabase()
+
+        let found = try await db.photo(atPath: "/tmp/does-not-exist.jpg")
+
+        XCTAssertNil(found)
+    }
 }

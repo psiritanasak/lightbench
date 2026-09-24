@@ -109,6 +109,49 @@ final class CatalogDatabase: Sendable {
         return (id, true)
     }
 
+    /// Registers `url` as a catalogued `Photo` (reusing an existing row
+    /// at the same path, exactly like `insertPhotoIfNeeded`), and — if
+    /// `url`'s DIRECT containing folder already has a folder-mirrored
+    /// collection (`isFolder == true`, from an earlier `importFolderTree`
+    /// — see that method's own doc comment), joins it. NEVER creates a
+    /// new collection — `PhotoEnhancer`'s own output (the first caller,
+    /// via `CatalogModel.registerEnhancedPhoto`) is a single new file
+    /// written directly into an already-catalogued folder, not a fresh
+    /// import, so there is no user-initiated "import this as a
+    /// collection" action backing a new one.
+    ///
+    /// Idempotent: registering the SAME path twice (e.g. Enhance,
+    /// deleted, then Enhance again reusing the exact name — see
+    /// `PhotoExporter.uniqueFileURL`'s own orphan-sidecar-aware naming)
+    /// reuses the existing row rather than duplicating it, matching
+    /// `insertPhotoIfNeeded`'s own established behavior.
+    func registerPhoto(at url: URL) async throws -> Photo {
+        try await dbQueue.write { db in
+            let (photoID, _) = try Self.insertPhotoIfNeeded(url: url, db: db)
+            let folderPath = url.deletingLastPathComponent().path
+            if let folderCollection = try PhotoCollection
+                .filter(PhotoCollection.Columns.isFolder == true)
+                .filter(PhotoCollection.Columns.folderPath == folderPath)
+                .fetchOne(db), let collectionID = folderCollection.id {
+                try CollectionPhoto(collectionId: collectionID, photoId: photoID).insert(db, onConflict: .ignore)
+            }
+            guard let photo = try Photo.filter(Photo.Columns.id == photoID).fetchOne(db) else {
+                throw CatalogDatabaseError(message: "registerPhoto: row for id \(photoID) disappeared immediately after insert/lookup")
+            }
+            return photo
+        }
+    }
+
+    /// The catalogued row at `path`, if any — used by
+    /// `CatalogModel.catalogedPhoto(atPath:)` to check whether a photo is
+    /// in the catalog at all before `PhotoEnhancer` acts on it (a photo
+    /// opened via `Open…` rather than imported has no row here).
+    func photo(atPath path: String) async throws -> Photo? {
+        try await dbQueue.read { db in
+            try Photo.filter(Photo.Columns.path == path).fetchOne(db)
+        }
+    }
+
     func photoCount() async throws -> Int {
         try await dbQueue.read { db in
             try Photo.fetchCount(db)
@@ -260,6 +303,37 @@ final class CatalogDatabase: Sendable {
     func createCollection(name: String) async throws -> PhotoCollection {
         try await dbQueue.write { db in
             var collection = PhotoCollection(id: nil, name: name, createdAt: Date())
+            try collection.insert(db)
+            return collection
+        }
+    }
+
+    /// Test-only seam (reviewer-caught, Enhance/Super Resolution review
+    /// round: `registerPhoto`'s own `isFolder == true` filter had NO
+    /// direct test — every real write path only ever produces
+    /// `isFolder: false` with a `nil` folderPath, or `isFolder: true`
+    /// with a real one, via `findOrCreateFolderCollection`, so a
+    /// same-shape-but-wrong row is otherwise unreachable through the
+    /// public API). Inserts `collection` completely as-given, bypassing
+    /// every other write method's own shape-enforcing logic — exists
+    /// specifically so a test can construct the one row shape
+    /// (`isFolder: false` with a non-nil `folderPath`) production code
+    /// never produces, and confirm `registerPhoto` still correctly
+    /// refuses to join it.
+    ///
+    /// Caution for future test authors (reviewer-noted, round 2, not
+    /// currently triggered by any test): `findOrCreateFolderCollection`'s
+    /// own lookup matches on `folderPath` ALONE, without also checking
+    /// `isFolder` — a real row this seam can produce but production code
+    /// cannot. A test that inserts an `isFolder: false` row at some
+    /// `folderPath` and later imports a real folder tree at that SAME
+    /// path would silently have `importFolderTree` adopt this non-folder
+    /// row as if it were a folder collection. Not an issue for anything
+    /// in this file today, but worth knowing before reusing this seam
+    /// more broadly.
+    func insertCollectionForTesting(_ collection: PhotoCollection) async throws -> PhotoCollection {
+        try await dbQueue.write { db in
+            var collection = collection
             try collection.insert(db)
             return collection
         }

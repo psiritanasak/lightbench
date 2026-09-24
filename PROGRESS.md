@@ -22,7 +22,36 @@ rounds (FIX FIRST × 5) to close a real async-load-vs-batch-write race;
 see CLAUDE.md's own roadmap entry for the full story, including
 IMPROVEMENTS.md D28 (one accepted, pre-existing, narrow residual
 exposure in `saveSidecarNow` itself, logged not fixed). 1254 tests (19
-new). **NOT yet live-verified** — see "Exact next step" below.
+new). **Live-verified (2026-09-24)** — see below.
+
+Live verification (scratch synthetic JPEGs, 3 folders: FolderA/B/C, NOT
+the user's real library) covered every item on the plan's own checklist:
+Copy Settings (toolbar + ⇧⌘C) on an edited open photo; Paste Settings
+(toolbar + ⇧⌘V) onto a 3-photo/2-folder selection, confirming ONE
+bookmark prompt per not-yet-granted folder (FolderB), not one per
+photo, and that an already-granted folder (FolderA, from the Copy step)
+needed no re-prompt; each target's sidecar JSON showed the copied
+tone/look fields while a pre-seeded target's OWN crop/mask/exposure
+values survived untouched; Library grid thumbnails and edited-badges
+updated live without leaving the Library (`thumbnailRevisions`); the
+open-photo path — opened a photo, edited it, selected it plus others,
+pasted twice (a batch paste while it was merely open, then a second
+paste with it as the live editor target) — confirmed the Editor showed
+the pasted look live, a "Paste Settings" row appeared in the History
+panel above "Opened," clicking "Opened" undid exactly the second
+paste's own field (`curvesShadows` back to 0, `exposureEV`/`contrast`
+from the first paste preserved) with the disk sidecar matching, and the
+two batch-only targets' own sidecars were completely unaffected by that
+undo (confirmed via direct JSON diff, not just the UI). The decline
+path was also verified end-to-end: pasting onto a fresh, never-granted
+folder (FolderC) and clicking Cancel on the access prompt produced
+"1 skipped" with no sidecar file created; a second Paste attempt on the
+same photo re-prompted (confirming no session-level decline memory for
+Paste, by design — distinct from `ImageDocumentModel.declinedFolders`,
+which is Editor-save-specific); clicking Grant Access that second time
+completed the paste and the sidecar landed on disk with the expected
+values. No new bugs found during live verification — the 6-round
+reviewer process had already closed the real risks.
 
 Deliberate v1 scope cuts (all confirmed/accepted, not oversights): no
 RAW-native fields carried (matches Presets' own behavior); no granular
@@ -1186,25 +1215,11 @@ lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
 Nothing blocking. Copy/Paste Settings is fully shipped, reviewed (3
-commits, the feature commit alone 6 rounds FIX FIRST × 5 → APPROVE), and
-committed — see the "Current phase" entry's own write-up. **NOT yet
-live-verified** — the natural next step for a resuming session is a
-live pass covering: Copy Settings on an edited photo (toolbar AND ⇧⌘C),
-disabled with nothing open; Paste Settings onto 3+ selected photos
-across 2+ folders (toolbar AND ⇧⌘V), confirming ONE bookmark prompt per
-not-yet-granted folder (not one per photo); checking each target's
-sidecar JSON — look/tone fields match the copied source, the target's
-OWN crop/masks/RAW fields survive untouched; grid thumbnails/edited-
-badges updating live without leaving the Library (the
-`thumbnailRevisions` mechanism from the 2nd commit); the open-photo path
-specifically — open a photo, edit it, select it plus others, paste,
-confirm the Editor shows the pasted look with a "Paste Settings" row in
-the History panel, Undo restores its pre-paste edit, other targets are
-unaffected; an identity-paste (copy from unedited, paste onto unedited)
-creates no sidecar and reports "already matched"; a declined folder
-reports skipped with no sidecar written, and re-prompts on the next
-attempt. Use scratch synthetic JPEGs (matching the Auto Tone/History
-panel sessions' own precedent), NOT the user's real library.
+commits, the feature commit alone 6 rounds FIX FIRST × 5 → APPROVE),
+committed, AND live-verified (2026-09-24) — see the "Current phase"
+entry's own write-up for the full checklist. Pick the next Lightroom
+gap and enter Plan Mode first, per this project's workflow rules (see
+the list at the end of this section).
 
 History panel is ALSO fully shipped, reviewed (2 rounds, FIX FIRST →
 APPROVE), committed, AND live-verified (2026-09-24) — every item on the
@@ -1234,9 +1249,7 @@ nearly any photo) is the one specific open design question to weigh
 while doing that — all 3 of this session's own test cases independently
 confirmed that saturation happening exactly as D26 describes.
 
-Otherwise, once Copy/Paste Settings is live-verified, pick the next
-Lightroom gap and enter Plan Mode first, per this project's workflow
-rules. Available: Enhance/Super Resolution (the one remaining unstarted
+Available: Enhance/Super Resolution (the one remaining unstarted
 Tier-2 item); Color Grading Slice B's own follow-ups — live-verifying
 the `AngularGradient` painted-wheel convention on screen (flagged
 DERIVED, not measured, in `ColorWheelGeometry.angularGradientFraction`'s

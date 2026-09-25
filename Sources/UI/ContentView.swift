@@ -1275,93 +1275,109 @@ struct ContentView: View {
     /// closure's statement count low enough for the Swift type-checker —
     /// see `filmstripToolbarItem`'s doc comment for the full story; this
     /// split predates D1(b) reaching in but was needed once it did.
+    /// Compacted from one `ToolbarItem` (and one Liquid-Glass capsule) per
+    /// action to two `ToolbarItemGroup`s of icon-only controls — same
+    /// actions/`.disabled` logic throughout, just fewer/smaller controls.
+    /// Each `Label`'s text is kept (not `.labelStyle(.iconOnly)`) so it still
+    /// supplies the AX `description`/tooltip macOS already derives for
+    /// toolbar buttons; it just doesn't render alongside the icon.
     @ToolbarContentBuilder
     private var libraryToolbarItems: some ToolbarContent {
-        ToolbarItem(placement: .automatic) {
-            Button(showLibrary ? "Editor" : "Library") {
+        ToolbarItemGroup(placement: .automatic) {
+            Button {
                 showLibrary.toggle()
+            } label: {
+                Label(showLibrary ? "Editor" : "Library", systemImage: showLibrary ? "photo" : "square.grid.2x2")
             }
-        }
-        ToolbarItem(placement: .automatic) {
-            Button("Open…") {
-                Task { await document.openImage() }
-            }
-        }
-        ToolbarItem(placement: .automatic) {
-            Button("Import Folder…") {
-                catalog.importFolder()
-            }
-        }
-        ToolbarItem(placement: .automatic) {
-            Button("Import Folder Tree…") {
-                catalog.importFolderTree()
+            Menu {
+                Button("Open…") {
+                    Task { await document.openImage() }
+                }
+                Button("Import Folder…") {
+                    catalog.importFolder()
+                }
+                Button("Import Folder Tree…") {
+                    catalog.importFolderTree()
+                }
+            } label: {
+                Label("Add Photos", systemImage: "plus")
             }
         }
         if showLibrary {
-            ToolbarItem(placement: .automatic) {
-                Button(
-                    catalog.selectedPhotoIDs.isEmpty
-                        ? "Export…"
-                        : "Export Selected (\(catalog.selectedPhotoIDs.count))…"
-                ) {
+            ToolbarItemGroup(placement: .automatic) {
+                Button {
                     exportModel.beginExport()
+                } label: {
+                    Label(exportButtonTitle, systemImage: "square.and.arrow.up")
                 }
                 .disabled(photosToExport.isEmpty || exportModel.isExporting)
-            }
-            if !catalog.selectedPhotoIDs.isEmpty {
-                ToolbarItem(placement: .automatic) {
-                    Menu("Add to Collection") {
-                        ForEach(catalog.collections) { collection in
-                            Button(collection.name) {
-                                catalog.addSelectedPhotos(to: collection)
+                .help(exportButtonTitle)
+
+                if !catalog.selectedPhotoIDs.isEmpty {
+                    Menu {
+                        Menu("Add to Collection") {
+                            ForEach(catalog.collections) { collection in
+                                Button(collection.name) {
+                                    catalog.addSelectedPhotos(to: collection)
+                                }
                             }
                         }
-                    }
-                    .disabled(catalog.collections.isEmpty || selectedPhotosVisibleInGrid.isEmpty)
-                }
-                ToolbarItem(placement: .automatic) {
-                    Button("Locate Selected…") {
-                        Task { await catalog.relocateSelectedPhotos() }
-                    }
-                    .disabled(selectedPhotosVisibleInGrid.isEmpty)
-                }
-                ToolbarItem(placement: .automatic) {
-                    Button("Paste Settings (\(selectedPhotosVisibleInGrid.count))…") {
-                        pasteModel.requestPaste(onto: selectedPhotosVisibleInGrid)
-                    }
-                    // `document.isLoadInFlight`, reviewer-caught: a photo
-                    // load is async and `document.currentURL` still names
-                    // the OUTGOING photo for its whole duration — a paste
-                    // confirmed during that window could target the
-                    // INCOMING photo without recognizing it as "the open
-                    // photo," write its sidecar directly, and then have
-                    // the load's own completion silently overwrite that
-                    // with pre-paste data. Disabling REQUESTING a paste
-                    // during the window narrows it — it is NOT the full
-                    // guard by itself (a load can still start AFTER a
-                    // request, while the confirmation dialog is open); see
-                    // `PasteSettingsModel.performPaste`'s own doc comment
-                    // for the complete, multi-layered story.
-                    .disabled(
-                        pasteModel.copied == nil || selectedPhotosVisibleInGrid.isEmpty || document.isLoadInFlight
-                    )
-                    .help(
-                        pasteModel.copied.map { "Paste settings copied from \($0.sourceFileName)" }
-                            ?? "Copy settings from a photo first (⇧⌘C in the Editor)"
-                    )
-                }
-                ToolbarItem(placement: .automatic) {
-                    Button("Clear Selection") {
-                        catalog.clearSelection()
+                        .disabled(catalog.collections.isEmpty || selectedPhotosVisibleInGrid.isEmpty)
+
+                        Button("Locate Selected…") {
+                            Task { await catalog.relocateSelectedPhotos() }
+                        }
+                        .disabled(selectedPhotosVisibleInGrid.isEmpty)
+
+                        Button("Paste Settings (\(selectedPhotosVisibleInGrid.count))…") {
+                            pasteModel.requestPaste(onto: selectedPhotosVisibleInGrid)
+                        }
+                        // `document.isLoadInFlight`, reviewer-caught: a photo
+                        // load is async and `document.currentURL` still names
+                        // the OUTGOING photo for its whole duration — a paste
+                        // confirmed during that window could target the
+                        // INCOMING photo without recognizing it as "the open
+                        // photo," write its sidecar directly, and then have
+                        // the load's own completion silently overwrite that
+                        // with pre-paste data. Disabling REQUESTING a paste
+                        // during the window narrows it — it is NOT the full
+                        // guard by itself (a load can still start AFTER a
+                        // request, while the confirmation dialog is open); see
+                        // `PasteSettingsModel.performPaste`'s own doc comment
+                        // for the complete, multi-layered story.
+                        .disabled(
+                            pasteModel.copied == nil || selectedPhotosVisibleInGrid.isEmpty
+                                || document.isLoadInFlight
+                        )
+
+                        Divider()
+
+                        Button("Clear Selection") {
+                            catalog.clearSelection()
+                        }
+                    } label: {
+                        Label("\(selectedPhotosVisibleInGrid.count) Selected", systemImage: "checkmark.circle")
                     }
                 }
             }
         }
     }
 
+    /// Shared between the Export button's `Label` and its `.help` tooltip —
+    /// same text the old text-only button showed, just no longer the only
+    /// place that text is used.
+    private var exportButtonTitle: String {
+        catalog.selectedPhotoIDs.isEmpty
+            ? "Export…"
+            : "Export Selected (\(catalog.selectedPhotoIDs.count))…"
+    }
+
+    /// Grouped into two `ToolbarItemGroup`s (history vs. document actions)
+    /// instead of five separate `ToolbarItem`s — same actions/`.disabled`
+    /// logic, just fewer Liquid-Glass capsules on macOS 26+.
     @ToolbarContentBuilder
     private var editHistoryToolbarItems: some ToolbarContent {
-        ToolbarItem(placement: .automatic) {
+        ToolbarItemGroup(placement: .automatic) {
             Button {
                 document.undo()
             } label: {
@@ -1372,16 +1388,14 @@ struct ContentView: View {
             // .undoRedo) }`) is the canonical ⌘Z/⇧⌘Z owner now, so two
             // separate views don't both claim the same key combo.
             .disabled(!document.canUndo)
-        }
-        ToolbarItem(placement: .automatic) {
+
             Button {
                 document.redo()
             } label: {
                 Label("Redo", systemImage: "arrow.uturn.forward")
             }
             .disabled(!document.canRedo)
-        }
-        ToolbarItem(placement: .automatic) {
+
             Button {
                 document.revertToOriginal()
             } label: {
@@ -1396,7 +1410,7 @@ struct ContentView: View {
             // own doc comment.
             .disabled(document.currentImage == nil || document.editState.isEffectivelyIdentity)
         }
-        ToolbarItem(placement: .automatic) {
+        ToolbarItemGroup(placement: .automatic) {
             Button {
                 pasteModel.copy(document.editState, fileName: document.currentFileName ?? "photo")
             } label: {
@@ -1408,8 +1422,7 @@ struct ContentView: View {
             // BOTH the Library and Editor panes; a new gate here would be
             // an inconsistency, not a safety improvement.
             .disabled(document.currentImage == nil)
-        }
-        ToolbarItem(placement: .automatic) {
+
             Button {
                 // Snapshotted synchronously, same pattern as "Copy
                 // Settings" just above — `enhanceModel.enhance` reads

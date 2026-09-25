@@ -198,8 +198,8 @@ Reviewer: FIX FIRST → APPROVE. Round 1 caught, by adversarial re-measurement (
 (Side by Side / Split, Phase 5 follow-up).
 
 ## Workflow rules (important)
-- Model is `opusplan`: ALWAYS enter Plan Mode before starting a new feature so the
-  plan is produced by the stronger model. Keep plans scoped to ONE feature.
+- Use Opus 5.5 for both planning AND implementation coding (not Sonnet). ALWAYS
+  enter Plan Mode before starting a new feature. Keep plans scoped to ONE feature.
 - After completing a feature and BEFORE any git commit, invoke the `reviewer` agent
   on the diff (`git diff HEAD`).
 - If the reviewer verdict is FIX FIRST: fix every listed issue, then re-run the
@@ -227,8 +227,9 @@ step and make every stopping point safe:
   "next step".
 
 ### Conserving quota (make the subscription last)
-- Reserve the stronger model for planning only (opusplan already does this). Don't
-  ask for Opus-level reasoning on routine implementation.
+- Opus 5.5 is now used for implementation too, not just planning — this trades
+  quota for code quality, so lean harder on the other items below (small
+  increments, `/clear` between features) to make it last.
 - Run `/clear` between features so context doesn't accumulate — large context is
   the main driver of token burn.
 - Keep plans and diffs scoped to one feature; avoid re-reading the whole codebase

@@ -75,18 +75,15 @@ extension MaskCombineTarget {
 ///
 /// `.colorRange` (Phase 7 slice 5, second half) sits BETWEEN those two
 /// extremes: Tolerance and Feather are labeled, AT-adjustable
-/// `EditSliderRow`s exactly like `.luminanceRange`'s own params — but
-/// PICKING the color itself is a mouse-only spatial tap
-/// (`ContentView.pointAndZoomOverlays`'s new capture layer, a bare
-/// `SpatialTapGesture` with no on-image overlay to excuse it either, since
-/// `hasOnImageOverlay(.colorRange)` is `false`). This is a real,
-/// logged accessibility gap (IMPROVEMENTS.md's D14) — NOT covered by
-/// `.luminanceRange`'s "nothing to log" reasoning above, since that kind
-/// has no spatial gesture at all. Unlike `.brush`'s D11 gap, this one is a
-/// cheap future win: the WB eyedropper's existing crosshair-nudge
-/// machinery (`crosshairPosition`/`handlePointPlacementKeyPress`/
-/// `commitPointPlacement`/`EditorCrosshairOverlay`) already exists and
-/// wiring it here would mostly be a routing change, not new machinery.
+/// `EditSliderRow`s exactly like `.luminanceRange`'s own params, and
+/// PICKING the color itself (`ContentView.pointAndZoomOverlays`'s capture
+/// layer) now ALSO has a keyboard/AT path (D14, IMPROVEMENTS.md — closed):
+/// arrow keys move the shared crosshair, Return commits, Escape disarms,
+/// routed through the exact same `crosshairPosition`/
+/// `handlePointPlacementKeyPress`/`commitPointPlacement`/
+/// `EditorCrosshairOverlay` machinery the WB eyedropper already used —
+/// confirming that entry's own prediction this would be "mostly a routing
+/// change, not new machinery."
 struct MaskDetailView: View {
     @Binding var mask: Mask
     /// `.brush` only — called when "Paint Stroke"/"Redraw Stroke" is

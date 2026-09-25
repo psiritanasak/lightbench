@@ -440,7 +440,8 @@ struct ContentView: View {
         // fails closed (falls through to the pan branch, or `.ignored`)
         // instead of committing a point against a crop-mode `fitRect`
         // with no crosshair even drawn.
-        if !isCroppingActive, isPickingWhiteBalance || isPlacingRedEyeCorrections || isPickingPointColor {
+        if !isCroppingActive,
+           isPickingWhiteBalance || isPlacingRedEyeCorrections || isPickingPointColor || isPickingColorRange {
             return handlePointPlacementKeyPress(keyPress)
         }
         // Phase 7 slice 2: same defensive re-check discipline as the
@@ -482,11 +483,12 @@ struct ContentView: View {
 
     /// Escape deselects the currently-selected Point Color instance — the
     /// `isEditingMask`/`handleMaskKeyPress` analogue for this kind. No
-    /// intermediate "picking-only" stage needed here the way brush/Color-
-    /// Range masks have: that stage already exists one level up, inside
+    /// intermediate "picking-only" stage needed here the way brush masks
+    /// have: that stage already exists one level up, inside
     /// `handlePointPlacementKeyPress` (Point Color's eyedropper IS routed
-    /// through the shared point-placement dispatch, unlike Color Range's
-    /// own mouse-only picker) — by the time control reaches here,
+    /// through the shared point-placement dispatch — D14, IMPROVEMENTS.md,
+    /// Color Range's own eyedropper now routes through the exact same
+    /// dispatch too) — by the time control reaches here,
     /// `pointColorPickingID` is already `nil` and only the SELECTION
     /// remains to clear.
     private func handlePointColorKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
@@ -525,15 +527,20 @@ struct ContentView: View {
             brushPaintingMaskID = nil
             return .handled
         }
-        // Phase 7 slice 5 (second half): same two-stage shape — Escape
-        // disarms the eyedropper ONLY (the mask stays selected; a never-
-        // picked mask is discarded by `discardUnpickedColorRangeMask` via
-        // the falling-edge `.onChange` below), matching `.brush`'s own
-        // "one Escape per stage" behavior.
-        if isPickingColorRange {
-            colorPickingMaskID = nil
-            return .handled
-        }
+        // D14 (IMPROVEMENTS.md): Color Range's own eyedropper-Escape stage
+        // USED to live here (a bespoke branch mirroring `.brush`'s own
+        // two-stage shape above), back when it was mouse-only and never
+        // reached `handleImagePaneKeyPress`'s point-placement dispatch at
+        // all. Now that `isPickingColorRange` is included in THAT dispatch's
+        // own arm-check, Escape while picking is caught by
+        // `handlePointPlacementKeyPress`'s `.escape` case before control
+        // ever reaches this function — this function only ever sees Escape
+        // for the SECOND stage (deselecting an already-disarmed mask,
+        // the `adjustPanel.selectedMaskID = nil` line below), matching how
+        // Point Color's own two stages are already split across
+        // `handlePointPlacementKeyPress` (picking) and
+        // `handlePointColorKeyPress` (selection) rather than living
+        // together in one function.
         adjustPanel.selectedMaskID = nil
         return .handled
     }
@@ -614,9 +621,10 @@ struct ContentView: View {
         }
     }
 
-    /// Arrow keys move `crosshairPosition`; Return commits (samples WB or
-    /// toggles a Red-Eye point at the crosshair — see
-    /// `commitPointPlacement`); Escape disarms without committing — a
+    /// Arrow keys move `crosshairPosition`; Return commits (samples WB,
+    /// toggles a Red-Eye point, or picks a Point Color/Color Range target
+    /// at the crosshair — see `commitPointPlacement`); Escape disarms
+    /// without committing — a
     /// genuinely NEW capability, since today there's no way to leave
     /// point-placement mode without a mouse click on the toolbar button
     /// or switching tabs.
@@ -646,6 +654,7 @@ struct ContentView: View {
             isPickingWhiteBalance = false
             isPlacingRedEyeCorrections = false
             pointColorPickingID = nil
+            colorPickingMaskID = nil
         default:
             return .ignored
         }
@@ -678,6 +687,12 @@ struct ContentView: View {
             // `pointAndZoomOverlays`.
             document.pickPointColorTarget(pointColorID: id, normalizedX: crosshairPosition.x, normalizedY: crosshairPosition.y)
             pointColorPickingID = nil
+        } else if let maskID = colorPickingMaskID {
+            // D14 (IMPROVEMENTS.md): one-shot, matching Point Color's own
+            // shape immediately above — the SAME call the mouse tap
+            // handler in `pointAndZoomOverlays` makes.
+            document.pickColorRangeTarget(maskID: maskID, normalizedX: crosshairPosition.x, normalizedY: crosshairPosition.y)
+            colorPickingMaskID = nil
         }
     }
 
@@ -1194,9 +1209,18 @@ struct ContentView: View {
         // 4's reviewer caught: `addMask -> select -> beginColorPick` is
         // one synchronous action SwiftUI collapses into a single
         // `.onChange` call that would never observe an intermediate `nil`.
+        //
+        // D14 (IMPROVEMENTS.md): now ALSO resets the keyboard crosshair +
+        // grabs focus on the rising edge, matching `pointColorPickingID`'s
+        // own `.onChange` below — added once this mode gained a keyboard
+        // path; previously had nothing to reset for (mouse-only).
         .onChange(of: colorPickingMaskID) { oldID, newID in
             if oldID != newID {
                 discardUnpickedColorRangeMask(oldID)
+            }
+            if newID != nil {
+                crosshairPosition = CGPoint(x: 0.5, y: 0.5)
+                isImagePaneFocused = true
             }
         }
         // Point Color Slice B: same `oldID != newID` shape as
@@ -1204,8 +1228,11 @@ struct ContentView: View {
         // add->select->pick coalescing hazard), PLUS the WB/Red-Eye
         // rising-edge crosshair reset + focus grab those two `.onChange`s
         // handle separately — combined here since both concerns key off
-        // the same `pointColorPickingID` change, unlike Color Range (which
-        // has no keyboard crosshair support to grab focus for).
+        // the same `pointColorPickingID` change. `colorPickingMaskID`'s
+        // own `.onChange` above now does the identical rising-edge reset
+        // (D14, IMPROVEMENTS.md) — kept as two separate `.onChange`
+        // handlers rather than merged, since each already carries its own
+        // discard-if-unpicked logic keyed on its own distinct id type.
         .onChange(of: pointColorPickingID) { oldID, newID in
             if oldID != newID {
                 discardUnpickedPointColor(oldID)
@@ -1863,10 +1890,11 @@ struct ContentView: View {
         // own discipline — Undo/Revert/Apply-Preset could delete the mask
         // mid-pick) and writes into that SPECIFIC mask via
         // `document.pickColorRangeTarget(maskID:normalizedX:normalizedY:)`,
-        // rather than a shared global field. No keyboard crosshair sync —
-        // UNLIKE WB, this mode has no keyboard equivalent at all yet (see
-        // `MaskDetailView`'s own doc comment on this gap, IMPROVEMENTS.md's
-        // D14).
+        // rather than a shared global field. D14 (IMPROVEMENTS.md): now
+        // ALSO syncs `crosshairPosition` on a mouse tap, matching Point
+        // Color's own tap handler below — the direct analogue of the real
+        // D4 bug (a keypress after a mouse click silently acting on a
+        // stale position) now that this mode has a keyboard path too.
         if isPickingColorRange, !isCroppingActive, !isPickingWhiteBalance, !isPlacingRedEyeCorrections,
            !isPaintingBrush, let maskID = colorPickingMaskID, let fitRect = currentFitRect {
             Color.clear
@@ -1881,6 +1909,7 @@ struct ContentView: View {
                         let normalizedX = tap.location.x / fitRect.width
                         let normalizedY = tap.location.y / fitRect.height
                         document.pickColorRangeTarget(maskID: maskID, normalizedX: normalizedX, normalizedY: normalizedY)
+                        crosshairPosition = CGPoint(x: normalizedX, y: normalizedY)
                         colorPickingMaskID = nil
                     }
                 )
@@ -1889,13 +1918,14 @@ struct ContentView: View {
         // Point Color Slice B: this eyedropper's tap-capture layer —
         // mirrors the WB eyedropper's own capture layer above almost
         // exactly (same `Color.clear`/crosshair-cursor/`SpatialTapGesture`
-        // shape, same one-shot auto-disarm, same keyboard-crosshair sync),
-        // NOT the Color Range eyedropper's (which has no keyboard
-        // equivalent, IMPROVEMENTS.md's D14 — closed for THIS kind by
-        // giving it the sync WB already has, rather than opening a third
-        // instance of that gap). Resolves the target instance by IDENTITY
-        // at commit time (mirrors `PointColorBinding`'s own discipline —
-        // Undo/Revert/Apply-Preset could delete the instance mid-pick),
+        // shape, same one-shot auto-disarm, same keyboard-crosshair sync).
+        // The Color Range eyedropper's own tap-capture layer above now has
+        // this exact same keyboard-crosshair sync too (D14, IMPROVEMENTS.md
+        // — closed for that kind the same way, rather than leaving a third
+        // instance of the gap open). Resolves the target instance by
+        // IDENTITY at commit time (mirrors `PointColorBinding`'s own
+        // discipline — Undo/Revert/Apply-Preset could delete the instance
+        // mid-pick),
         // same as the Color Range branch above.
         if isPickingPointColor, !isCroppingActive, !isPickingWhiteBalance, !isPlacingRedEyeCorrections,
            !isPaintingBrush, !isPickingColorRange, let id = pointColorPickingID, let fitRect = currentFitRect {
@@ -1920,9 +1950,10 @@ struct ContentView: View {
         // D8 (IMPROVEMENTS.md): the keyboard-driven crosshair itself —
         // only while a point-placement mode is armed AND the pane holds
         // keyboard focus (so it doesn't linger on screen after focus
-        // moves to a sidebar control). Rendered ABOVE the WB/Red-Eye
-        // capture layers above (later in the `ZStack` = on top), same
-        // z-ordering `RedEyeOverlayView`'s own persistent markers use.
+        // moves to a sidebar control). Rendered ABOVE all four tap-capture
+        // layers above (WB/Red-Eye/Point-Color/Color-Range, later in the
+        // `ZStack` = on top), same z-ordering `RedEyeOverlayView`'s own
+        // persistent markers use.
         if isImagePaneFocused, let fitRect = currentFitRect {
             if isPickingWhiteBalance, !isCroppingActive {
                 EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .white)
@@ -1930,6 +1961,11 @@ struct ContentView: View {
                 EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .yellow)
             } else if isPickingPointColor, !isCroppingActive {
                 EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .cyan)
+            } else if isPickingColorRange, !isCroppingActive {
+                // D14 (IMPROVEMENTS.md): a distinct tint from every other
+                // picker (white/yellow/cyan already taken) so it's visually
+                // unambiguous which mode is armed.
+                EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .green)
             }
         }
         // Compare Split's draggable divider. `compareMode` can only be

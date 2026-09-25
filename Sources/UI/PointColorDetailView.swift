@@ -12,13 +12,14 @@ import SwiftUI
 /// the by-ID lookup (`Binding<EditState>.pointColor(id:)`,
 /// `PointColorBinding.swift`) exactly once per view build.
 ///
-/// Picking the color itself is a mouse-AND-keyboard spatial tap (unlike
-/// `.colorRange`'s own mouse-only picker, logged as IMPROVEMENTS.md D14) —
+/// Picking the color itself is a mouse-AND-keyboard spatial tap —
 /// `ContentView` wires this instance's picking mode into the same
 /// `crosshairPosition`/`handlePointPlacementKeyPress`/
 /// `EditorCrosshairOverlay` machinery the White Balance/Red-Eye eyedroppers
 /// already use, closing this feature's own share of that gap at ship
-/// rather than opening a third instance of it.
+/// rather than opening a third instance of it. `.colorRange`'s own picker
+/// (once mouse-only, logged as IMPROVEMENTS.md D14) now routes through the
+/// identical machinery too — see `MaskDetailView`'s own doc comment.
 struct PointColorDetailView: View {
     @Binding var pointColor: PointColor
     /// Called when "Pick Color"/"Re-pick Color" is tapped — mirrors

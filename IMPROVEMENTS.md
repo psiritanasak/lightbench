@@ -689,7 +689,48 @@ Deliberately left as a documented gap rather than rushed:
 `.onChange` call site's own comment (both in `ContentView.swift`) now
 say so explicitly instead of claiming coverage that doesn't exist.
 
-### D14. No keyboard/AT path to pick a Color Range mask's target color (Phase 7 slice 5, second half)
+### D14. No keyboard/AT path to pick a Color Range mask's target color (Phase 7 slice 5, second half) — SHIPPED 2026-09-25
+
+**Update (2026-09-25): the Color Range eyedropper's own keyboard/AT path
+is now shipped**, closing this entry's own long-open half (Point Color's
+side was closed back in Slice B, 2026-09-18 — see the update below).
+Exactly the "mostly a routing change" this entry's own text predicted:
+`isPickingColorRange` was added to `handleImagePaneKeyPress`'s
+point-placement arm-check, `handlePointPlacementKeyPress`'s `.escape`
+case and `commitPointPlacement`'s if/else-if chain both gained a
+`colorPickingMaskID` branch, `EditorCrosshairOverlay` gained a 4th
+(green) tint, and the mouse tap-capture layer now syncs
+`crosshairPosition` too (the same D4-class staleness bug WB's own path
+already guards against). One small piece of genuinely NEW logic, not
+just routing: `handleMaskKeyPress`'s own bespoke `isPickingColorRange`
+Escape branch (this mode's original, pre-D14 two-stage Escape, built
+entirely inside mask-key handling since it had no point-placement
+dispatch to join) became dead code once the point-placement dispatch
+started intercepting Escape first, and was removed rather than left as
+unreachable cruft. Reviewer: 3 rounds, FIX FIRST → FIX FIRST → APPROVE —
+round 1 found no logic bugs at all, only stale doc comments elsewhere in
+the codebase this change made false (`PointColorDetailView`/
+`MaskDetailView`/two `ContentView` comments all still described Color
+Range as mouse-only or Point Color as the only kind with keyboard
+support) — fixed; round 2 caught two more of the SAME class in this very
+entry (the paragraph below still described the eyedropper as
+present-tense mouse-only, pointing readers at a `MaskDetailView` comment
+that by then said the opposite) — fixed by putting the original text in
+the past tense, see the note directly below it.
+1329 tests pass unchanged (no new automated tests — this is `ContentView`
+UI-glue code with no existing test precedent, matching D8/Point Color
+Slice B's own "verified live, not unit-tested" convention).
+
+The shared `EditorInteractionMode` mode-enum follow-up below is
+DELIBERATELY NOT built this slice — investigated and scoped this same
+session, then explicitly split out as its own future session: the
+keyboard wiring is a small, well-precedented, additive change, while the
+enum is a real refactor across 2 files touching all 6 sites' state
+shape, and bundling them would make any regression harder to attribute
+to one or the other. Still open — the inventory below (6 sites, plus the
+separately-noted 3-way selection-half inconsistency) is unchanged from
+what this entry already had; this session's own research reconfirmed it
+matches the current code but didn't expand it.
 
 **Update (Point Color Slice B, 2026-09-18):** the routing this entry
 describes was built, but for Point Color's OWN eyedropper, not this
@@ -698,30 +739,30 @@ named below (`isPickingPointColor` alongside `isPickingWhiteBalance`/
 `isPlacingRedEyeCorrections`, cyan `EditorCrosshairOverlay` tint,
 `ImageDocumentModel.pickPointColorTarget` from `commitPointPlacement`),
 confirming this entry's own "mostly a routing change" prediction. The
-Color Range mask eyedropper this entry is actually about is still
-mouse-only — not touched, still open below.
+Color Range mask eyedropper this entry is actually about was still
+mouse-only at that point — see the 2026-09-25 update above for the rest.
 
-`ColorRange` mask's Tolerance/Feather are labeled, AT-adjustable
+*(Original text below, as of Phase 7 slice 5 — describes the state BEFORE
+the 2026-09-25 update above; the gap it describes is now closed, and
+`MaskDetailView`'s own class doc comment now says so rather than the
+opposite.)*
+
+`ColorRange` mask's Tolerance/Feather were labeled, AT-adjustable
 `EditSliderRow`s exactly like `.luminanceRange`'s own params — but
 PICKING the color itself (`ContentView.pointAndZoomOverlays`'s new
-tap-capture branch) is a bare `SpatialTapGesture` with no keyboard/AT
+tap-capture branch) was a bare `SpatialTapGesture` with no keyboard/AT
 path at all, the same category of gap D8 closed for the WB eyedropper
-and Red-Eye placement, and the same one `MaskDetailView`'s own class
-doc comment now names explicitly for this kind.
+and Red-Eye placement.
 
 Unlike D11 (`.brush`'s stroke shape — no slider equivalent, no obvious
-keyboard generalization), this one is a CHEAP future win: D8's
+keyboard generalization), this was a CHEAP future win: D8's
 crosshair-nudge machinery (`ContentView.crosshairPosition`/
 `handlePointPlacementKeyPress`/`commitPointPlacement`/
-`EditorCrosshairOverlay`) already exists and already handles exactly
+`EditorCrosshairOverlay`) already existed and already handled exactly
 this shape (arrow keys move a normalized-position crosshair, Return
 commits, Escape disarms) — wiring a third "mode" into that existing
 dispatch (alongside `isPickingWhiteBalance`/`isPlacingRedEyeCorrections`)
-is mostly a routing change: extend `handleImagePaneKeyPress`'s mode
-check, extend `commitPointPlacement` with an `isPickingColorRange`
-branch calling `document.pickColorRangeTarget(maskID:normalizedX:normalizedY:)`,
-draw `EditorCrosshairOverlay` while armed. Not built this slice —
-logged as the next candidate D8-style follow-up, not forgotten.
+was mostly a routing change, confirmed by the 2026-09-25 update above.
 
 **Two smaller follow-ups noted while building this slice, neither
 built:**

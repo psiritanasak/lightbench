@@ -7,8 +7,44 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
-**Enhance / Super Resolution — all 5 code commits DONE (started/shipped
-2026-09-24), NOT yet live-verified.** Commit 5 (`Sources/UI/EnhanceModel.swift`
+**Enhance / Super Resolution — all 5 code commits DONE and LIVE-VERIFIED
+(2026-09-25).** Live-verified with explicit user permission for screen
+automation, against scratch synthetic JPEGs under `/tmp/livetest_enhance/`
+(never the user's real library; cleaned up afterward, including the
+catalog rows). Confirmed on a real Release build: the Enhance toolbar
+button ran the MetalFX path end to end ("Created "X-Enhanced-SR.jpg" (2x,
+MetalFX)."); output was exactly 2x the source's pixel dimensions
+(400x300 → 800x600); the source file was byte-identical before/after
+(size/mtime/checksum unchanged) and its sidecar untouched; the new file
+had NO sidecar; the new photo appeared in the Library grid (All Photos)
+with a correctly-rendered thumbnail showing the baked-in +1.5 EV edit,
+with NO second `CatalogModel`-side folder-access prompt — reused the
+`SidecarFolderAccess` grant already obtained when the exposure edit was
+saved, confirming `registerEnhancedPhoto`'s own doc-comment expectation
+was correct; re-enhancing the same open photo produced
+"A1_source-Enhanced-SR (2).jpg" with no overwrite; Enhance on a photo
+opened via File > Open but never imported (not catalogued) showed the
+exact designed guard message ("Enhance works on photos in your Library —
+import this photo's folder first.") and wrote no file. NOT verified this
+pass, for lack of time/fixtures rather than any known issue: a
+MetalFX-vs-Lanczos visual quality comparison, a RAW (D610) source, and
+quit/relaunch persistence of the new thumbnail — none are believed risky
+given the rest of the pass was clean, but are honestly unconfirmed.
+
+**Unrelated pre-existing bug found during this pass, NOT part of Enhance
+and NOT fixed here:** double-clicking a photo thumbnail in the Library
+grid to open it in the Editor failed with "Couldn't open... The file may
+be missing, unreadable, or not a supported image format," even
+immediately after importing that exact folder — while `File > Open…` on
+the identical path succeeded straight away. This points at a gap in
+whatever security-scoped access the Library-driven open path relies on
+(likely `CatalogModel`'s read-only browsing scope not being what
+`ImageDocumentModel.load(from:)` actually uses), distinct from every
+`SidecarFolderAccess` mechanism this feature touched. Worth its own
+investigation in a future session — not logged to IMPROVEMENTS.md yet
+since it wasn't isolated further; do that first before fixing it.
+
+Commit 5 (`Sources/UI/EnhanceModel.swift`
 + the "Enhance" toolbar button/HUD/status alert in `ContentView.swift`)
 is DONE — 5 reviewer rounds, FIX FIRST × 4 → APPROVE, all 1321 tests
 passing, committed (`360445e`). Every real finding across all 5 rounds
@@ -1349,47 +1385,27 @@ icons or trial-and-error expansion, which had already produced a false
 lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
-**Live-verify Enhance / Super Resolution.** All 5 code commits are
-done, reviewed, and committed — see the "Current phase" entry above.
-Plan file (still valid, read it before continuing, especially its own
-12-item live-verification checklist):
-`/Users/praween/.claude/plans/cheeky-whistling-teacup.md`.
+**Enhance / Super Resolution is done — all 5 code commits shipped, live-
+verified (2026-09-25, see "Current phase" above).** Start a NEW feature
+next session: re-read CLAUDE.md's roadmap gaps list (Tier 1/Tier 2) and
+pick with the user, per the "one feature per session" rule.
 
-Nothing left to CODE — commit 6 is docs (this file, CLAUDE.md,
-IMPROVEMENTS.md — already mostly kept current commit-by-commit, just
-needs a final roadmap-entry pass in CLAUDE.md once live verification
-finishes) + the live-verification pass itself. Use scratch synthetic
-photos first (matching every prior feature's own precedent this
-session — Copy/Paste Settings, History panel, Auto Tone), NOT the
-user's real library; ask for screen-automation permission again,
-scoped to this task, per project memory's "ask first, scoped per-task"
-rule; start `caffeinate` proactively.
-
-Specific things this feature's own review process flagged as
-GENUINELY UNVERIFIED (not just "the standard checklist" — these are
-real open questions from the reviewer rounds, not boilerplate):
-- The enhanced photo's thumbnail must render in the Library grid with
-  NO surprise second `CatalogModel`-side folder-access prompt —
-  `CatalogModel.registerEnhancedPhoto`'s own doc comment explicitly
-  flags this as "a reasoned-through design expectation, NOT yet a
-  measured fact."
-- A MetalFX-vs-Lanczos VISUAL QUALITY comparison — only speed/
-  feasibility has been measured (the Step 0 probe). Force the Lanczos
-  path via a temporary, uncommitted `device: nil` change to compare
-  against MetalFX output at 100% zoom on the same photo.
-- The folder-access grant flow end to end with a REAL `NSOpenPanel`:
-  first-time grant, decline (no session-level decline memory — must
-  re-prompt on a second attempt), and — if practical to set up — a
-  parent-folder grant actually covering a child folder's Enhance
-  request (the round-3/round-4 fix this feature's own review process
-  went through 2 extra rounds to get right).
-- RAW source path (D610 fixture, if available) — confirm output is
-  JPEG, confirm the Library/Editor stay responsive during the render
-  (no `RawDecoder.RenderGate` deadlock).
+Left over from Enhance's own live-verification pass (not blocking, but
+worth doing before/while touching this area again):
+- Investigate the pre-existing Library-double-click-open bug logged
+  above under "Current phase" ("Couldn't open... unreadable" via the
+  grid even right after import, while `File > Open…` on the same path
+  works) — isolate which code path/security scope is actually failing
+  before attempting a fix, and log it to IMPROVEMENTS.md once isolated.
+- Not verified this pass, for lack of time/fixtures rather than a known
+  problem: MetalFX-vs-Lanczos visual quality (force via a temporary
+  `device: nil` change and compare at 100% zoom), a RAW (D610) source
+  through Enhance, and whether the new thumbnail/photo survive a quit
+  + relaunch. Pick up if any of these becomes relevant.
 - The exFAT/FAT32 fallback path was verified via real `hdiutil` disk
-  images during development (see commit 3's own message), NOT via the
-  live-verification screen-automation pass — no need to repeat that
-  specific check live unless a real external/SD-card volume is handy.
+  images during development (see commit 3's own message) — no need to
+  repeat that specific check live unless a real external/SD-card volume
+  is handy.
 
 Reviewer (`model: "opus"`) on `git diff HEAD` was used before every
 commit, per CLAUDE.md — this feature is the most heavily reviewed

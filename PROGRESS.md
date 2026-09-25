@@ -31,18 +31,75 @@ MetalFX-vs-Lanczos visual quality comparison, a RAW (D610) source, and
 quit/relaunch persistence of the new thumbnail — none are believed risky
 given the rest of the pass was clean, but are honestly unconfirmed.
 
-**Unrelated pre-existing bug found during this pass, NOT part of Enhance
-and NOT fixed here:** double-clicking a photo thumbnail in the Library
-grid to open it in the Editor failed with "Couldn't open... The file may
-be missing, unreadable, or not a supported image format," even
-immediately after importing that exact folder — while `File > Open…` on
-the identical path succeeded straight away. This points at a gap in
-whatever security-scoped access the Library-driven open path relies on
-(likely `CatalogModel`'s read-only browsing scope not being what
-`ImageDocumentModel.load(from:)` actually uses), distinct from every
-`SidecarFolderAccess` mechanism this feature touched. Worth its own
-investigation in a future session — not logged to IMPROVEMENTS.md yet
-since it wasn't isolated further; do that first before fixing it.
+**Library-driven photo open failing with "Couldn't open... unreadable" —
+investigated and fixed (2026-09-25).** The bug this same paragraph
+previously logged as unfixed: double-clicking a photo thumbnail in the
+Library grid (or the Editor filmstrip, or ⌘←/⌘→) to open it failed with
+"Couldn't open... The file may be missing, unreadable, or not a
+supported image format," while `File > Open…` on the identical path
+always succeeded. Root cause: `ImageDocumentModel.load(from:)` never
+acquires security-scoped access for the image file itself — it depends
+entirely on `CatalogModel`'s own folder-level scope (`activeFolders`/
+`folderBookmarks`, activated once at import time or app launch), which
+is never re-verified before a later open. `activeFolders` membership
+only proves access was granted at some point, not that it still holds —
+the same gap `isPhotoConfirmedMissing`'s own doc comment already named
+for a different feature, but never applied to the open path itself.
+
+Shipped: `CatalogModel.ensureAccessActive(forPhotoAt:)`, called from all
+3 catalog-driven `load(from:)` call sites (Library grid, Editor
+filmstrip, ⌘←/⌘→ in `PhotoAppApp.swift`), self-healing by re-resolving or
+re-requesting folder access when a photo can't actually be read. Reviewer
+(Opus): 4 rounds, FIX FIRST × 3 → APPROVE — round 1 caught a real leak (an
+early draft re-started an already-active root's security scope on every
+single open, with no matching `stop` anywhere in this file by design);
+round 2 caught that the fix's own premise didn't match the literal
+reported repro (a reachability check that would read "fine" for a
+just-imported, freshly-scoped folder); round 3 caught that the corrected
+probe couldn't yet distinguish a genuinely-DELETED file from one that's
+merely access-denied, which would have evicted a still-good root and
+shown an unfixable re-grant panel for an ordinary deletion.
+
+**Live-verified (2026-09-25)**, with explicit user permission for screen
+automation, against this machine's own REAL PhotoApp library (not a
+scratch fixture — the only live-verification session this project has
+run against real, non-test data). This was possible only because an
+earlier incident THIS SAME SESSION (a test bug — since fixed — that
+wrote to the real app's shared `UserDefaults` instead of an isolated
+store) had left the real `PhotoApp.libraryFolderBookmarks` empty,
+reproducing a state closely related to the reported bug: opening a real,
+already-catalogued photo (`~/Downloads/IMG_9806.jpg`) failed with the
+exact reported error, with no re-grant prompt at all. Iterating twice
+more against the running app (each time rebuilding, relaunching, and
+retrying the identical click) confirmed two real, load-bearing fixes:
+(1) the method must fall back to a derived candidate folder when NO
+tracked root covers the photo at all, not just when a tracked root has
+gone stale; (2) the liveness probe must actually attempt to READ the
+file (a real `FileHandle` open), not just check `FileManager.fileExists`
+— existence and readability are not the same fact under this app's
+sandbox (a real file with zero read access still reads as "exists").
+With both fixes in place, the re-grant panel appeared correctly
+(pre-navigated to the right folder, "PhotoApp lost access to
+'Downloads'..."), and after granting access the photo opened and
+rendered successfully — confirmed with no side effects (no sidecar
+created, source file's own mtime/content unchanged).
+
+**Important scope note, not glossed over:** this live pass demonstrates
+the fix works for the general "a tracked or trackable folder's access
+has been lost" class of failure, reproduced via a REAL (if differently-
+caused) instance of "access lost, not deleted." It does NOT specifically
+reproduce the ORIGINAL report's own trigger — a failure occurring
+immediately after importing a folder, before any access could plausibly
+have lapsed yet — which remains undiagnosed. The fix should cover that
+trigger too, since the probe reacts to any unreadable file regardless of
+cause, but that specific claim has not been separately live-verified.
+If the bug recurs after this fix ships, that's the next thing to check.
+
+Known, accepted, non-blocking gap logged as IMPROVEMENTS.md D32: a file
+that's genuinely unreadable for an ordinary POSIX-permissions reason
+(not a lost security scope) is currently treated the same as a lost
+scope — a correct distinction would need to branch on the syscall's own
+errno (`ENOENT` vs `EACCES`/`EPERM`), not just a `FileHandle` open/close.
 
 Commit 5 (`Sources/UI/EnhanceModel.swift`
 + the "Enhance" toolbar button/HUD/status alert in `ContentView.swift`)

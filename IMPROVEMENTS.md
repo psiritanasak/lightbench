@@ -1444,6 +1444,62 @@ reset a reused row's rating/flag/fileSize/importedAt on every call
 (would also reset them on an ORDINARY harmless re-import, arguably the
 wrong tradeoff the other direction).
 
+### D31. Thumbnail decode and `isPhotoConfirmedMissing` share the same stale-security-scope gap `ensureAccessActive` just fixed for the Editor-open path — not fixed there
+
+Fixing the "Library-driven photo open sometimes fails" bug (see
+PROGRESS.md's own write-up and `CatalogModel.ensureAccessActive`'s doc
+comment) only covers `ImageDocumentModel.load(from:)`'s 3 catalog-driven
+call sites (Library grid, Editor filmstrip, ⌘←/⌘→). `ThumbnailCache`/
+`RawDecoder.decode` read the exact same bare file paths with no scope
+acquisition of their own, relying on the identical
+`CatalogModel.activeFolders`/`folderBookmarks` ambient state — so a
+folder whose security scope has gone stale (the same "membership alone
+proves nothing" gap `isPhotoConfirmedMissing`'s own doc comment already
+named) should, in principle, break thumbnail decode too. It just fails
+silently there (a spinner that never resolves, or a false "Missing"
+placeholder) instead of surfacing the visible "Couldn't open…" alert
+that made the Editor-open case noticeable in the first place.
+
+Not fixed this slice — `ensureAccessActive(forPhotoAt:)` could in
+principle be called from `CatalogModel.thumbnail(for:)` too, but that's a
+MUCH hotter path (every visible grid cell, not one explicit user action).
+Beyond the NSOpenPanel re-grant fallback (the obviously expensive branch,
+already flagged), even the CHEAP common-case probe would add one real
+`FileHandle(forReadingAtPath:)` open/close per thumbnail request — small,
+but paid on every grid scroll rather than one explicit open, so this
+needs its own measurement before treating that as free, not just an
+assumption that it is.
+
+### D32. `ensureAccessActive`'s readability probe can't tell a lost security scope from an ordinary POSIX-permissions failure (reviewer-caught, round 4)
+
+`CatalogModel.ensureAccessActive`'s recovery probe (`needsRecovery`)
+correctly distinguishes "file doesn't exist" (skip recovery — see D31's
+neighboring history and that method's own doc comment) from "file exists
+but `FileHandle(forReadingAtPath:)` fails" (recover). It does NOT further
+distinguish, within that second case, a genuinely lost security scope
+from an ordinary file the user (or something else) made unreadable via
+plain POSIX permissions (`chmod 000`, or similar) — both currently read
+as "needs recovery." Consequence, each time such a file is opened: the
+folder's root is evicted from `activeFolders` and its security scope
+re-started (one more unmatched start, same cost class this method
+already accepts for genuine recoveries — see `reacquireAccess`'s own doc
+comment), and if no bookmark resolves, a re-grant panel appears that
+cannot possibly fix an ordinary permissions problem.
+
+A precise fix would replace the `FileHandle`-based probe with a raw
+`open(2)` call and branch on `errno`: `ENOENT` → missing (already
+handled), a sandbox-specific denial (`EPERM`, per Apple's own sandboxing
+model) → recover, plain POSIX `EACCES` → leave alone, let `load(from:)`'s
+existing error surface normally. Not built this slice — genuinely rare
+in practice (a photo the user has independently chmod'd is an unusual
+scenario for a photo library), and the existing `chmod 000` unit-test
+fixtures (`CatalogModelTests`'s `makeUnreadableFileFixture`) would need
+to become sandbox-denial fixtures instead, which the current test
+suite has no way to construct deterministically (this project's own
+established boundary for anything panel/sandbox-adjacent — see
+`ensureAccessActive`'s own reviewer history for the same limitation
+applied elsewhere).
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

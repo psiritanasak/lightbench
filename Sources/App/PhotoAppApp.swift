@@ -126,6 +126,9 @@ struct PhotoAppApp: App {
     /// re-deriving it when clicked.
     private func open(_ photo: Photo?) {
         guard let photo else { return }
-        Task { await document.load(from: URL(fileURLWithPath: photo.path)) }
+        Task {
+            await catalog.ensureAccessActive(forPhotoAt: photo.path)
+            await document.load(from: URL(fileURLWithPath: photo.path))
+        }
     }
 }

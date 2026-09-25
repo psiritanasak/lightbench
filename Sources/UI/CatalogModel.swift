@@ -138,11 +138,38 @@ final class CatalogModel: ObservableObject {
     /// for browsing, one there for sidecar-saving) is an accepted,
     /// harmless redundancy — same underlying `NSOpenPanel` grant, recorded
     /// twice.
-    private var folderBookmarks: [String: Data] {
-        get { UserDefaults.standard.dictionary(forKey: Self.folderBookmarksDefaultsKey) as? [String: Data] ?? [:] }
-        set { UserDefaults.standard.set(newValue, forKey: Self.folderBookmarksDefaultsKey) }
+    /// Internal, not `private`: `CatalogModelTests` reads/seeds this
+    /// directly to exercise `ensureAccessActive(forPhotoAt:)`'s decision
+    /// logic — same testability-motivated widening `activeFolders` below
+    /// already has, and for the identical reason. Backed by `defaults`
+    /// (injected, see below), NOT a hardcoded `UserDefaults.standard` —
+    /// reviewer-caught (real, not theoretical): `PhotoAppTests` is hosted
+    /// inside the `PhotoApp` target (`TEST_HOST`), so `.standard` in a
+    /// test IS the same preferences domain the real, installed app reads —
+    /// a test that assigns a whole new dictionary here would silently
+    /// replace (not merge with) a real user's actual persisted library-
+    /// folder bookmarks. Confirmed happening: an earlier version of this
+    /// property's own tests did exactly that, wiping a real
+    /// `~/Library/Containers/com.photoapp.PhotoApp/.../com.photoapp.PhotoApp.plist`
+    /// entry that several genuinely-imported folders
+    /// (`~/Desktop`, `~/Downloads`, `~/Pictures/Bolivia_trip/*`) depended
+    /// on — same class of hazard `SidecarFolderAccess`'s own `init(defaults:)`
+    /// already exists to avoid; this mirrors that exact shape instead of
+    /// reinventing an unsafe one.
+    var folderBookmarks: [String: Data] {
+        get { defaults.dictionary(forKey: Self.folderBookmarksDefaultsKey) as? [String: Data] ?? [:] }
+        set { defaults.set(newValue, forKey: Self.folderBookmarksDefaultsKey) }
     }
     private static let folderBookmarksDefaultsKey = "PhotoApp.libraryFolderBookmarks"
+
+    /// Injected so tests never touch the real app's shared `UserDefaults.
+    /// standard` domain (see `folderBookmarks`'s own doc comment for why
+    /// that's not just a style preference). Defaults to `.standard` for
+    /// both real call sites (`init()`, the app's own real usage, and
+    /// `init(database:)`, whose callers that DON'T care about folder
+    /// access can ignore this parameter entirely) — only `CatalogModelTests`
+    /// passes an isolated suite.
+    private let defaults: UserDefaults
 
     /// Folders (by path) whose security scope is currently active THIS
     /// session — guards `activateFolderAccess`/`activateKnownFolders`
@@ -161,7 +188,8 @@ final class CatalogModel: ObservableObject {
 
     private let thumbnailCache = ThumbnailCache()
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         Task.detached { [weak self] in
             do {
                 let database = try CatalogDatabase()
@@ -177,14 +205,19 @@ final class CatalogModel: ObservableObject {
     }
 
     /// Testing seam: takes an already-open catalog and skips both the
-    /// asynchronous open above and `activateKnownFolders()`, which touches
-    /// `UserDefaults` and real sandbox security scopes — neither of which
-    /// belongs in a unit test. Deliberately does NOT call `refresh()`, so a
-    /// test controls exactly when the first load happens instead of racing
-    /// an implicit one. Same testability-motivated widening as
-    /// `ThumbnailCache` and `PhotoExporter.resized`.
-    init(database: CatalogDatabase) {
+    /// asynchronous open above and `activateKnownFolders()` (real sandbox
+    /// security scopes — never belongs in a unit test, regardless of
+    /// `defaults`). Deliberately does NOT call `refresh()`, so a test
+    /// controls exactly when the first load happens instead of racing an
+    /// implicit one. Same testability-motivated widening as
+    /// `ThumbnailCache` and `PhotoExporter.resized`. `defaults` defaults to
+    /// `.standard` for callers that don't care about folder-access state
+    /// at all — a test exercising `folderBookmarks`/`ensureAccessActive`
+    /// MUST pass an isolated `UserDefaults(suiteName:)` instead (see
+    /// `folderBookmarks`'s own doc comment for why).
+    init(database: CatalogDatabase, defaults: UserDefaults = .standard) {
         self.database = database
+        self.defaults = defaults
     }
 
     func importFolder() {
@@ -1043,6 +1076,208 @@ final class CatalogModel: ObservableObject {
     }
 
     // MARK: - Folder access (read-only, persisted across relaunches)
+
+    /// Shows a directory-mode `NSOpenPanel` asking the user to re-grant
+    /// access to `folder`, returning the URL they picked (or `nil` on
+    /// cancel). Extracted into an injectable closure — the real
+    /// `NSOpenPanel().runModal()` call blocks on real UI, so no automated
+    /// test may ever reach it; this is what lets
+    /// `ensureAccessActive(forPhotoAt:)`'s OWN decision logic stay fully
+    /// testable, same "inject the untestable side effect" shape
+    /// `PhotoEnhancer.commitExclusively`'s own `nextCandidate` closure
+    /// already established for a different real-race problem. Tests
+    /// substitute a closure that returns a value directly, with no panel
+    /// ever shown.
+    var folderReGrantPrompt: (URL) -> URL? = { folder in
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = folder
+        panel.message =
+            "PhotoApp lost access to \"\(folder.lastPathComponent)\". Choose this folder again to open its photos."
+        panel.prompt = "Grant Access"
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    /// Per-root in-flight reactivation tasks — reviewer-caught (round 1 of
+    /// this method's own review): without this, a second concurrent call
+    /// for the SAME stale root (a rapid second ⌘→ or filmstrip tap while
+    /// the first call's re-grant panel is still up — `NSOpenPanel.runModal()`
+    /// spins a nested run loop that keeps servicing the main queue, so a
+    /// second `Task` genuinely CAN interleave and run to completion before
+    /// the first one's panel closes) would race ahead into its OWN
+    /// `document.load(from:)` independently. Since `ImageDocumentModel
+    /// .load(from:)`'s own `loadGeneration` guard lets the LATER-STARTING
+    /// call win regardless of which photo the user actually meant to end
+    /// up on, the first (slower) call's eventual, correct `load` could
+    /// silently overwrite the second (faster) one's already-succeeded
+    /// result — landing the user on the wrong photo after a spurious
+    /// error. Serializing concurrent callers for the same root behind ONE
+    /// attempt closes this.
+    private var reactivationTasks: [String: Task<Void, Never>] = [:]
+
+    /// Re-verifies that `path` is actually readable before every
+    /// Library/filmstrip/⌘←→-driven `ImageDocumentModel.load(from:)` (which
+    /// has no reference to this class and no way to do this itself),
+    /// self-healing if it isn't. `File > Open…`
+    /// (`ImageDocumentModel.openImage()`) doesn't need this — `NSOpenPanel`
+    /// grants it fresh access every time.
+    ///
+    /// Deliberately does NOT re-call `startAccessingSecurityScopedResource()`
+    /// on an already-working root on every open — reviewer-caught (round 1):
+    /// an earlier version of this method did exactly that, unconditionally,
+    /// which LEAKS one unmatched start per open (there is no matching
+    /// `stop` anywhere in this file, by design — see
+    /// `activateKnownFolders`'s own doc comment — so a redundant start
+    /// just accumulates). Only a confirmed-unreadable file pays that cost,
+    /// via `reacquireAccess` below, not every ordinary open.
+    ///
+    /// LIVE-REPRODUCED (2026-09-25) in two stages, against this machine's
+    /// own real library (one specific photo, `~/Downloads/IMG_9806.jpg`) —
+    /// not just reasoned about, and NOT a demonstration that this was the
+    /// ORIGINAL bug report's own root cause (that report's own trigger —
+    /// a failure immediately after importing a folder — is still
+    /// undiagnosed; the immediate cause reproduced here was a DIFFERENT,
+    /// already-disclosed incident this same session where a test bug
+    /// wiped the real `folderBookmarks` store, leaving `activeFolders`
+    /// empty). What IS demonstrated: (1) an earlier draft returned
+    /// immediately whenever `confirmedActiveFolderRoot` found no covering
+    /// entry in `activeFolders` at all, which reproduced the exact
+    /// symptom (no re-grant prompt, generic "Couldn't open" error) — fixed
+    /// by falling back to a derived candidate folder when no tracked root
+    /// covers the photo; (2) the fallback then STILL failed to prompt,
+    /// because the liveness probe at the time
+    /// (`FileManager.fileExists(atPath:)`) reads `true` for a real file
+    /// this sandboxed process has NO read access to at all — existence
+    /// and readability are not the same fact here — fixed by probing
+    /// readability directly (see the nested `Task` below). Since the
+    /// probe reacts to any unreadable file regardless of cause, it should
+    /// also cover the original report's own trigger, but that specific
+    /// claim has NOT been separately live-verified.
+    func ensureAccessActive(forPhotoAt path: String) async {
+        // Tries a currently-active root first (the common case), then a
+        // folder that HAS a stored bookmark but never made it into
+        // `activeFolders` (e.g. a start that failed at launch — reviewer-
+        // caught, round 3: falling straight to the photo's own immediate
+        // folder here would miss a bookmark stored for an ANCESTOR folder
+        // and prompt for access a silent re-resolve would have recovered),
+        // and only then falls back to the photo's own immediate folder as
+        // a last resort when nothing at all is tracked for it.
+        let root = PhotoImporter.confirmedActiveFolderRoot(forPhotoAt: path, activeFolders: activeFolders)
+            ?? PhotoImporter.confirmedActiveFolderRoot(forPhotoAt: path, activeFolders: Set(folderBookmarks.keys))
+            ?? (path as NSString).deletingLastPathComponent
+        guard !root.isEmpty else { return }
+
+        if let inFlight = reactivationTasks[root] {
+            await inFlight.value
+            return
+        }
+
+        // The probe itself runs INSIDE the registered task, not before it
+        // — reviewer-caught (round 2, self-caught while writing this
+        // method's own concurrent-callers test): probing first and only
+        // registering `reactivationTasks[root]` afterward leaves an
+        // `await`-wide window where a second concurrent caller can ALSO
+        // observe "nothing in flight yet" and create its own duplicate
+        // task, defeating the serialization this is for. Everything from
+        // the `if let inFlight` check above through this assignment has
+        // NO suspension point, so — Swift's actor-reentrancy model (an
+        // actor-isolated function only yields at `await`) — it runs as
+        // one atomic unit against any OTHER caller scheduled on this same
+        // `@MainActor`.
+        let task = Task { [weak self] in
+            guard let self else { return }
+            // Off the main actor — a file open can block for real on a
+            // slow/unmounted network volume, same reasoning as
+            // `isPhotoConfirmedMissing`'s own `Task.detached`.
+            //
+            // LIVE-MEASURED (2026-09-25), not theorized: this was
+            // originally a bare `FileManager.fileExists(atPath: root)` —
+            // reviewer-caught (round 2) as possibly insufficient ("a
+            // metadata read, not a data read"), and CONFIRMED insufficient
+            // by directly reproducing the bug: `fileExists` reads `true`
+            // for a real file this sandboxed process has NO read access
+            // to at all — existence and readability are not the same
+            // fact here.
+            //
+            // Checking existence AND readability together, not readability
+            // alone, is itself a reviewer-caught (round 3) correction: a
+            // file that's genuinely been DELETED also fails to open, but
+            // treating that the same as a lost-access failure would wrongly
+            // evict a still-good root from `activeFolders` (breaking
+            // `isPhotoConfirmedMissing` for every sibling photo in that
+            // folder), leak one more unmatched security-scope start for a
+            // recovery that can't possibly help, and show a re-grant panel
+            // that can't fix a deletion — `load(from:)`'s own existing
+            // "may be missing" error already covers a genuinely-gone file
+            // correctly on its own.
+            let needsRecovery = await Task.detached {
+                guard FileManager.default.fileExists(atPath: path) else { return false }
+                guard let handle = FileHandle(forReadingAtPath: path) else { return true }
+                try? handle.close()
+                return false
+            }.value
+            guard needsRecovery else { return } // the common case: access still holds, nothing to do
+            await self.reacquireAccess(forStaleRoot: root)
+        }
+        reactivationTasks[root] = task
+        await task.value
+        reactivationTasks.removeValue(forKey: root)
+    }
+
+    /// `root` just failed `ensureAccessActive`'s readability probe — either
+    /// a previously-active entry that's gone stale, or a freshly-derived
+    /// candidate that was never tracked at all. Re-resolves its bookmark
+    /// and re-starts it, or falls back to `folderReGrantPrompt`. This DOES
+    /// cost one more unmatched security-scope start per recovery (there is
+    /// no matching `stop` anywhere in this file, by design) — acceptable
+    /// because it only runs when a real problem was just confirmed, not on
+    /// every ordinary open.
+    private func reacquireAccess(forStaleRoot root: String) async {
+        activeFolders.remove(root)
+        if let data = folderBookmarks[root] {
+            var isStale = false
+            if let resolved = try? URL(
+                resolvingBookmarkData: data,
+                options: [.withSecurityScope, .withoutMounting],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ), resolved.startAccessingSecurityScopedResource() {
+                activeFolders.insert(root)
+                // Reviewer-caught (round 1): `isStale` being true but the
+                // resolve+start still succeeding is routine (e.g. after a
+                // system update), not a real access loss — silently
+                // refresh the stored bookmark instead of bothering the
+                // user with a prompt for something that already self-healed.
+                if isStale, let refreshed = try? resolved.bookmarkData(
+                    options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil
+                ) {
+                    folderBookmarks[root] = refreshed
+                }
+                return
+            }
+        }
+
+        // No bookmark, or it didn't resolve/start even after the retry
+        // above. Deliberately does NOT delete `folderBookmarks[root]` here
+        // — reviewer-caught (round 1): this could be a TRANSIENT failure
+        // (an external drive not currently mounted, a network share
+        // that's down), and destroying an otherwise-still-good bookmark
+        // before the user has a chance to just reconnect it is worse than
+        // leaving it in place. `activateFolderAccess` below overwrites it
+        // on a successful re-grant; a decline leaves it untouched for a
+        // future retry once whatever's wrong resolves itself.
+        let folder = URL(fileURLWithPath: root)
+        guard let grantedURL = folderReGrantPrompt(folder), grantedURL.coversAccess(to: folder) else {
+            importStatusMessage = "Couldn't restore access to \"\(folder.lastPathComponent)\" — this photo may not open."
+            return
+        }
+        if let warning = activateFolderAccess(for: grantedURL) {
+            importStatusMessage = warning
+        }
+    }
 
     /// Captures a security-scoped bookmark for `folder` and activates it
     /// for the rest of this process's lifetime. Without this, photos

@@ -1524,7 +1524,10 @@ struct ContentView: View {
                 // instead of the user staring at an unchanged Library grid
                 // during the gap.
                 showLibrary = false
-                Task { await document.load(from: URL(fileURLWithPath: photo.path)) }
+                Task {
+                    await catalog.ensureAccessActive(forPhotoAt: photo.path)
+                    await document.load(from: URL(fileURLWithPath: photo.path))
+                }
             }
         }
     }
@@ -1559,7 +1562,10 @@ struct ContentView: View {
             editorSplitView
             if isFilmstripVisible {
                 EditorFilmstripView(catalog: catalog, currentURL: document.currentURL) { photo in
-                    Task { await document.load(from: URL(fileURLWithPath: photo.path)) }
+                    Task {
+                        await catalog.ensureAccessActive(forPhotoAt: photo.path)
+                        await document.load(from: URL(fileURLWithPath: photo.path))
+                    }
                 }
             }
         }

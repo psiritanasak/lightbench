@@ -7,6 +7,27 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
+**Phase 8 (Polish) slice 1 — D16 per-mask Clarity perf, INVESTIGATED,
+MEASURED, no viable simple fix found this slice (2026-09-25).**
+Hypothesis from code reading: `EditPipeline.applyMasks`'s per-mask loop
+never saves an intermediate, so later masks' reads re-evaluate earlier
+masks' entire lazy Core Image chain again — measurement did NOT support
+this as the fix's own justification (see below). Candidate fix
+(`img.insertingIntermediate()` after each mask's blend) was measured, not
+assumed — a temporary harness reproducing IMPROVEMENTS.md D16's own exact
+methodology (baseline measured once; the fix measured twice to rule out a
+fluke on the fix side) — and came back flat-to-worse on every 3-mask
+configuration, never better: r=0.25 consistently slower (+29.5% to
++32.6%), r=0.9 never faster and noisy (+2.4% to +24.3% across the two
+fix runs). Reverted in full; see IMPROVEMENTS.md's own D16 entry for the
+complete numbers, the noise-floor caveat on the 1-mask cases, and exactly
+what claims this measurement does and doesn't support. Matches this
+project's own P1 precedent: a plausible theory that measured false is
+recorded and retired, not forced through. No code shipped this slice;
+the value is the ruled-out approach and an unconfirmed lead (ROI/region
+growth as a candidate dominant cost, not yet measured) for whoever picks
+this up next.
+
 **Enhance / Super Resolution — all 5 code commits DONE and LIVE-VERIFIED
 (2026-09-25).** Live-verified with explicit user permission for screen
 automation, against scratch synthetic JPEGs under `/tmp/livetest_enhance/`

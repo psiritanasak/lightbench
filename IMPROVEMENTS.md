@@ -869,6 +869,67 @@ paragraph) — both are "applyMasks recomputes more than it needs to"
 problems. Note that cache is documented in the source and CLAUDE.md, not
 in this file; D15 above covers slice 6's scope cuts, not its perf work.
 
+**Candidate fix investigated and MEASURED FALSE (2026-09-25, Phase 8
+slice 1) — do not re-attempt this exact fix without new evidence (see
+"what would count as new evidence" below).** The theory: `applyMasks`'s
+per-mask loop never saves an intermediate, so `img` (the running
+accumulator) is read TWICE per later mask — once through that mask's own
+Clarity blur, once again as the blend's background — and since Core
+Image's graph is lazy, mask N's reads re-evaluate masks 1..N-1's entire
+chain again. Fix tried: `img.insertingIntermediate()` right after each
+mask's blend — a CACHING HINT to Core Image's own renderer (not a
+separate forced render call of its own), intended to let later masks'
+two reads share one already-rendered buffer within the same
+`createCGImage` call instead of re-deriving it. Caveat on the fix itself:
+whether Core Image actually materialized an intermediate at that point
+was NOT independently confirmed (e.g. via `CI_PRINT_TREE`) — that gap is
+itself part of what "new evidence" for a retry would need to close.
+
+Measured (temporary `CFAbsoluteTimeGetCurrent()` harness in
+`EditPipelineTests.swift`, added/used/reverted per this file's own
+convention; reproducing this entry's exact original methodology — 4000
+×4000, full `createCGImage` over the whole extent, best of 3, `.radial`
+mask center (0.5,0.5), feather 0.5, rotation 0, Clarity +1, fresh
+`CIContext` per run): baseline measured once; the fix was then measured
+twice (two independent runs) specifically to rule out a fluke on the fix
+side. Results, 3-mask configurations (the only ones this fix could
+plausibly help):
+- r=0.25: consistently SLOWER — baseline 241.3ms, fix 312.4ms (+29.5%)
+  and 319.9ms (+32.6%) on the two runs.
+- r=0.9: never faster, noisy — baseline 1944.0ms, fix 1990.7ms (+2.4%)
+  and 2416.8ms (+24.3%) on the two runs.
+
+1-mask configurations (where the fix has no theoretical benefit at all,
+since there's no second mask to share a cached read with) swung by up to
+~40% in BOTH directions across the two fix runs relative to baseline —
+consistent with ordinary run-to-run noise (GPU/thermal/JIT warmup) on
+this measurement setup, not a real effect, and not informative either way
+about the fix itself. Given that much noise floor, the 3-mask r=0.9
+result (+2.4% to +24.3%) is properly read as "never measured faster,"
+not as a precisely-bounded slowdown.
+
+Conclusion, stated at the confidence the data actually supports: **this
+specific fix did not recover any of the measured cost** — every
+3-mask/Clarity configuration was flat-to-slower, never faster. Why is
+NOT established by this measurement alone; two candidate explanations
+remain open and were NOT distinguished between: (1) redundant graph
+re-evaluation is a real cost but the intermediate's own price (a
+full-extent buffer write, then read, per mask) exceeds whatever it saves;
+(2) Core Image's own renderer may already share/reuse the relevant
+subgraph within one `createCGImage` call well enough that this specific
+theory's premise doesn't hold. Whether region-SIZE growth (each mask's
+ROI dilating from the one before, per this entry's own "Two compounding
+causes" paragraph above) is the real dominant cost is an UNVERIFIED lead,
+not a separately-measured conclusion — a candidate worth measuring next,
+not a fix to build on faith. Reverted in full (code and temporary
+harness); `git diff` confirmed clean before committing this write-up.
+
+**What would count as "new evidence" for a future attempt:** a render-
+graph dump (e.g. `CI_PRINT_TREE`) confirming whether an inserted
+intermediate is actually materialized where expected; and/or per-mask
+timing broken down by each mask's own ROI size, to determine whether cost
+tracks region growth independent of caching.
+
 ### D17. Dehaze combines superlinearly with Clarity (ROI dilation), found measuring the Dehaze slice
 
 **Read the methodology warning first — three claims in this entry's original

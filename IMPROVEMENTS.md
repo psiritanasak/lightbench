@@ -755,6 +755,24 @@ Color does not clear a selected radial mask). The separately-noted
 it was never part of the armed-mode state this enum covers, and remains
 open.
 
+**Live-verified (2026-09-28)**, alongside this entry's own 2026-09-25
+Color Range keyboard/AT path update above (neither had been live-verified
+on screen until now), against a scratch synthetic JPEG and a real Release
+build. Directly exercised the type's own documented central hazard — WB
+armed while a mask was selected stayed armed through the
+`disarmMaskModes()` call its own deselection triggers — plus Point
+Color → WB (unpicked instance discarded, WB wins), Brush → Escape
+(discarded when never painted) and Brush → Color Range (unpainted brush
+discarded in the same coalesced action that arms Color Range), Color
+Range's own single-Escape discard-when-unpicked, and Red-Eye
+toggle-off + a WB arm/Crop-tab/Adjust-tab round trip (WB correctly
+cleared by the tab switch). No regressions found; see `PROGRESS.md`'s own
+entry for the full scenario-by-scenario write-up, including one
+automation-only gotcha (`BrushMaskOverlayView`'s
+`DragGesture(minimumDistance: 0)` turns even a zero-movement synthetic
+click into a real stroke point) worth remembering for the next
+live-verification session in this area.
+
 **Update (Point Color Slice B, 2026-09-18):** the routing this entry
 describes was built, but for Point Color's OWN eyedropper, not this
 one — Point Color's picker is wired into the exact crosshair machinery

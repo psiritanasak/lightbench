@@ -31,15 +31,62 @@ test changed — a pure UI-state refactor, no user-visible change intended.
 Deliberately does NOT fold in mask/point-color SELECTION
 (`selectedMaskID`/`selectedPointColorID`) — see IMPROVEMENTS.md's D14
 entry for why; the 3-way selection-half inconsistency it also logged
-remains open. **Live verification in progress** — see below.
+remains open.
 
 Preceded by the Color Range mask eyedropper keyboard/AT path (SHIPPED
 2026-09-25, `d3098e7`), which closed D14's OTHER long-open half (no
 keyboard/AT path to pick a Color Range mask's target color) — see
-IMPROVEMENTS.md's D14 entry for that round's own write-up. Still not
-live-verified on screen; folded into this session's live-verification
-pass below alongside the mode-enum refactor itself, since both touch the
-same eyedropper/mask interaction surface.
+IMPROVEMENTS.md's D14 entry for that round's own write-up.
+
+**Both are now live-verified (2026-09-28)**, with explicit user permission
+granted for this task, against a scratch synthetic JPEG
+(`mode_enum_test.jpg`, a plain 400x300 PIL-built image in a scratch
+folder, opened via the toolbar's Add Photos > Open… menu, never
+imported into the catalog; deleted afterward along with its sidecar) and
+a real Release build. Every scenario the plan's own hazard analysis
+called out was exercised directly, not just the happy path:
+- **The hazard case**: selected a radial mask (its overlay/handles
+  visible), then armed WB — confirmed WB stayed armed (yellow button,
+  white crosshair) even though arming WB clears the mask selection,
+  which fires `.onChange(of: isEditingMask)` → `disarmMaskModes()`
+  immediately afterward. A blanket `.none` there would have silently
+  disarmed WB right after arming it; it didn't.
+- **Point Color → WB**: armed Point Color's eyedropper (cyan crosshair,
+  "No color picked yet"), then armed WB — confirmed WB won and the
+  never-picked Point Color instance was discarded entirely ("No point
+  colors yet" again), while an unrelated already-existing radial mask
+  was left untouched.
+- **Brush discard-on-Escape**: added a Brush mask (armed for painting),
+  pressed Escape once with no intervening paint — confirmed the mask was
+  deleted entirely (list count back to unchanged). Found and worked
+  around a real automation-only gotcha along the way, not a product bug:
+  `BrushMaskOverlayView`'s gesture is `DragGesture(minimumDistance: 0)`,
+  so a zero-movement synthetic click still registers as a 1-point stroke
+  — a genuine Escape test needs to add the mask and press Escape without
+  any intervening click on the image pane at all.
+- **Brush → Color Range transition**: added a Brush mask, then
+  immediately clicked "Color" without painting or escaping — confirmed
+  the unpainted Brush mask was discarded in the same synchronous action
+  that armed the new Color Range mask's eyedropper (green crosshair),
+  exactly the `addMask → select → beginColorPick` coalesced-`.onChange`
+  case `EditorInteractionMode`'s own commit message calls out.
+- **Color Range discard-on-Escape**: pressed Escape once while a
+  never-picked Color Range mask's eyedropper was armed — confirmed one
+  Escape both disarmed the eyedropper AND discarded the mask entirely
+  (not just deselected it), since `isPickingColorRange` routes through
+  the same point-placement dispatch as WB, not the two-stage brush-paint
+  Escape. This is the CORRECT, by-design behavior, not the two-stage
+  behavior originally assumed going into this test — worth remembering
+  for next time so it isn't misread as a regression.
+- **Red-Eye + tab switch**: armed Red-Eye, toggled it back off (confirmed
+  un-tinted, no crosshair); armed WB, switched to the Crop tab and back
+  to Adjust — confirmed WB was cleared by `.onChange(of: selectedTab)`.
+
+No regressions found. Every transition matched the wiring commit's own
+design exactly, including one case (Color Range's single-escape discard)
+that turned out to behave slightly differently than the live-verification
+plan assumed going in — a pre-existing, correct design detail the
+refactor preserved rather than a new finding.
 
 **Phase 8 (Polish) slice 1 — D16 per-mask Clarity perf, INVESTIGATED,
 MEASURED, no viable simple fix found this slice (2026-09-25).**

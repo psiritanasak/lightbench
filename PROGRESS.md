@@ -7,6 +7,29 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
+**Color Range mask eyedropper keyboard/AT path — SHIPPED (2026-09-25),
+closing IMPROVEMENTS.md D14's long-open second half.** This is the most
+recent commit on `master` (`d3098e7`) and was not yet reflected here.
+`isPickingColorRange` now routes through the same shared point-placement
+keyboard dispatch WB/Red-Eye/Point Color already use
+(`handleImagePaneKeyPress`'s arm-check, `commitPointPlacement`'s
+if/else-if chain, a new green `EditorCrosshairOverlay` tint, mouse
+tap-capture syncing `crosshairPosition`), making it the last of the 6
+mutual-exclusion sites to gain keyboard/AT support — this was purely a
+routing change, as the entry itself predicted, plus removing one now-dead
+bespoke Escape branch it made unreachable. Reviewer: 3 rounds, FIX FIRST →
+FIX FIRST → APPROVE, every finding a stale doc comment (no logic bugs) —
+see IMPROVEMENTS.md's own D14 entry for the full round-by-round detail.
+1329 tests pass unchanged (no new tests — matches this codebase's existing
+"UI-glue verified live, not unit-tested" convention for this class of
+change). **Not yet live-verified on screen** — worth doing before/while
+next touching mask eyedroppers.
+
+The shared `EditorInteractionMode` mode-enum refactor (the actual fix for
+all 6 mutual-exclusion sites at once) was deliberately NOT built this
+slice — scoped out as its own future session so a regression in either
+piece can't be misattributed. Still open.
+
 **Phase 8 (Polish) slice 1 — D16 per-mask Clarity perf, INVESTIGATED,
 MEASURED, no viable simple fix found this slice (2026-09-25).**
 Hypothesis from code reading: `EditPipeline.applyMasks`'s per-mask loop
@@ -1463,10 +1486,17 @@ icons or trial-and-error expansion, which had already produced a false
 lead (accidentally landing on Masks at guessed index 10).
 
 ## Exact next step
+Working tree is clean; nothing in progress. The last 4 sessions each
+shipped one self-contained slice (Enhance/Super Resolution, the Library
+double-click-open fix, the D16 perf investigation — no code, ruled out —
+and the Color Range keyboard/AT path closing D14) and all are committed,
+reviewed, and (except the D14 keyboard path, see "Current phase" above)
+live-verified. Start a NEW feature next session: re-read CLAUDE.md's
+roadmap gaps list (Tier 1/Tier 2) and pick with the user, per the "one
+feature per session" rule.
+
 **Enhance / Super Resolution is done — all 5 code commits shipped, live-
-verified (2026-09-25, see "Current phase" above).** Start a NEW feature
-next session: re-read CLAUDE.md's roadmap gaps list (Tier 1/Tier 2) and
-pick with the user, per the "one feature per session" rule.
+verified (2026-09-25, see "Current phase" above further down).**
 
 Left over from Enhance's own live-verification pass (not blocking, but
 worth doing before/while touching this area again):

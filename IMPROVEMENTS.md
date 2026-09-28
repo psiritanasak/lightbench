@@ -1023,6 +1023,89 @@ intermediate is actually materialized where expected; and/or per-mask
 timing broken down by each mask's own ROI size, to determine whether cost
 tracks region growth independent of caching.
 
+**Update (2026-09-28, Phase 8 slice 2) — the region-growth lead is now
+MEASURED, with a genuinely bigger and more actionable discovery alongside
+it.** Two separate temporary harnesses (`EditPipelineTests.swift`, added,
+run, transcribed below, then fully reverted — `git diff` confirmed clean
+before this write-up, same discipline as the 2026-09-25 entry above), both
+using a fresh `CIContext()` per timed sample (per D17's own methodology-
+trap lesson) and `precondition`-verified real (non-nil, correctly-sized)
+`createCGImage` output at every size, so a silent fast-failure at a large
+size couldn't masquerade as a real fast render.
+
+**Finding 1 (unplanned, found while sizing the decisive test below): the
+ENTIRE superlinear effect — not just its magnitude, its EXISTENCE — is
+confined to images where BOTH dimensions are ≤ 4096px.** A size scan
+(mask geometry held fixed: center 0.5,0.5, r=0.25, feather 0.5, clarity
++1) found a sharp, discrete cliff between 4096px and 4097px, not a
+gradual fade:
+
+    size        N=1        N=3 co-located   ratio
+    4096x4096   16.8ms     102.5ms          6.10x
+    4100x4100    4.4ms       4.4ms          1.00x
+
+A follow-up (`testD16DimensionCliff`) confirmed the cliff is PER-DIMENSION
+— either width or height alone exceeding 4096 is sufficient to collapse
+the effect to flat/trivial cost, not a total-area threshold:
+
+    config                                          N=1      N=3 co-located   ratio
+    4096x4096 (both <= 4096)                        20.2ms   122.4ms          6.07x
+    4097x4096 (width only over)                      4.5ms     4.4ms          0.98x
+    4096x4097 (height only over)                      4.4ms     4.4ms          1.00x
+    6016x4016 (this app's own D610 RAW target)        4.3ms     4.4ms          1.03x
+    4016x6016 (D610, rotated)                         4.3ms     4.3ms          0.99x
+
+The last two rows are the practically important ones: **this app's own
+real RAW target, the Nikon D610 (6016x4016), already sits on the fast
+side of this cliff in both orientations.** D16's own original 4000x4000
+measurement, and every number in this entry until today, happened to be
+taken exactly in the one size regime (both dimensions ≤ 4096) where the
+problem exists at all. This does not prove the D610's own full-res
+export/render is free of ALL mask-related cost — only that THIS specific
+superlinear-with-mask-count behavior, as measured, does not reproduce at
+that camera's actual resolution. Root cause of the cliff itself (almost
+certainly a Core Image/Metal internal tiling or maximum-single-texture-
+dimension threshold — 4096 is a common such limit on Apple GPUs) was not
+investigated further; that would be its own separate spike, not a
+prerequisite for reporting this measured fact.
+
+**Finding 2 (the originally-planned test): geometric ROI overlap is a
+real, reproducible contributor to the cost, measured inside the one size
+regime where there's an effect to measure at all (4096x4096).** Three
+independent process runs, same config each time (r=0.15 — chosen for
+comfortable corner-to-center separation margin at this exact size, not
+D16's own r=0.25 — anchor mask at center 0.5,0.5 held IDENTICAL across
+"co-located" and "disjoint," only masks 1-2's position differs):
+
+    run   N=1      N=3 co-located (ratio)   N=3 disjoint (ratio)
+    1     15.9ms   67.5ms   (4.24x)         39.8ms   (2.50x)
+    2     15.6ms   82.8ms   (5.30x)         42.9ms   (2.75x)
+    3     30.3ms   66.3ms   (2.19x)         41.6ms   (1.37x)
+
+Despite noisy absolute N=1 baselines (15.6-30.3ms) at this millisecond
+scale, the WITHIN-RUN pattern is consistent across all 3 runs: co-located
+cost is 1.6x-1.9x the disjoint cost for the exact same N=3 mask count and
+per-mask work, every time. Moving masks 1-2 away from mask 3's own
+dilated read region measurably and reproducibly cheapens mask 3's own
+cost — direct, repeated evidence that geometric ROI overlap (mask 3's
+Clarity blur re-evaluating masks 1-2's own expensive chains because their
+painted regions sit inside its dilation halo) is a REAL contributor, not
+merely a redundant-read/caching artifact (already ruled out on
+2026-09-25) or a pure graph-depth cost independent of geometry (which
+would have predicted NO gap between co-located and disjoint — not what
+was measured).
+
+**Verdict, at the confidence this data supports:** region growth via
+geometric ROI overlap is CONFIRMED as a real, reproducible contributor to
+per-mask Clarity's superlinear cost — but ONLY within a narrow size
+window (both dimensions ≤ 4096px) that this app's own actual RAW target
+does not fall into. No fix is proposed or attempted here, matching this
+entry's own original scoping ("it needs its own slice") — and any future
+fix attempt should first re-confirm on which real photo sizes (this
+app's actual JPEG/export targets, not just the one RAW camera) the
+problem is even reachable, given how narrow the affected window turned
+out to be.
+
 ### D17. Dehaze combines superlinearly with Clarity (ROI dilation), found measuring the Dehaze slice
 
 **Read the methodology warning first — three claims in this entry's original

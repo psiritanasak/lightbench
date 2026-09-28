@@ -7,6 +7,36 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
+**D16 follow-up: region-growth INVESTIGATED and MEASURED, plus a bigger
+unplanned discovery (2026-09-28, Phase 8 slice 2).** IMPROVEMENTS.md's
+D16 entry left one unverified lead standing: whether per-mask Clarity's
+superlinear cost (8.8x-22x for 3 masks, measured 2026-09-25) is driven by
+geometric ROI overlap between masks. Two temporary harnesses (measured,
+transcribed, fully reverted — `git diff` confirmed clean) answered this
+AND surfaced something more consequential:
+
+1. **The entire effect is confined to images where BOTH dimensions are
+   ≤4096px** — a sharp, discrete cliff (6.1x at 4096x4096, flat 1.0x at
+   4097x4096 or 4096x4097), not a gradual fade, and per-DIMENSION, not
+   area-based. **This app's own real RAW target, the Nikon D610
+   (6016x4016), already sits on the fast/flat side of that cliff in both
+   orientations** — meaning D16's own original measurement (taken at
+   4000x4000) may not describe this camera's actual full-res behavior at
+   all. Root cause of the cliff (likely a Core Image/Metal internal
+   tiling threshold) not investigated further — a separate spike if ever
+   needed.
+2. **Geometric ROI overlap IS a real, reproducible contributor** — 3
+   independent runs at 4096x4096 (the one size where there's an effect to
+   measure) each showed co-located masks costing 1.6x-1.9x what the same
+   3 masks cost when 2 of them are moved away from the 3rd's own Clarity
+   dilation footprint, despite noisy absolute baselines run-to-run.
+
+No code changes; see IMPROVEMENTS.md's own D16 entry for the full numbers
+and verdict. Not fixed here, matching D16's own original scoping ("it
+needs its own slice") — and any future fix attempt should first re-check
+which real photo sizes the problem is even reachable at, given how narrow
+the affected window turned out to be.
+
 **`EditorInteractionMode` mode-enum refactor — SHIPPED (2026-09-28),
 closing IMPROVEMENTS.md D14's armed-mode follow-up.** One
 `Sources/UI/EditorInteractionMode.swift` enum

@@ -721,16 +721,39 @@ the past tense, see the note directly below it.
 UI-glue code with no existing test precedent, matching D8/Point Color
 Slice B's own "verified live, not unit-tested" convention).
 
-The shared `EditorInteractionMode` mode-enum follow-up below is
-DELIBERATELY NOT built this slice — investigated and scoped this same
-session, then explicitly split out as its own future session: the
-keyboard wiring is a small, well-precedented, additive change, while the
-enum is a real refactor across 2 files touching all 6 sites' state
-shape, and bundling them would make any regression harder to attribute
-to one or the other. Still open — the inventory below (6 sites, plus the
-separately-noted 3-way selection-half inconsistency) is unchanged from
-what this entry already had; this session's own research reconfirmed it
-matches the current code but didn't expand it.
+**Update (2026-09-28): the shared `EditorInteractionMode` mode-enum
+follow-up below is now SHIPPED**, closing the armed-mode half of this
+entry's own longstanding follow-up. `Sources/UI/EditorInteractionMode.swift`
+is one enum (`.none`/`.pickingWhiteBalance`/`.placingRedEye`/
+`.paintingBrush(maskID:)`/`.pickingColorRange(maskID:)`/
+`.pickingPointColor(pointColorID:)`) replacing the 5 separate properties
+(2 bools + 3 `UUID?`s) the 6 arm sites below used to keep mutually
+exclusive by hand. `ContentView`'s old properties survive as read-only
+computed projections under their original names, so every READ site
+(`canZoom`, the overlay gates, `.onChange` handlers, the crosshair tint
+switch) is unchanged; only the write sites converted, each to either
+`interactionMode = .none` (only where the old code cleared all 5, or a
+guard in scope proves nothing else could be armed) or a targeted
+`interactionMode.disarm(_:)`/`disarmMaskModes()`/`disarmPointColorPick()`
+otherwise — a deliberate rule to avoid the type's own central hazard: a
+blanket `.none` inside a handler meant to clear only ONE mode would
+silently disarm whatever else is armed. 2 commits (the enum + its tests,
+then the `ContentView`/`AdjustTabView` wiring), each independently
+reviewed (`model: "opus"`) — APPROVE on both, no correctness issues found
+in the wiring commit (traced every guarded/one-shot disarm site for
+behavioral equivalence, confirmed no old writes remained, ran the full
+suite independently). 1355 tests, no existing test changed — this is a
+pure UI-state refactor with no user-visible change.
+
+Deliberately does NOT fold in mask/point-color SELECTION
+(`AdjustPanelState.selectedMaskID`/`selectedPointColorID`), despite this
+entry's own original sketch including an `editingMask(UUID)` case —
+selection survives tab switches and legitimately coexists with an armed
+mode today (brush painting always has its mask selected; arming Point
+Color does not clear a selected radial mask). The separately-noted
+3-way selection-half inconsistency below is UNCHANGED by this shipment —
+it was never part of the armed-mode state this enum covers, and remains
+open.
 
 **Update (Point Color Slice B, 2026-09-18):** the routing this entry
 describes was built, but for Point Color's OWN eyedropper, not this
@@ -766,7 +789,16 @@ was mostly a routing change, confirmed by the 2026-09-25 update above.
 
 **Two smaller follow-ups noted while building this slice, neither
 built:**
-- **A shared mutual-exclusion mode enum is now genuinely worth it.**
+- **A shared mutual-exclusion mode enum — SHIPPED 2026-09-28.** See the
+  2026-09-28 update at the top of this entry for the full write-up.
+  `EditorInteractionMode` covers exactly the PICKING-armed half described
+  below (WB/Red-Eye/brush-paint/color-pick/point-color-pick); it
+  deliberately does NOT fold in `editingMask(UUID)` the way this bullet's
+  original sketch proposed — see that update for why.
+
+  *(Original text below, describing the state BEFORE the 2026-09-28
+  update — the armed-mode half it describes is now closed.)*
+
   `AdjustTabView`/`ContentView` hand-roll WB/Red-Eye/mask-selection/
   brush-paint/color-pick/point-color-pick mutual exclusion at 6 separate
   sites (`select(_:)`, the WB button, the Red-Eye button,
@@ -790,7 +822,9 @@ built:**
   consequence found (both are presentation-only, and Escape already
   routes mask-first then point-color, so a double-Escape is the worst
   case) — but it's the same underlying disease the enum above would cure,
-  not a separate one.
+  not a separate one. **STILL OPEN as of 2026-09-28**: the shipped enum
+  deliberately excludes selection, so this three-way inconsistency is
+  unchanged by that shipment.
 - **`PixelSampler` doesn't unpremultiply, `PointColor.cikernel` does.**
   Reviewer-caught (Point Color Slice B round 2): for a sampled pixel with
   0.5 ≤ alpha < 1 (only reachable once geometry is non-identity and a

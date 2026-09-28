@@ -7,28 +7,39 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
-**Color Range mask eyedropper keyboard/AT path — SHIPPED (2026-09-25),
-closing IMPROVEMENTS.md D14's long-open second half.** This is the most
-recent commit on `master` (`d3098e7`) and was not yet reflected here.
-`isPickingColorRange` now routes through the same shared point-placement
-keyboard dispatch WB/Red-Eye/Point Color already use
-(`handleImagePaneKeyPress`'s arm-check, `commitPointPlacement`'s
-if/else-if chain, a new green `EditorCrosshairOverlay` tint, mouse
-tap-capture syncing `crosshairPosition`), making it the last of the 6
-mutual-exclusion sites to gain keyboard/AT support — this was purely a
-routing change, as the entry itself predicted, plus removing one now-dead
-bespoke Escape branch it made unreachable. Reviewer: 3 rounds, FIX FIRST →
-FIX FIRST → APPROVE, every finding a stale doc comment (no logic bugs) —
-see IMPROVEMENTS.md's own D14 entry for the full round-by-round detail.
-1329 tests pass unchanged (no new tests — matches this codebase's existing
-"UI-glue verified live, not unit-tested" convention for this class of
-change). **Not yet live-verified on screen** — worth doing before/while
-next touching mask eyedroppers.
+**`EditorInteractionMode` mode-enum refactor — SHIPPED (2026-09-28),
+closing IMPROVEMENTS.md D14's armed-mode follow-up.** One
+`Sources/UI/EditorInteractionMode.swift` enum
+(`.none`/`.pickingWhiteBalance`/`.placingRedEye`/`.paintingBrush(maskID:)`/
+`.pickingColorRange(maskID:)`/`.pickingPointColor(pointColorID:)`)
+replaces the 5 separate `@State`/`@Binding` properties (2 bools + 3
+`UUID?`s) that `AdjustTabView`'s 6 arm sites used to keep mutually
+exclusive by hand. `ContentView`'s old property names survive as
+read-only computed projections, so every READ site (`canZoom`, the
+overlay gates, `.onChange` handlers, the crosshair tint switch) is
+unchanged; only the ~16 write sites converted, each to either
+`interactionMode = .none` (only where the old code cleared all 5, or a
+guard in scope proves nothing else could be armed) or a targeted
+`.disarm(_:)`/`disarmMaskModes()`/`disarmPointColorPick()` otherwise — a
+deliberate rule against the type's own central hazard (a blanket `.none`
+in a handler meant to clear only one mode would silently disarm whatever
+else is armed). 2 commits (the enum + its tests, then the wiring), each
+independently reviewed (`model: "opus"`) — APPROVE on both; the wiring
+review traced every guarded/one-shot disarm site for behavioral
+equivalence and ran the full suite independently. 1355 tests, no existing
+test changed — a pure UI-state refactor, no user-visible change intended.
+Deliberately does NOT fold in mask/point-color SELECTION
+(`selectedMaskID`/`selectedPointColorID`) — see IMPROVEMENTS.md's D14
+entry for why; the 3-way selection-half inconsistency it also logged
+remains open. **Live verification in progress** — see below.
 
-The shared `EditorInteractionMode` mode-enum refactor (the actual fix for
-all 6 mutual-exclusion sites at once) was deliberately NOT built this
-slice — scoped out as its own future session so a regression in either
-piece can't be misattributed. Still open.
+Preceded by the Color Range mask eyedropper keyboard/AT path (SHIPPED
+2026-09-25, `d3098e7`), which closed D14's OTHER long-open half (no
+keyboard/AT path to pick a Color Range mask's target color) — see
+IMPROVEMENTS.md's D14 entry for that round's own write-up. Still not
+live-verified on screen; folded into this session's live-verification
+pass below alongside the mode-enum refactor itself, since both touch the
+same eyedropper/mask interaction surface.
 
 **Phase 8 (Polish) slice 1 — D16 per-mask Clarity perf, INVESTIGATED,
 MEASURED, no viable simple fix found this slice (2026-09-25).**
@@ -1575,5 +1586,6 @@ still latent in `ImageAverageColor`/`PixelSampler`); IMPROVEMENTS.md D27
 (the 3 History panel nits logged this session); IMPROVEMENTS.md D28 (a
 pre-existing `saveSidecarNow` load-during-save race onto the wrong
 sidecar, found while closing Copy/Paste Settings' own race — affects
-every ordinary debounced save, not just batch paste); and the now-6-site
-mutual-exclusion mode enum IMPROVEMENTS.md logs as overdue.
+every ordinary debounced save, not just batch paste). The mutual-exclusion
+mode enum this list used to name as overdue is now SHIPPED — see the
+"Current phase" entry at the top of this file.

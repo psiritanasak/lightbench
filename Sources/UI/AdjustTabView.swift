@@ -124,34 +124,15 @@ struct AdjustTabView: View {
     /// `CatalogModel` at all; every other section only touches `document`.
     @ObservedObject var catalog: CatalogModel
     @Binding var panel: AdjustPanelState
-    /// Owned by `ContentView` because the image pane reads them too — they
-    /// gate zooming (`canZoom`), drive the tap overlays, and are cleared when
-    /// a different photo is loaded.
-    @Binding var isPickingWhiteBalance: Bool
-    @Binding var isPlacingRedEyeCorrections: Bool
-    /// Phase 7 slice 4: which mask (if any) is currently in live brush-paint
-    /// mode — owned by `ContentView` for the same reason `selectedMaskID`
-    /// is (it gates `canZoom`, drives the on-image live-stroke overlay, and
-    /// is cleared by photo/tab/Compare switches). `UUID?`, not `Bool` (F4):
-    /// the falling-edge cleanup that deletes a never-painted mask needs to
-    /// name the OLD id, which a bare `Bool` can't supply once `select(_:)`
-    /// has already repointed `selectedMaskID`.
-    @Binding var brushPaintingMaskID: UUID?
-    /// Phase 7 slice 5 (second half): which mask (if any) is currently
-    /// armed for the Color Range eyedropper tap — owned by `ContentView`
-    /// for the same reason `brushPaintingMaskID` is (it gates zoom/pan via
-    /// `canZoom`'s own `isPickingColorRange` term, drives the tap-capture
-    /// overlay, and is cleared by photo/tab/Compare switches). `UUID?`,
-    /// not `Bool` (mirrors F4's own reasoning): a future falling-edge
-    /// cleanup needs to name the OLD id.
-    @Binding var colorPickingMaskID: UUID?
-    /// Point Color Slice B: which point color instance (if any) is
-    /// currently armed for its eyedropper tap — owned by `ContentView` for
-    /// the same reason `colorPickingMaskID` is (it gates zoom/pan via
-    /// `canZoom`'s own term, drives the tap-capture overlay, and is
-    /// cleared by photo/tab/Compare switches). `UUID?`, not `Bool`, same
-    /// reasoning: a falling-edge cleanup needs to name the OLD id.
-    @Binding var pointColorPickingID: UUID?
+    /// The Editor's single armed-interaction-mode value — owned by
+    /// `ContentView` because the image pane reads it too (it gates
+    /// `canZoom`, drives every tap-capture overlay, and is cleared when a
+    /// different photo is loaded). Replaces 5 separate bindings (a bool
+    /// each for WB/Red-Eye, a `UUID?` each for brush-painting/Color-Range-
+    /// picking/Point-Color-picking) that this file's own arm/disarm sites
+    /// used to keep mutually exclusive by hand — see `EditorInteractionMode`'s
+    /// own doc comment for the full history (IMPROVEMENTS.md D14).
+    @Binding var interactionMode: EditorInteractionMode
     /// Called when EITHER point-picking mode is entered. `ContentView` exits
     /// Compare and resets zoom/pan in response — passed as a callback so this
     /// view doesn't take bindings to three unrelated viewport states.
@@ -562,14 +543,14 @@ struct AdjustTabView: View {
                 range: -100...100, identity: 0
             ) { String(format: "%+.0f", $0) }
             Button {
-                isPickingWhiteBalance.toggle()
-                if isPickingWhiteBalance {
-                    isPlacingRedEyeCorrections = false
+                // `toggle` alone already replaces whatever else was armed
+                // (brush/Color-Range/Point-Color) with `.pickingWhiteBalance`
+                // or `.none` — only the two SELECTIONS (a separate concern
+                // from armed-mode) still need clearing by hand here.
+                interactionMode.toggle(.pickingWhiteBalance)
+                if interactionMode.isPickingWhiteBalance {
                     panel.selectedMaskID = nil
-                    brushPaintingMaskID = nil
-                    colorPickingMaskID = nil
                     panel.selectedPointColorID = nil
-                    pointColorPickingID = nil
                     onEnterPointPickingMode()
                 }
             } label: {
@@ -577,8 +558,8 @@ struct AdjustTabView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .tint(isPickingWhiteBalance ? .yellow : nil)
-            .accessibilityAddTraits(isPickingWhiteBalance ? [.isSelected] : [])
+            .tint(interactionMode.isPickingWhiteBalance ? .yellow : nil)
+            .accessibilityAddTraits(interactionMode.isPickingWhiteBalance ? [.isSelected] : [])
             Button {
                 document.fixColorCast()
             } label: {
@@ -807,14 +788,12 @@ struct AdjustTabView: View {
     private var redEyeSection: some View {
         Group {
             Button {
-                isPlacingRedEyeCorrections.toggle()
-                if isPlacingRedEyeCorrections {
-                    isPickingWhiteBalance = false
+                // Mirrors the WB button above exactly — `toggle` alone
+                // already replaces whatever else was armed.
+                interactionMode.toggle(.placingRedEye)
+                if interactionMode.isPlacingRedEyeCorrections {
                     panel.selectedMaskID = nil
-                    brushPaintingMaskID = nil
-                    colorPickingMaskID = nil
                     panel.selectedPointColorID = nil
-                    pointColorPickingID = nil
                     onEnterPointPickingMode()
                 }
             } label: {
@@ -822,8 +801,8 @@ struct AdjustTabView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .tint(isPlacingRedEyeCorrections ? .yellow : nil)
-            .accessibilityAddTraits(isPlacingRedEyeCorrections ? [.isSelected] : [])
+            .tint(interactionMode.isPlacingRedEyeCorrections ? .yellow : nil)
+            .accessibilityAddTraits(interactionMode.isPlacingRedEyeCorrections ? [.isSelected] : [])
             EditSliderRow(
                 label: "Red-Eye Size", value: $document.editState.redEyeSize,
                 range: 0...1, identity: 0.5, displayMultiplier: 100
@@ -873,8 +852,7 @@ struct AdjustTabView: View {
                 if !newValue { next.selectedMaskID = nil }
                 panel = next
                 if !newValue {
-                    brushPaintingMaskID = nil
-                    colorPickingMaskID = nil
+                    interactionMode.disarmMaskModes()
                 }
             }
         )
@@ -1101,12 +1079,9 @@ struct AdjustTabView: View {
         }
     }
 
-    /// Mirrors the WB/Red-Eye buttons' own disarm shape — clears the OTHER
-    /// two "point-ish interaction" modes and resets the viewport, so all
-    /// three disarm each other by hand at three sites total (this one, and
-    /// the two extended above), matching this file's existing convention
-    /// rather than refactoring to a single mode enum (a larger, unrelated
-    /// change out of scope here).
+    /// Resets `interactionMode` to `.none` — selecting a mask (or another
+    /// mask) disarms whatever else was armed, matching the WB/Red-Eye
+    /// buttons' own disarm-on-arm shape.
     ///
     /// Reviewer-caught during slice 5's own design (not a live bug, a
     /// design correction before it could become one): `onEnterPointPickingMode()`
@@ -1119,11 +1094,7 @@ struct AdjustTabView: View {
     /// kind. A mask kind with no overlay has nothing to protect.
     private func select(_ mask: Mask) {
         panel.selectedMaskID = mask.id
-        isPickingWhiteBalance = false
-        isPlacingRedEyeCorrections = false
-        brushPaintingMaskID = nil
-        colorPickingMaskID = nil
-        pointColorPickingID = nil
+        interactionMode = .none
         if hasOnImageOverlay(mask.kind) {
             onEnterPointPickingMode()
         }
@@ -1134,12 +1105,8 @@ struct AdjustTabView: View {
         if panel.selectedMaskID == mask.id {
             panel.selectedMaskID = nil
         }
-        if brushPaintingMaskID == mask.id {
-            brushPaintingMaskID = nil
-        }
-        if colorPickingMaskID == mask.id {
-            colorPickingMaskID = nil
-        }
+        interactionMode.disarm(.paintingBrush(maskID: mask.id))
+        interactionMode.disarm(.pickingColorRange(maskID: mask.id))
     }
 
     /// Arms live brush-paint mode for `id` — called both by `addMask` (a
@@ -1151,34 +1118,21 @@ struct AdjustTabView: View {
     /// right after arming (before drawing) leaves an existing stroke
     /// intact rather than discarding it early.
     private func beginBrushStroke(for id: UUID) {
-        isPickingWhiteBalance = false
-        isPlacingRedEyeCorrections = false
-        brushPaintingMaskID = id
-        colorPickingMaskID = nil
-        pointColorPickingID = nil
+        interactionMode = .paintingBrush(maskID: id)
         onEnterPointPickingMode()
     }
 
-    /// Arms the Color Range eyedropper for `id` — mirrors `beginBrushStroke`'s
-    /// shape (clears WB/Red-Eye/`brushPaintingMaskID`, sets its own armed-id
-    /// state), but ALSO calls `onEnterPointPickingMode()` UNCONDITIONALLY,
-    /// independent of `hasOnImageOverlay(.colorRange)` (which is `false` —
-    /// see that function's own doc comment): that gate answers "does merely
+    /// Arms the Color Range eyedropper for `id` — assigning `interactionMode`
+    /// directly already disarms WB/Red-Eye/brush, but this ALSO calls
+    /// `onEnterPointPickingMode()` UNCONDITIONALLY, independent of
+    /// `hasOnImageOverlay(.colorRange)` (which is `false` — see that
+    /// function's own doc comment): that gate answers "does merely
     /// SELECTING this mask need an overlay reset," but ARMING a tap
     /// genuinely needs the zoom/pan reset regardless of overlay ownership —
     /// the eyedropper's own tap-capture layer is positioned against an
     /// un-zoomed `currentFitRect`, same as WB's.
-    ///
-    /// This is the 5th hand-rolled mutual-exclusion site (after WB, Red-Eye,
-    /// `select(_:)`, `beginBrushStroke`) — logged in IMPROVEMENTS.md that a
-    /// shared mode enum is now genuinely worth it, not built this slice
-    /// (touches already-verified WB/RedEye/Brush behavior).
     private func beginColorPick(for id: UUID) {
-        isPickingWhiteBalance = false
-        isPlacingRedEyeCorrections = false
-        brushPaintingMaskID = nil
-        colorPickingMaskID = id
-        pointColorPickingID = nil
+        interactionMode = .pickingColorRange(maskID: id)
         onEnterPointPickingMode()
     }
 
@@ -1196,7 +1150,7 @@ struct AdjustTabView: View {
                 if !newValue { next.selectedPointColorID = nil }
                 panel = next
                 if !newValue {
-                    pointColorPickingID = nil
+                    interactionMode.disarmPointColorPick()
                 }
             }
         )
@@ -1281,17 +1235,13 @@ struct AdjustTabView: View {
     /// `onEnterPointPickingMode()`.
     private func selectPointColor(_ pointColor: PointColor) {
         panel.selectedPointColorID = pointColor.id
-        isPickingWhiteBalance = false
-        isPlacingRedEyeCorrections = false
-        brushPaintingMaskID = nil
-        colorPickingMaskID = nil
         // Reviewer-caught: without this, arming instance 1's eyedropper
         // then clicking instance 2's row left the eyedropper armed on 1
         // while the detail panel showed 2 — the next tap wrote into the
         // WRONG instance, and the orphaned unpicked instance 1 never got
         // discarded (`isPointColorSelected` stays true, since instance 2
         // still exists).
-        pointColorPickingID = nil
+        interactionMode = .none
     }
 
     private func deletePointColor(_ pointColor: PointColor) {
@@ -1299,26 +1249,16 @@ struct AdjustTabView: View {
         if panel.selectedPointColorID == pointColor.id {
             panel.selectedPointColorID = nil
         }
-        if pointColorPickingID == pointColor.id {
-            pointColorPickingID = nil
-        }
+        interactionMode.disarm(.pickingPointColor(pointColorID: pointColor.id))
     }
 
-    /// Arms this instance's eyedropper — mirrors `beginColorPick`'s shape
-    /// (clears WB/Red-Eye/brush/colorRange, calls `onEnterPointPickingMode()`
-    /// UNCONDITIONALLY, independent of any on-image overlay, since the tap-
-    /// capture layer itself needs the un-zoomed `currentFitRect` regardless).
-    /// This is the 6th hand-rolled mutual-exclusion site (after WB, Red-Eye,
-    /// `select(_:)`, `beginBrushStroke`, `beginColorPick`) — IMPROVEMENTS.md
-    /// already logs that a shared mode enum is overdue; not built this
-    /// slice, for the same reason `beginColorPick` gave (touches already-
-    /// verified WB/Red-Eye/Brush/Color-Range behavior).
+    /// Arms this instance's eyedropper — assigning `interactionMode` directly
+    /// already disarms WB/Red-Eye/brush/Color-Range, but this ALSO calls
+    /// `onEnterPointPickingMode()` UNCONDITIONALLY, independent of any
+    /// on-image overlay, since the tap-capture layer itself needs the
+    /// un-zoomed `currentFitRect` regardless.
     private func beginPointColorPick(for id: UUID) {
-        isPickingWhiteBalance = false
-        isPlacingRedEyeCorrections = false
-        brushPaintingMaskID = nil
-        colorPickingMaskID = nil
-        pointColorPickingID = id
+        interactionMode = .pickingPointColor(pointColorID: id)
         onEnterPointPickingMode()
     }
 

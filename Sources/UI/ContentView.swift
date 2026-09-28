@@ -244,6 +244,20 @@ struct ContentView: View {
         return hasOnImageOverlay(mask.kind)
     }
 
+    /// The Editor's single armed-interaction-mode value — replaces 5
+    /// separate `@State` properties (a bool each for WB/Red-Eye, a `UUID?`
+    /// each for brush-painting/Color-Range-picking/Point-Color-picking)
+    /// that 6 separate arm sites in `AdjustTabView` used to keep mutually
+    /// exclusive by hand. See `EditorInteractionMode`'s own doc comment for
+    /// the full history (IMPROVEMENTS.md D14).
+    @State private var interactionMode: EditorInteractionMode = .none
+
+    /// The 5 properties below are READ-ONLY projections of `interactionMode`
+    /// kept under their original names/types — every existing read site
+    /// (`canZoom`, the overlay gates, `.onChange` handlers, the crosshair
+    /// tint switch) keeps reading exactly these, unchanged. Only writes
+    /// (armed/disarmed transitions) go through `interactionMode` itself now.
+
     /// Phase 7 slice 4: which mask (if any) currently has live brush-paint
     /// mode armed — `UUID?`, not `Bool` (F4), so the falling-edge cleanup
     /// (`discardUnpaintedBrushMask`, wired via the `.onChange` below) can
@@ -254,7 +268,7 @@ struct ContentView: View {
     /// `isEditingMask` in practice — see `canZoom`'s own doc comment for
     /// why that implication is still spelled out explicitly there rather
     /// than relied on.
-    @State private var brushPaintingMaskID: UUID?
+    private var brushPaintingMaskID: UUID? { interactionMode.brushPaintingMaskID }
     private var isPaintingBrush: Bool { brushPaintingMaskID != nil }
 
     /// Phase 7 slice 5 (second half): which mask (if any) currently has
@@ -265,7 +279,7 @@ struct ContentView: View {
     /// is `false`) — this state exists purely to gate the tap-capture
     /// layer in `pointAndZoomOverlays` and `canZoom`'s own
     /// `isPickingColorRange` term, not to draw anything.
-    @State private var colorPickingMaskID: UUID?
+    private var colorPickingMaskID: UUID? { interactionMode.colorPickingMaskID }
     private var isPickingColorRange: Bool { colorPickingMaskID != nil }
 
     /// Point Color Slice B: which point color instance (if any) currently
@@ -274,21 +288,21 @@ struct ContentView: View {
     /// `.colorRange`, this kind has no on-image overlay at all — this state
     /// exists purely to gate the tap-capture layer in `pointAndZoomOverlays`
     /// and `canZoom`'s own `isPickingPointColor` term.
-    @State private var pointColorPickingID: UUID?
+    private var pointColorPickingID: UUID? { interactionMode.pointColorPickingID }
     private var isPickingPointColor: Bool { pointColorPickingID != nil }
 
     /// Whether a tap on the image should be captured as a WB eyedropper
     /// sample. Its own overlay only exists while this is true AND cropping
     /// is not active (see `body`), so the two point-interactions are
     /// mutually exclusive by construction, not by a shared runtime check.
-    @State private var isPickingWhiteBalance = false
+    private var isPickingWhiteBalance: Bool { interactionMode.isPickingWhiteBalance }
 
     /// Whether taps on the image should place/remove Red-Eye correction
     /// points. UNLIKE `isPickingWhiteBalance`, placing a point does NOT
     /// auto-disarm this mode — the user will often place several
     /// corrections (both eyes) in one sitting, so it stays armed until
     /// toggled off or the user leaves the Adjust tab.
-    @State private var isPlacingRedEyeCorrections = false
+    private var isPlacingRedEyeCorrections: Bool { interactionMode.isPlacingRedEyeCorrections }
 
     /// D8 (IMPROVEMENTS.md): the keyboard-driven crosshair's current
     /// position — normalized 0...1, SwiftUI-local/y-DOWN, the SAME
@@ -524,7 +538,10 @@ struct ContentView: View {
         // needed to deselect, matching every other mode's "one Escape per
         // stage" shape.
         if isPaintingBrush {
-            brushPaintingMaskID = nil
+            // Guarded by `isPaintingBrush`, so `interactionMode` is exactly
+            // `.paintingBrush` here — a blanket `.none` is safe (nothing
+            // else could be armed under the one-at-a-time invariant).
+            interactionMode = .none
             return .handled
         }
         // D14 (IMPROVEMENTS.md): Color Range's own eyedropper-Escape stage
@@ -651,10 +668,11 @@ struct ContentView: View {
             guard keyPress.phase == .down else { return .handled }
             commitPointPlacement()
         case .escape:
-            isPickingWhiteBalance = false
-            isPlacingRedEyeCorrections = false
-            pointColorPickingID = nil
-            colorPickingMaskID = nil
+            // This function is only ever reached while one of WB/Red-Eye/
+            // Point-Color/Color-Range is armed (the dispatch guard in
+            // `handleImagePaneKeyPress` below) — brush painting is never
+            // among them, so a blanket `.none` can't disarm it by mistake.
+            interactionMode = .none
         default:
             return .ignored
         }
@@ -674,7 +692,7 @@ struct ContentView: View {
         guard let fitRect = currentFitRect else { return }
         if isPickingWhiteBalance {
             document.pickWhiteBalance(normalizedX: crosshairPosition.x, normalizedY: crosshairPosition.y)
-            isPickingWhiteBalance = false
+            interactionMode.disarm(.pickingWhiteBalance)
         } else if isPlacingRedEyeCorrections {
             document.editState.redEyePoints = RedEyeHitTest.toggling(
                 crosshairPosition, in: document.editState.redEyePoints, fitRect: fitRect,
@@ -686,13 +704,13 @@ struct ContentView: View {
             // one target per arm, mirroring the mouse tap handler in
             // `pointAndZoomOverlays`.
             document.pickPointColorTarget(pointColorID: id, normalizedX: crosshairPosition.x, normalizedY: crosshairPosition.y)
-            pointColorPickingID = nil
+            interactionMode.disarm(.pickingPointColor(pointColorID: id))
         } else if let maskID = colorPickingMaskID {
             // D14 (IMPROVEMENTS.md): one-shot, matching Point Color's own
             // shape immediately above — the SAME call the mouse tap
             // handler in `pointAndZoomOverlays` makes.
             document.pickColorRangeTarget(maskID: maskID, normalizedX: crosshairPosition.x, normalizedY: crosshairPosition.y)
-            colorPickingMaskID = nil
+            interactionMode.disarm(.pickingColorRange(maskID: maskID))
         }
     }
 
@@ -1096,13 +1114,9 @@ struct ContentView: View {
             selectedTab = .adjust
             selectedAspect = .freeform
             customAspectRatio = nil
-            isPickingWhiteBalance = false
-            isPlacingRedEyeCorrections = false
+            interactionMode = .none
             adjustPanel.selectedMaskID = nil
-            brushPaintingMaskID = nil
-            colorPickingMaskID = nil
             adjustPanel.selectedPointColorID = nil
-            pointColorPickingID = nil
             compareMode = .off
             splitOrientation = .vertical
             splitPosition = 0.5
@@ -1116,13 +1130,9 @@ struct ContentView: View {
         // toolbar Menu's `.disabled(...)` and `canZoom`).
         .onChange(of: selectedTab) { _, newTab in
             if newTab != .adjust {
-                isPickingWhiteBalance = false
-                isPlacingRedEyeCorrections = false
+                interactionMode = .none
                 adjustPanel.selectedMaskID = nil
-                brushPaintingMaskID = nil
-                colorPickingMaskID = nil
                 adjustPanel.selectedPointColorID = nil
-                pointColorPickingID = nil
                 compareMode = .off
                 zoomScale = 1
                 panOffset = .zero
@@ -1185,7 +1195,7 @@ struct ContentView: View {
         // IMPROVEMENTS.md's D13 for why.
         //
         // Reviewer-caught: `AdjustTabView.addMask(kind: .brush)` calls
-        // `select(mask)` (which writes `brushPaintingMaskID = nil`) and
+        // `select(mask)` (which sets `interactionMode = .none`) and
         // then `beginBrushStroke(for:)` (which writes the NEW id) in one
         // synchronous action — SwiftUI coalesces both writes into a SINGLE
         // `.onChange` invocation with `old = <previous mask>, new = <new
@@ -1249,7 +1259,7 @@ struct ContentView: View {
         // exists.
         .onChange(of: isPointColorSelected) { _, stillSelected in
             if !stillSelected {
-                pointColorPickingID = nil
+                interactionMode.disarmPointColorPick()
             }
         }
         // Closes the same hazard `isEditingMask`'s own doc comment already
@@ -1265,8 +1275,7 @@ struct ContentView: View {
         // identical reason.
         .onChange(of: isEditingMask) { _, stillEditing in
             if !stillEditing {
-                brushPaintingMaskID = nil
-                colorPickingMaskID = nil
+                interactionMode.disarmMaskModes()
             }
         }
         // Reviewer-caught: returning to the Editor from the Library while
@@ -1500,26 +1509,23 @@ struct ContentView: View {
             .accessibilityAddTraits(compareMode != .off ? [.isSelected] : [])
             .onChange(of: compareMode) { _, newMode in
                 if newMode != .off {
-                    isPickingWhiteBalance = false
-                    isPlacingRedEyeCorrections = false
-                    // Deliberately does NOT disable the Compare menu itself
-                    // above (masks stay APPLIED — Compare is the best way
-                    // to see what a mask did) — this only clears the
-                    // overlay/detail-panel SELECTION, matching WB/Red-Eye's
-                    // own clear right above.
-                    adjustPanel.selectedMaskID = nil
-                    brushPaintingMaskID = nil
-                    colorPickingMaskID = nil
-                    // Reviewer-caught: this branch was missing entirely —
+                    // Clears every armed mode in one assignment now —
                     // the `.disabled` above blocks entering Compare from
                     // the MENU while armed, but `compareMode` is also a
                     // plain `@State` this `.onChange` observes regardless
-                    // of how it changed, so leaving this out meant nothing
-                    // actually stopped Point Color's eyedropper from
-                    // staying armed over a Side-by-Side/Split viewport
-                    // whose `currentFitRect` assumption no longer holds.
+                    // of how it changed (reviewer-caught: this branch was
+                    // once missing entirely, so nothing actually stopped
+                    // Point Color's eyedropper from staying armed over a
+                    // Side-by-Side/Split viewport whose `currentFitRect`
+                    // assumption no longer holds).
+                    interactionMode = .none
+                    // Deliberately does NOT disable the Compare menu itself
+                    // above (masks stay APPLIED — Compare is the best way
+                    // to see what a mask did) — this only clears the
+                    // overlay/detail-panel SELECTION, matching the armed-mode
+                    // clear right above.
+                    adjustPanel.selectedMaskID = nil
                     adjustPanel.selectedPointColorID = nil
-                    pointColorPickingID = nil
                 }
             }
         }
@@ -1775,7 +1781,7 @@ struct ContentView: View {
                         // with Red-Eye's own sync, which genuinely needs
                         // it since that mode does NOT auto-disarm.
                         crosshairPosition = CGPoint(x: normalizedX, y: normalizedY)
-                        isPickingWhiteBalance = false
+                        interactionMode.disarm(.pickingWhiteBalance)
                     }
                 )
                 // D6 (IMPROVEMENTS.md): a spatial tap-anywhere-on-the-image
@@ -1865,7 +1871,7 @@ struct ContentView: View {
                         fitRect: fitRect,
                         points: maskBinding.brushPoints,
                         brushSize: maskBinding.wrappedValue.brushSize,
-                        onStrokeEnded: { brushPaintingMaskID = nil }
+                        onStrokeEnded: { interactionMode.disarm(.paintingBrush(maskID: id)) }
                     )
                 }
             case .luminanceRange, .colorRange:
@@ -1910,7 +1916,7 @@ struct ContentView: View {
                         let normalizedY = tap.location.y / fitRect.height
                         document.pickColorRangeTarget(maskID: maskID, normalizedX: normalizedX, normalizedY: normalizedY)
                         crosshairPosition = CGPoint(x: normalizedX, y: normalizedY)
-                        colorPickingMaskID = nil
+                        interactionMode.disarm(.pickingColorRange(maskID: maskID))
                     }
                 )
                 .accessibilityHidden(true)
@@ -1942,7 +1948,7 @@ struct ContentView: View {
                         let normalizedY = tap.location.y / fitRect.height
                         document.pickPointColorTarget(pointColorID: id, normalizedX: normalizedX, normalizedY: normalizedY)
                         crosshairPosition = CGPoint(x: normalizedX, y: normalizedY)
-                        pointColorPickingID = nil
+                        interactionMode.disarm(.pickingPointColor(pointColorID: id))
                     }
                 )
                 .accessibilityHidden(true)
@@ -2038,11 +2044,7 @@ struct ContentView: View {
                         document: document,
                         catalog: catalog,
                         panel: $adjustPanel,
-                        isPickingWhiteBalance: $isPickingWhiteBalance,
-                        isPlacingRedEyeCorrections: $isPlacingRedEyeCorrections,
-                        brushPaintingMaskID: $brushPaintingMaskID,
-                        colorPickingMaskID: $colorPickingMaskID,
-                        pointColorPickingID: $pointColorPickingID,
+                        interactionMode: $interactionMode,
                         onEnterPointPickingMode: {
                             compareMode = .off
                             zoomScale = 1

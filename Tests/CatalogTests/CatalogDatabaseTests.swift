@@ -1,3 +1,4 @@
+import GRDB
 import XCTest
 @testable import PhotoApp
 
@@ -83,7 +84,7 @@ final class CatalogDatabaseTests: XCTestCase {
         let photo = try XCTUnwrap(photos.first)
 
         XCTAssertEqual(photo.rating, 0)
-        XCTAssertFalse(photo.isFlagged)
+        XCTAssertEqual(photo.flagStatus, FlagStatus.none)
     }
 
     func testSetRatingUpdatesTheStoredValue() async throws {
@@ -125,21 +126,54 @@ final class CatalogDatabaseTests: XCTestCase {
         XCTAssertEqual(photo.rating, 0)
     }
 
-    func testSetFlaggedTogglesTheStoredValue() async throws {
+    func testSetFlagStatusStoresEveryState() async throws {
         let db = try makeDatabase()
         _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
         let importedPhotos = try await db.allPhotos()
         let id = try XCTUnwrap(importedPhotos.first?.id)
+        XCTAssertEqual(importedPhotos.first?.flagStatus, FlagStatus.none)
 
-        try await db.setFlagged(true, for: id)
-        let flaggedPhotos = try await db.allPhotos()
-        let flaggedPhoto = try XCTUnwrap(flaggedPhotos.first)
-        XCTAssertTrue(flaggedPhoto.isFlagged)
+        for status in [FlagStatus.picked, .rejected, .none] {
+            try await db.setFlagStatus(status, for: id)
+            let stored = try await db.allPhotos().first
+            XCTAssertEqual(stored?.flagStatus, status)
+        }
+    }
 
-        try await db.setFlagged(false, for: id)
-        let unflaggedPhotos = try await db.allPhotos()
-        let unflaggedPhoto = try XCTUnwrap(unflaggedPhotos.first)
-        XCTAssertFalse(unflaggedPhoto.isFlagged)
+    /// A catalog created before Migration 007 (migrated only through 006,
+    /// with real flagged/unflagged rows) must upgrade in place: flagged rows
+    /// become Picks, and the old boolean column is gone.
+    func testMigration007ConvertsIsFlaggedToPickedAndDropsColumn() async throws {
+        let path = NSTemporaryDirectory() + "catalog-\(UUID().uuidString).sqlite"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        do {
+            let queue = try DatabaseQueue(path: path)
+            var migrator = DatabaseMigrator()
+            Migration001Initial.register(in: &migrator)
+            Migration002RatingsAndFlags.register(in: &migrator)
+            Migration003Collections.register(in: &migrator)
+            Migration004FolderCollections.register(in: &migrator)
+            Migration005Presets.register(in: &migrator)
+            Migration006CollectionFolderPathIndex.register(in: &migrator)
+            try migrator.migrate(queue)
+            try await queue.write { db in
+                try db.execute(sql: """
+                    INSERT INTO photo (path, filename, importedAt, rating, isFlagged)
+                    VALUES ('/tmp/flagged.jpg', 'flagged.jpg', '2026-01-01 00:00:00', 3, 1),
+                           ('/tmp/plain.jpg', 'plain.jpg', '2026-01-01 00:00:00', 0, 0)
+                    """)
+            }
+        }
+
+        let db = try CatalogDatabase(path: path)
+        let photos = try await db.allPhotos()
+        XCTAssertEqual(photos.first { $0.filename == "flagged.jpg" }?.flagStatus, .picked)
+        XCTAssertEqual(photos.first { $0.filename == "flagged.jpg" }?.rating, 3)
+        XCTAssertEqual(photos.first { $0.filename == "plain.jpg" }?.flagStatus, FlagStatus.none)
+
+        let columns = try await DatabaseQueue(path: path).read { try $0.columns(in: "photo").map(\.name) }
+        XCTAssertFalse(columns.contains("isFlagged"))
+        XCTAssertTrue(columns.contains("flagStatus"))
     }
 
     // MARK: - Removal (D5, IMPROVEMENTS.md)

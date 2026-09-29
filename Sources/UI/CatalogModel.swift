@@ -85,7 +85,7 @@ final class CatalogModel: ObservableObject {
     /// A THRESHOLD ("N stars and up"), not exact match — `0` = no rating
     /// filter. See `LibraryFilterSort.apply`'s own doc comment.
     @Published var minimumRating: Int = 0
-    @Published var flaggedOnly: Bool = false
+    @Published var flagFilter: LibraryFlagFilter = .all
     @Published var searchText: String = ""
 
     /// What the Library grid actually renders — `photos` (the
@@ -100,7 +100,7 @@ final class CatalogModel: ObservableObject {
     var displayedPhotos: [Photo] {
         LibraryFilterSort.apply(
             to: photos, sort: sortOption, minimumRating: minimumRating,
-            flaggedOnly: flaggedOnly, searchText: searchText
+            flagFilter: flagFilter, searchText: searchText
         )
     }
 
@@ -110,7 +110,7 @@ final class CatalogModel: ObservableObject {
     func clearLibraryFilters() {
         sortOption = .dateOldest
         minimumRating = 0
-        flaggedOnly = false
+        flagFilter = .all
         searchText = ""
     }
 
@@ -795,20 +795,20 @@ final class CatalogModel: ObservableObject {
         }
     }
 
-    /// Sets `photo`'s flagged state — same shape/reasoning as `setRating`,
-    /// minus the clamp (a `Bool` has no invalid value to guard against).
-    func setFlagged(_ isFlagged: Bool, for photo: Photo) {
+    /// Sets `photo`'s pick/reject flag — same shape/reasoning as `setRating`,
+    /// minus the clamp (`FlagStatus` has no invalid value to guard against).
+    func setFlagStatus(_ status: FlagStatus, for photo: Photo) {
         guard let database, let id = photo.id else { return }
-        updatePhotoInPlace(id: id) { $0.isFlagged = isFlagged }
+        updatePhotoInPlace(id: id) { $0.flagStatus = status }
         Task.detached { [weak self] in
-            do { try await database.setFlagged(isFlagged, for: id) } catch { await self?.refresh() }
+            do { try await database.setFlagStatus(status, for: id) } catch { await self?.refresh() }
         }
     }
 
     /// Removes `photo` from the catalog (D5, IMPROVEMENTS.md) — catalog
     /// row only, the original file on disk is never touched (see
     /// `CatalogDatabase.deletePhoto`'s own doc comment). Local-first, same
-    /// shape/failure-resync reasoning as `setRating`/`setFlagged`, but
+    /// shape/failure-resync reasoning as `setRating`/`setFlagStatus`, but
     /// UNLIKE them this is permanent rather than a re-toggleable field, so
     /// it also prunes the two stale-reference gaps `toggleMembership`
     /// leaves for OTHER mutators (there, the entry is expected to resolve
@@ -970,7 +970,7 @@ final class CatalogModel: ObservableObject {
     }
 
     /// Toggles `photo`'s membership in `collection` — same local-first
-    /// shape and failure-resync reasoning as `setRating`/`setFlagged`,
+    /// shape and failure-resync reasoning as `setRating`/`setFlagStatus`,
     /// plus one case they don't have.
     ///
     /// GHOST-CELL CASE: when the sidebar is currently filtered to the very

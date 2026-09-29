@@ -8,7 +8,7 @@ import XCTest
 final class LibraryNavigationTests: XCTestCase {
     private func photo(id: Int64, filename: String, rating: Int = 0) -> Photo {
         Photo(id: id, path: "/tmp/\(filename)", filename: filename, fileSize: nil,
-              importedAt: Date(timeIntervalSince1970: 0), rating: rating, isFlagged: false)
+              importedAt: Date(timeIntervalSince1970: 0), rating: rating, flagStatus: .none)
     }
 
     private lazy var three = [
@@ -74,7 +74,7 @@ final class LibraryNavigationTests: XCTestCase {
             photo(id: 3, filename: "c.jpg", rating: 3)
         ]
         let displayed = LibraryFilterSort.apply(
-            to: rated, sort: .ratingHighToLow, minimumRating: 0, flaggedOnly: false, searchText: ""
+            to: rated, sort: .ratingHighToLow, minimumRating: 0, flagFilter: .all, searchText: ""
         )
         XCTAssertEqual(displayed.map(\.id), [2, 3, 1])
         XCTAssertEqual(LibraryNavigation.neighbor(of: "/tmp/b.jpg", in: displayed, offset: 1)?.id, 3)
@@ -92,7 +92,7 @@ final class LibraryNavigationTests: XCTestCase {
             photo(id: 3, filename: "c.jpg", rating: 3)
         ]
         let displayed = LibraryFilterSort.apply(
-            to: rated, sort: .dateOldest, minimumRating: 3, flaggedOnly: false, searchText: ""
+            to: rated, sort: .dateOldest, minimumRating: 3, flagFilter: .all, searchText: ""
         )
         XCTAssertEqual(displayed.map(\.id), [2, 3])
         XCTAssertNil(LibraryNavigation.neighbor(of: "/tmp/a.jpg", in: displayed, offset: 1))

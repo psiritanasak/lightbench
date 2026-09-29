@@ -20,6 +20,34 @@ enum LibrarySortOption: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Which pick/reject states the Library grid shows. `.all` is the default:
+/// hiding rejects by default would silently hide photos the user has.
+enum LibraryFlagFilter: CaseIterable, Identifiable, Sendable {
+    case all, picked, unflagged, rejected, notRejected
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .all: return "All Flags"
+        case .picked: return "Picked"
+        case .unflagged: return "Unflagged"
+        case .rejected: return "Rejected"
+        case .notRejected: return "Hide Rejected"
+        }
+    }
+
+    func matches(_ status: FlagStatus) -> Bool {
+        switch self {
+        case .all: return true
+        case .picked: return status == .picked
+        case .unflagged: return status == .none
+        case .rejected: return status == .rejected
+        case .notRejected: return status != .rejected
+        }
+    }
+}
+
 /// Pure, SwiftUI/GRDB-independent Library grid refinement — sort + rating/
 /// flag/filename filtering, applied entirely in memory to whatever source
 /// set `CatalogModel.photos` already holds (the sidebar's Collection/Folder
@@ -39,11 +67,11 @@ enum LibraryFilterSort {
     ///     empty (or whitespace-only) string means no search filter.
     static func apply(
         to photos: [Photo], sort: LibrarySortOption,
-        minimumRating: Int, flaggedOnly: Bool, searchText: String
+        minimumRating: Int, flagFilter: LibraryFlagFilter, searchText: String
     ) -> [Photo] {
         var result = photos
-        if flaggedOnly {
-            result = result.filter(\.isFlagged)
+        if flagFilter != .all {
+            result = result.filter { flagFilter.matches($0.flagStatus) }
         }
         if minimumRating > 0 {
             result = result.filter { $0.rating >= minimumRating }

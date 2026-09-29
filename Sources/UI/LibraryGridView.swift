@@ -360,8 +360,12 @@ struct LibraryGridView: View {
             if let digit = character.wholeNumberValue, (0...5).contains(digit) {
                 return setRatingOnFocused(digit, in: displayed)
             }
-            if character == "." || character == "f" || character == "F" {
-                return toggleFlagOnFocused(in: displayed)
+            switch character {
+            case ".", "f", "F": return setFlagOnFocused(nil, in: displayed)
+            case "p", "P": return setFlagOnFocused(.picked, in: displayed)
+            case "x", "X": return setFlagOnFocused(.rejected, in: displayed)
+            case "u", "U": return setFlagOnFocused(FlagStatus.none, in: displayed)
+            default: break
             }
         }
         return .ignored
@@ -417,18 +421,20 @@ struct LibraryGridView: View {
         return .handled
     }
 
-    private func toggleFlagOnFocused(in photos: [Photo]) -> KeyPress.Result {
+    /// `.`/`f` toggle Pick (a Rejected photo goes back to unflagged rather
+    /// than straight to Picked); `p`/`x`/`u` set Pick/Reject/Unflag directly.
+    private func setFlagOnFocused(_ status: FlagStatus?, in photos: [Photo]) -> KeyPress.Result {
         guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.path == path }) else {
             return .ignored
         }
-        catalog.setFlagged(!photo.isFlagged, for: photo)
+        catalog.setFlagStatus(status ?? photo.flagStatus.toggledPick, for: photo)
         advanceFocusIfNoLongerVisible(previousPath: path, previousList: photos)
         return .handled
     }
 
     /// Reviewer-caught: rating/flagging the focused photo can filter it
     /// OUT of `displayedPhotos` (e.g. rating it below `catalog.minimumRating`,
-    /// or unflagging it while `catalog.flaggedOnly` is on) — without this,
+    /// or unflagging it while `catalog.flagFilter` is `.picked`) — without this,
     /// focus would silently keep pointing at a now-invisible photo until
     /// the next arrow press reset it all the way back to the grid's first
     /// item. Instead, moves focus to whichever photo now occupies the SAME
@@ -460,16 +466,12 @@ struct LibraryGridView: View {
             }
             .frame(maxWidth: 130)
 
-            Button {
-                catalog.flaggedOnly.toggle()
-            } label: {
-                Image(systemName: catalog.flaggedOnly ? "flag.fill" : "flag")
+            Picker("Flag", selection: $catalog.flagFilter) {
+                ForEach(LibraryFlagFilter.allCases) { option in
+                    Text(option.label).tag(option)
+                }
             }
-            .buttonStyle(.bordered)
-            .foregroundStyle(catalog.flaggedOnly ? .yellow : .secondary)
-            .help("Flagged only")
-            .accessibilityLabel("Flagged only")
-            .accessibilityAddTraits(catalog.flaggedOnly ? [.isSelected] : [])
+            .frame(maxWidth: 150)
 
             Spacer(minLength: 12)
 
@@ -693,6 +695,7 @@ private struct LibraryThumbnailCell: View {
                             .frame(width: cellSize, height: cellSize)
                     }
                 }
+                .opacity(photo.flagStatus == .rejected ? 0.45 : 1)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(isMissing ? "\(photo.filename), missing" : photo.filename)
                 .accessibilityAddTraits(.isButton)
@@ -767,22 +770,23 @@ private struct LibraryThumbnailCell: View {
                 }
                 Spacer(minLength: 0)
                 Button {
-                    catalog.setFlagged(!photo.isFlagged, for: photo)
+                    catalog.setFlagStatus(photo.flagStatus.toggledPick, for: photo)
                 } label: {
                     // `.caption2`, matching `StarRatingRow`'s own icon
                     // size — see the `HStack`'s own doc comment above for
                     // the measured effect.
-                    Image(systemName: photo.isFlagged ? "flag.fill" : "flag")
+                    Image(systemName: photo.flagStatus.symbolName)
                         .font(.caption2)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(photo.isFlagged ? .yellow : .secondary)
+                .foregroundStyle(photo.flagStatus.tint)
                 .accessibilityLabel("Flag")
-                // D6 (IMPROVEMENTS.md): `.isSelected`, matching the
-                // selection checkbox's own idiom for the same "binary
-                // on/off state" shape above — one convention for both
-                // rather than mixing in `accessibilityValue` here too.
-                .accessibilityAddTraits(photo.isFlagged ? [.isSelected] : [])
+                .accessibilityValue(photo.flagStatus.accessibilityValue)
+                // D6 (IMPROVEMENTS.md): `accessibilityValue` (above)
+                // carries the three states (Picked/Rejected/Unflagged).
+                // `.isSelected` is kept for Picked only, for continuity
+                // with the selection checkbox's own D6 idiom.
+                .accessibilityAddTraits(photo.flagStatus == .picked ? [.isSelected] : [])
 
                 Menu {
                     ForEach(catalog.collections) { collection in
@@ -804,6 +808,30 @@ private struct LibraryThumbnailCell: View {
                             // into the item's own label instead.
                             .accessibilityElement(children: .combine)
                             .accessibilityLabel(isMember ? "\(collection.name), member" : collection.name)
+                        }
+                    }
+                    if !catalog.collections.isEmpty {
+                        Divider()
+                    }
+                    ForEach(FlagStatus.menuOrder, id: \.self) { status in
+                        Button {
+                            catalog.setFlagStatus(status, for: photo)
+                        } label: {
+                            HStack {
+                                Text(status.menuTitle)
+                                Spacer()
+                                if photo.flagStatus == status {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                            // D6 (IMPROVEMENTS.md): same fix as the
+                            // collection items above — the checkmark is
+                            // glyph-only, so fold the current state into
+                            // the item's label for VoiceOver.
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(
+                                photo.flagStatus == status ? "\(status.menuTitle), current" : status.menuTitle
+                            )
                         }
                     }
                     if isMissing {

@@ -7,10 +7,10 @@ import XCTest
 /// (`CropAspectMath`, `CompareLayout`, `ZoomPanGeometry`).
 final class LibraryFilterSortTests: XCTestCase {
     private func photo(
-        id: Int64, filename: String, importedAt: Date, rating: Int = 0, isFlagged: Bool = false
+        id: Int64, filename: String, importedAt: Date, rating: Int = 0, flagStatus: FlagStatus = .none
     ) -> Photo {
         Photo(id: id, path: "/tmp/\(filename)", filename: filename, fileSize: nil, importedAt: importedAt,
-              rating: rating, isFlagged: isFlagged)
+              rating: rating, flagStatus: flagStatus)
     }
 
     private let day0 = Date(timeIntervalSince1970: 0)
@@ -25,7 +25,7 @@ final class LibraryFilterSortTests: XCTestCase {
             photo(id: 2, filename: "b", importedAt: day0),
             photo(id: 3, filename: "c", importedAt: day1)
         ]
-        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 0, flaggedOnly: false, searchText: "")
+        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "")
         XCTAssertEqual(result.map(\.id), [2, 3, 1])
     }
 
@@ -35,7 +35,7 @@ final class LibraryFilterSortTests: XCTestCase {
             photo(id: 2, filename: "b", importedAt: day0),
             photo(id: 3, filename: "c", importedAt: day1)
         ]
-        let result = LibraryFilterSort.apply(to: photos, sort: .dateNewest, minimumRating: 0, flaggedOnly: false, searchText: "")
+        let result = LibraryFilterSort.apply(to: photos, sort: .dateNewest, minimumRating: 0, flagFilter: .all, searchText: "")
         XCTAssertEqual(result.map(\.id), [1, 3, 2])
     }
 
@@ -45,7 +45,7 @@ final class LibraryFilterSortTests: XCTestCase {
             photo(id: 2, filename: "b", importedAt: day0, rating: 5),
             photo(id: 3, filename: "c", importedAt: day0, rating: 0)
         ]
-        let result = LibraryFilterSort.apply(to: photos, sort: .ratingHighToLow, minimumRating: 0, flaggedOnly: false, searchText: "")
+        let result = LibraryFilterSort.apply(to: photos, sort: .ratingHighToLow, minimumRating: 0, flagFilter: .all, searchText: "")
         XCTAssertEqual(result.map(\.id), [2, 1, 3])
     }
 
@@ -57,7 +57,7 @@ final class LibraryFilterSortTests: XCTestCase {
             photo(id: 2, filename: "Photo 2.jpg", importedAt: day0),
             photo(id: 3, filename: "Photo 1.jpg", importedAt: day0)
         ]
-        let result = LibraryFilterSort.apply(to: photos, sort: .nameAZ, minimumRating: 0, flaggedOnly: false, searchText: "")
+        let result = LibraryFilterSort.apply(to: photos, sort: .nameAZ, minimumRating: 0, flagFilter: .all, searchText: "")
         XCTAssertEqual(result.map(\.id), [3, 2, 1])
     }
 
@@ -68,7 +68,7 @@ final class LibraryFilterSortTests: XCTestCase {
             photo(id: 1, filename: "a", importedAt: day0, rating: 0),
             photo(id: 2, filename: "b", importedAt: day0, rating: 3)
         ]
-        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 0, flaggedOnly: false, searchText: "")
+        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "")
         XCTAssertEqual(result.count, 2)
     }
 
@@ -78,20 +78,31 @@ final class LibraryFilterSortTests: XCTestCase {
             photo(id: 2, filename: "b", importedAt: day0, rating: 3),
             photo(id: 3, filename: "c", importedAt: day0, rating: 5)
         ]
-        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 3, flaggedOnly: false, searchText: "")
+        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 3, flagFilter: .all, searchText: "")
         XCTAssertEqual(Set(result.map(\.id)), [2, 3])
     }
 
-    // MARK: - Flagged filter
+    // MARK: - Flag filter
 
-    func testFlaggedOnlyExcludesUnflaggedPhotos() {
-        let photos = [
-            photo(id: 1, filename: "a", importedAt: day0, isFlagged: true),
-            photo(id: 2, filename: "b", importedAt: day0, isFlagged: false)
+    private var mixedFlags: [Photo] {
+        [
+            photo(id: 1, filename: "a", importedAt: day0, flagStatus: .picked),
+            photo(id: 2, filename: "b", importedAt: day0, flagStatus: .none),
+            photo(id: 3, filename: "c", importedAt: day0, flagStatus: .rejected)
         ]
-        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 0, flaggedOnly: true, searchText: "")
-        XCTAssertEqual(result.map(\.id), [1])
     }
+
+    private func ids(_ filter: LibraryFlagFilter) -> [Int64?] {
+        LibraryFilterSort.apply(
+            to: mixedFlags, sort: .dateOldest, minimumRating: 0, flagFilter: filter, searchText: ""
+        ).map(\.id)
+    }
+
+    func testFlagFilterAllKeepsEverything() { XCTAssertEqual(ids(.all), [1, 2, 3]) }
+    func testFlagFilterPickedKeepsOnlyPicked() { XCTAssertEqual(ids(.picked), [1]) }
+    func testFlagFilterUnflaggedKeepsOnlyUnflagged() { XCTAssertEqual(ids(.unflagged), [2]) }
+    func testFlagFilterRejectedKeepsOnlyRejected() { XCTAssertEqual(ids(.rejected), [3]) }
+    func testFlagFilterNotRejectedHidesRejected() { XCTAssertEqual(ids(.notRejected), [1, 2]) }
 
     // MARK: - Search
 
@@ -100,14 +111,14 @@ final class LibraryFilterSortTests: XCTestCase {
             photo(id: 1, filename: "IMG_0001.jpg", importedAt: day0),
             photo(id: 2, filename: "sunset.jpg", importedAt: day0)
         ]
-        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 0, flaggedOnly: false, searchText: "sun")
+        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "sun")
         XCTAssertEqual(result.map(\.id), [2])
     }
 
     func testSearchTrimsWhitespace() {
         let photos = [photo(id: 1, filename: "sunset.jpg", importedAt: day0)]
         let result = LibraryFilterSort.apply(
-            to: photos, sort: .dateOldest, minimumRating: 0, flaggedOnly: false, searchText: "  sunset  "
+            to: photos, sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "  sunset  "
         )
         XCTAssertEqual(result.map(\.id), [1])
     }
@@ -117,13 +128,13 @@ final class LibraryFilterSortTests: XCTestCase {
             photo(id: 1, filename: "a.jpg", importedAt: day0),
             photo(id: 2, filename: "b.jpg", importedAt: day0)
         ]
-        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 0, flaggedOnly: false, searchText: "")
+        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "")
         XCTAssertEqual(result.count, 2)
     }
 
     func testWhitespaceOnlySearchTextIsNoFilter() {
         let photos = [photo(id: 1, filename: "a.jpg", importedAt: day0)]
-        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 0, flaggedOnly: false, searchText: "   ")
+        let result = LibraryFilterSort.apply(to: photos, sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "   ")
         XCTAssertEqual(result.count, 1)
     }
 
@@ -131,13 +142,13 @@ final class LibraryFilterSortTests: XCTestCase {
 
     func testFiltersCombineAndSortIsAppliedLast() {
         let photos = [
-            photo(id: 1, filename: "beach.jpg", importedAt: day2, rating: 4, isFlagged: true),
-            photo(id: 2, filename: "beach.jpg", importedAt: day0, rating: 5, isFlagged: true),
-            photo(id: 3, filename: "beach.jpg", importedAt: day1, rating: 2, isFlagged: true),
-            photo(id: 4, filename: "beach.jpg", importedAt: day0, rating: 5, isFlagged: false)
+            photo(id: 1, filename: "beach.jpg", importedAt: day2, rating: 4, flagStatus: .picked),
+            photo(id: 2, filename: "beach.jpg", importedAt: day0, rating: 5, flagStatus: .picked),
+            photo(id: 3, filename: "beach.jpg", importedAt: day1, rating: 2, flagStatus: .picked),
+            photo(id: 4, filename: "beach.jpg", importedAt: day0, rating: 5, flagStatus: .none)
         ]
         let result = LibraryFilterSort.apply(
-            to: photos, sort: .dateNewest, minimumRating: 3, flaggedOnly: true, searchText: "beach"
+            to: photos, sort: .dateNewest, minimumRating: 3, flagFilter: .picked, searchText: "beach"
         )
         // id 3 excluded (rating < 3), id 4 excluded (not flagged); 1 and 2
         // remain, newest first.
@@ -145,7 +156,7 @@ final class LibraryFilterSortTests: XCTestCase {
     }
 
     func testEmptyInputReturnsEmptyOutput() {
-        let result = LibraryFilterSort.apply(to: [], sort: .dateOldest, minimumRating: 0, flaggedOnly: false, searchText: "")
+        let result = LibraryFilterSort.apply(to: [], sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "")
         XCTAssertTrue(result.isEmpty)
     }
 }

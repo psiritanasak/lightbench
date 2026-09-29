@@ -144,16 +144,16 @@ final class CatalogModelTests: XCTestCase {
         }
     }
 
-    func testSetFlaggedUpdatesLocallyAndPersists() async throws {
+    func testSetFlagStatusUpdatesLocallyAndPersists() async throws {
         let model = await makeModel()
         let photo = try XCTUnwrap(model.photos.first)
-        XCTAssertFalse(try XCTUnwrap(model.photos.first).isFlagged)
+        XCTAssertEqual(try XCTUnwrap(model.photos.first).flagStatus, FlagStatus.none)
 
-        model.setFlagged(true, for: photo)
+        model.setFlagStatus(.rejected, for: photo)
 
-        XCTAssertTrue(try XCTUnwrap(model.photos.first).isFlagged)
+        XCTAssertEqual(try XCTUnwrap(model.photos.first).flagStatus, .rejected)
         try await waitUntil("flag to reach the database") {
-            try await self.database.allPhotos().first { $0.path == photo.path }?.isFlagged == true
+            try await self.database.allPhotos().first { $0.path == photo.path }?.flagStatus == .rejected
         }
     }
 

@@ -65,6 +65,7 @@ final class CatalogDatabase: Sendable {
         Migration004FolderCollections.register(in: &migrator)
         Migration005Presets.register(in: &migrator)
         Migration006CollectionFolderPathIndex.register(in: &migrator)
+        Migration007PickRejectFlags.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 
@@ -188,11 +189,11 @@ final class CatalogDatabase: Sendable {
         }
     }
 
-    /// Sets `photoID`'s flagged state.
-    func setFlagged(_ isFlagged: Bool, for photoID: Int64) async throws {
+    /// Sets `photoID`'s pick/reject flag.
+    func setFlagStatus(_ status: FlagStatus, for photoID: Int64) async throws {
         try await dbQueue.write { db in
             try Photo.filter(Photo.Columns.id == photoID)
-                .updateAll(db, Photo.Columns.isFlagged.set(to: isFlagged))
+                .updateAll(db, Photo.Columns.flagStatus.set(to: status))
         }
     }
 
@@ -341,7 +342,7 @@ final class CatalogDatabase: Sendable {
     }
 
     /// Renames `id` to `name` (D5, IMPROVEMENTS.md) — the project's first
-    /// `UPDATE` on any table other than `photo` (`setRating`/`setFlagged`
+    /// `UPDATE` on any table other than `photo` (`setRating`/`setFlagStatus`
     /// above are the only prior precedent for this shape). Trimming/empty
     /// validation happens in `CatalogModel`, not here — this method trusts
     /// its input, matching `createCollection`'s own split of concerns.

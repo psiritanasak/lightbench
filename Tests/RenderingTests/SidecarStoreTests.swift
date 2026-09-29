@@ -115,7 +115,7 @@ final class SidecarStoreTests: XCTestCase {
 
         let photo = Photo(
             id: 1, path: photoURL.path, filename: photoURL.lastPathComponent,
-            fileSize: 0, importedAt: Date(), rating: 0, isFlagged: false
+            fileSize: 0, importedAt: Date(), rating: 0, flagStatus: .none
         )
         XCTAssertEqual(PhotoExporter.loadEditState(for: photo), state)
         if case .decoded(let decoded) = SidecarStore.read(forPhotoAt: photoURL) {

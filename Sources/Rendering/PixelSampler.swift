@@ -51,10 +51,20 @@ enum PixelSampler {
         var count = 0
         for pixelIndex in 0..<(width * height) {
             let offset = pixelIndex * 4
-            guard buffer[offset + 3] >= minAlpha else { continue }
-            sumR += Double(buffer[offset])
-            sumG += Double(buffer[offset + 1])
-            sumB += Double(buffer[offset + 2])
+            let a = Double(buffer[offset + 3])
+            // `a > 0` guards the divide below against a future caller
+            // passing `minAlpha <= 0` — no current call site does (all 3
+            // real callers use the default 0.5), but `minAlpha` is a public
+            // parameter, and 0/0 would produce a NaN that could reach
+            // `WhiteBalanceSolver` or a persisted Color Range/Point Color
+            // target, silently failing every later sidecar write.
+            guard a > 0, Float(a) >= minAlpha else { continue }
+            // `CIContext.render(_:toBitmap:...)` returns PREMULTIPLIED
+            // RGBA — divide by alpha before using color values (D25; same
+            // fix as `ImageAverageColor.compute`/`ImageToneStatistics`).
+            sumR += Double(buffer[offset]) / a
+            sumG += Double(buffer[offset + 1]) / a
+            sumB += Double(buffer[offset + 2]) / a
             count += 1
         }
         guard count > 0 else { return nil }

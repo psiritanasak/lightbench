@@ -1739,7 +1739,7 @@ implementation. Worth a Hue Range slider (or narrower default windows)
 if foliage-adjacent false-positives turn out to matter in practice on
 real photos.
 
-### D25. `ImageAverageColor`/`PixelSampler` read `CIContext.render`'s premultiplied output as if it were straight (reviewer-caught, Auto Tone planning session)
+### D25. `ImageAverageColor`/`PixelSampler` read `CIContext.render`'s premultiplied output as if it were straight (reviewer-caught, Auto Tone planning session) — FIXED 2026-09-29
 
 Found while building `ImageToneStatistics` (Auto Tone's own statistics
 sampler, `Sources/Rendering/ImageToneStatistics.swift`): `CIContext.
@@ -1748,19 +1748,53 @@ row/column commonly lands at a fractional alpha (still passing a
 `>= 0.5` qualifying guard) whose RGB has therefore been scaled down by
 that alpha. `ImageToneStatistics` now divides by alpha before use (see
 its own doc comment for the measured before/after numbers) — `Sources/
-Rendering/ImageAverageColor.swift:70-85` (the gray-world mean behind Fix
-Color Cast) and `Sources/Rendering/PixelSampler.swift:50-59` (the WB
-eyedropper's box sample) read the same premultiplied buffer without
-un-premultiplying first, and share the identical latent bug.
+Rendering/ImageAverageColor.swift`'s `compute(of:)` (the gray-world mean
+behind Fix Color Cast) and `Sources/Rendering/PixelSampler.swift`'s
+`averageColor(in:at:radius:minAlpha:)` (the WB eyedropper's box sample)
+read the same premultiplied buffer without un-premultiplying first, and
+shared the identical latent bug.
 
-Not fixed here — out of scope for the diff that found it, and likely
-low real-world impact for both: `ImageAverageColor`'s own 0.05...0.95
-luma exclusion band already throws out most near-edge/near-transparent
-readings this would affect, and `PixelSampler`'s tiny 5x5 box sample is
-rarely centered exactly on a resampled edge. Worth a real measurement
-(the same "temporary harness, deleted" technique `ImageToneStatistics`'s
-own fix used) before deciding whether either is worth fixing — a
-plausible v1 read is "real but small," not "definitely fine."
+**Fixed**: both now divide R/G/B by alpha (after the existing alpha
+threshold guard, before any downstream use — in `ImageAverageColor`
+specifically before the luma exclusion gate, so that gate also sees the
+corrected value) — the same pattern `ImageToneStatistics` already
+established. One new bitmap-backed test per file
+(`testPremultipliedAlphaDoesNotBiasTheAverage`/
+`testPremultipliedAlphaDoesNotBiasTheSample`), since every existing
+fixture in both files was a `CIImage(color:).cropped(to:)` constant
+generator — Core Image can fold those through rendering without ever
+exercising a real premultiply/unpremultiply round trip, so none of them
+could have caught this bug (the same gap `ImageToneStatisticsTests
+.bitmapGrayImage`'s own doc comment already documents for its sibling
+sampler). The new `bitmapColorImage` helper takes the INTENDED STRAIGHT
+color/alpha but stores PREMULTIPLIED bytes — verified empirically during
+implementation, not assumed: an initial attempt storing straight values
+directly produced doubled output, because `CIImage(bitmapData:...)`
+round-trips its raw buffer through `render(_:toBitmap:...)` UNCHANGED,
+with no premultiply/unpremultiply conversion of its own, so only
+premultiplied input actually reproduces a real premultiplied-source
+scenario. Both fixes mutation-tested (reverting each, confirming its own
+new test fails, reproducing the halved premultiplied values). 1361 tests
+(2 new).
+
+This also retroactively closes a narrower, previously-accepted gap in
+`ImageDocumentModel.pickColorRangeTarget`'s own doc comment (a
+semi-transparent Color Range tap recording a luminance target
+`ColorRange.cikernel`'s own unpremultiplied math could never exactly
+match) — that doc comment is now updated to point here instead of
+describing the gap as open.
+
+Reviewer (Opus, color-math change): FIX FIRST → APPROVE. Round 1 caught
+a stale doc comment in `ImageDocumentModel.pickColorRangeTarget` that
+this same fix had made false (it described the premultiplied-read gap as
+an accepted, unfixed limitation needing a future return-type change —
+now fixed, so rewritten to say so) and a defensive hardening gap: no
+current caller passes `PixelSampler.averageColor`'s `minAlpha` below its
+0.5 default, but the parameter is public, and `minAlpha <= 0` would let
+`a == 0` through the guard into the new division, producing a NaN that
+could reach `WhiteBalanceSolver` or a persisted Color Range/Point Color
+target and silently fail every later sidecar write — fixed with an
+`a > 0` guard ahead of the existing threshold check.
 
 ### D26. Auto Tone's Black Point saturates to its own maximum for nearly every photo (reviewer-caught, design note, not blocking)
 

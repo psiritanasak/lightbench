@@ -10,6 +10,37 @@ final class PixelSamplerTests: XCTestCase {
         return CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: size, height: size))
     }
 
+    /// A REAL bitmap-backed image (not a constant-color generator) — same
+    /// discipline `ImageToneStatisticsTests.bitmapGrayImage`'s own doc
+    /// comment documents: a constant generator can be folded through
+    /// rendering WITHOUT ever rasterizing a real premultiply/unpremultiply
+    /// round trip, so it can't exercise D25's bug at all. Takes the
+    /// intended STRAIGHT (r, g, b, a) but stores PREMULTIPLIED bytes
+    /// (`r*a`, `g*a`, `b*a`, `a`) — empirically verified (a throwaway
+    /// probe, not assumed): `CIImage(bitmapData:...)` round-trips its raw
+    /// buffer through `CIContext.render(_:toBitmap:...)` UNCHANGED, with no
+    /// premultiply/unpremultiply conversion of its own, so feeding it
+    /// straight values here would silently test something other than the
+    /// premultiplied-source scenario this fixture needs to exercise (a real
+    /// premultiplied `CGImageAlphaInfo.premultipliedLast` source, matching
+    /// what `render(_:toBitmap:...)` itself always returns, regardless of
+    /// the source's own representation).
+    private func bitmapColorImage(r: Double, g: Double, b: Double, a: Double, size: Int = 64) -> CIImage {
+        var data = [Float](repeating: 0, count: size * size * 4)
+        for pixelIndex in 0..<(size * size) {
+            let offset = pixelIndex * 4
+            data[offset] = Float(r * a)
+            data[offset + 1] = Float(g * a)
+            data[offset + 2] = Float(b * a)
+            data[offset + 3] = Float(a)
+        }
+        let cfData = Data(bytes: data, count: data.count * MemoryLayout<Float>.size)
+        return CIImage(
+            bitmapData: cfData, bytesPerRow: size * 16,
+            size: CGSize(width: size, height: size), format: .RGBAf, colorSpace: linearSpace
+        )
+    }
+
     func testSolidImageAveragesToItsOwnColor() {
         let image = solidColorImage(r: 0.6, g: 0.3, b: 0.1)
         let sample = PixelSampler.averageColor(in: image, at: CGPoint(x: 32, y: 32))
@@ -61,5 +92,24 @@ final class PixelSamplerTests: XCTestCase {
         let sample = PixelSampler.averageColor(in: cropped, at: CGPoint(x: 25, y: 20))
 
         XCTAssertEqual(sample?.r ?? -1, 0.4, accuracy: 0.001)
+    }
+
+    /// D25: `CIContext.render(_:toBitmap:...)` returns PREMULTIPLIED RGBA —
+    /// `averageColor(in:at:radius:minAlpha:)` read R/G/B directly, with only
+    /// an alpha-threshold guard, never dividing by alpha first. A pixel
+    /// with fractional alpha still at/above `minAlpha` had its RGB scaled
+    /// down by that alpha, biasing the sample. Straight color
+    /// (0.6, 0.3, 0.1) at alpha 0.5 premultiplies to (0.3, 0.15, 0.05, 0.5)
+    /// — exactly at the default `minAlpha` threshold, so this still
+    /// qualifies pre- and post-fix; only the recovered color differs.
+    /// Pre-fix, this would have read back the halved (0.3, 0.15, 0.05)
+    /// premultiplied triple instead.
+    func testPremultipliedAlphaDoesNotBiasTheSample() {
+        let image = bitmapColorImage(r: 0.6, g: 0.3, b: 0.1, a: 0.5)
+        let sample = PixelSampler.averageColor(in: image, at: CGPoint(x: 32, y: 32))
+
+        XCTAssertEqual(sample?.r ?? -1, 0.6, accuracy: 0.005)
+        XCTAssertEqual(sample?.g ?? -1, 0.3, accuracy: 0.005)
+        XCTAssertEqual(sample?.b ?? -1, 0.1, accuracy: 0.005)
     }
 }

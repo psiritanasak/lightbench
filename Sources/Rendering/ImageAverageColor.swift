@@ -67,14 +67,21 @@ enum ImageAverageColor {
         var count = 0
         for pixelIndex in 0..<(width * height) {
             let offset = pixelIndex * 4
-            let r = Double(buffer[offset])
-            let g = Double(buffer[offset + 1])
-            let b = Double(buffer[offset + 2])
             let a = Double(buffer[offset + 3])
             // Same reasoning as PixelSampler: a mostly-transparent margin
             // (e.g. revealed by straighten/perspective) shouldn't dilute
             // the average with meaningless transparent content.
             guard a >= 0.5 else { continue }
+
+            // `CIContext.render(_:toBitmap:...)` returns PREMULTIPLIED
+            // RGBA — divide by alpha before using color values (D25;
+            // `ImageToneStatistics.swift` already fixed the identical bug
+            // for its own sampler). A pixel with fractional alpha still
+            // above the `>= 0.5` guard has its raw R/G/B scaled down by
+            // that alpha, biasing both the luma gate below and the mean.
+            let r = Double(buffer[offset]) / a
+            let g = Double(buffer[offset + 1]) / a
+            let b = Double(buffer[offset + 2]) / a
 
             let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
             guard luma > minLuma, luma < maxLuma else { continue }

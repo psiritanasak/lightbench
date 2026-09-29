@@ -167,6 +167,26 @@ stray "round N" labels and a factual mismatch about which prior
 measurement the dense re-scan actually found irreproducible, plus this
 non-destructive-invariant note being missing — all fixed. APPROVE.
 
+**D25 SHIPPED (2026-09-29)** — `ImageAverageColor.compute` (the
+gray-world sampler behind Fix Color Cast) and `PixelSampler.averageColor`
+(the WB eyedropper's box sample) both now un-premultiply before use,
+closing the same premultiplied-RGBA bug `ImageToneStatistics` already
+fixed for its own sampler. One new bitmap-backed regression test per
+file (the existing fixtures were all constant generators, which can't
+exercise a real premultiply/unpremultiply round trip), both mutation-
+tested (reverting each fix reproduces the halved premultiplied values).
+Reviewer (Opus): FIX FIRST → APPROVE — caught a stale doc comment in
+`ImageDocumentModel.pickColorRangeTarget` this fix had made false (now
+updated to say "fixed by D25" instead of describing an open gap) and a
+defensive hardening gap (`PixelSampler.averageColor`'s public `minAlpha`
+parameter could let `a == 0` through into the new divide if ever passed
+`<= 0`, producing a NaN — no real caller does today, all 3 use the 0.5
+default, but a one-line `a > 0` guard closes it regardless). Also
+retroactively closes a narrower gap this same premultiplied-read bug
+caused in Color Range's own eyedropper (a semi-transparent tap recording
+a target `ColorRange.cikernel`'s unpremultiplied math couldn't exactly
+match). 1361 tests (2 new).
+
 **D20's numeric-readout half SHIPPED (2026-09-29)** — a small `Text`
 caption ("H +137° / S 42%") under Color Grading's Hue/Saturation wheel,
 `AdjustTabView.colorGradingWheelReadout(for:)`. Fixes the "2 of 3 axes
@@ -1871,19 +1891,17 @@ nearly any photo) is the one specific open design question to weigh
 while doing that — all 3 of this session's own test cases independently
 confirmed that saturation happening exactly as D26 describes.
 
-Available: Enhance/Super Resolution (the one remaining unstarted
-Tier-2 item); Color Grading Slice B's own follow-ups — live-verifying
-the `AngularGradient` painted-wheel convention on screen (flagged
-DERIVED, not measured, in `ColorWheelGeometry.angularGradientFraction`'s
-doc comment) and IMPROVEMENTS.md D20 (a numeric Hue/Saturation readout);
-IMPROVEMENTS.md D22 (Point Color's missing luminance-selection axis,
-needs its own design pass); IMPROVEMENTS.md D23 (Transform Scale/
-Aspect's minification-aliasing gap); IMPROVEMENTS.md D25 (the same
-premultiplied-alpha read bug `ImageToneStatistics` fixed for itself,
-still latent in `ImageAverageColor`/`PixelSampler`); IMPROVEMENTS.md D27
-(the 3 History panel nits logged this session); IMPROVEMENTS.md D28 (a
-pre-existing `saveSidecarNow` load-during-save race onto the wrong
+Available: Color Grading Slice B's own follow-up — live-verifying the
+`AngularGradient` painted-wheel convention on screen (flagged DERIVED,
+not measured, in `ColorWheelGeometry.angularGradientFraction`'s doc
+comment; D20's own numeric readout half is now SHIPPED, see the
+"Current phase" entry); IMPROVEMENTS.md D22 (Point Color's missing
+luminance-selection axis, needs its own design pass); IMPROVEMENTS.md
+D27 (the 3 History panel nits logged this session); IMPROVEMENTS.md D28
+(a pre-existing `saveSidecarNow` load-during-save race onto the wrong
 sidecar, found while closing Copy/Paste Settings' own race — affects
-every ordinary debounced save, not just batch paste). The mutual-exclusion
-mode enum this list used to name as overdue is now SHIPPED — see the
-"Current phase" entry at the top of this file.
+every ordinary debounced save, not just batch paste). D23 (Transform
+Scale/Aspect's minification-aliasing gap) and D25 (the premultiplied-
+alpha read bug) are now both SHIPPED — see the "Current phase" entry at
+the top of this file. The mutual-exclusion mode enum this list used to
+name as overdue is now SHIPPED too — see the same entry.

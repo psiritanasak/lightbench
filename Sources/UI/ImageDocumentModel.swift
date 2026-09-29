@@ -809,21 +809,17 @@ final class ImageDocumentModel: ObservableObject {
     /// itself would already have been cleared by `isEditingMask`'s own
     /// `.onChange`, per `ContentView.swift`).
     ///
-    /// Reviewer-flagged, accepted, not fixed here: `PixelSampler
-    /// .averageColor` returns PREMULTIPLIED values (verified: a 0.6-alpha
-    /// sample reads ~0.6x too low), while `ColorRange.cikernel` unpremultiplies
+    /// FIXED by D25 (2026-09-29): `PixelSampler.averageColor` previously
+    /// returned PREMULTIPLIED values (verified: a 0.6-alpha sample read
+    /// ~0.6x too low) while `ColorRange.cikernel` unpremultiplies
     /// (`s.rgb / s.a`) before its own HSL/luma math — so a tap on a
     /// semi-transparent region (alpha in `[minAlpha, 1)`, e.g. a corner a
-    /// straighten/perspective transform partially reveals) records a
-    /// LUMINANCE target the kernel can never exactly match. Narrow in
-    /// practice (ordinary photo content is opaque; `PixelSampler`'s own
-    /// `minAlpha: 0.5` default already excludes the fully-transparent
-    /// case) and not touched here — fixing it means widening
-    /// `PixelSampler.averageColor`'s return type to also carry alpha,
-    /// which is shared, already-reviewed code also used by
-    /// `pickWhiteBalance` (same latent gap there, never reported before
-    /// this slice) — a separate future session's change, not a drive-by
-    /// edit bundled into this one.
+    /// straighten/perspective transform partially reveals) recorded a
+    /// LUMINANCE target the kernel could never exactly match.
+    /// `PixelSampler.averageColor` now divides by alpha before returning
+    /// (the same fix `ImageAverageColor.compute`/`ImageToneStatistics`
+    /// already applied for their own samplers), so this call site — and
+    /// `pickWhiteBalance`'s identical call — now agree with the kernel.
     func pickColorRangeTarget(maskID: UUID, normalizedX u: Double, normalizedY v: Double) {
         guard let currentImage else { return }
         guard let maskIndex = editState.masks.firstIndex(where: { $0.id == maskID }) else { return }

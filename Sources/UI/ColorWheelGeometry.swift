@@ -101,10 +101,14 @@ enum ColorWheelGeometry {
     /// a first draft's `AngularGradient` convention assumption shipped
     /// backwards and was reviewer-caught before ever landing.
     ///
-    /// DERIVED (by reading SwiftUI's documented behavior, not a runtime
-    /// probe — flag this for live visual re-verification too, per this
-    /// codebase's own convention that only an actual run may be called
-    /// MEASURED): that convenience initializer is
+    /// Derived from SwiftUI's documented behavior, then LIVE-VERIFIED on
+    /// screen (2026-09-29, Release build, scratch fixture): red painted at
+    /// the right edge, yellow-green at the top, cyan at the left, blue at the
+    /// lower left, magenta at the lower right; a click at the top edge read
+    /// approximately H +90° (caption partly clipped) and one at the left edge
+    /// read H 180° / S 100%, each with the
+    /// puck sitting on the matching painted color. That convenience
+    /// initializer is
     /// `startAngle: .zero, endAngle: .degrees(360)`,
     /// and SwiftUI's `Angle` zero points along +x (3 o'clock, screen right
     /// edge) sweeping CLOCKWISE with increasing angle in this y-down view

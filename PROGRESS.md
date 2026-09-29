@@ -908,8 +908,8 @@ both Slice A (backend: 9 `EditState` fields, `ColorGrading.cikernel`, the
 into a new "Color Grading" section in `AdjustTabView`) are committed,
 reviewed (Slice A: 2 rounds; Slice B: 3 rounds, FIX FIRST → FIX FIRST →
 APPROVE), and all 1088 tests pass. See CLAUDE.md's Color Grading entry for
-the full reviewer-round write-up. NOT yet live-verified — the
-`AngularGradient` painted-wheel convention is DERIVED from documentation,
+the full reviewer-round write-up. NOT yet live-verified at the time (since live-verified 2026-09-29) — the
+`AngularGradient` painted-wheel convention was DERIVED from documentation,
 not confirmed on screen; see IMPROVEMENTS.md D20 for the separately-logged
 keyboard/AT/numeric-readout gap (Hue/Saturation are pointer-only with no
 value display; only Luminance has a real slider).
@@ -1407,7 +1407,7 @@ Also relabeled a doc comment from MEASURED to DERIVED (it was a claim read
 from SwiftUI's documentation, not an actual run — this codebase's own
 CLAUDE.md convention reserves MEASURED for the latter). Round 3: APPROVE.
 
-**Not yet live-verified**: the `AngularGradient` convention itself (fraction
+**Not yet live-verified (since live-verified 2026-09-29)**: the `AngularGradient` convention itself (fraction
 0 at the wheel's right edge, sweeping clockwise) rests on reading SwiftUI's
 documented behavior, not on-screen confirmation that the painted color
 under the puck actually matches the tint being applied — flagged in both
@@ -1891,11 +1891,12 @@ nearly any photo) is the one specific open design question to weigh
 while doing that — all 3 of this session's own test cases independently
 confirmed that saturation happening exactly as D26 describes.
 
-Available: Color Grading Slice B's own follow-up — live-verifying the
-`AngularGradient` painted-wheel convention on screen (flagged DERIVED,
-not measured, in `ColorWheelGeometry.angularGradientFraction`'s doc
-comment; D20's own numeric readout half is now SHIPPED, see the
-"Current phase" entry); IMPROVEMENTS.md D22 (Point Color's missing
+Done 2026-09-29: Color Grading Slice B's `AngularGradient` painted-wheel
+convention is now LIVE-VERIFIED on screen (painted wheel and puck agree at
+approximately hue 90° and at 180°; see
+`ColorWheelGeometry.angularGradientFraction`'s doc comment). D20's own
+numeric readout half is also SHIPPED (see the "Current phase" entry).
+Available: IMPROVEMENTS.md D22 (Point Color's missing
 luminance-selection axis, needs its own design pass); IMPROVEMENTS.md
 D27 (the 3 History panel nits logged this session); IMPROVEMENTS.md D28
 (a pre-existing `saveSidecarNow` load-during-save race onto the wrong

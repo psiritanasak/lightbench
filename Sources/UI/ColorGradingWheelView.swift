@@ -112,9 +112,9 @@ struct ColorGradingWheelView: View {
     /// — that function (not this view) owns the geometric convention and
     /// carries this control's own unit tests, per this codebase's "pure
     /// geometry gets direct XCTest coverage, not eyeballed through a
-    /// gesture" convention. **Not yet live-verified** — see the Slice B
-    /// plan's own Verification section. If the convention assumption is
-    /// wrong, the fix is confined to `angularGradientFraction` alone, not
+    /// gesture" convention. Live-verified 2026-09-29 (see
+    /// `angularGradientFraction`'s doc comment). If the convention ever
+    /// proves wrong, the fix is confined to `angularGradientFraction` alone, not
     /// this view's structure.
     ///
     /// An explicit CLOSING stop at location `1.0`, duplicating the first

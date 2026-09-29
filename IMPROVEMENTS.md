@@ -1309,7 +1309,40 @@ placing straight-line segments between keyboard-driven points, closer to
 Red-Eye's tap-to-place model than to a freehand drag) is one candidate
 starting point, not a decided design.
 
-### D20. Color Grading Slice B's wheel has no keyboard/AT path AND no numeric readout for 2 of its 3 axes (reviewer-caught, Slice B)
+### D20. Color Grading Slice B's wheel has no keyboard/AT path AND no numeric readout for 2 of its 3 axes (reviewer-caught, Slice B) — numeric readout SHIPPED 2026-09-29
+
+**Update: the numeric-readout half is shipped**, exactly the cheapest fix
+this entry's own text named — a small `Text` caption under the wheel
+(`AdjustTabView.colorGradingWheelReadout(for:)`, called from
+`colorGradingSection` right after `ColorGradingWheelView`), formatted
+"H +137° / S 42%" (Hue: `"%+.0f°"`, matching the global HSL Hue slider's
+own format; Saturation: an UNSIGNED `"%.0f%%"`, since Color Grading's own
+Saturation field is 0...1 with no negative direction, unlike Luminance's
+bipolar `"%+.0f%%"` right below it). Being ordinary, always-visible text
+(not hidden), it's automatically VoiceOver-readable with no
+`.accessibilityValue` plumbing needed — no code change to the wheel's own
+`.accessibilityHidden(true)` at all. The keyboard/AT-DRAG half (actually
+moving the puck without a mouse) remains explicitly deferred, unchanged —
+this entry's own text called that "a full D8-style keyboard-driven
+interaction redesign," a separate, bigger future session. No new tests
+(SwiftUI glue, matching this codebase's "verified live, not unit-tested"
+convention for this class of change) — build+test verified, 1358 tests
+unchanged. **Not live-verified this session** — an unrelated screen-
+automation incident (focus unexpectedly landed on a different app mid-
+session, briefly surfacing an unrelated file dialog) cut that pass short;
+the change itself is low-risk (one non-interactive `Text` view, no
+gesture/interaction code touched) so this was judged not worth another
+live-verification attempt in the same session.
+
+Reviewer: APPROVE, 2 non-blocking nits logged for completeness, neither
+worth their own fix: (1) the readout shows the RAW stored Saturation,
+not `EditPipeline.applyColorGrading`'s own rendered/clamped value
+(`clampedSaturation`) — only divergent for an out-of-range value a
+hand-edited sidecar could produce, since this app's own slider/wheel
+controls can't generate one; (2) Hue at exactly 0 (or a theoretical
+negative zero) reads "+0°"/"-0°" — cosmetic, and the pre-existing global
+HSL Hue slider already has the identical behavior, so this isn't a new
+inconsistency.
 
 `ColorGradingWheelView` is `.accessibilityHidden(true)`, matching the
 established WB-eyedropper/Red-Eye/pan-overlay deferral precedent (D8) —

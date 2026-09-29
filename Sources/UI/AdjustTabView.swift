@@ -237,6 +237,33 @@ struct AdjustTabView: View {
         }
     }
 
+    /// IMPROVEMENTS.md D20: `ColorGradingWheelView` is `.accessibilityHidden`
+    /// and shows Hue/Saturation only via the puck's own visual position — no
+    /// numeric value anywhere, sighted or not, unlike Luminance's own
+    /// `EditSliderRow` right below. This plain, always-visible `Text` is the
+    /// cheapest fix that entry names: it doubles as a sighted numeric
+    /// readout AND, simply by being real (non-hidden) text, a VoiceOver-
+    /// readable one too — no `.accessibilityValue` plumbing needed. The
+    /// wheel's own drag interaction stays pointer-only (unchanged, still
+    /// deferred per that entry) — this does not add keyboard control of the
+    /// puck itself.
+    ///
+    /// Hue: degrees, -180...180 (`EditState.shadowHue`'s own doc comment) —
+    /// same convention and format (`"%+.0f°"`) the global HSL Hue slider
+    /// already uses. Saturation: 0...1, a magnitude with no negative
+    /// direction (unlike `hslSaturation`'s bipolar -1...1) — formatted as an
+    /// UNSIGNED percentage, deliberately not the `"%+.0f%%"` this file uses
+    /// for bipolar fields like Luminance right below, since a "+" on a value
+    /// that can't go negative would be misleading.
+    private func colorGradingWheelReadout(for range: ColorGradingRange) -> some View {
+        let hue = colorGradingHueBinding(for: range).wrappedValue
+        let saturation = colorGradingSaturationBinding(for: range).wrappedValue
+        return Text(String(format: "H %+.0f° / S %.0f%%", hue, saturation * 100))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Adjust")
@@ -634,6 +661,7 @@ struct AdjustTabView: View {
                 saturation: colorGradingSaturationBinding(for: panel.selectedColorGradingRange)
             )
             .id(panel.selectedColorGradingRange)
+            colorGradingWheelReadout(for: panel.selectedColorGradingRange)
             EditSliderRow(
                 label: "Luminance",
                 value: colorGradingLuminanceBinding(for: panel.selectedColorGradingRange),

@@ -7,6 +7,22 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
+**D20's numeric-readout half SHIPPED (2026-09-29)** — a small `Text`
+caption ("H +137° / S 42%") under Color Grading's Hue/Saturation wheel,
+`AdjustTabView.colorGradingWheelReadout(for:)`. Fixes the "2 of 3 axes
+have no value shown anywhere, sighted or not" gap D20 logged during
+Color Grading Slice B's own review — Luminance already had a real
+`EditSliderRow`. The keyboard/AT-drag half stays deferred (its own
+bigger future session, unchanged). See IMPROVEMENTS.md's own D20 entry
+for the exact formatting rationale. 1358 tests unchanged (SwiftUI glue,
+no new test, matching this codebase's own convention for this class of
+change). **Not live-verified** — an unrelated screen-automation incident
+this session (focus briefly landed on a different app, surfacing an
+unrelated file dialog with real personal filenames visible in one
+screenshot before it was caught and deleted) cut that pass short; judged
+not worth a retry given how low-risk this specific change is (a single
+non-interactive `Text` view, no gesture code touched).
+
 **D16 follow-up: region-growth INVESTIGATED and MEASURED, plus a bigger
 unplanned discovery (2026-09-28, Phase 8 slice 2).** IMPROVEMENTS.md's
 D16 entry left one unverified lead standing: whether per-mask Clarity's

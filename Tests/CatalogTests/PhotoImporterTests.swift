@@ -149,6 +149,50 @@ final class PhotoImporterTests: XCTestCase {
         XCTAssertNil(PhotoImporter.scanFolderTree(at: root))
     }
 
+    /// Regression pin, not a bug fix: `root/loop` is a real on-disk symlink
+    /// pointing BACK at `root` itself. `scanNode` was never actually
+    /// vulnerable to recursing into this (see its own doc comment —
+    /// `URL.resourceValues(forKeys: [.isDirectoryKey])` reports the LINK's
+    /// own type, not the resolved target's, so a symlinked directory
+    /// already reports `isDirectory == false` today, verified directly).
+    /// This test exists so a future change that made `scanNode` follow
+    /// symlinks (e.g. swapping in `resolvingSymlinksInPath()`) would be
+    /// caught immediately, rather than only failing much later as a hang.
+    func testScanFolderTreeDoesNotRecurseIntoASelfReferencingSymlinkCycle() throws {
+        let root = try makeDir("cycle-root")
+        touch("real.jpg", in: root)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("loop"), withDestinationURL: root
+        )
+
+        let node = try XCTUnwrap(PhotoImporter.scanFolderTree(at: root))
+
+        XCTAssertEqual(node.imageFiles.map(\.lastPathComponent), ["real.jpg"])
+        XCTAssertTrue(node.children.isEmpty, "the symlinked directory must not be recursed into at all")
+    }
+
+    /// The same regression pin as the test above, for a longer cycle
+    /// through two real folders (A's own child symlinks to B, B's own
+    /// child symlinks back to A) rather than a directly self-referencing
+    /// one — same underlying already-correct behavior, a different shape.
+    func testScanFolderTreeDoesNotRecurseIntoAMutualSymlinkCycle() throws {
+        let a = try makeDir("cycle2/a")
+        let b = try makeDir("cycle2/b")
+        touch("in_a.jpg", in: a)
+        touch("in_b.jpg", in: b)
+        try FileManager.default.createSymbolicLink(at: a.appendingPathComponent("to_b"), withDestinationURL: b)
+        try FileManager.default.createSymbolicLink(at: b.appendingPathComponent("to_a"), withDestinationURL: a)
+
+        let root = try XCTUnwrap(PhotoImporter.scanFolderTree(at: tempDir.appendingPathComponent("cycle2")))
+
+        let aNode = try XCTUnwrap(root.children.first(where: { $0.url.lastPathComponent == "a" }))
+        let bNode = try XCTUnwrap(root.children.first(where: { $0.url.lastPathComponent == "b" }))
+        XCTAssertEqual(aNode.imageFiles.map(\.lastPathComponent), ["in_a.jpg"])
+        XCTAssertEqual(bNode.imageFiles.map(\.lastPathComponent), ["in_b.jpg"])
+        XCTAssertTrue(aNode.children.isEmpty)
+        XCTAssertTrue(bNode.children.isEmpty)
+    }
+
     // MARK: - confirmedActiveFolderRoot (D5, IMPROVEMENTS.md — missing-file detection)
 
     func testConfirmedActiveFolderRootMatchesAPhotoDirectlyUnderAnActiveFolder() {

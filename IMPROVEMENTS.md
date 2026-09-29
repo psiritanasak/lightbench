@@ -1737,6 +1737,41 @@ established boundary for anything panel/sandbox-adjacent — see
 `ensureAccessActive`'s own reviewer history for the same limitation
 applied elsewhere).
 
+### D33. Ghost selection IDs make Export/Add-to-Collection UI silently misleading (reviewer-caught while correcting a stale nit, 2026-09-29)
+
+Found while investigating whether `CatalogModel.selectedPhotoIDs` not
+being pruned in `refresh()` was a real gap (it isn't — see PROGRESS.md's
+"Open reviewer issues" for the full story: this is a deliberate design,
+pinned by `CatalogModelTests.
+testAddSelectedPhotosExcludesAPhotoNoLongerVisibleInTheGrid`, and the 3
+actual consumers — `addSelectedPhotos`, `relocateSelectedPhotos`,
+`selectedPhotos` — all correctly intersect against `photos` before acting).
+
+But 2 UI sites read the RAW, unintersected `catalog.selectedPhotoIDs`
+directly, not through one of those safe consumers:
+- `ContentView.exportButtonTitle` (`Sources/UI/ContentView.swift`, ~1406)
+  shows `"Export Selected (\(catalog.selectedPhotoIDs.count))…"` — if
+  every ID in the selection has since become a ghost (toggled out of the
+  currently-viewed collection, same mechanism the pinned test exercises),
+  the button shows a nonzero count with nothing actually checked in the
+  grid. The button itself stays SAFE (`.disabled(photosToExport.isEmpty
+  || …)`, line ~1349, and `photosToExport`, lines ~41-42, correctly
+  filters ghosts out via `catalog.isSelected($0)`, leaving it empty) — so
+  it's disabled, not clickable-but-silently-empty. The actual gap is
+  narrower than "exports nothing": a misleading nonzero count on a
+  DISABLED button, with no fallback to "export the current filtered set"
+  the way a genuinely-empty selection gets.
+- The "Add to Collection" toolbar menu's own gate (`ContentView.swift`,
+  ~1352) is `if !catalog.selectedPhotoIDs.isEmpty` — same raw check, so
+  the menu can appear with nothing visibly checked in the grid.
+
+Narrow: only reachable via the exact "toggle a photo out of the
+currently-viewed collection while it's selected, don't touch the grid
+selection again" sequence the pinned test itself constructs, not
+ordinary use. Not fixed here (docs-only session); a real fix would
+route both sites through the same `photos`-intersected count/check the 3
+real consumers already use, rather than reading `selectedPhotoIDs` raw.
+
 ### D12. Brush mask v1 scope cuts (Phase 7 slice 4) — deferred, not forgotten
 
 Logged together since they're all small, independent follow-ups to the

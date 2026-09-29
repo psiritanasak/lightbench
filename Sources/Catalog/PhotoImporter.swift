@@ -61,6 +61,24 @@ enum PhotoImporter {
         return node.imageFiles.isEmpty && node.children.isEmpty ? nil : node
     }
 
+    /// A symlinked directory is never recursed into here, but not because
+    /// of any special-case guard: `URL.resourceValues(forKeys:
+    /// [.isDirectoryKey])` reports the LINK's own type (lstat semantics),
+    /// not the resolved target's — a symlink to a directory reports
+    /// `isDirectory == false`, same as a symlink to a file, verified
+    /// directly (a small standalone script against real on-disk symlinks,
+    /// not assumed from documentation) rather than trusted from a
+    /// plausible-sounding first-draft comment that turned out to describe
+    /// the OPPOSITE of Foundation's real behavior. So `scanNode` was never
+    /// actually vulnerable to unbounded recursion through a symlink cycle
+    /// — a symlinked entry falls to the `else` branch below and is
+    /// silently excluded (no image extension), never appended to
+    /// `children`. `Tests/CatalogTests/PhotoImporterTests.swift`'s
+    /// symlink-cycle tests exist as regression PINS for this real,
+    /// already-correct, easy-to-accidentally-regress behavior (e.g. if a
+    /// future change swapped in `resolvingSymlinksInPath()` or a
+    /// `FileManager` option that follows links) — not as evidence of a
+    /// bug this function once had.
     private static func scanNode(at folder: URL) -> FolderScanNode {
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: folder,

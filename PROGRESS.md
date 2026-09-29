@@ -746,12 +746,48 @@ See CLAUDE.md's roadmap for the full phase list and
 
 ## Open reviewer issues
 None currently open or blocking. Every reviewer round on record ended in
-APPROVE before its commit, per this project's workflow rule. A handful of old,
-explicitly non-blocking nits (pre-Phase-6 era — e.g. `selectedPhotoIDs` not
-pruned on every `refresh()`, no index on `collection.folderPath`, no
-symlink-loop guard in `PhotoImporter.scanNode`) were carried forward for a
-long time without being escalated or acted on; see `docs/PROGRESS_HISTORY.md`
-if picking up cheap cleanup work, but none of them block anything current.
+APPROVE before its commit, per this project's workflow rule.
+
+Of the 3 old, pre-Phase-6-era nits this section used to carry forward
+unresolved, all 3 are now closed as of 2026-09-29 (Phase 8 cleanup slice):
+- `collection.folderPath` had no SQL index — SHIPPED, `Migrations/
+  006_collection_folder_path_index.swift` (append-only, per this
+  project's own migration convention).
+- `PhotoImporter.scanNode` "no symlink-loop guard" was ALSO a stale nit,
+  not a real gap — reviewer-caught (mutation-tested: removing the code
+  this session first added left both new tests passing unchanged).
+  `URL.resourceValues(forKeys: [.isDirectoryKey])` reports the LINK's own
+  type (lstat semantics), not the resolved target's — a symlinked
+  directory already reports `isDirectory == false`, verified directly
+  against real on-disk symlinks, not assumed. So `scanNode` was never
+  actually vulnerable to the unbounded-recursion hazard the nit assumed;
+  a symlinked entry silently falls to the "not an image" branch instead.
+  No code changed in the end (an added guard was reverted down to a
+  correcting doc comment on `scanNode` itself, once mutation-testing
+  disproved it did anything). 2 new tests kept, reworded as regression
+  PINS for this real, already-correct, easy-to-accidentally-regress
+  behavior (e.g. if a future change swapped in
+  `resolvingSymlinksInPath()`) — not evidence of a bug fixed.
+- `CatalogModel.selectedPhotoIDs` "not pruned on every `refresh()`" was
+  investigated and is ALSO a stale nit, not a real gap — `refresh()`
+  itself doesn't prune, and a real regression test
+  (`CatalogModelTests.testAddSelectedPhotosExcludesAPhotoNoLongerVisibleInTheGrid`)
+  pins that it must not (pruning there would fail it). The 3 real
+  consumers (`addSelectedPhotos`, `relocateSelectedPhotos`,
+  `selectedPhotos`) all correctly intersect against `photos` before
+  acting instead — a reviewer already chose that fix, at the point of
+  use, during the batch-add-to-collection feature (IMPROVEMENTS.md,
+  ~line 480). (An earlier draft of this very bullet claimed the reason
+  was "so a photo doesn't lose its selection when switching back to All
+  Photos" — reviewer-caught as FALSE: `selectedFilter`'s own `didSet`
+  already clears `selectedPhotoIDs` on every filter switch, unconditionally,
+  so that specific scenario was never real. The actual reason is simpler:
+  the 3 consumers above already guard safely, so `refresh()`-level pruning
+  would be redundant enforcement, not a needed one.) One real, narrow gap
+  the same investigation surfaced: 2 OTHER UI sites read the raw,
+  unintersected set directly and can show a misleading nonzero
+  count/menu for an all-ghost selection — logged, not fixed, as
+  IMPROVEMENTS.md D33.
 
 **Process note**: the project's `reviewer` agent only registers when the
 session is started from `~/photoapp-starter`, not `~` — this has caused a

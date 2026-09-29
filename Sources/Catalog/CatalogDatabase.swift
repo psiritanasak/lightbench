@@ -64,6 +64,7 @@ final class CatalogDatabase: Sendable {
         Migration003Collections.register(in: &migrator)
         Migration004FolderCollections.register(in: &migrator)
         Migration005Presets.register(in: &migrator)
+        Migration006CollectionFolderPathIndex.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 

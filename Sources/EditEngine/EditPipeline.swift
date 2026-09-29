@@ -1189,7 +1189,14 @@ enum EditPipeline {
     /// currently is) — matching domain research's own best guess for
     /// Lightroom's real curve shape ("most likely exponential... so that
     /// +a and -a are exact inverses"), not just a bug patch.
-    private static let kMaxTransformAspectStretch: Double = 0.6
+    // `internal` (not `private`), not by convention here — D23,
+    // reviewer-caught (review pass 3): `EditPipelineTests.rawTransformScaleNoClamp` needs
+    // to reference this constant directly rather than keep its own
+    // hardcoded copy, which had already drifted out of sync once (the
+    // test's own doc comment said "1.6" instead of the constant's actual
+    // `0.6` value — 1.6 is `1 + kMaxTransformAspectStretch`, not the
+    // constant itself).
+    static let kMaxTransformAspectStretch: Double = 0.6
 
     private static func transformScaleActive(_ state: EditState) -> Bool {
         state.transformScale != 1 || state.transformAspect != 0
@@ -1198,9 +1205,12 @@ enum EditPipeline {
     /// Lightroom's own Transform-panel "Scale"/"Aspect" (Aspect labeled
     /// "Stretch" in this app's UI — see `EditState.transformAspect`'s own
     /// doc comment for why). Both are diagonal affine scales about the
-    /// SAME center, so they're combined into ONE `CGAffineTransform` before
-    /// a single resample — diagonal matrices commute, so unlike this
-    /// pipeline's non-commuting COLOR stages, no swap-and-remeasure is
+    /// SAME center, so they're combined into ONE resample (a
+    /// `CILanczosScaleTransform` call, see the PREFILTERED RESAMPLE
+    /// paragraph below — no longer a raw `CGAffineTransform` as of
+    /// 2026-09-29, though the "one combined resample, not two sequential
+    /// ones" structure is unchanged) — diagonal matrices commute, so unlike
+    /// this pipeline's non-commuting COLOR stages, no swap-and-remeasure is
     /// needed to justify combining them; it's a provable fact, not a
     /// measured one. For any FINITE `state.transformScale`/`transformAspect`
     /// (the only inputs this struct's fields can ever hold — a `NaN` could
@@ -1227,20 +1237,89 @@ enum EditPipeline {
     /// position, and a real design question (which stage's "center" should
     /// win) worth its own session, not a silent scope decision.
     ///
-    /// KNOWN, UNFIXED LIMITATION (reviewer-caught): `.transformed(by:)` is a
-    /// plain affine resample with no prefiltering. At the clamp extremes
-    /// this stage can minify by up to ~3.2x on one axis (`transformScale:
-    /// 0.5, transformAspect: 1` gives `sx = 0.5/(1 + kMaxTransformAspectStretch)
-    /// = 0.3125` at the current `kMaxTransformAspectStretch = 0.6` — this
-    /// figure moves with that constant and was re-derived, not left stale,
-    /// when the constant was live-tuned from `0.3`; the retune measurably
-    /// WORSENED this worst case from ~2.6x) — unlike Straighten/
-    /// Perspective, which never minify, this is the first stage in the
-    /// Transform/Distort group that can alias a full-resolution photo.
-    /// `CILanczosScaleTransform`-style prefiltering would fix it; not done
-    /// here — the common case (Scale near 1.0, clearing a modest keystone
-    /// wedge) is a mild zoom, not a strong minify, so this is scoped as a
-    /// follow-up rather than blocking v1 (see IMPROVEMENTS.md D23).
+    /// PREFILTERED RESAMPLE (IMPROVEMENTS.md D23, fixed 2026-09-29): the
+    /// scale/stretch step itself runs through `CILanczosScaleTransform`,
+    /// not a plain `.transformed(by:)` affine resample — at the clamp
+    /// extremes this stage can minify by up to ~3.2x on one axis
+    /// (`transformScale: 0.5, transformAspect: 1` gives `sx =
+    /// 0.5/(1 + kMaxTransformAspectStretch) = 0.3125` at the current
+    /// `kMaxTransformAspectStretch = 0.6`), a real aliasing risk on
+    /// high-frequency content a naive resample would not filter (a real
+    /// measurement, IMPROVEMENTS.md's own D23 entry, found this roughly
+    /// HALVES a fine-stripe aliasing signature vs. the old mechanism — a
+    /// genuine improvement, not a complete elimination). `CILanczosScale
+    /// Transform`'s `scale`/`aspectRatio` parameters were verified
+    /// empirically (a throwaway probe against real `CIImage` extents, not
+    /// assumed from documentation) to produce `outputWidth = inputWidth *
+    /// scale * aspectRatio`, `outputHeight = inputHeight * scale` — so
+    /// this function's own independently-derived `sx`/`sy` map onto the
+    /// filter's parameters as `scale = sy`, `aspectRatio = sx / sy`, for
+    /// ANY `sx`/`sy`, not just this function's own specific formula. The
+    /// SAME probe also confirmed the filter scales about the ABSOLUTE
+    /// ORIGIN `(0,0)`, exactly like a raw `CGAffineTransform(scaleX:y:)`
+    /// would — so the translate-to-origin/translate-back sandwich below is
+    /// unchanged from the pre-fix version; only the MIDDLE step's
+    /// mechanism changed.
+    ///
+    /// REVIEWER-CAUGHT: `CILanczosScaleTransform`'s windowed-sinc kernel
+    /// has NEGATIVE side lobes (unlike the old plain affine's bilinear-ish
+    /// resample) — at a hard alpha/color edge (the transparent-margin
+    /// boundary this stage's own shrink creates, or ANY hard edge in the
+    /// source content) this genuinely RINGS, not just rounds. This figure
+    /// needed reconciling TWICE before it stabilized: 3 disagreeing FIRST
+    /// drafts (this comment, PROGRESS.md, and an independent reviewer
+    /// probe each cited a DIFFERENT number, none naming the same fixture/
+    /// sweep/scan-density) were followed by a first RECONCILIATION attempt
+    /// (a single unified "1.0864/-0.0739" figure, from a sparse per-pixel-
+    /// call scan) that ALSO turned out not to reproduce — a later dense
+    /// (every-pixel) re-scan of the EXACT SAME fixtures/corners that
+    /// reconciliation claimed to describe showed the sparse scan had
+    /// silently missed the true extrema. The figure actually depends on
+    /// the hard edge's own sub-pixel phase relative to
+    /// the resample grid, which shifts with fixture size — so this is
+    /// reported as a RANGE across 3 fixture sizes (64/100/200px), not one
+    /// fixed number (`EditPipelineTests.testD23DenseRingingReconciliation`,
+    /// a throwaway harness, densely scanning every pixel via
+    /// `renderFullFrame`, not sparse per-pixel calls, run then deleted —
+    /// its own reference check lives on permanently inside
+    /// `testTransformScaleClampBoundsRingingAtHardEdges` below): WITHOUT
+    /// the clamp, alpha overshoots as high as 1.06-1.10 and color
+    /// undershoots as low as roughly -0.06 to -0.063 — both well past
+    /// ordinary floating-point noise, and both magnify- as well as
+    /// minify-side (this ISN'T only a minification-aliasing problem).
+    /// Alpha above 1 breaks `over` compositing math (`src + bg*(1-a)`
+    /// SUBTRACTS background when `a > 1`) and corrupts export clamping
+    /// differently than the live preview; negative linear color feeds
+    /// directly into every downstream perceptual stage (Dehaze/Vignette/
+    /// Clarity/NR/Sharpen/Grain). Fixed with `CIFilter.colorClamp()`
+    /// (min/max `(0,0,0,0)`/`(1e6,1e6,1e6,1)` — ASYMMETRIC, see this same
+    /// clamp's own inline comment at its call site below for why color's
+    /// upper bound is deliberately left open) immediately after the
+    /// Lanczos filter, BEFORE the translate-back/crop/composite — measured
+    /// (same harness) to reliably pull alpha's OVERSHOOT (the only
+    /// direction actually observed on these fixtures — negative alpha
+    /// never appeared, so alpha's lower bound is a defensive clamp, not
+    /// one proven necessary by measurement) and color's undershoot EXACTLY
+    /// back into range in every case tried, with NO effect on
+    /// already-in-range pixels (an interior, fully-opaque, correctly-
+    /// colored pixel read bit-identical before and after clamping). A
+    /// residual IS left on purpose: the bright-side overshoot
+    /// on COLOR (not alpha) can still read above 1.0 after the clamp —
+    /// deliberately, to preserve highlight headroom. `CIColorClamp`
+    /// operates on UNPREMULTIPLIED values (divide by alpha, clamp,
+    /// multiply back), so clamping alpha to 1 also removes the PORTION of
+    /// color's own overshoot that was riding on alpha's overshoot — what's
+    /// left is only the color channel's own genuine ringing, measured
+    /// (same harness) at a constant ~1.06 across all 3 fixture sizes tried
+    /// (vs. 1.09-1.12 pre-clamp) — a real, smaller, but still faint Lanczos
+    /// halo on SDR content; this is the accepted tradeoff, not a residual
+    /// bug. This is NOT the same hazard `EditPipeline.kGrainZeroPoint`'s
+    /// own doc comment documents for `CIColorClamp`/`CIColorMatrix`-family
+    /// filters silently corrupting `CIRandomGenerator`'s NON-premultiplied
+    /// synthetic noise via a hidden premultiply round-trip — this stage's
+    /// own image data is genuinely, already premultiplied real image
+    /// content, the exact case that round-trip is CORRECT for, confirmed
+    /// by the same measurement finding no corruption on interior pixels.
     ///
     /// UNLIKE Perspective/Flip (which preserve extent by construction —
     /// corners move inward, or land back on the identical rect) and UNLIKE
@@ -1283,10 +1362,43 @@ enum EditPipeline {
         let sx = scale / aspectFactor
         let sy = scale * aspectFactor
 
-        let transform = CGAffineTransform(translationX: -extent.midX, y: -extent.midY)
-            .concatenating(CGAffineTransform(scaleX: sx, y: sy))
-            .concatenating(CGAffineTransform(translationX: extent.midX, y: extent.midY))
-        let transformed = image.transformed(by: transform).cropped(to: extent)
+        let centered = image.transformed(by: CGAffineTransform(translationX: -extent.midX, y: -extent.midY))
+        // Fallback matches the PRE-fix mechanism exactly (a raw affine
+        // scale), not a silent "skip scaling entirely" no-op — `outputImage`
+        // returning `nil` here is practically unreachable (no documented
+        // failure mode for this filter with finite, in-range parameters),
+        // but a real fallback is one line and costs nothing.
+        let plainAffineFallback = centered.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+        let lanczos = CIFilter.lanczosScaleTransform()
+        lanczos.inputImage = centered
+        lanczos.scale = Float(sy)
+        lanczos.aspectRatio = Float(sx / sy)
+        let scaled = lanczos.outputImage ?? plainAffineFallback
+        // `CIColorClamp`, not skippable — see this function's own
+        // REVIEWER-CAUGHT paragraph above for the measured ringing this
+        // closes (alpha up to 1.06-1.10, color down to roughly -0.06,
+        // depending on fixture size — see that paragraph for why this is a
+        // range, not one fixed number). ONLY the LOWER bound on color (no
+        // negative linear light)
+        // and BOTH bounds on alpha (0...1, since alpha above 1 breaks `over`
+        // compositing) — self-caught, NOT reviewer-caught: an EARLIER draft
+        // (before any reviewer saw this diff) clamped color's UPPER bound
+        // to 1 too, which silently destroyed highlight
+        // headroom this stage is explicitly required to preserve
+        // (`testTransformScalePreservesHighlightHeadroom`'s own "should not
+        // be clamped, unlike curves" — caught immediately by that existing
+        // test failing, not reasoned about in advance). A large finite
+        // upper bound on R/G/B (not `.infinity` — `CIColorClamp` documents
+        // undefined behavior for a non-finite bound), no cap at all in
+        // practice for any value this pipeline can produce.
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = scaled
+        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+        clamp.maxComponents = CIVector(x: 1e6, y: 1e6, z: 1e6, w: 1)
+        let clamped = clamp.outputImage ?? scaled
+        let transformed = clamped
+            .transformed(by: CGAffineTransform(translationX: extent.midX, y: extent.midY))
+            .cropped(to: extent)
         let transparentCanvas = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: extent)
         return transformed.composited(over: transparentCanvas)
     }

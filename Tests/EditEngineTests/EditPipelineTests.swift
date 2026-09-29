@@ -2329,6 +2329,24 @@ final class EditPipelineTests: XCTestCase {
 
         XCTAssertEqual(pixel(of: output, at: 2, 2).a, 0, "corner falls outside the shrunk content's span")
 
+        // D23, 2026-09-29: once the resample mechanism became
+        // `CILanczosScaleTransform`, this MEASURED as 1.0000012 instead of
+        // exactly 1.0 — the windowed-sinc kernel's own ringing overshooting
+        // past 1 at this near-edge interior point (see `applyTransformScale`'s
+        // own REVIEWER-CAUGHT doc paragraph). Reads back exactly 1.0 again
+        // (exact equality, not `accuracy:`) since that same paragraph's
+        // `CIColorClamp` fix — bounding alpha to `[0,1]` — pulls this
+        // specific overshoot back down exactly. Unlike
+        // `testTransformScaleClearsPerspectiveWedges` below, whose own
+        // residual is a genuine sub-1.0 floating-point artifact the clamp's
+        // upper bound can't touch, this one really did need the mechanism
+        // fix, not just a loosened assertion — though this ONE pixel's own
+        // 1.2e-6 overshoot is an incidental witness, not the clamp's real
+        // regression guard; see `testTransformScaleClampBoundsRingingAtHardEdges`
+        // below for that (reviewer-caught, review pass 2: this comment
+        // previously implied this assertion alone was sufficient coverage
+        // for the clamp's removal, which is fragile — a slightly different
+        // fixture or sample point could miss it entirely).
         let interior = pixel(of: output, at: 40, 60)
         XCTAssertEqual(interior.a, 1, "interior point stays covered")
         XCTAssertEqual(
@@ -2461,8 +2479,215 @@ final class EditPipelineTests: XCTestCase {
         let perspectiveOnly = EditPipeline.apply(EditState(verticalPerspective: 1), to: input)
         XCTAssertEqual(pixel(of: perspectiveOnly, at: 10, 90).a, 0, "the wedge exists with Perspective alone")
 
+        // `accuracy:`, not exact equality (D23, 2026-09-29): measured
+        // 0.99999994, not exactly 1.0 — mutation-tested (temporarily
+        // reverted to exact equality, confirmed it genuinely still fails
+        // even with `applyTransformScale`'s own `CIColorClamp` fix in
+        // place) to be ordinary sub-1.0 floating-point summation noise
+        // from the windowed-sinc kernel, NOT the same overshoot-past-1
+        // ringing that fix closes — a clamp's upper bound can't pull a
+        // value UP to 1, only down. Unlike
+        // `testTransformScaleBelowOneExposesTransparentMargin` above (whose
+        // own residual WAS the overshoot case, and reads back exact again
+        // post-fix), this one genuinely needs the tolerance.
         let withScale = EditPipeline.apply(EditState(verticalPerspective: 1, transformScale: 1.5), to: input)
-        XCTAssertEqual(pixel(of: withScale, at: 10, 90).a, 1, "Scale, running after Perspective, clears the same wedge")
+        XCTAssertEqual(
+            pixel(of: withScale, at: 10, 90).a, 1, accuracy: accuracy,
+            "Scale, running after Perspective, clears the same wedge"
+        )
+    }
+
+    /// Reviewer-caught gap (review pass 1): the only thing that previously
+    /// caught the clamp's removal was an incidental 1.2e-6 alpha overshoot
+    /// at ONE interior pixel of `testTransformScaleBelowOneExposesTransparentMargin`
+    /// — fragile, and undershoot on color had no guard at all. This is a
+    /// dedicated regression: the 4 worst-case corners of the clamped
+    /// (scale, aspect) range, on 2 hard-edge fixtures (a solid opaque
+    /// square, isolating the ALPHA edge the crop-back margin creates; a
+    /// pure color step edge, fully opaque, isolating COLOR ringing with no
+    /// alpha edge in the way), asserting the shipped `CIColorClamp`'s own
+    /// bounds hold everywhere: alpha in `[0,1]`, color's LOWER bound at 0
+    /// (color's upper bound is deliberately left unchecked — see
+    /// `applyTransformScale`'s own doc comment for why headroom above 1.0
+    /// must survive). Runs through `EditPipeline.apply` itself, not a
+    /// hand-rolled duplicate, so it guards what actually ships.
+    ///
+    /// REVIEWER-CAUGHT, review pass 2: an earlier version of this test
+    /// sampled only a strided subset of pixels (`stride(by: 8)`/
+    /// `stride(by: 4)`), which is fragile — a partial regression (e.g.
+    /// only alpha's bound clamped, not color's) could land between sampled
+    /// points and pass undetected; on the color assertions specifically,
+    /// the strided version only ever grazed a -0.0002-magnitude residual,
+    /// nowhere near the real undershoot, so it was barely exercising the
+    /// guard at all. Fixed to render the FULL frame into one buffer per
+    /// case (via `renderFullFrame`, no pixel skipped) and, per that pass's
+    /// own suggestion, added an explicit non-vacuousness check: the SAME
+    /// corners/fixtures run through `rawTransformScaleNoClamp` (the
+    /// pre-clamp reference geometry, kept permanently for this purpose,
+    /// not deleted as a "temporary" harness) must show a real violation
+    /// SOMEWHERE across the sweep, proving this test's assertions on the
+    /// CLAMPED path are actually discriminating, not accidentally
+    /// always-true — aggregated across all 4 corners, not asserted
+    /// per-corner, since not every individual corner rings equally hard
+    /// on this fixture (e.g. `(1.5, 1)` alone only reaches about -0.0054,
+    /// well under a strict per-corner threshold, even though the worst
+    /// corner in the same sweep reaches roughly -0.06 — a per-corner
+    /// assertion would be a false negative on the milder corners).
+    ///
+    /// REVIEWER-CAUGHT, review pass 3: this non-vacuousness check only
+    /// covered color's lower bound — alpha's upper bound (the compositing-
+    /// breaking direction) had a mutation-tested guard but no equivalent
+    /// self-proving check. Added a matching aggregate reference-alpha-max
+    /// check. That same pass also caught that the alpha assertions above
+    /// were `XCTAssert`-per-pixel inside the scan loop (floods the log
+    /// with ~21,000 failures and measurably slows a genuine regression's
+    /// run) — fixed to aggregate min/max first, one assertion after the
+    /// scan, matching the color path's own existing shape.
+    ///
+    /// Mutation-tested repeatedly across all 3 review passes, 2026-09-29:
+    /// fails without the clamp, and the reference violation is real and
+    /// large (measured via `testD23DenseRingingReconciliation`, a
+    /// temporary harness, run then deleted, densely scanning every pixel
+    /// of these exact fixtures/corners at 3 sizes: alpha overshoots as
+    /// high as 1.06-1.10, color undershoots as low as roughly -0.06, color
+    /// overshoots as high as 1.09-1.12 depending on the fixture's own edge
+    /// phase relative to the pixel grid — the magnitude is fixture-size-
+    /// dependent, not one fixed number, which is why 3 earlier drafts of
+    /// this figure disagreed with each other). With the clamp applied,
+    /// alpha reads back EXACTLY 1.0 and color's lower bound reads back
+    /// EXACTLY 0.0 in every case tried — the accepted residual is ONLY on
+    /// color's upper bound (~1.06, constant across fixture sizes in what
+    /// was tried), which is left open on purpose for highlight headroom,
+    /// not a discrepancy. NOTE: on these fixtures, alpha's own LOWER bound
+    /// (`>= 0`) is never actually the thing at risk — negative alpha never
+    /// appeared even without the clamp, only overshoot above 1 — so that
+    /// ONE specific assertion is a defensive check, not one this test's
+    /// own non-vacuousness proof covers (unlike alpha's upper bound and
+    /// color's lower bound, which the 2 reference checks above DO prove
+    /// are genuinely exercised).
+    func testTransformScaleClampBoundsRingingAtHardEdges() {
+        let alphaEdgeFixture = solidColorImage(r: 1, g: 1, b: 1, a: 1, size: 200)
+        let colorEdgeFixture = stepEdgeImage(lo: 0, hi: 1, size: 200, alpha: 1)
+        let worstCaseCorners: [(Double, Double)] = [(0.5, 1), (0.5, -1), (1.5, 1), (1.5, -1)]
+
+        // Non-vacuousness check is aggregated across ALL corners, not
+        // asserted per-corner: measured (`testD23DenseRingingReconciliation`)
+        // that not every individual corner rings equally hard on this
+        // fixture — e.g. (1.5, 1) alone shows only a ~-0.0054 undershoot,
+        // well under a per-corner threshold, even though the WORST corner
+        // across the same sweep reaches roughly -0.06. A per-corner
+        // assertion would be a false negative on the milder corners; what
+        // actually matters is that AT LEAST ONE corner in this sweep
+        // exercises a real violation, proving the sweep as a whole isn't
+        // vacuous.
+        var worstReferenceMinColor: Float = .infinity
+        var worstReferenceMaxAlpha: Float = -.infinity
+
+        for (scale, aspect) in worstCaseCorners {
+            let state = EditState(transformScale: scale, transformAspect: aspect)
+
+            // Aggregated (min/max first, ONE assertion after the scan), not
+            // an `XCTAssert` per pixel — reviewer-caught: asserting inside
+            // the loop floods the log with ~21,000 individual failures and
+            // measurably slows the run whenever this test genuinely fails,
+            // for no extra discriminating power over a plain min/max check.
+            var clampedMaxAlpha: Float = -.infinity
+            var clampedMinAlpha: Float = .infinity
+            var clampedMinColorFromAlphaFixture: Float = .infinity
+            let alphaBuf = renderFullFrame(EditPipeline.apply(state, to: alphaEdgeFixture))
+            for i in stride(from: 0, to: alphaBuf.count, by: 4) {
+                clampedMaxAlpha = max(clampedMaxAlpha, alphaBuf[i + 3])
+                clampedMinAlpha = min(clampedMinAlpha, alphaBuf[i + 3])
+                clampedMinColorFromAlphaFixture = min(clampedMinColorFromAlphaFixture, alphaBuf[i])
+            }
+            XCTAssertLessThanOrEqual(clampedMaxAlpha, 1, "scale \(scale) aspect \(aspect)")
+            XCTAssertGreaterThanOrEqual(clampedMinAlpha, 0, "scale \(scale) aspect \(aspect)")
+            XCTAssertGreaterThanOrEqual(clampedMinColorFromAlphaFixture, 0, "scale \(scale) aspect \(aspect)")
+
+            let colorBuf = renderFullFrame(EditPipeline.apply(state, to: colorEdgeFixture))
+            var clampedMinColor: Float = .infinity
+            for i in stride(from: 0, to: colorBuf.count, by: 4) {
+                clampedMinColor = min(clampedMinColor, colorBuf[i], colorBuf[i + 1], colorBuf[i + 2])
+            }
+            XCTAssertGreaterThanOrEqual(clampedMinColor, 0, "scale \(scale) aspect \(aspect)")
+
+            let referenceColorBuf = renderFullFrame(rawTransformScaleNoClamp(colorEdgeFixture, scale: scale, aspect: aspect))
+            for i in stride(from: 0, to: referenceColorBuf.count, by: 4) {
+                worstReferenceMinColor = min(
+                    worstReferenceMinColor, referenceColorBuf[i], referenceColorBuf[i + 1], referenceColorBuf[i + 2]
+                )
+            }
+            let referenceAlphaBuf = renderFullFrame(rawTransformScaleNoClamp(alphaEdgeFixture, scale: scale, aspect: aspect))
+            for i in stride(from: 0, to: referenceAlphaBuf.count, by: 4) {
+                worstReferenceMaxAlpha = max(worstReferenceMaxAlpha, referenceAlphaBuf[i + 3])
+            }
+        }
+
+        // Non-vacuousness checks: across this sweep, the unclamped
+        // reference geometry must show a real violation somewhere on BOTH
+        // channels — otherwise the per-corner assertions above could all
+        // be passing by accident (this whole sweep just doesn't ring
+        // enough to matter), not because the clamp is doing real work.
+        // (Alpha's own LOWER bound has no equivalent check — negative
+        // alpha never appeared on these fixtures even unclamped, so that
+        // assertion stays a defensive check, not one proven necessary.)
+        XCTAssertGreaterThan(
+            worstReferenceMaxAlpha, 1.01,
+            "unclamped reference should show a real alpha overshoot somewhere in this sweep, " +
+            "otherwise the clamped alpha-upper-bound assertion above isn't actually being exercised"
+        )
+        XCTAssertLessThan(
+            worstReferenceMinColor, -0.01,
+            "unclamped reference should show a real color undershoot somewhere in this sweep, " +
+            "otherwise the clamped assertions above aren't actually being exercised"
+        )
+    }
+
+    /// PERMANENT (promoted from a D23 review-pass-2 measurement harness): renders
+    /// the FULL frame into one buffer, not per-pixel `pixel(of:at:)` calls,
+    /// so a scan can't silently skip the true extrema — used by
+    /// `testTransformScaleClampBoundsRingingAtHardEdges` above.
+    private func renderFullFrame(_ image: CIImage) -> [Float] {
+        let extent = image.extent
+        let width = Int(extent.width)
+        let height = Int(extent.height)
+        var buffer = [Float](repeating: 0, count: width * height * 4)
+        context.render(
+            image, toBitmap: &buffer, rowBytes: width * 16,
+            bounds: extent, format: .RGBAf, colorSpace: linearSpace
+        )
+        return buffer
+    }
+
+    /// PERMANENT (promoted from a D23 measurement harness): reproduces
+    /// `applyTransformScale`'s own geometry EXCEPT the `CIColorClamp` fix —
+    /// a standalone duplicate, not a call into private production code
+    /// (only the clamp step is omitted; the `aspectFactor`/`sx`/`sy` math
+    /// references `EditPipeline.kMaxTransformAspectStretch` directly, not a
+    /// second hardcoded copy of its value, since an earlier draft's
+    /// hardcoded `1.6` — actually `1 + kMaxTransformAspectStretch`, not the
+    /// constant itself — is exactly the kind of copy that can silently
+    /// drift if the constant is retuned again), kept permanently as
+    /// `testTransformScaleClampBoundsRingingAtHardEdges`'s own
+    /// non-vacuousness check (proving that test's assertions on the
+    /// CLAMPED path are actually discriminating against a real violation,
+    /// not accidentally always-true).
+    private func rawTransformScaleNoClamp(_ image: CIImage, scale: Double, aspect: Double) -> CIImage {
+        let extent = image.extent
+        let aspectFactor = pow(1 + EditPipeline.kMaxTransformAspectStretch, aspect)
+        let sx = scale / aspectFactor
+        let sy = scale * aspectFactor
+        let centered = image.transformed(by: CGAffineTransform(translationX: -extent.midX, y: -extent.midY))
+        let lanczos = CIFilter.lanczosScaleTransform()
+        lanczos.inputImage = centered
+        lanczos.scale = Float(sy)
+        lanczos.aspectRatio = Float(sx / sy)
+        let scaled = lanczos.outputImage!
+        let transformed = scaled
+            .transformed(by: CGAffineTransform(translationX: extent.midX, y: extent.midY))
+            .cropped(to: extent)
+        let canvas = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: extent)
+        return transformed.composited(over: canvas)
     }
 
     // MARK: - Flip geometry

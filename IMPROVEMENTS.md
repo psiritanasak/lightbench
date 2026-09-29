@@ -1462,7 +1462,233 @@ Not fixed here — logged for whoever builds Slice B's UI, since a user
 who picks a shadow color and expects highlights of the same hue to be
 unaffected will be surprised.
 
-### D23. Transform Scale/Stretch has no minification prefiltering (reviewer-caught)
+### D23. Transform Scale/Stretch has no minification prefiltering (reviewer-caught) — SHIPPED 2026-09-29
+
+**Update: fixed, with a real measurement, not just the fix.**
+`applyTransformScale`'s middle step now runs through
+`CIFilter.lanczosScaleTransform()` instead of a raw
+`CGAffineTransform(scaleX:y:)` — the SAME translate-to-origin/translate-
+back sandwich as before wraps it (a throwaway probe script, run and
+deleted, confirmed the filter scales about the absolute origin `(0,0)`
+exactly like the raw affine did, so the sandwich itself needed no
+change), and everything after (`.cropped(to:)` then
+`.composited(over:)` the transparent canvas) is untouched. The filter's
+own `scale`/`aspectRatio` parameters were verified empirically (same
+probe) to give `outputWidth = inputWidth * scale * aspectRatio`,
+`outputHeight = inputHeight * scale` — so this function's own
+independently-derived `sx`/`sy` map onto them as `scale = sy`,
+`aspectRatio = sx / sy`, for any `sx`/`sy`, not just this function's own
+specific formula.
+
+**Self-caught, pre-review, test-suite-measured deviations**: Lanczos's
+wider sampling kernel measurably shifted 2 existing hard-alpha
+assertions right at the shrunk-content boundary
+(`testTransformScaleBelowOneExposesTransparentMargin`: `1.0000012`
+instead of exactly `1.0`; `testTransformScaleClearsPerspectiveWedges`:
+`0.99999994` instead of `1.0`). First characterized as "floating-point
+kernel-weight summation noise... not a real correctness regression" and
+fixed by loosening both to `accuracy:` — **review pass 1 (below) found
+this explanation was INCOMPLETE**: the first of the two was actually the
+SAME ringing/overshoot mechanism that pass identifies as a real bug, not
+mere noise, and is now fixed at the SOURCE (see that section's own
+write-up) — re-measured afterward as reading back EXACTLY `1.0` again,
+so that assertion is back to exact equality, not `accuracy:`. Only the
+SECOND assertion's own residual (mutation-tested: still fails even with
+that fix in place, since it's already below 1.0 and an upper clamp can't
+pull a value UP) is genuine sub-1.0 floating-point summation noise,
+correctly still using `accuracy:` (the file's own existing `0.002`
+constant).
+
+**A real, measured aliasing comparison** (temporary harness in
+`EditPipelineTests.swift`, run once, transcribed here, then fully
+reverted — `git diff` confirmed clean, matching the D16/D17 convention
+for this exact file): a fine 3px-period black/white stripe pattern
+(chosen to alias under the documented ~3.2x worst-case minification),
+rendered through BOTH the OLD plain-affine mechanism (reproduced
+standalone in the harness, not by reverting production code) and the
+NEW Lanczos one at `transformScale: 0.5, transformAspect: 1`, sampling
+an 80-pixel row well inside the shrunk content's own span (away from
+the transparent-margin edge entirely). Measured standard deviation
+across that row, as an honest proxy for "how much of the fine stripe
+pattern survived as visible banding rather than blending into a smooth
+average":
+
+    old (plain affine):  stddev 0.2513
+    new (Lanczos):        stddev 0.1188
+
+**Roughly HALVED (~2.1x lower), a real and meaningful reduction — but
+not a complete elimination.** The raw sampled rows show why: the OLD
+row swings across nearly the FULL black-to-white range (0.16 to 0.96),
+while the NEW row is compressed toward mid-gray (0.55 to 0.88) but still
+shows a repeating pattern, not a flat blend. Reported at the confidence
+this one data point supports: prefiltering is a genuine, measured
+improvement at this specific severe combination (3.2x minification, a
+3px period near the limit of what any reasonable resample could fully
+resolve), not a complete fix for arbitrarily fine content — which
+matches ordinary expectations for ANY prefilter (a wider blur/sinc
+kernel reduces but cannot perfectly eliminate aliasing at frequencies
+right at the resample's own limit). Not measured at gentler,
+more-realistic minification levels (e.g. near the "common case" this
+entry itself already named as low-risk) — the harness was scoped to the
+documented worst case specifically, per the plan's own "measure the
+worst case, not the average case" framing.
+
+**Reviewer-caught (review pass 1): the ringing was a real correctness bug,
+not just a test-assertion nuisance.** `CILanczosScaleTransform`'s windowed-
+sinc kernel has negative side lobes — at a hard alpha/color edge (the
+transparent-margin boundary this stage's own shrink creates, or any hard
+edge in the source content) it genuinely RINGS, not just rounds. This
+first surfaced as the self-caught (pre-reviewer) "floating-point noise"
+characterization above, which was wrong for one of the two shifted
+assertions.
+
+**The real figure needed reconciling TWICE before it stabilized** — 3
+earlier drafts of it disagreed with each other (the `EditPipeline.swift`
+doc comment's own first draft said 1.064/-0.057, PROGRESS.md said
+1.196/-0.072, and an independent reviewer probe said 1.093/-0.062, none
+naming the same fixture/sweep), and a first reconciliation attempt (a
+single unified
+"1.0864/-0.0739" figure, from a sparse per-pixel-call scan) ALSO didn't
+reproduce once re-checked with a dense, every-pixel scan — the real
+figure depends on the hard edge's own sub-pixel phase relative to the
+resample grid, which shifts with fixture size, so there is no single
+fixed number. The figure below is the final, dense-scan reconciliation
+(`EditPipelineTests.testD23DenseRingingReconciliation`, a temporary
+harness swept over the 4 worst-case `(scale, aspect)` corners of the
+clamped range on 2 hard-edge fixtures — a solid opaque square isolating
+the ALPHA edge, a pure color step edge isolating COLOR ringing — at 3
+fixture sizes, run once, transcribed here, then deleted), reported as a
+RANGE, not one number:
+
+    WITHOUT the clamp: alpha overshoot 1.06-1.10, color undershoot
+    roughly -0.06 to -0.063, color overshoot 1.09-1.12 (all across
+    64/100/200px fixtures)
+
+Alpha above 1 breaks `over` compositing math and corrupts export
+clamping differently than the live preview; negative linear color feeds
+directly into every downstream perceptual stage (Dehaze/Vignette/
+Clarity/NR/Sharpen/Grain).
+
+**Fix**: `CIFilter.colorClamp()` immediately after the Lanczos filter,
+BEFORE the translate-back/crop/composite. My first attempt clamped both
+bounds on color (`minComponents`/`maxComponents` both `(0,0,0,0)`/
+`(1,1,1,1)`) — self-caught immediately via `testTransformScalePreservesHighlightHeadroom`
+failing: this stage is explicitly required to preserve linear-light
+values above 1.0 (highlight headroom), so a full `[0,1]` clamp on color
+silently destroys that. Corrected to an ASYMMETRIC clamp: `minComponents
+= (0,0,0,0)`, `maxComponents = (1e6,1e6,1e6,1)` — both bounds on alpha
+(`[0,1]`, since alpha above 1 breaks compositing either direction, though
+only the UPPER bound is ever actually exercised on these fixtures —
+negative alpha never appeared, so the lower bound is defensive, not
+proven necessary by measurement), only the LOWER bound on color (no
+negative linear light, upper bound left open so headroom survives).
+With the clamp applied, alpha reads back EXACTLY 1.0 and color's lower
+bound reads back EXACTLY 0.0 in every case tried. A residual IS left ON
+PURPOSE: the bright-side overshoot on color (not alpha) can still read
+up to a CONSTANT ~1.06 after the clamp (vs. 1.09-1.12 pre-clamp) at a
+hard 1.0/0.0 edge — a faint Lanczos halo on SDR content, the accepted
+tradeoff for preserving headroom, not a bug. The post-clamp figure being
+LOWER than the pre-clamp color overshoot has a real, verified mechanism:
+`CIColorClamp` operates on UNPREMULTIPLIED values (divide by alpha,
+clamp, multiply back), so clamping alpha down to 1 also removes the
+portion of color's own overshoot that was riding on alpha's overshoot —
+what's left is only the color channel's own genuine ringing.
+
+Also caught and fixed: `lanczos.outputImage ?? centered` silently
+skipped scaling entirely if the filter ever returned `nil` — changed to
+`?? plainAffineFallback`, a raw affine scale built from the same `sx`/
+`sy`, so the fallback reproduces the PRE-fix mechanism rather than a
+no-op; and a stale doc comment left over from before the mechanism
+change, still describing it as "combined into ONE `CGAffineTransform`".
+
+**New permanent regression** (there was none before review pass 1 — the
+only thing that caught the clamp's removal was an incidental 1.2e-6
+alpha overshoot at one interior pixel of
+`testTransformScaleBelowOneExposesTransparentMargin`, fragile, and
+color undershoot had no guard at all):
+`testTransformScaleClampBoundsRingingAtHardEdges`, asserting the clamp's
+own bounds (alpha `[0,1]`, color's lower bound at 0) hold across the 4
+worst-case corners on both hard-edge fixtures, run through the real
+`EditPipeline.apply` — a DENSE full-frame scan (via a new
+`renderFullFrame` helper, no pixel skipped; an earlier strided-sampling
+draft only ever grazed a -0.0002-magnitude color residual, nowhere near
+the real undershoot, and was barely exercising the guard at all), plus
+an explicit non-vacuousness check: the identical corners/fixtures run
+through `rawTransformScaleNoClamp` (the pre-clamp reference geometry,
+kept PERMANENTLY as a test helper, not deleted as a "temporary" harness)
+must show a real violation SOMEWHERE across the 4-corner sweep —
+aggregated, not asserted per-corner, since one individual corner
+(`(1.5, 1)`) alone only reaches about -0.0054, well under a strict
+per-corner threshold, even though the worst corner in the same sweep
+reaches roughly -0.06; a per-corner assertion would be a false negative
+on the milder corners. Mutation-tested: a blanket `[0,1]` clamp breaks
+`testTransformScalePreservesHighlightHeadroom` as expected; removing the
+clamp entirely breaks this new test, reproducing violations in the
+ranges documented above.
+
+**Performance, re-measured honestly.** The FIRST performance pass (this
+entry's own original, pre-review numbers — superseded below, kept in
+PROGRESS.md's own history for the record, not deleted) had no warm-up
+before timing and used a lazy solid-color fixture — reviewer-caught as
+implausible (it reported full-res as FASTER than proxy-scale, a
+~9x-larger render). Re-measured with a proper fix: an untimed warm-up
+render per variant per size before timing (Metal/kernel first-compile
+cost, not image size, was almost certainly what the old numbers actually
+captured), a random-noise bitmap fixture (not a lazy solid color Core
+Image can special-case), and an average of 5 timed renders each via a
+forced `createCGImage` call (temporary harness, run once, transcribed,
+then deleted):
+
+    proxy (2000x1333):    old 1.38ms, new 1.31ms (0.94x — NOT slower)
+    full-res (6016x4016): old 4.72ms, new 4.64ms (0.98x — NOT slower)
+
+On this Metal-backed `CIContext` (Apple M1), the Lanczos + colorClamp
+path is NOT measurably slower than the old plain affine at either size
+— both are comfortably within noise of each other. This supersedes and
+corrects the earlier (flawed) "1.58x slower at proxy scale" claim
+entirely; there is no proxy-scale performance regression to weigh
+against the aliasing improvement.
+
+**Non-destructive-invariant note (pass 4)**: swapping the resample
+mechanism changes how any ALREADY-SAVED edit with `transformScale != 1`
+or `transformAspect != 0` renders — slightly softer at minification, plus
+the accepted ~1.06 color halo at a hard highlight edge that didn't exist
+under the old plain-affine resample. This is the same class of change
+CLAUDE.md already records for `kMaxTransformAspectStretch`'s own live
+retune (2026-09-21): intended, not a bug, and not replay-identical for a
+photo whose sidecar already used this stage — worth knowing so a visual
+difference on an old edit isn't mistaken for a regression.
+
+1359 tests (2 assertions updated with a measured, documented reason,
+1 new permanent regression test; all temporary measurement harnesses —
+the initial sparse ringing probe, the corrective dense re-scan, and both
+performance passes — were run once each and fully reverted, matching
+this file's own convention). Reviewer: 4 passes, FIX FIRST × 3 →
+APPROVE — pass 1 caught the ringing bug, the fallback bug, the stale
+doc comment, and the missing regression test (fixed in this entry's
+first half above); pass 2 caught that pass 1's OWN reconciled
+1.0864/-0.0739 figure didn't reproduce under a dense re-scan, plus the
+new regression test's own color check being fragile (fixed in this
+entry's second half above); pass 3 caught that the dense-scan figure
+still hadn't replaced the stale 1.0864/-0.0739 numbers in THIS entry's
+own text, a self-contradictory "corrected to the range above" pointing
+at no such range, inconsistent round/pass labeling across files (this
+entry now uses "review pass N" consistently instead of an overloaded
+"round"), a wrong doc-comment constant value, an unaggregated per-pixel
+assertion loop, and a missing non-vacuousness check on alpha's own upper
+bound (all fixed in `EditPipeline.swift`/`EditPipelineTests.swift`);
+pass 4 independently re-verified every pass-3 fix (including its own
+mutation tests of the new alpha non-vacuousness check and a fresh
+geometry-shift probe of its own, finding no new correctness bugs) and
+found only 3 residual doc nits — 2 more stray "round N" labels, and a
+factual mismatch in `applyTransformScale`'s own doc comment about
+exactly which prior measurement the dense re-scan found irreproducible
+(it named the wrong one, the original 3-way-disagreeing figures rather
+than the intermediate "1.0864/-0.0739" reconciliation attempt that
+actually failed) — plus this non-destructive-invariant note being
+missing entirely. All 4 fixed; APPROVE.
+
+*(Original entry below, describing the gap before this update.)*
 
 `EditPipeline.applyTransformScale` uses a plain `.transformed(by:)`
 affine resample — no `CILanczosScaleTransform`-style prefiltering.

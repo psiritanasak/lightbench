@@ -7,6 +7,166 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
+**D23 SHIPPED (2026-09-29)** — Transform Scale/Stretch's minification
+now runs through `CIFilter.lanczosScaleTransform()` instead of a plain
+affine resample, fixing the ~3.2x-worst-case aliasing risk that entry
+documented. A real measurement (temporary harness, run once, reverted):
+a fine 3px-period stripe pattern at the documented worst case showed
+the new path's aliasing-signature standard deviation roughly HALVED
+(0.2513 → 0.1188) vs. the old mechanism — a genuine, measured
+improvement, honestly reported as partial (not a complete elimination
+at this severe a combination), not oversold.
+
+Self-caught, pre-review, work shifted 2 existing hard-alpha test
+assertions and first characterized both as harmless floating-point
+kernel-weight summation noise, loosened to `accuracy:`. **Reviewer-caught
+(review pass 1): that characterization was wrong for one of the two.**
+The real mechanism is
+Lanczos ringing — the windowed-sinc kernel's negative side-lobes cause a
+genuine overshoot past alpha 1.0 and undershoot below color 0.0 near
+hard edges, not mere summation noise. This is a real correctness bug:
+alpha above 1.0 breaks downstream compositing math, and negative color
+values feed later pipeline stages. Fixed at the source with
+`CIFilter.colorClamp()`, inserted right after the Lanczos resample — but
+ASYMMETRICALLY: only alpha's upper bound (`maxComponents.w = 1`) and
+color's LOWER bound (`minComponents = 0`) are clamped. My first attempt
+clamped color's upper bound to 1 too, and immediately broke
+`testTransformScalePreservesHighlightHeadroom` (self-caught via test
+failure) — this codebase deliberately preserves linear-light values
+above 1.0 through this stage, so an upper color clamp is not just
+unneeded but wrong. With the correct asymmetric clamp in place,
+`testTransformScaleBelowOneExposesTransparentMargin`'s reading is pulled
+back down to EXACTLY `1.0` again (reverted to exact equality, no
+`accuracy:` needed) — confirming the clamp fixes the actual bug, not
+just the symptom. `testTransformScaleClearsPerspectiveWedges`'s own
+`0.99999994` reading is unrelated: mutation-tested (temporarily reverted
+to exact equality with the clamp fix still in place, confirmed it
+genuinely still fails) to be ordinary sub-1.0 floating-point summation
+noise a clamp's upper bound can't touch — correctly kept at `accuracy:`.
+
+**The ringing figures themselves needed reconciling — twice.** 3 separate
+probes (this doc's own first draft: 1.196/-0.072; the `EditPipeline.swift`
+doc comment's first draft: 1.064/-0.057; an independent reviewer probe:
+1.093/-0.062) each cited a different number because none named the same
+fixture/sweep, so none could be checked against the others — a real
+violation of this project's own "measurement records are historical
+facts" convention (an unreproducible number isn't a fact). A first
+reconciliation attempt (`EditPipelineTests.testD23RingingMeasurement`,
+using sparse `pixel(of:at:)` calls at `stride(by: 2)`/`stride(by: 1)`)
+produced ONE unified figure, 1.0864/-0.0739 — but review pass 2 found
+this ALSO didn't reproduce: a dense, every-pixel
+re-scan of the exact same fixtures/corners (`testD23DenseRingingReconciliation`,
+rendering the FULL frame into one buffer via `renderFullFrame`, not
+sparse per-pixel calls — a sparse scan can silently miss the true
+extrema) found the real figure DEPENDS on the hard edge's own sub-pixel
+phase relative to the resample grid, which shifts with fixture size —
+there is no single fixed number. Reported honestly as a range across 3
+fixture sizes (64/100/200px), both temporary harnesses run once here
+then deleted:
+
+    WITHOUT the clamp: alpha overshoot 1.06-1.10, color undershoot
+    roughly -0.06 to -0.063, color overshoot 1.09-1.12
+    WITH the clamp:    alpha reads back EXACTLY 1.0, color's lower bound
+    reads back EXACTLY 0.0, color's upper-bound residual is a CONSTANT
+    ~1.06 across all 3 sizes tried (the accepted headroom-preservation
+    tradeoff, not a bug — see below)
+
+This range now replaces the single (still-wrong) 1.0864/-0.0739 figure
+everywhere (this doc, `EditPipeline.swift`'s own doc comments,
+`IMPROVEMENTS.md`'s D23 entry). The post-clamp color residual being
+LOWER than the pre-clamp color overshoot (1.06 vs. 1.09-1.12) has a real
+mechanism, also previously undocumented: `CIColorClamp` operates on
+UNPREMULTIPLIED values (divide by alpha, clamp, multiply back), so
+clamping alpha down to 1 also removes the portion of color's own
+overshoot that was riding on alpha's overshoot — what's left after the
+clamp is only the color channel's own genuine ringing.
+
+A new PERMANENT regression test,
+`testTransformScaleClampBoundsRingingAtHardEdges`, guards the clamp's
+own bounds going forward — now using the SAME dense full-frame scan (not
+the original's fragile `stride(by: 8)`/`stride(by: 4)` sampling, which
+review pass 2 found only ever grazed a -0.0002-magnitude residual on the
+color assertions, nowhere near the real undershoot) plus an explicit
+non-vacuousness check: the identical corners/fixtures run through
+`rawTransformScaleNoClamp` (the pre-clamp reference geometry, now kept
+PERMANENTLY for this purpose, not deleted) must show a real violation
+somewhere across the 4-corner sweep — AGGREGATED, not per-corner, since
+one corner alone (`(1.5, 1)`, ~-0.0054) doesn't ring hard enough to pass
+a strict per-corner threshold even though the worst corner in the same
+sweep reaches roughly -0.06. Mutation-tested (reverting to a blanket
+`[0,1]` clamp: `testTransformScalePreservesHighlightHeadroom` fails as
+expected; removing the clamp: the new test itself fails, reproducing
+violations in the range above) — replacing the previous, fragile "guard"
+(an incidental 1.2e-6 overshoot at one interior pixel of an unrelated
+test).
+
+**Review pass 3** caught 5 remaining issues, all fixed: the reconciled
+range above still hadn't replaced the stale 1.0864/-0.0739 numbers
+inside `IMPROVEMENTS.md`'s own D23 entry text (a self-contradictory
+"corrected to the range above" pointing at no such range); inconsistent
+"round N" labeling across all 4 files, where the same event was called
+different round numbers in different places, or "reviewer-caught" was
+applied to something actually self-caught — now consistently "review
+pass N" throughout; a stale doc comment claiming `kMaxTransformAspectStretch`
+was "hardcoded here as 1.6" (1.6 is `1 + kMaxTransformAspectStretch`,
+not the constant itself) — fixed by making the constant `internal`
+instead of `private` and having the test reference it directly, closing
+the copy-drift risk rather than just correcting the comment; an
+unaggregated `XCTAssert`-per-pixel loop on the alpha assertions (floods
+the log with ~21,000 failures on a genuine regression) — aggregated to
+min/max first, matching the color path's existing shape; and a missing
+non-vacuousness check on alpha's own upper bound (the compositing-
+breaking direction) — added, mirroring color's existing check.
+
+Reviewer pass 1 also caught: the Lanczos fallback was `?? centered`
+(silently skips scaling entirely if the filter ever returns nil) —
+fixed to `?? plainAffineFallback`, which reproduces the pre-fix plain
+affine transform instead of a no-op; and a stale doc comment still
+describing the mechanism as "combined into ONE `CGAffineTransform`"
+after it became a Lanczos resample — fixed.
+
+**Performance was also re-measured, and the FIRST pass was wrong.** The
+original harness (no warm-up, a lazy solid-color fixture) reported
+proxy-scale (2000x1333) at old=9.99ms vs. new=15.80ms (claimed 1.58x
+slower) and full-res (6016x4016) at old=5.16ms vs. new=5.26ms (1.02x)
+— reviewer-caught as implausible on its face (full-res, a ~9x-larger
+render, coming out FASTER than proxy-scale). Re-measured properly
+(temporary harness, run once here, then deleted): an untimed warm-up
+render per variant per size BEFORE timing (a one-time Metal/kernel
+first-compile cost, not image size, was almost certainly what the old
+numbers actually captured), a random-noise bitmap fixture instead of a
+lazy solid color, and an average of 5 forced (`createCGImage`) renders
+each:
+
+    proxy (2000x1333):    old 1.38ms, new 1.31ms (0.94x — NOT slower)
+    full-res (6016x4016): old 4.72ms, new 4.64ms (0.98x — NOT slower)
+
+On this Metal-backed `CIContext` (Apple M1), Lanczos + colorClamp is NOT
+measurably slower than the old plain affine at EITHER size — both are
+within noise of each other. This supersedes the earlier "1.58x slower at
+proxy scale" claim entirely; there is no real proxy-scale performance
+cost to weigh against the aliasing improvement, at least on this
+hardware. See `IMPROVEMENTS.md`'s own D23 entry for the full write-up.
+
+**Non-destructive-invariant note**: swapping the resample mechanism
+changes how any ALREADY-SAVED edit with `transformScale != 1` or
+`transformAspect != 0` renders (slightly softer at minification, plus
+the accepted ~1.06 color halo at a hard highlight edge) — the same class
+of change already recorded for `kMaxTransformAspectStretch`'s own live
+retune, not replay-identical for such a photo, intended not a bug.
+
+1359 tests, 1 new permanent regression test (all temporary measurement
+harnesses reverted). Reviewer: 4 passes, FIX FIRST × 3 → APPROVE — pass
+1 caught the ringing bug itself; pass 2 caught that pass 1's own
+reconciled ringing figure didn't reproduce under a denser re-scan, plus
+a fragile test assertion; pass 3 caught the doc/labeling issues
+described above; pass 4 independently re-verified every pass-3 fix
+(including its own mutation tests and a fresh geometry-shift probe,
+finding no new correctness bugs) and caught 3 residual doc nits — 2
+stray "round N" labels and a factual mismatch about which prior
+measurement the dense re-scan actually found irreproducible, plus this
+non-destructive-invariant note being missing — all fixed. APPROVE.
+
 **D20's numeric-readout half SHIPPED (2026-09-29)** — a small `Text`
 caption ("H +137° / S 42%") under Color Grading's Hue/Saturation wheel,
 `AdjustTabView.colorGradingWheelReadout(for:)`. Fixes the "2 of 3 axes

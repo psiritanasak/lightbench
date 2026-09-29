@@ -1349,6 +1349,21 @@ struct ContentView: View {
                 .disabled(photosToExport.isEmpty || exportModel.isExporting)
                 .help(exportButtonTitle)
 
+                // Deliberately the RAW `catalog.selectedPhotoIDs`, not
+                // `selectedPhotosVisibleInGrid` (IMPROVEMENTS.md D33,
+                // reviewer-caught): the menu's own "Clear Selection" button
+                // is the ONLY call site of `catalog.clearSelection()`
+                // anywhere in this app. Gating the whole menu on the
+                // ghost-filtered set would hide that button too the moment
+                // every selected id becomes a ghost, trapping the user with
+                // a selection they can no longer reach any way to clear
+                // (switching Collection/Folder still clears it via
+                // `selectedFilter`'s own `didSet`, but that's not always
+                // where the user wants to go). The label INSIDE the menu
+                // already shows the correctly-filtered count (`"\
+                // (selectedPhotosVisibleInGrid.count) Selected"` below) —
+                // this outer gate only decides whether the menu ITSELF is
+                // reachable at all, which must stay keyed on the raw set.
                 if !catalog.selectedPhotoIDs.isEmpty {
                     Menu {
                         Menu("Add to Collection") {
@@ -1403,9 +1418,25 @@ struct ContentView: View {
     /// same text the old text-only button showed, just no longer the only
     /// place that text is used.
     private var exportButtonTitle: String {
-        catalog.selectedPhotoIDs.isEmpty
-            ? "Export…"
-            : "Export Selected (\(catalog.selectedPhotoIDs.count))…"
+        // The "is anything selected AT ALL" check is the RAW
+        // `catalog.selectedPhotoIDs`, deliberately matching `photosToExport`'s
+        // own guard (line ~41) exactly — the title and the `.disabled` state
+        // right above must agree on when to show the "Selected" form at all,
+        // or a disabled button can end up reading the same as an enabled
+        // "export everything" one (reviewer-caught: an all-ghost selection
+        // with this check on the FILTERED set instead showed plain "Export…"
+        // — indistinguishable from the truly-nothing-selected case — while
+        // still disabled, with no visible reason why).
+        //
+        // The COUNT shown once something's selected, `selectedPhotosVisibleInGrid`
+        // (IMPROVEMENTS.md D33): ghost ids (a photo toggled out of the
+        // currently-viewed collection, still selected — see
+        // `CatalogModel.selectedPhotos`'s own doc comment) must not inflate
+        // this number past what `photosToExport` actually exports — that
+        // part of the original fix stands, including the honest "(0)" an
+        // all-ghost selection now shows instead of a silently wrong count.
+        guard !catalog.selectedPhotoIDs.isEmpty else { return "Export…" }
+        return "Export Selected (\(selectedPhotosVisibleInGrid.count))…"
     }
 
     /// Grouped into two `ToolbarItemGroup`s (history vs. document actions)

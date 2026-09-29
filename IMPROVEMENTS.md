@@ -1737,7 +1737,40 @@ established boundary for anything panel/sandbox-adjacent — see
 `ensureAccessActive`'s own reviewer history for the same limitation
 applied elsewhere).
 
-### D33. Ghost selection IDs make Export/Add-to-Collection UI silently misleading (reviewer-caught while correcting a stale nit, 2026-09-29)
+### D33. Ghost selection IDs make Export/Add-to-Collection UI silently misleading (reviewer-caught while correcting a stale nit, 2026-09-29) — SHIPPED 2026-09-29
+
+**Update: fixed, after a reviewer-caught regression in the first attempt.**
+The first draft made BOTH sites — the menu's own outer visibility gate
+AND `exportButtonTitle` — key off `ContentView.selectedPhotosVisibleInGrid`
+(a thin forward to `CatalogModel.selectedPhotos`, the ghost-filtered
+accessor). Reviewer-caught: the menu's own "Clear Selection" button
+(`catalog.clearSelection()`'s ONLY call site anywhere in this app) lives
+INSIDE that menu — gating the whole menu on the filtered set hid the one
+way to clear a selection the moment every selected id became a ghost,
+trapping the user (switching Collection/Folder still clears it via
+`selectedFilter`'s own `didSet`, but that's not always where the user
+wants to go). Fixed: the menu's own outer gate stays on the RAW
+`catalog.selectedPhotoIDs`, matching `photosToExport`'s own guard exactly
+— only the label's COUNT inside the menu (already correct, unchanged by
+either draft) and `exportButtonTitle`'s count (once something IS
+selected) use the ghost-filtered accessor. `exportButtonTitle` itself
+also needed the same "raw set decides IF, filtered set decides the
+NUMBER" split — the first draft's fully-filtered version could show a
+plain "Export…" (which reads as "will export everything," normally
+enabled) on a `.disabled` button for an all-ghost selection, with no
+visible reason why; it now shows "Export Selected (0)…" instead, honestly
+reflecting the disabled state.
+
+A second reviewer-caught issue in the first draft: its own write-up here
+claimed `CatalogModel.selectedPhotos` "already has its own test
+coverage" — false, nothing under `Tests/` called it at the time. Fixed
+both the claim and the gap: `CatalogModelTests.
+testSelectedPhotosExcludesAGhostID` now pins the exact accessor both
+`ContentView` sites depend on, reusing the identical ghost-selection setup
+`testAddSelectedPhotosExcludesAPhotoNoLongerVisibleInTheGrid` (right above
+it) already established. 1358 tests (1 new).
+
+*(Original finding below, describing the gap before this update.)*
 
 Found while investigating whether `CatalogModel.selectedPhotoIDs` not
 being pruned in `refresh()` was a real gap (it isn't — see PROGRESS.md's

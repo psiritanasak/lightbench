@@ -342,6 +342,34 @@ final class CatalogModelTests: XCTestCase {
         )
     }
 
+    /// IMPROVEMENTS.md D33 (reviewer-caught): pins the SAME accessor
+    /// `ContentView.exportButtonTitle`/the Add-to-Collection menu's own
+    /// count label now depend on (`selectedPhotos`), using the exact same
+    /// ghost-selection setup as the test above — `selectedPhotoIDs` (the
+    /// raw set) still contains the vanished photo's id, but `selectedPhotos`
+    /// (photos.filter { isSelected($0) }) must not, since the photo is no
+    /// longer part of `photos` at all.
+    func testSelectedPhotosExcludesAGhostID() async throws {
+        let trip = try await database.createCollection(name: "Trip")
+        let tripID = try XCTUnwrap(trip.id)
+        let model = await makeModel()
+        let photo = try XCTUnwrap(model.photos.first)
+        let photoID = try XCTUnwrap(photo.id)
+
+        model.toggleMembership(of: photo, in: trip)
+        try await waitUntil("membership to reach the database") {
+            try await self.database.photos(inCollection: tripID).contains { $0.id == photoID }
+        }
+        model.selectedFilter = .collection(tripID)
+        try await waitUntil("the grid to show the collection") { model.photos.count == 1 }
+        model.toggleSelection(of: photo)
+        model.toggleMembership(of: photo, in: trip) // ghost-cell removal
+        try await waitUntil("the photo to leave the grid") { model.photos.isEmpty }
+
+        XCTAssertTrue(model.selectedPhotoIDs.contains(photoID), "precondition: still in the raw set")
+        XCTAssertTrue(model.selectedPhotos.isEmpty, "a ghost id must not appear in the filtered accessor")
+    }
+
     // MARK: - Collections (D5, IMPROVEMENTS.md)
 
     func testRenameCollectionRefreshesTheList() async throws {

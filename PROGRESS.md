@@ -786,8 +786,17 @@ unresolved, all 3 are now closed as of 2026-09-29 (Phase 8 cleanup slice):
   would be redundant enforcement, not a needed one.) One real, narrow gap
   the same investigation surfaced: 2 OTHER UI sites read the raw,
   unintersected set directly and can show a misleading nonzero
-  count/menu for an all-ghost selection — logged, not fixed, as
-  IMPROVEMENTS.md D33.
+  count/menu for an all-ghost selection — logged as IMPROVEMENTS.md D33,
+  and SHIPPED the same day, after a reviewer-caught regression in the
+  first attempt (gating the Add-to-Collection menu's own visibility on
+  the ghost-filtered set hid its "Clear Selection" button — the only
+  way to reach it anywhere in this app — the moment a selection became
+  all-ghost, trapping the user). Fixed: the menu's own outer gate stays
+  on the raw selection set; only the count shown inside it, and
+  `exportButtonTitle`'s count once something IS selected, use the
+  ghost-filtered `ContentView.selectedPhotosVisibleInGrid`. See
+  IMPROVEMENTS.md's own D33 entry for the full corrected story,
+  including a new regression test for the accessor itself.
 
 **Process note**: the project's `reviewer` agent only registers when the
 session is started from `~/photoapp-starter`, not `~` — this has caused a

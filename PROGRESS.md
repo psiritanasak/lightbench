@@ -7,6 +7,13 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
+**Pick/Reject flags (2026-09-29)** — three-state `FlagStatus` replaces
+`isFlagged` (Migration 007, `LibraryFlagFilter`, P/X/U keys, dimmed
+rejects). 1370 tests pass. NOT yet live-verified: back up the real
+`catalog.sqlite` to the scratchpad first, then confirm in a Release build
+that flagged photos migrated to Picked, the menu/keys/filter work, and
+state survives relaunch (needs the user's permission for screen automation).
+
 **D23 SHIPPED (2026-09-29)** — Transform Scale/Stretch's minification
 now runs through `CIFilter.lanczosScaleTransform()` instead of a plain
 affine resample, fixing the ~3.2x-worst-case aliasing risk that entry

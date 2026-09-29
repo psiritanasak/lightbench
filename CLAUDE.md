@@ -64,7 +64,7 @@ measured-but-counterintuitive behavior that isn't repeated here.
    - Ratings (0–5) + flags — `Migrations/002_ratings_and_flags.swift`
    - Collections (albums) — `Migrations/003_collections.swift`, `CollectionSidebarView.swift`; the record is `PhotoCollection`, not `Collection` (would shadow `Swift.Collection`)
    - `LibraryFilter` enum replaces an optional `selectedCollectionID` binding — avoids a known SwiftUI `List(selection:)`-with-`Optional` quirk
-   - Not started: removing photos from catalog, detecting deleted-on-disk files, pick/reject 3-state, keyboard shortcuts, rename/delete collections
+   - Later Phase 4 follow-ups, all shipped: remove photos from catalog (D5), missing-on-disk detection + relocate (D5), rename/delete collections, grid keyboard shortcuts (D4), and three-state Pick/Reject (2026-09-29: `FlagStatus`, `Migrations/007_pick_reject_flags.swift` — converts old `isFlagged` to Picked and drops the column; P/X/U keys, Flag filter, rejected thumbnails dimmed)
    - Post-Phase-4 follow-up: folder-mirrored nested collections — `PhotoImporter.scanFolderTree`, `Migrations/004_folder_collections.swift`, `OutlineGroup` in sidebar
 5. Presets + export: save/apply presets, batch export — ✅ COMPLETE
    - Batch export (JPEG/PNG/TIFF, resize/quality, progress HUD) — `Sources/Rendering/PhotoExporter.swift`; sandbox needs `user-selected.read-write` (not read-only)

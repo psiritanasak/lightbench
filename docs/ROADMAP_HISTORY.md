@@ -119,8 +119,8 @@ reconcile.
    Phase 4's own scope at the time). Removing photos from the catalog,
    detecting files deleted on disk since import, a three-state pick/reject
    model, keyboard shortcuts for rating/flagging, and renaming/deleting
-   collections are all still NOT started — candidates for a future
-   session.
+   collections were NOT started at this point — all have since shipped
+   (see the Pick/Reject entry at the end of this file for the last one).
 
    **Post-Phase-4 follow-up (shipped, outside the original roadmap
    scope): folder-mirrored nested collections.** The user organizes
@@ -2755,3 +2755,16 @@ global pipeline):
 Before/After comparison — this app's Compare mode (Side by Side / Split,
 post-Phase-5 follow-up #5) already covers Lightroom's Before/After views.
 
+## Pick / Reject flags (2026-09-29)
+Replaced the boolean `photo.isFlagged` with a three-state `FlagStatus`
+(rejected -1 / none 0 / picked 1). `Migrations/007_pick_reject_flags.swift`
+adds `flagStatus`, converts flagged rows to Picked, and drops `isFlagged`
+(GRDB `drop(column:)`, SQLite 3.35+; the column had no index/FK).
+`LibraryFlagFilter` (All/Picked/Unflagged/Rejected/Hide Rejected, default All)
+replaces `flaggedOnly`. UI: one flag icon per cell (click toggles Pick; a
+Rejected photo clears to unflagged), a Pick/Reject/Unflag section in the
+Photo-options menu, keys P/X/U (legacy `.`/`f` still toggle Pick), rejected
+thumbnails dimmed to 0.45. Reviewer: FIX FIRST -> fixes (misplaced doc
+comments, menu VoiceOver labels, a `toggledPick` unit test). The migration
+upgrade test builds a real pre-007 database and would fail if either the
+UPDATE or the column drop were removed.

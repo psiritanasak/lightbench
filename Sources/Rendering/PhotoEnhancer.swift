@@ -15,12 +15,15 @@ struct EnhanceOutcome: Sendable {
 
 enum PhotoEnhanceError: LocalizedError {
     case unreadableSource(String)
+    case incompleteSource(String)
     case upscaleFailed
 
     var errorDescription: String? {
         switch self {
         case .unreadableSource(let path):
             return "Couldn't read \"\(path)\" — the app may not currently have permission to access it."
+        case .incompleteSource(let path):
+            return "\"\(path)\" looks cut off (an incomplete or damaged file), so enhancing it would bake a partial image into a new file. Nothing was written. (The photo can still be opened and viewed.)"
         case .upscaleFailed:
             return "Couldn't upscale this photo."
         }
@@ -98,6 +101,10 @@ enum PhotoEnhancer {
     /// exists to serialize app-wide against a real deadlock risk (see
     /// `SuperResolutionUpscaler`'s own doc comment on this precondition).
     static func enhance(sourceURL: URL, editState: EditState, into folder: URL) async throws -> EnhanceOutcome {
+        // D37: refuse a truncated source rather than baking a partial image into a new file.
+        if SourceIntegrity.verdict(forFileAt: sourceURL) == .truncated {
+            throw PhotoEnhanceError.incompleteSource(sourceURL.path)
+        }
         guard let oriented = await RawDecoder.decode(contentsOf: sourceURL, editState: editState) else {
             throw PhotoEnhanceError.unreadableSource(sourceURL.path)
         }

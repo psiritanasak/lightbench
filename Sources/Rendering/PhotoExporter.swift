@@ -32,11 +32,14 @@ struct ExportSettings: Sendable {
 
 enum PhotoExportError: LocalizedError {
     case unreadableSource(String)
+    case incompleteSource(String)
 
     var errorDescription: String? {
         switch self {
         case .unreadableSource(let path):
             return "Couldn't read \"\(path)\" — the app may not currently have permission to access it."
+        case .incompleteSource(let path):
+            return "\"\(path)\" looks cut off (an incomplete or damaged file), so exporting it would write a partial image. Nothing was written. (The photo can still be opened and viewed.)"
         }
     }
 }
@@ -125,6 +128,10 @@ enum PhotoExporter {
         settings: ExportSettings
     ) async throws -> URL {
         let sourceURL = URL(fileURLWithPath: photo.path)
+        // D37: refuse a truncated source rather than silently exporting a partial image.
+        if SourceIntegrity.verdict(forFileAt: sourceURL) == .truncated {
+            throw PhotoExportError.incompleteSource(photo.path)
+        }
         guard let oriented = await RawDecoder.decode(contentsOf: sourceURL, editState: editState) else {
             throw PhotoExportError.unreadableSource(photo.path)
         }

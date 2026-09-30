@@ -32,6 +32,22 @@ Residual open items from shipped entries:
 - **D34** — Xcode Previews (`XCODE_RUNNING_FOR_PREVIEWS`) still open the real catalog; Swift Testing / non-`xcodebuild` test plans not verified to set the XCTest markers.
 
 ## Open items
+
+### D35. Lightroom Classic parity backlog (researched 2026-09-30) — feature gaps, prioritized
+Sources: Adobe Lightroom Classic release notes (15.2-15.6, 2026) plus general Lightroom knowledge; items marked (R) came from the release notes, the rest are unverified against them. Supersedes nothing in CLAUDE.md's "Gaps vs. Adobe Lightroom Desktop" (which covers Develop only) — this adds Library/Import/Export/multi-photo gaps. Each item is its own session (Plan Mode first). Priority order (value / effort):
+
+1. **Profiles / LUTs** (`.cube`, Amount slider) + small Develop gaps: Vignette Softness, B&W Intensity/Neutrals/Tone/Grain, Color Grading Blending/Balance + Global wheel, HSL per-band Lightness check, Calibration panel, custom crop overlays.
+2. **AI masks via Apple Vision / Core ML**: Subject, Sky, Background, People parts, Landscape (R: Feather/Edge refine sliders, Aug 2026), Object Select, Depth Range, in-mask Add/Subtract/Invert layers. Start with a feasibility spike (`VNGenerateForegroundInstanceMaskRequest` gives Subject/People free; Sky/Landscape need a model) — same approach as the MetalFX probe.
+3. **Healing / Clone spot removal** (classic patch, no ML); later Generative Remove (R: better reflection removal, Sept 2026), Generative Expand / Crop & Expand (R), Lens Blur, AI Denoise.
+4. **Library basics**: keywords + IPTC/EXIF metadata read/write, color labels, Smart Collections, Collection Sets, Stacks, virtual copies/snapshots, metadata filter/search, standard XMP sidecar interop (ours is proprietary `.photoapp.json`).
+5. **Export / import upgrades**: metadata + watermark, color space/bit depth, output sharpening, naming templates, export presets, HEIC/AVIF/DNG; import rename/copy/apply-preset, tethering, watched folders.
+6. **Multi-photo**: HDR merge, Panorama merge, focus stacking, granular Sync Settings dialog, Survey/Reference view.
+7. **Culling / faces**: Assisted Culling, duplicate detection, face detection + People view (R: Faces panel with Eye Focus / Eyes Open scores, June 2026).
+8. **Persist edit history** across sessions (ours is in-memory), Smart Previews (offline editing), folder move/rename inside the app, Soft Proofing, Print/Slideshow/Map (low value for this app).
+9. **Phase 8 polish** (tiled rendering, perf) and the open items below (start with D28).
+
+Deliberately not pursued: cloud sync, Adobe/Firefly integration, mobile.
+
 ### P6. Minor, take-if-passing-by
 
 - `PhotoExporter.export`: `Data(contentsOf: tempURL)` + `data.write(to:)`

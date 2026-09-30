@@ -42,7 +42,7 @@ None.
 ## Exact next step
 Pick a new feature with the user (one per session): CLAUDE.md's roadmap gaps
 list (Tier 1 / Tier 2), Phase 8 polish, or an open item in `IMPROVEMENTS.md`.
-Candidate suggested last review: **D28** (pre-existing `saveSidecarNow`
+Feature-gap roadmap vs. Lightroom: **IMPROVEMENTS.md D35** (prioritized list). Other candidate: **D28** (pre-existing `saveSidecarNow`
 load-during-save race onto the wrong sidecar — a data-integrity hazard on every
 debounced save). Also open there: D31/D32 (security-scope gaps), D13 (phantom
 brush mask on photo switch), D22/D24/D26 (design gaps), D20 keyboard half.

@@ -34,7 +34,7 @@ Residual open items from shipped entries:
 ## Open items
 
 ### D35. Lightroom Classic parity backlog (researched 2026-09-30) — feature gaps, prioritized
-Sources: Adobe Lightroom Classic release notes (15.2-15.6, 2026) plus general Lightroom knowledge; items marked (R) came from the release notes, the rest are unverified against them. Supersedes nothing in CLAUDE.md's "Gaps vs. Adobe Lightroom Desktop" (which covers Develop only) — this adds Library/Import/Export/multi-photo gaps. Each item is its own session (Plan Mode first). Priority order (value / effort):
+Sources: Lightroom Classic releases 14.4 (Jun 2025) through 15.6 (Sep 2026) as summarized by Lightroom Queen and PhotoshopCAFE (Adobe's own release-notes pages returned 403), plus general Lightroom knowledge; items marked (R) are confirmed in those summaries, the rest are unverified. Release-note additions are in the second list below. Supersedes nothing in CLAUDE.md's "Gaps vs. Adobe Lightroom Desktop" (which covers Develop only) — this adds Library/Import/Export/multi-photo gaps. Each item is its own session (Plan Mode first). Priority order (value / effort):
 
 1. **Profiles / LUTs** (`.cube`, Amount slider) + small Develop gaps: Vignette Softness, B&W Intensity/Neutrals/Tone/Grain, Color Grading Blending/Balance + Global wheel, HSL per-band Lightness check, Calibration panel, custom crop overlays.
 2. **AI masks via Apple Vision / Core ML**: Subject, Sky, Background, People parts, Landscape (R: Feather/Edge refine sliders, Aug 2026), Object Select, Depth Range, in-mask Add/Subtract/Invert layers. Start with a feasibility spike (`VNGenerateForegroundInstanceMaskRequest` gives Subject/People free; Sky/Landscape need a model) — same approach as the MetalFX probe.
@@ -45,6 +45,17 @@ Sources: Adobe Lightroom Classic release notes (15.2-15.6, 2026) plus general Li
 7. **Culling / faces**: Assisted Culling, duplicate detection, face detection + People view (R: Faces panel with Eye Focus / Eyes Open scores, June 2026).
 8. **Persist edit history** across sessions (ours is in-memory), Smart Previews (offline editing), folder move/rename inside the app, Soft Proofing, Print/Slideshow/Map (low value for this app).
 9. **Phase 8 polish** (tiled rendering, perf) and the open items below (start with D28).
+
+**Additions from the release-note pass (14.4 → 15.6), not covered in the list above:**
+- **Retouch**: automatic Dust/sensor-spot removal (15.0), Distraction Remove for people and reflections (14.4, improved 15.0/15.6), shadow + reflection detection when removing an object (15.0). Fold into item 3 — a classic spot-detect + heal pass could cover dust without ML.
+- **Point Color "Variance" slider** (15.0) — evens or increases color contrast within the picked range. Small extension of our shipped Point Color (same kernel family; own design pass).
+- **HDR editing/output**: HDR Headroom / HDR Limit slider (1.0–8.0), Display P3 + HDR + video color spaces, 32-bit HDR hand-off to Photoshop, HDR panorama. Our pipeline already preserves >1.0 linear headroom; needs an EDR (extended dynamic range) display path — new architecture, own spike.
+- **AI mask refinement**: Feather/Edge sliders (15.5), finer Select Subject edges (hair/feathers, 15.4), Snow landscape mask (15.0), Scene Quick Actions (14.4, e.g. Water slider), Adaptive Presets incl. seasonal Landscape (15.0), new film-inspired presets/profiles (15.3). Goes with item 2 / item 1.
+- **Enhance**: Super Resolution + Denoise applied non-destructively without writing a DNG (14.4), Topaz 2x/4x generative upscale (15.2), Render to DNG (15.5), Flatten AI Edits (15.5). Our Enhance already writes a separate 2x JPEG; the gap is Denoise, non-baked/editable Enhance, and output formats.
+- **Library**: Auto Stack by time (incl. millisecond precision) or visual similarity (15.0), Assisted Culling with Subject/Eye Focus + eyes-open scoring (15.0–15.4), duplicate detection incl. matching capture date/time + size (14.4/15.4), Color Labels (15.0), Batch Rename (also inside Export, 15.2), "Show photos in subfolders" (15.0), AI/edit-applied filters in metadata search and Smart Collections (14.4/15.4), natural-language search (cloud only, 15.3), keyword sync (15.4). Fold into items 4 and 7.
+- **Robustness we lack**: relocating an entire missing folder (14.4) — our D5 relocate handles individual files only; in-app catalog-data corruption detection/repair (15.5); Background Activity Manager to pause face/duplicate scans (15.4); faster mask-brush painting (15.4; ours has a known perf finding for brush-∩-brush + Clarity).
+- **Format/UI**: WebP import/edit (15.2), PNG export (14.4 — ours already has it), PSB (15.3), Photoshop export options for 16-bit ProPhoto (15.3), Zoom-while-cropping (Z key, 15.0/15.3), Rotate/Flip recorded in History + crop-mask opacity (15.5), 4K slideshow/video export (15.0), Leica/Canon tethering (15.0/15.4).
+- **Generative/cloud, deliberately excluded**: Firefly edit/video/boards, Prompt to Edit (15.6, early access), Generative Expand (desktop app, 15.5), Edit Using Describe, Animate.
 
 Deliberately not pursued: cloud sync, Adobe/Firefly integration, mobile.
 

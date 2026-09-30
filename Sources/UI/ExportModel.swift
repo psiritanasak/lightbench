@@ -108,7 +108,9 @@ final class ExportModel: ObservableObject {
             for (index, photo) in photos.enumerated() {
                 let editState = PhotoExporter.loadEditState(for: photo)
                 do {
-                    _ = try await PhotoExporter.export(photo, editState: editState, to: destination, settings: settingsSnapshot)
+                    _ = try await PhotoExporter.export(
+                        photo, editState: editState, to: destination, settings: settingsSnapshot, sequenceIndex: index
+                    )
                     succeeded += 1
                 } catch {
                     failed += 1

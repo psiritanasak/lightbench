@@ -30,7 +30,7 @@ enum NamingError: Error, Equatable, LocalizedError {
         case .emptyResult:
             return "That template produces an empty file name."
         case .tooLong:
-            return "That template produces a file name longer than 255 bytes."
+            return "The file name would be longer than 255 bytes."
         }
     }
 }
@@ -49,7 +49,8 @@ struct NamingContext: Sendable {
     var fileExtension: String
     /// This photo's 0-based position in the batch, in the order the caller
     /// supplied (the Library grid's displayed order for a rename; the export
-    /// loop's order for an export).
+    /// loop's order for an export). Position, not "count of successes": a
+    /// photo that fails or is refused leaves a gap in `{seq}`.
     var sequenceIndex: Int
     /// What `{seq}` counts up from (default 1, so the first photo is `001`).
     /// Must be >= 0 — a `{seq}` that renders as `-001` would put a leading `-`
@@ -88,9 +89,32 @@ fileprivate enum NamingSegment: Equatable, Sendable {
 struct CompiledNamingTemplate: Sendable {
     fileprivate let segments: [NamingSegment]
 
+    /// True when the template contains `{date}`/`{datetime}` — so a caller can
+    /// skip the (file I/O) `CaptureDate` read entirely for templates that
+    /// don't need it.
+    var usesCaptureDate: Bool {
+        segments.contains { segment in
+            if case .token(let token) = segment, token == .date || token == .datetime { return true }
+            return false
+        }
+    }
+
     /// The full file name (rendered, sanitized base name + `.` + original
     /// extension) for one photo.
     func render(context: NamingContext) -> Result<String, NamingError> {
+        switch renderBaseName(context: context) {
+        case .success(let base):
+            return .success(context.fileExtension.isEmpty ? base : base + "." + context.fileExtension)
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    /// Just the rendered, sanitized BASE name (no extension) — for callers,
+    /// like Export, whose output extension differs from the source's and who
+    /// add their own collision suffix. The 255-byte limit is still measured
+    /// against the FULL name (`base.extension`), using `context.fileExtension`.
+    func renderBaseName(context: NamingContext) -> Result<String, NamingError> {
         var base = ""
         for segment in segments {
             switch segment {
@@ -114,7 +138,7 @@ struct CompiledNamingTemplate: Sendable {
 
         let fileName = context.fileExtension.isEmpty ? rendered : rendered + "." + context.fileExtension
         guard fileName.utf8.count <= 255 else { return .failure(.tooLong) }
-        return .success(fileName)
+        return .success(rendered)
     }
 }
 

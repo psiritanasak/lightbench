@@ -1129,6 +1129,16 @@ panel, so heavy queued renders / GPU memory pressure on the 8GB machine are
 suspects, but nothing was verified. If it recurs: capture it, note zoom/pan state
 and pending edits, and check whether it clears after a re-render. Not investigated.
 
+### D39. A collision suffix " (N)" can push a file name past 255 bytes (found reviewing Export naming, 2026-09-30) — open, fixed for rename in batch-rename commit 3
+
+`PhotoExporter.uniqueFileURL` (shared by Export and Enhance) appends " (2)", " (3)"…
+to a base name that already passed the 255-byte check WITHOUT the suffix. A base within a few
+bytes of the limit then produces a path `fileExists` can't resolve (ENAMETOOLONG reads as "no
+such file"), the loop returns that candidate, and the write fails with a generic Cocoa error;
+nothing is overwritten and the temp file is cleaned up, so it is safe but the message is poor.
+Pre-existing (the old default naming had it too). Cleanest fix: trim the base to fit BEFORE adding
+the suffix, in the one shared function.
+
 ## Working agreements
 1. One item per session, smallest viable slice, Plan Mode first (CLAUDE.md).
 2. Performance items: measure before and after on a real large photo/library; record numbers in PROGRESS.md.

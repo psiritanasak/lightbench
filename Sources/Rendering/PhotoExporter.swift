@@ -28,16 +28,26 @@ struct ExportSettings: Sendable {
     var format: ExportFormat = .jpeg
     var quality: CGFloat = 0.9 // JPEG only, 0...1
     var resize: ExportResize = .original
+    /// File-name template for the exported files (`NamingTemplate` syntax).
+    /// The default `{name}` reproduces the source's own base name exactly,
+    /// i.e. today's behavior, byte-identical. `{seq}` numbers photos by their
+    /// POSITION in the batch: a photo that fails (or is refused) leaves a gap
+    /// (001, 003…) rather than renumbering, so a re-export of only the failures
+    /// can't collide with an earlier number.
+    var namingTemplate: String = NamingTemplate.defaultTemplate
 }
 
 enum PhotoExportError: LocalizedError {
     case unreadableSource(String)
     case incompleteSource(String)
+    case invalidNaming(NamingError)
 
     var errorDescription: String? {
         switch self {
         case .unreadableSource(let path):
             return "Couldn't read \"\(path)\" — the app may not currently have permission to access it."
+        case .invalidNaming(let error):
+            return error.errorDescription ?? "The file name template is invalid."
         case .incompleteSource(let path):
             return "\"\(path)\" looks cut off (an incomplete or damaged file), so exporting it would write a partial image. Nothing was written. (The photo can still be opened and viewed.)"
         }
@@ -125,19 +135,29 @@ enum PhotoExporter {
         _ photo: Photo,
         editState: EditState,
         to destinationFolder: URL,
-        settings: ExportSettings
+        settings: ExportSettings,
+        sequenceIndex: Int = 0
     ) async throws -> URL {
         let sourceURL = URL(fileURLWithPath: photo.path)
         // D37: refuse a truncated source rather than silently exporting a partial image.
         if SourceIntegrity.verdict(forFileAt: sourceURL) == .truncated {
             throw PhotoExportError.incompleteSource(photo.path)
         }
+        // Naming is resolved BEFORE the expensive decode/render so a bad
+        // template fails fast. The capture-date read (file I/O) only happens
+        // for templates that actually use {date}/{datetime}.
+        let baseName = try Self.destinationBaseName(
+            for: photo, sourceURL: sourceURL, format: settings.format,
+            template: settings.namingTemplate, sequenceIndex: sequenceIndex
+        )
         guard let oriented = await RawDecoder.decode(contentsOf: sourceURL, editState: editState) else {
             throw PhotoExportError.unreadableSource(photo.path)
         }
         let edited = EditPipeline.apply(editState, to: oriented)
         let resized = Self.resized(edited, option: settings.resize)
-        let outputURL = Self.uniqueDestinationURL(for: photo, in: destinationFolder, format: settings.format)
+        let outputURL = Self.uniqueFileURL(
+            baseName: baseName, fileExtension: settings.format.fileExtension, in: destinationFolder
+        )
 
         // Writes to an app-writable temp file via CIContext first, then
         // moves those bytes into the real destination via plain
@@ -210,6 +230,45 @@ enum PhotoExporter {
         guard longSide > maxLongEdge, longSide > 0 else { return image }
         let scale = maxLongEdge / longSide
         return image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    }
+
+    /// The exported file's base name (no extension) for `photo` under
+    /// `template`: `{seq}` counts from 1 at `sequenceIndex` 0, `{date}` reads
+    /// the source's capture date (only when the template needs it). Throws
+    /// `PhotoExportError.invalidNaming` for a bad template or an unusable
+    /// result. Internal for testability.
+    static func destinationBaseName(
+        for photo: Photo, sourceURL: URL, format: ExportFormat, template: String, sequenceIndex: Int
+    ) throws -> String {
+        let compiled: CompiledNamingTemplate
+        switch NamingTemplate.compile(template) {
+        case .success(let value): compiled = value
+        case .failure(let error): throw PhotoExportError.invalidNaming(error)
+        }
+        let captureDate = compiled.usesCaptureDate
+            ? CaptureDate.read(from: sourceURL, fallback: photo.importedAt)
+            : photo.importedAt
+        return try destinationBaseName(for: photo, format: format, compiled: compiled, sequenceIndex: sequenceIndex, captureDate: captureDate)
+    }
+
+    /// Pure core (no I/O) of `destinationBaseName` — what the tests and the
+    /// Export sheet's live preview call with an already-known capture date.
+    static func destinationBaseName(
+        for photo: Photo, format: ExportFormat, compiled: CompiledNamingTemplate, sequenceIndex: Int, captureDate: Date
+    ) throws -> String {
+        let context = NamingContext(
+            baseName: (photo.filename as NSString).deletingPathExtension,
+            fileExtension: format.fileExtension,
+            sequenceIndex: sequenceIndex,
+            captureDate: captureDate,
+            rating: photo.rating,
+            colorLabel: photo.colorLabel,
+            flagStatus: photo.flagStatus
+        )
+        switch compiled.renderBaseName(context: context) {
+        case .success(let base): return base
+        case .failure(let error): throw PhotoExportError.invalidNaming(error)
+        }
     }
 
     /// `photo.filename` with `format`'s extension, in `folder` — appending

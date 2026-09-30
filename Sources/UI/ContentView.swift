@@ -1051,7 +1051,9 @@ struct ContentView: View {
                 Text(message)
             }
             .sheet(isPresented: $exportModel.isPresentingOptions) {
-                ExportOptionsView(exportModel: exportModel, photoCount: photosToExport.count) {
+                ExportOptionsView(
+                    exportModel: exportModel, photoCount: photosToExport.count, previewPhoto: photosToExport.first
+                ) {
                     exportModel.runExport(photos: photosToExport)
                 }
             }

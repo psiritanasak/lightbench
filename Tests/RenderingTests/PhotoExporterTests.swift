@@ -214,4 +214,139 @@ final class PhotoExporterTests: XCTestCase {
             // expected
         }
     }
+
+    // MARK: - Naming templates (batch rename, commit 2)
+
+    private func photo(named filename: String, path: String? = nil, rating: Int = 0,
+                       label: ColorLabel = .none, flag: FlagStatus = .none) -> Photo {
+        Photo(id: 1, path: path ?? tempDir.appendingPathComponent(filename).path, filename: filename, fileSize: nil,
+              importedAt: Date(timeIntervalSince1970: 1_772_719_629), rating: rating, flagStatus: flag, colorLabel: label)
+    }
+
+    /// A JPEG carrying an EXIF capture date, so `{date}` has something real to read.
+    private func writeJPEGWithEXIFDate(_ exifDate: String, named name: String) throws -> URL {
+        let ctx = try XCTUnwrap(CGContext(
+            data: nil, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+        let url = tempDir.appendingPathComponent(name)
+        let dest = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil))
+        let props: [CFString: Any] = [kCGImagePropertyExifDictionary: [kCGImagePropertyExifDateTimeOriginal: exifDate]]
+        CGImageDestinationAddImage(dest, try XCTUnwrap(ctx.makeImage()), props as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(dest))
+        return url
+    }
+
+    func testDefaultTemplateGivesTheSourcesOwnBaseNameEvenForAwkwardNames() throws {
+        // Byte-identical to the pre-template behavior, incl. names the sanitizer would change.
+        for filename in ["IMG_0001.JPG", "My Trip (2).jpeg", "a:b.png", ".hidden.jpg", "IMG..7.tif", "日本語.NEF"] {
+            let base = try PhotoExporter.destinationBaseName(
+                for: photo(named: filename), sourceURL: tempDir.appendingPathComponent(filename),
+                format: .jpeg, template: NamingTemplate.defaultTemplate, sequenceIndex: 0
+            )
+            XCTAssertEqual(base, (filename as NSString).deletingPathExtension, filename)
+        }
+    }
+
+    func testExportSettingsDefaultsToTheIdentityTemplate() {
+        XCTAssertEqual(ExportSettings().namingTemplate, "{name}")
+    }
+
+    func testSequenceUsesTheBatchIndexAndCountsFromOne() throws {
+        let p = photo(named: "IMG_1.jpg")
+        let names = try (0..<3).map {
+            try PhotoExporter.destinationBaseName(
+                for: p, sourceURL: p.path.isEmpty ? tempDir : URL(fileURLWithPath: p.path),
+                format: .jpeg, template: "Trip_{seq:2}", sequenceIndex: $0
+            )
+        }
+        XCTAssertEqual(names, ["Trip_01", "Trip_02", "Trip_03"])
+    }
+
+    func testRatingLabelAndFlagComeFromThePhoto() throws {
+        let p = photo(named: "IMG_1.jpg", rating: 4, label: .green, flag: .picked)
+        let base = try PhotoExporter.destinationBaseName(
+            for: p, sourceURL: URL(fileURLWithPath: p.path), format: .jpeg,
+            template: "{name}-{rating}-{label}-{flag}", sequenceIndex: 0
+        )
+        XCTAssertEqual(base, "IMG_1-4-green-picked")
+    }
+
+    func testDateTokenReadsTheSourcesEXIFCaptureDate() throws {
+        let url = try writeJPEGWithEXIFDate("2024:12:25 08:30:00", named: "dated.jpg")
+        let p = photo(named: "dated.jpg", path: url.path)
+        let base = try PhotoExporter.destinationBaseName(
+            for: p, sourceURL: url, format: .jpeg, template: "{datetime}_{name}", sequenceIndex: 0
+        )
+        XCTAssertEqual(base, "20241225-083000_dated")
+    }
+
+    /// What gates the capture-date file read: only `{date}`/`{datetime}` need it. (This does NOT
+    /// prove the source is unread — `CaptureDate.read` never throws — only that the gate is right.)
+    func testOnlyDateTokensAskForTheCaptureDate() throws {
+        XCTAssertFalse(try NamingTemplate.compile("{seq}_{name}_{rating}{label}{flag}").get().usesCaptureDate)
+        XCTAssertTrue(try NamingTemplate.compile("x{date}").get().usesCaptureDate)
+        XCTAssertTrue(try NamingTemplate.compile("{datetime}").get().usesCaptureDate)
+        XCTAssertTrue(try NamingTemplate.compile("{{}}{name}{seq}{date}").get().usesCaptureDate)
+    }
+
+    func testInvalidTemplateThrowsInvalidNamingWithTheSpecificReason() {
+        let p = photo(named: "IMG_1.jpg")
+        XCTAssertThrowsError(try PhotoExporter.destinationBaseName(
+            for: p, sourceURL: URL(fileURLWithPath: p.path), format: .jpeg, template: "{bogus}", sequenceIndex: 0
+        )) { error in
+            guard case PhotoExportError.invalidNaming(.unknownToken("bogus")) = error else {
+                return XCTFail("expected invalidNaming(unknownToken), got \(error)")
+            }
+        }
+    }
+
+    func testExportWritesTheTemplatedNameWithTheExportFormatsExtension() async throws {
+        let sourceURL = try writeSolidColorJPEG(size: 64, named: "IMG_9.jpg")
+        let p = Photo(id: 1, path: sourceURL.path, filename: "IMG_9.jpg", fileSize: nil, importedAt: Date(), rating: 3)
+        let out = tempDir.appendingPathComponent("out", isDirectory: true)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        var settings = ExportSettings(format: .png)
+        settings.namingTemplate = "Trip_{seq:3}_{rating}star"
+
+        let url = try await PhotoExporter.export(p, editState: .identity, to: out, settings: settings, sequenceIndex: 6)
+
+        XCTAssertEqual(url.lastPathComponent, "Trip_007_3star.png") // export ext (png), not the source's (jpg)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testTemplatedExportNeverOverwritesAndKeepsTheCollisionSuffix() async throws {
+        let sourceURL = try writeSolidColorJPEG(size: 32, named: "IMG_1.jpg")
+        let p = Photo(id: 1, path: sourceURL.path, filename: "IMG_1.jpg", fileSize: nil, importedAt: Date())
+        let out = tempDir.appendingPathComponent("out", isDirectory: true)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        var settings = ExportSettings()
+        settings.namingTemplate = "same"
+
+        let first = try await PhotoExporter.export(p, editState: .identity, to: out, settings: settings)
+        let second = try await PhotoExporter.export(p, editState: .identity, to: out, settings: settings)
+
+        XCTAssertEqual(first.lastPathComponent, "same.jpg")
+        XCTAssertEqual(second.lastPathComponent, "same (2).jpg")
+    }
+
+    func testExportWithAnInvalidTemplateFailsBeforeWritingAnything() async throws {
+        let sourceURL = try writeSolidColorJPEG(size: 32, named: "IMG_1.jpg")
+        let p = Photo(id: 1, path: sourceURL.path, filename: "IMG_1.jpg", fileSize: nil, importedAt: Date())
+        let out = tempDir.appendingPathComponent("out", isDirectory: true)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        var settings = ExportSettings()
+        settings.namingTemplate = "{oops"
+
+        do {
+            _ = try await PhotoExporter.export(p, editState: .identity, to: out, settings: settings)
+            XCTFail("expected an invalid template to fail the export")
+        } catch let error as PhotoExportError {
+            guard case .invalidNaming(.unterminatedBrace) = error else { return XCTFail("got \(error)") }
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: out.path), [])
+    }
 }
+

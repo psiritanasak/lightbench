@@ -18,6 +18,14 @@ warning). Live check not verified: pan/zoom and clean slider-drag latency at
 temporary harness was deleted.
 
 Recently shipped (newest first; details in history):
+- **Color labels (2026-09-30)** — `ColorLabel` (red/yellow/green/blue/purple),
+  Migration 008, `LibraryLabelFilter` + Label picker, colored dot on thumbnails,
+  per-cell Color Label menu, keys 6-9 (red/yellow/green/blue; purple menu-only).
+  Reviewer: FIX FIRST (docs/stale-comment only) → APPROVE. 1414 tests pass.
+  Live-verified in a Release build against the real catalog (backed up first,
+  every change undone): migration applied, menu label + dot, DB value, Label
+  filter. NOT verified: keys 6-9 (need a focused grid cell; synthetic key events
+  have not reached the grid before). Batch rename is NOT done (next slice).
 - **D34 (2026-09-30)** — test host no longer opens the real catalog or prunes
   real folder bookmarks. 1375 tests pass.
 - **Pick/Reject flags (2026-09-29)** — `FlagStatus`, Migration 007, P/X/U keys,
@@ -56,7 +64,7 @@ debounced save). Also open there: D31/D32 (security-scope gaps), D13 (phantom
 brush mask on photo switch), D22/D24/D26 (design gaps), D20 keyboard half.
 
 ### Planned next slices (from IMPROVEMENTS.md D35, one per session, Plan Mode first)
-1. **Color labels + batch rename** (Library; cheap wins, new migration 008) — or, if preferring AI, the **Vision subject-mask feasibility spike** (`VNGenerateForegroundInstanceMaskRequest`, probe test like the MetalFX one).
+1. ~~Color labels~~ ✅ shipped. **Batch rename** (Library + inside Export; next Library slice) — or, if preferring AI, the **Vision subject-mask feasibility spike** (`VNGenerateForegroundInstanceMaskRequest`, probe test like the MetalFX one).
 2. **Profiles / LUTs** + small Develop gaps (Vignette Softness, B&W panel, Color Grading Blending, Point Color Variance).
 3. **Spot removal**: manual heal/clone, then automatic dust detection (no ML).
 4. **AI masks** (Subject/Sky/Background/People, mask Feather/Edge refine) after the spike.

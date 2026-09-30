@@ -9,10 +9,20 @@ in one pass when resuming after a cutoff, not accumulate into another log.
 ## Current phase
 **Pick/Reject flags (2026-09-29)** — three-state `FlagStatus` replaces
 `isFlagged` (Migration 007, `LibraryFlagFilter`, P/X/U keys, dimmed
-rejects). 1370 tests pass. NOT yet live-verified: back up the real
-`catalog.sqlite` to the scratchpad first, then confirm in a Release build
-that flagged photos migrated to Picked, the menu/keys/filter work, and
-state survives relaunch (needs the user's permission for screen automation).
+rejects). 1370 tests pass. LIVE-VERIFIED 2026-09-30 (Release build, user's
+real catalog, every change undone afterward: 0 flagged of 1094 before and
+after): the Photo-options menu's Pick/Reject/Unflag (VoiceOver label
+"Unflag, current" seen via AX), red-X icon + dimmed thumbnail on Reject,
+yellow flag on Pick, DB `flagStatus` -1/1 confirmed via read-only sqlite3,
+and the Flag filter (Rejected shows only the rejected photo; Hide Rejected
+removes it; All Flags restores). The real catalog had ALREADY migrated
+(17:07 on 2026-09-29) when `xcodebuild test` launched the app as its test
+host — before any backup existed; a Time Machine local snapshot of the
+pre-migration file showed 1094 photos / 0 flagged, matching the migrated
+result (main DB file only; its WAL was not copied). NOT verified: the
+cell's flag-icon click (my automation click missed it), the P/X/U keys
+(synthetic key events don't reach this app), quit/relaunch (DB-level
+persistence was confirmed instead). See IMPROVEMENTS.md D34.
 
 **D23 SHIPPED (2026-09-29)** — Transform Scale/Stretch's minification
 now runs through `CIFilter.lanczosScaleTransform()` instead of a plain

@@ -2147,6 +2147,18 @@ behavior change at this panel's scale).
 
 ---
 
+### D34. `xcodebuild test` runs migrations against the user's REAL catalog (found 2026-09-30, Pick/Reject live check)
+
+The unit-test bundle's host is the app itself; `CatalogModel.init()` opens
+the on-disk catalog (`~/Library/Containers/com.photoapp.PhotoApp/Data/Library/
+Application Support/PhotoApp/catalog.sqlite`) at launch, so running the test
+suite applies any pending migration (007 here) to the developer's real
+catalog before a backup can be taken. Harmless for Migration 007 (verified
+against a Time Machine snapshot: 1094 photos / 0 flagged before and after),
+but a destructive future migration would run unattended. Options: have the
+test host detect XCTest (`XCTestConfigurationFilePath`) and use an in-memory
+or temp-directory catalog, or back the file up before migrating. Not fixed.
+
 ## Working agreements for whichever agent implements
 
 1. One item per session, smallest viable slice, Plan Mode first (CLAUDE.md).

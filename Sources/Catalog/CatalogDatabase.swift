@@ -31,16 +31,59 @@ final class CatalogDatabase: Sendable {
     /// `Application Support/PhotoApp/catalog.sqlite`. This lives inside
     /// the app's own sandbox container, so — unlike the user's photo
     /// files — it needs no security-scoped bookmark to read or write.
+    /// Under XCTest the catalog lives in a throwaway temp directory instead
+    /// — see `defaultCatalogDirectory(isRunningUnderXCTest:)`.
     convenience init() throws {
-        let supportDir = try FileManager.default.url(
+        let supportDir = try Self.defaultCatalogDirectory()
+        let dbURL = supportDir.appendingPathComponent("catalog.sqlite")
+        try self.init(path: dbURL.path)
+    }
+
+    /// True when this process was launched by the XCTest runner. `PhotoAppTests`
+    /// is hosted by the app itself, so the app's own launch-time code runs
+    /// inside the test host — anything there that touches real user state
+    /// (the catalog, `UserDefaults.standard` folder bookmarks) must check
+    /// this. Any of the runner's environment markers counts (OR, not AND): a
+    /// missing marker fails OPEN — silently back to the real catalog, which
+    /// is exactly the D34 bug — so accept every one we know of.
+    static var isRunningUnderXCTest: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return ["XCTestConfigurationFilePath", "XCTestBundlePath", "XCTestSessionIdentifier"]
+            .contains { environment[$0] != nil }
+    }
+
+    /// Where `init()` keeps `catalog.sqlite`, WITHOUT creating anything (D34,
+    /// IMPROVEMENTS.md). With the real Application Support directory, launching
+    /// the test host used to make `xcodebuild test` silently apply pending
+    /// migrations to the developer's real catalog before any backup could be
+    /// taken. Under XCTest this is a directory unique to THIS process inside
+    /// the temp directory (never deleted by us — the OS cleans temp — because
+    /// wiping a shared fixed path would delete the catalog another live test
+    /// host, e.g. under parallel testing, still has open).
+    /// `isRunningUnderXCTest` is a parameter so both branches are unit-testable
+    /// from inside a test process.
+    static func catalogDirectoryURL(isRunningUnderXCTest: Bool = CatalogDatabase.isRunningUnderXCTest) throws -> URL {
+        let fileManager = FileManager.default
+        if isRunningUnderXCTest {
+            return fileManager.temporaryDirectory.appendingPathComponent(
+                "PhotoApp-XCTest-catalog-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true
+            )
+        }
+        return try fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
-            create: true
+            create: false
         ).appendingPathComponent("PhotoApp", isDirectory: true)
-        try FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
-        let dbURL = supportDir.appendingPathComponent("catalog.sqlite")
-        try self.init(path: dbURL.path)
+    }
+
+    /// `catalogDirectoryURL`, created if missing — what `init()` uses.
+    static func defaultCatalogDirectory(
+        isRunningUnderXCTest: Bool = CatalogDatabase.isRunningUnderXCTest
+    ) throws -> URL {
+        let dir = try catalogDirectoryURL(isRunningUnderXCTest: isRunningUnderXCTest)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
     }
 
     /// Opens a catalog at an explicit path.

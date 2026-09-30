@@ -195,7 +195,13 @@ final class CatalogModel: ObservableObject {
                 let database = try CatalogDatabase()
                 await MainActor.run {
                     self?.database = database
-                    self?.activateKnownFolders()
+                    // D34: the test host must not prune/activate the developer's
+                    // REAL folder bookmarks (`activateKnownFolders` deletes any
+                    // bookmark that fails to resolve from `UserDefaults.standard`);
+                    // its throwaway temp catalog needs no folder access anyway.
+                    if !CatalogDatabase.isRunningUnderXCTest {
+                        self?.activateKnownFolders()
+                    }
                 }
                 await self?.refresh()
             } catch {

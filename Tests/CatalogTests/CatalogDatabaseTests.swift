@@ -176,6 +176,71 @@ final class CatalogDatabaseTests: XCTestCase {
         XCTAssertTrue(columns.contains("flagStatus"))
     }
 
+    // MARK: - Default catalog location under XCTest (D34, IMPROVEMENTS.md)
+
+    private static func isUnderTemporaryDirectory(_ url: URL) -> Bool {
+        url.standardizedFileURL.path.hasPrefix(FileManager.default.temporaryDirectory.standardizedFileURL.path)
+    }
+
+    /// Pure path computation — creates nothing, so this can never touch the
+    /// real container even when asked for the real location.
+    func testCatalogDirectoryUnderXCTestIsAProcessUniqueTempDirectory() throws {
+        let realDir = try CatalogDatabase.catalogDirectoryURL(isRunningUnderXCTest: false)
+        let testDir = try CatalogDatabase.catalogDirectoryURL(isRunningUnderXCTest: true)
+
+        XCTAssertNotEqual(testDir.standardizedFileURL, realDir.standardizedFileURL)
+        XCTAssertTrue(Self.isUnderTemporaryDirectory(testDir))
+        XCTAssertTrue(testDir.lastPathComponent.hasSuffix("-\(ProcessInfo.processInfo.processIdentifier)"))
+    }
+
+    func testCatalogDirectoryOutsideXCTestIsApplicationSupport() throws {
+        let realDir = try CatalogDatabase.catalogDirectoryURL(isRunningUnderXCTest: false)
+        XCTAssertTrue(realDir.path.hasSuffix("Application Support/PhotoApp"))
+    }
+
+    func testDefaultCatalogDirectoryUnderXCTestCreatesAndReusesTheSameTempDirectory() throws {
+        let first = try CatalogDatabase.defaultCatalogDirectory(isRunningUnderXCTest: true)
+        try XCTSkipUnless(Self.isUnderTemporaryDirectory(first), "XCTest branch did not return a temp dir")
+        let marker = first.appendingPathComponent("marker.txt")
+        try Data("x".utf8).write(to: marker)
+
+        let second = try CatalogDatabase.defaultCatalogDirectory(isRunningUnderXCTest: true)
+
+        XCTAssertEqual(first, second)
+        // Never wiped: a second call must not delete a sibling host's live catalog.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        try? FileManager.default.removeItem(at: marker)
+    }
+
+    /// This test process IS an XCTest run, so the default detection must fire
+    /// here — checked WITHOUT needing a real catalog on the machine, so a
+    /// regression is caught on CI / a fresh checkout too.
+    func testXCTestIsDetectedInThisProcess() throws {
+        XCTAssertTrue(CatalogDatabase.isRunningUnderXCTest)
+        let defaultDir = try CatalogDatabase.catalogDirectoryURL()
+        XCTAssertTrue(Self.isUnderTemporaryDirectory(defaultDir))
+    }
+
+    /// End-to-end guard for the actual bug: constructing the app's default
+    /// catalog from inside this test process must not touch the real one.
+    func testConvenienceInitInThisProcessDoesNotTouchTheRealCatalog() async throws {
+        // Stop BEFORE constructing anything if detection regressed — otherwise
+        // the `CatalogDatabase()` below would itself open (and migrate) the
+        // real catalog, the exact failure this test exists to prevent.
+        let defaultDir = try CatalogDatabase.catalogDirectoryURL()
+        try XCTSkipUnless(Self.isUnderTemporaryDirectory(defaultDir), "detection regressed; see testXCTestIsDetectedInThisProcess")
+
+        let realFile = try CatalogDatabase.catalogDirectoryURL(isRunningUnderXCTest: false)
+            .appendingPathComponent("catalog.sqlite")
+        let before = try? FileManager.default.attributesOfItem(atPath: realFile.path)[.modificationDate] as? Date
+
+        let db = try CatalogDatabase()
+        _ = try await db.allPhotos()
+
+        let after = try? FileManager.default.attributesOfItem(atPath: realFile.path)[.modificationDate] as? Date
+        XCTAssertEqual(before, after)
+    }
+
     // MARK: - Removal (D5, IMPROVEMENTS.md)
 
     func testDeletePhotoRemovesTheRow() async throws {

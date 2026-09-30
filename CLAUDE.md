@@ -14,8 +14,11 @@ Edits are stored as parameter sets and rendered live on the GPU.
   already-shipped item, especially RAW (Phase 6) or Masking (Phase 7).
 - **`PROGRESS.md`**: resumption state — current phase, in-progress work, exact
   next step, open reviewer issues. Read first when resuming after a cutoff.
-- **`IMPROVEMENTS.md`**: known non-blocking gaps/nits logged during review,
-  not yet worth their own session.
+- **`IMPROVEMENTS.md`**: OPEN non-blocking gaps/nits logged during review,
+  not yet worth their own session, plus a one-line index of shipped ones.
+- **`docs/PROGRESS_HISTORY.md`** / **`docs/IMPROVEMENTS_HISTORY.md`**: archived
+  full text of shipped work moved out of the two files above. When an item
+  ships, move its detail there and leave a short summary/index line behind.
 
 ## Stack
 - Swift + SwiftUI (AppKit interop where needed)

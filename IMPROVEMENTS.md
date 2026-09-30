@@ -1167,6 +1167,14 @@ time the template or start number changes: roughly 3,000 `stat`s per keystroke a
 a local SSD, noticeable on a network volume or slow external drive. Not measured. If it ever hurts,
 debounce `RenameModel.recomputePlan` (~150 ms) and/or move the plan build off the main actor.
 
+### D43. The rename success alert is timed, not tied to the sheet's dismissal (batch-rename commit 4 review, 2026-09-30) — open, low
+
+`RenameModel` dismisses the sheet, sleeps 350 ms, then raises the "Renamed N photos" alert, because macOS can
+drop an alert raised in the same pass as a sheet's dismissal. That is a timing guess: on a slow machine or with
+reduced-motion animations a dismissal longer than 350 ms could still swallow the alert (files, catalog and undo
+log are already committed; only the message is lost, and Undo Rename is available regardless). Sturdier: hold
+the message and raise it from `sheetDidDisappear`.
+
 ## Working agreements
 1. One item per session, smallest viable slice, Plan Mode first (CLAUDE.md).
 2. Performance items: measure before and after on a real large photo/library; record numbers in PROGRESS.md.

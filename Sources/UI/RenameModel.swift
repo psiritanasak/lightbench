@@ -15,7 +15,9 @@ struct RenameProviders {
 /// is unit-testable; `ContentView` fills it from the live models. `hasModalPanel` is the catch-all:
 /// while ANY `NSOpenPanel.runModal()` is up (Paste's folder grant, an import/locate picker, Export's
 /// destination), menu-driven main-actor work keeps running — so a rename/undo started then could act
-/// on paths that panel's action is about to use.
+/// on paths that panel's action is about to use. NOTE: `hasModalPanel` (`NSApp.modalWindow`) only sees
+/// `runModal`/`runModalSession` panels — every file panel in this app is one today; a panel ever moved to
+/// `beginSheetModal` or SwiftUI's `.fileImporter` would slip past it and needs its own flag.
 struct RenameBusyState {
     var isLoadInFlight = false
     var isExporting = false

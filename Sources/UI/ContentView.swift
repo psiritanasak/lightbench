@@ -1451,7 +1451,10 @@ struct ContentView: View {
                         Button("Rename Files (\(selectedPhotosVisibleInGrid.count))…") {
                             renameModel.begin(photos: selectedPhotosVisibleInGrid, catalog: catalog, providers: renameProviders)
                         }
-                        .disabled(selectedPhotosVisibleInGrid.isEmpty || renameModel.isWorking || document.isLoadInFlight)
+                        .disabled(
+                            selectedPhotosVisibleInGrid.isEmpty || renameModel.isWorking || renameModel.isPresentingSheet
+                                || document.isLoadInFlight
+                        )
 
                         Button("Undo Rename") {
                             renameModel.undo(catalog: catalog, providers: renameProviders)

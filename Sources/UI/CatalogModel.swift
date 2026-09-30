@@ -74,6 +74,19 @@ final class CatalogModel: ObservableObject {
     /// where it's still visible.
     @Published var focusedPhotoPath: String?
 
+    /// True while `RenameModel` is applying or undoing a batch rename. Renaming moves files and rewrites
+    /// catalog paths, so the catalog's other path-touching actions (import, locate, remove) refuse to run
+    /// meanwhile — an import could insert a row at a path the batch is about to claim, which would make
+    /// the batch (or its Undo) fail permanently. Set only by `RenameModel`.
+    @Published var isRenameInProgress = false
+
+    /// Imports currently running (a folder scan + insert takes time and has no other flag).
+    /// `RenameModel` refuses to start while this is non-zero.
+    @Published private(set) var importsInFlight = 0
+    var isImporting: Bool { importsInFlight > 0 }
+
+    static let renameInProgressMessage = "A rename is in progress — try again in a moment."
+
     /// Sort/filter/search refinement, applied entirely in memory on top of
     /// whatever source set `selectedFilter` already produced — see
     /// `displayedPhotos`. Deliberately INDEPENDENT of `selectedFilter`
@@ -230,6 +243,7 @@ final class CatalogModel: ObservableObject {
     }
 
     func importFolder() {
+        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
         guard let database else {
             importStatusMessage = initError.map { "Couldn't open the photo catalog: \($0.localizedDescription)" }
                 ?? "The photo catalog isn't ready yet — try again in a moment."
@@ -255,12 +269,14 @@ final class CatalogModel: ObservableObject {
         // finishes.
         let accessWarning = activateFolderAccess(for: folder)
 
+        importsInFlight += 1
         Task.detached { [weak self] in
             let urls = PhotoImporter.imageFiles(in: folder)
             do {
                 let result = try await database.importPhotos(at: urls)
                 await self?.refresh()
                 await MainActor.run {
+                    self?.importsInFlight -= 1
                     var message = Self.summary(for: result)
                     if let accessWarning {
                         message += " \(accessWarning)"
@@ -269,6 +285,7 @@ final class CatalogModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    self?.importsInFlight -= 1
                     self?.importStatusMessage = "Import failed: \(error.localizedDescription)"
                 }
             }
@@ -282,6 +299,7 @@ final class CatalogModel: ObservableObject {
     /// `importFolder()` — that one stays a flat, single-level import,
     /// unchanged.
     func importFolderTree() {
+        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
         guard let database else {
             importStatusMessage = initError.map { "Couldn't open the photo catalog: \($0.localizedDescription)" }
                 ?? "The photo catalog isn't ready yet — try again in a moment."
@@ -298,19 +316,24 @@ final class CatalogModel: ObservableObject {
 
         let accessWarning = activateFolderAccess(for: folder)
 
+        importsInFlight += 1
         Task.detached { [weak self] in
             // The recursive scan is synchronous, blocking filesystem I/O
             // (mirrors `PhotoImporter.imageFiles(in:)`'s existing need to
             // run off-main) — must happen here, inside `Task.detached`,
             // not on `@MainActor`.
             guard let node = PhotoImporter.scanFolderTree(at: folder) else {
-                await MainActor.run { self?.importStatusMessage = "No photos found in that folder." }
+                await MainActor.run {
+                    self?.importsInFlight -= 1
+                    self?.importStatusMessage = "No photos found in that folder."
+                }
                 return
             }
             do {
                 let result = try await database.importFolderTree(node)
                 await self?.refresh()
                 await MainActor.run {
+                    self?.importsInFlight -= 1
                     var message = Self.summary(for: result)
                     if let accessWarning {
                         message += " \(accessWarning)"
@@ -319,6 +342,7 @@ final class CatalogModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    self?.importsInFlight -= 1
                     self?.importStatusMessage = "Import failed: \(error.localizedDescription)"
                 }
             }
@@ -584,6 +608,7 @@ final class CatalogModel: ObservableObject {
     /// reads as "Missing" in the first place, and this action is never
     /// offered for it. Documented, not solved, this slice.
     func relocatePhoto(_ photo: Photo) async {
+        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
         guard let id = photo.id, let database else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -655,6 +680,7 @@ final class CatalogModel: ObservableObject {
     /// inherited "whole folder moved" limitation as `relocatePhoto(_:)`'s
     /// own doc comment describes.
     func relocateSelectedPhotos() async {
+        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
         guard let database else { return }
         let visibleSelectedIDs = Set(photos.compactMap(\.id)).intersection(selectedPhotoIDs)
         guard !visibleSelectedIDs.isEmpty else { return }
@@ -898,6 +924,7 @@ final class CatalogModel: ObservableObject {
     ///   `invalidateThumbnail(for:)`, so a later re-import of the same
     ///   path can't resurrect a stale cached image.
     func removePhoto(_ photo: Photo) {
+        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
         guard let database, let id = photo.id else { return }
         photos.removeAll { $0.id == id }
         selectedPhotoIDs.remove(id)

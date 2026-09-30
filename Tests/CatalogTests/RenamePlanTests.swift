@@ -162,6 +162,15 @@ final class RenamePlanTests: XCTestCase {
         XCTAssertFalse(p.isApplicable) // all-or-nothing
     }
 
+    /// The Editor's photo was deleted on disk (no sidecar): a batch could rename ANOTHER photo onto its
+    /// path, and the Editor's next debounced save would then give the renamed photo the wrong edits.
+    func testARenameOntoThePathOfThePhotoOpenInTheEditorIsBlocked() throws {
+        let p = try plan([photo(1, "/f/a.jpg")], template: "gone", files: ["/f/a.jpg"], open: "/f/gone.jpg")
+        XCTAssertEqual(blocks(p), [.targetIsOpenInEditor])
+        XCTAssertFalse(p.isApplicable)
+        XCTAssertFalse(RenameBlock.targetIsOpenInEditor.message.isEmpty)
+    }
+
     func testTheSamePhotoSelectedTwiceIsBlocked() throws {
         let a = photo(1, "/f/a.jpg")
         let p = try plan([a, a, photo(2, "/f/b.jpg")], template: "{seq}")
@@ -197,7 +206,7 @@ final class RenamePlanTests: XCTestCase {
 
     func testEveryBlockHasAHumanReadableMessage() {
         let all: [RenameBlock] = [.notCatalogued, .selectedTwice, .template(.emptyResult), .collidesWithBatch("x.jpg"), .targetExists,
-                                  .targetSidecarExists, .targetCatalogued, .sourceMissing, .openInEditor]
+                                  .targetSidecarExists, .targetCatalogued, .sourceMissing, .openInEditor, .targetIsOpenInEditor]
         for block in all { XCTAssertFalse(block.message.isEmpty) }
         XCTAssertTrue(RenameBlock.collidesWithBatch("x.jpg").message.contains("x.jpg"))
     }

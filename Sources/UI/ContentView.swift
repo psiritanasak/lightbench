@@ -35,6 +35,7 @@ struct ContentView: View {
                 if document.isLoadInFlight { return "A photo is still loading — try again in a moment." }
                 if exportModel.isExporting || exportModel.isPresentingOptions { return "An export is running or being set up — finish or cancel it first." }
                 if enhanceModel.isEnhancing { return "Enhance is running — wait for it to finish." }
+                if catalog.isImporting { return "An import is running — wait for it to finish." }
                 if pasteModel.pendingTargets != nil { return "Finish or cancel the Paste Settings prompt first." }
                 return nil
             }
@@ -931,8 +932,8 @@ struct ContentView: View {
                     // press ⌘→ to start opening a different photo, then
                     // confirm). Re-check here too, at the moment of the
                     // actual, mostly-irreversible write.
-                    guard !document.isLoadInFlight else {
-                        pasteModel.statusMessage = "A photo is still loading — try Paste Settings again in a moment."
+                    guard !document.isLoadInFlight, !renameModel.isWorking else {
+                        pasteModel.statusMessage = "A photo is still loading or being renamed — try Paste Settings again in a moment."
                         return
                     }
                     // Captured ONCE, synchronously, in the same step as
@@ -1391,9 +1392,11 @@ struct ContentView: View {
                 Button("Import Folder…") {
                     catalog.importFolder()
                 }
+                .disabled(catalog.isRenameInProgress)
                 Button("Import Folder Tree…") {
                     catalog.importFolderTree()
                 }
+                .disabled(catalog.isRenameInProgress)
             } label: {
                 Label("Add Photos", systemImage: "plus")
             }
@@ -1437,7 +1440,7 @@ struct ContentView: View {
                         Button("Locate Selected…") {
                             Task { await catalog.relocateSelectedPhotos() }
                         }
-                        .disabled(selectedPhotosVisibleInGrid.isEmpty)
+                        .disabled(selectedPhotosVisibleInGrid.isEmpty || catalog.isRenameInProgress)
 
                         Button("Rename Files (\(selectedPhotosVisibleInGrid.count))…") {
                             renameModel.begin(photos: selectedPhotosVisibleInGrid, catalog: catalog, providers: renameProviders)

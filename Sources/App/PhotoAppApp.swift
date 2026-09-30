@@ -102,7 +102,7 @@ struct PhotoAppApp: App {
                 // independently, not just the toolbar button's copy of it.
                 .disabled(
                     pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight
-                        || renameModel.isWorking
+                        || renameModel.isWorking || renameModel.isPresentingSheet
                 )
                 Divider()
                 // Batch rename: no default shortcut (matches Enhance). These only REQUEST — `ContentView`
@@ -110,7 +110,10 @@ struct PhotoAppApp: App {
                 Button("Rename Files…") { renameModel.request = .rename }
                     .disabled(catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight)
                 Button("Undo Rename") { renameModel.request = .undo }
-                    .disabled(!renameModel.canUndo || renameModel.isWorking || document.isLoadInFlight)
+                    .disabled(
+                        !renameModel.canUndo || renameModel.isWorking || renameModel.isPresentingSheet
+                            || document.isLoadInFlight
+                    )
             }
         }
     }

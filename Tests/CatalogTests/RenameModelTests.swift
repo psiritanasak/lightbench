@@ -354,6 +354,7 @@ final class RenameModelTests: XCTestCase {
     func testBeginWhileTheSheetIsAlreadyOpenIsIgnored() async throws {
         let photos = try await makePhotos(["a.jpg", "b.jpg"])
         try await beginAndSettle(Array(photos.prefix(1)))
+        model.sheetDidAppear() // the sheet is genuinely on screen
         model.begin(photos: photos, catalog: catalog, providers: providers) // e.g. the Photo menu again
         XCTAssertEqual(model.photoCount, 1) // the open sheet keeps its original selection
     }
@@ -386,6 +387,137 @@ final class RenameModelTests: XCTestCase {
         openPath = link.appendingPathComponent("a.jpg").path // a different spelling of the same file
         try await beginAndSettle(photos, template: "new")
         XCTAssertEqual(model.plan?.entries.first?.decision, .blocked(.openInEditor))
+    }
+
+    // MARK: Sheet lifecycle, catalog lock, error routing (commit-4 review, round 2)
+
+    /// SwiftUI drops a presentation made while another is up: `isPresentingSheet` would stay true forever.
+    func testASheetThatNeverAppearedDoesNotBlockTheNextBegin() async throws {
+        let photos = try await makePhotos(["a.jpg", "b.jpg"])
+        try await beginAndSettle(Array(photos.prefix(1))) // presented, but `sheetDidAppear` is never called
+        model.begin(photos: photos, catalog: catalog, providers: providers)
+        XCTAssertEqual(model.photoCount, 2)
+        XCTAssertTrue(model.isPresentingSheet)
+    }
+
+    func testTheSheetDisappearingResetsThePresentedState() async throws {
+        let photos = try await makePhotos(["a.jpg"])
+        try await beginAndSettle(photos)
+        model.sheetDidAppear()
+        model.sheetDidDisappear()
+        XCTAssertFalse(model.isPresentingSheet)
+        XCTAssertFalse(model.sheetIsVisible)
+    }
+
+    func testTheCatalogIsLockedForTheWholeApplyAndUndoThenUnlocked() async throws {
+        let photos = try await makePhotos(["a.jpg"])
+        try await beginAndSettle(photos, template: "new")
+        var lockedDuringApply = false
+        model.acquireWriteAccess = { [unowned self] _ in
+            lockedDuringApply = catalog.isRenameInProgress
+            return RenameModel.WriteAccess(release: {})
+        }
+        try await applyAndWait()
+        XCTAssertTrue(lockedDuringApply)
+        XCTAssertFalse(catalog.isRenameInProgress)
+
+        var lockedDuringUndo = false
+        model.acquireWriteAccess = { [unowned self] _ in
+            lockedDuringUndo = catalog.isRenameInProgress
+            return RenameModel.WriteAccess(release: {})
+        }
+        model.undo(catalog: catalog, providers: providers)
+        XCTAssertTrue(catalog.isRenameInProgress) // flipped synchronously, like isWorking
+        try await waitUntil("undo to finish") { !self.model.isWorking }
+        XCTAssertTrue(lockedDuringUndo)
+        XCTAssertFalse(catalog.isRenameInProgress)
+    }
+
+    func testTheCatalogIsUnlockedEvenWhenApplyIsRefused() async throws {
+        let photos = try await makePhotos(["a.jpg"])
+        try await beginAndSettle(photos, template: "new")
+        grantAccess = false
+        try await applyAndWait()
+        XCTAssertFalse(catalog.isRenameInProgress)
+    }
+
+    /// Import/locate/remove could insert or repoint rows at paths the batch is about to claim.
+    func testCatalogMutatorsRefuseWhileARenameIsInProgress() async throws {
+        let photos = try await makePhotos(["a.jpg"])
+        let a = photos[0]
+        catalog.isRenameInProgress = true
+
+        catalog.importFolder() // must return BEFORE showing any file panel
+        XCTAssertEqual(catalog.importStatusMessage, CatalogModel.renameInProgressMessage)
+        catalog.importStatusMessage = nil
+        catalog.importFolderTree()
+        XCTAssertEqual(catalog.importStatusMessage, CatalogModel.renameInProgressMessage)
+        catalog.importStatusMessage = nil
+        await catalog.relocatePhoto(a)
+        XCTAssertEqual(catalog.importStatusMessage, CatalogModel.renameInProgressMessage)
+        catalog.importStatusMessage = nil
+        await catalog.relocateSelectedPhotos()
+        XCTAssertEqual(catalog.importStatusMessage, CatalogModel.renameInProgressMessage)
+
+        catalog.removePhoto(a)
+        try await Task.sleep(nanoseconds: 200_000_000) // removePhoto's DB delete is fire-and-forget
+        let remaining = try await db.allPhotos()
+        XCTAssertEqual(remaining.count, 1) // NOT removed
+
+        catalog.isRenameInProgress = false
+        XCTAssertEqual(catalog.importsInFlight, 0)
+        XCTAssertFalse(catalog.isImporting)
+    }
+
+    /// If the sheet vanished mid-apply, a failure (possibly "files couldn't be put back — use Locate…")
+    /// must still reach the user — as an alert, not as an unseen sheet error.
+    func testAFailureAfterTheSheetVanishedIsReportedAsAnAlert() async throws {
+        let photos = try await makePhotos(["a.jpg"])
+        try await beginAndSettle(photos, template: "new")
+        model.acquireWriteAccess = { [unowned self] _ in
+            model.sheetDidDisappear() // the sheet goes away during the folder prompt...
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent("a.jpg")) // ...and the file vanishes
+            return RenameModel.WriteAccess(release: {})
+        }
+        try await applyAndWait()
+        XCTAssertNotNil(model.statusMessage) // shown as an alert
+        XCTAssertNil(model.sheetError)
+    }
+
+    /// The CATCH path (not just the early refusals): the failure happens inside `applyRename`, after every
+    /// check passed — here the folder turns read-only at the post-prompt re-check — while the sheet is gone.
+    func testAnApplyFailureInsideTheEngineAfterTheSheetVanishedIsAnAlert() async throws {
+        let photos = try await makePhotos(["a.jpg"])
+        try await beginAndSettle(photos, template: "new")
+        var openPathCalls = 0
+        let folder = dir!
+        let sabotaging = RenameProviders(
+            openPhotoPath: { [unowned self] in
+                openPathCalls += 1
+                // Calls: apply's early check (1), the post-prompt re-check (2). Break the folder RIGHT AFTER the
+                // last check the model can still see, and make the sheet disappear.
+                if openPathCalls == 2 {
+                    model.sheetDidDisappear()
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+                }
+                return nil
+            },
+            busyReason: { nil }
+        )
+        model.cancel() // re-open the sheet with the sabotaging providers installed
+        model.begin(photos: photos, catalog: catalog, providers: sabotaging)
+        model.template = "new"
+        try await waitUntil("catalog path owners") { !self.model.isLoadingOwners }
+        openPathCalls = 0
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+
+        try await applyAndWait()
+
+        XCTAssertNil(model.sheetError)
+        XCTAssertTrue(model.statusMessage?.contains("Renaming failed") ?? false, "\(String(describing: model.statusMessage))")
+        XCTAssertFalse(model.isPresentingSheet)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        XCTAssertNotNil(read("a.jpg")) // nothing lost
     }
 }
 

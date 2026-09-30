@@ -84,6 +84,9 @@ struct RenameSheetView: View {
         }
         .padding()
         .frame(width: 580, height: 560)
+        .interactiveDismissDisabled(model.isWorking) // never lose the sheet (and its errors) mid-rename
+        .onAppear { model.sheetDidAppear() }
+        .onDisappear { model.sheetDidDisappear() }
     }
 
     private var previewList: some View {

@@ -24,6 +24,9 @@ enum RenameBlock: Equatable, Sendable {
     /// This photo is open in the Editor — its debounced sidecar save would
     /// write to the OLD sidecar path after the rename (IMPROVEMENTS.md D28's hazard class).
     case openInEditor
+    /// The rename's TARGET path is the photo open in the Editor (e.g. that file was deleted on disk):
+    /// its next debounced sidecar save would land beside the renamed photo and hand it the wrong edits.
+    case targetIsOpenInEditor
 
     var message: String {
         switch self {
@@ -36,6 +39,7 @@ enum RenameBlock: Equatable, Sendable {
         case .targetCatalogued: return "Another photo in the library uses that name."
         case .sourceMissing: return "The file is missing or can't be accessed."
         case .openInEditor: return "Loaded in the Editor — open a different photo first."
+        case .targetIsOpenInEditor: return "The Editor has a photo at that name — open a different photo first."
         }
     }
 }
@@ -198,6 +202,8 @@ struct RenamePlan: Equatable, Sendable {
                 drafts[index].block = .sourceMissing
             } else if let open = environment.openPhotoPath, isSamePath(open, d.photo.path) {
                 drafts[index].block = .openInEditor
+            } else if let open = environment.openPhotoPath, isSamePath(open, newPath), !sameFileCaseOnly {
+                drafts[index].block = .targetIsOpenInEditor
             } else if !sameFileCaseOnly { // (a case-only rename's target checks are the engine's job: RENAME_EXCL + its sidecar check)
                 let targetKey = key(folder: d.folder, name: newName)
                 let sidecarKey = key(folder: d.folder, name: newName + ".photoapp.json")

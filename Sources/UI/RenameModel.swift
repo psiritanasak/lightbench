@@ -91,6 +91,9 @@ final class RenameModel: ObservableObject {
     /// Opens the sheet for `photos` (already in the Library grid's displayed order — which is also
     /// the `{seq}` order).
     func begin(photos: [Photo], catalog: CatalogModel, providers: RenameProviders) {
+        // A sheet that was requested but never appeared (SwiftUI drops a presentation made while another
+        // is up) would otherwise leave `isPresentingSheet` true forever and block every later rename.
+        if isPresentingSheet && !sheetIsVisible && !isWorking { isPresentingSheet = false }
         guard !isWorking, !isPresentingSheet else { return }
         if let reason = providers.busyReason() {
             statusMessage = reason
@@ -124,6 +127,16 @@ final class RenameModel: ObservableObject {
                 self.recomputePlan()
             }
         }
+    }
+
+    /// Reported by `RenameSheetView.onAppear`/`onDisappear`.
+    private(set) var sheetIsVisible = false
+
+    func sheetDidAppear() { sheetIsVisible = true }
+
+    func sheetDidDisappear() {
+        sheetIsVisible = false
+        isPresentingSheet = false
     }
 
     func cancel() {
@@ -204,16 +217,20 @@ final class RenameModel: ObservableObject {
     func apply() {
         guard !isWorking else { return }
         isWorking = true
+        catalog?.isRenameInProgress = true // catalog import/locate/remove refuse meanwhile
         sheetError = nil
         Task { await performApply() }
     }
 
     private func performApply() async {
-        defer { isWorking = false }
+        defer {
+            isWorking = false
+            catalog?.isRenameInProgress = false
+        }
         guard let catalog, let providers else { return }
 
         if let reason = providers.busyReason() {
-            sheetError = reason
+            report(reason)
             return
         }
         // Re-plan against FRESH state; refuse if it differs from what the user confirmed.
@@ -223,11 +240,11 @@ final class RenameModel: ObservableObject {
         let fresh = makePlan()
         plan = fresh
         guard let fresh, fresh.isApplicable else {
-            sheetError = "Things changed since the preview — review it and try again."
+            report("Things changed since the preview — review it and try again.")
             return
         }
         guard fresh == confirmed else {
-            sheetError = "The preview changed — review it, then press Rename again."
+            report("The preview changed — review it, then press Rename again.")
             return
         }
 
@@ -241,14 +258,14 @@ final class RenameModel: ObservableObject {
         // may be stale. Synchronous, with NO `await` between here and the rename (the same shape as
         // `PasteSettingsModel`'s `canProceed`).
         if let reason = providers.busyReason() {
-            sheetError = reason
+            report(reason)
             return
         }
         openPhotoPath = providers.openPhotoPath()
         let recheck = makePlan()
         guard recheck == fresh else {
             plan = recheck
-            sheetError = "Things changed while waiting for folder access — review the preview and try again."
+            report("Things changed while waiting for folder access — review the preview and try again.")
             return
         }
 
@@ -258,7 +275,9 @@ final class RenameModel: ObservableObject {
             canUndo = true
             statusMessage = "Renamed \(count) photo\(count == 1 ? "" : "s"). Use Undo Rename to put the names back."
         } catch {
-            sheetError = error.localizedDescription
+            // `report`, not `sheetError`: if the sheet vanished mid-apply the message (which may be the
+            // "files couldn't be put back — use Locate…" one) must still reach the user as an alert.
+            report(error.localizedDescription)
         }
     }
 
@@ -268,11 +287,15 @@ final class RenameModel: ObservableObject {
     func undo(catalog: CatalogModel, providers: RenameProviders) {
         guard !isWorking else { return }
         isWorking = true
+        catalog.isRenameInProgress = true
         Task { await performUndo(catalog: catalog, providers: providers) }
     }
 
     private func performUndo(catalog: CatalogModel, providers: RenameProviders) async {
-        defer { isWorking = false }
+        defer {
+            isWorking = false
+            catalog.isRenameInProgress = false
+        }
         if let reason = providers.busyReason() {
             statusMessage = reason
             return

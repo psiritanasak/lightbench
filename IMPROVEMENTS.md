@@ -1129,7 +1129,7 @@ panel, so heavy queued renders / GPU memory pressure on the 8GB machine are
 suspects, but nothing was verified. If it recurs: capture it, note zoom/pan state
 and pending edits, and check whether it clears after a re-render. Not investigated.
 
-### D39. A collision suffix " (N)" can push a file name past 255 bytes (found reviewing Export naming, 2026-09-30) — open, fixed for rename in batch-rename commit 3
+### D39. A collision suffix " (N)" can push a file name past 255 bytes (found reviewing Export naming, 2026-09-30) — FIXED in batch-rename commit 3 (`PhotoExporter.baseNameFitting`: trims whole characters off the base so `base + " (N)" + ext` fits; shared by Export and Enhance via `uniqueFileURL`)
 
 `PhotoExporter.uniqueFileURL` (shared by Export and Enhance) appends " (2)", " (3)"…
 to a base name that already passed the 255-byte check WITHOUT the suffix. A base within a few
@@ -1138,6 +1138,17 @@ such file"), the loop returns that candidate, and the write fails with a generic
 nothing is overwritten and the temp file is cleaned up, so it is safe but the message is poor.
 Pre-existing (the old default naming had it too). Cleanest fix: trim the base to fit BEFORE adding
 the suffix, in the one shared function.
+
+### D40. A crash mid-rename can leave photos hidden or the catalog stale (batch-rename commit 3 review, 2026-09-30) — open, accepted for v1
+
+`RenameEngine` journals in memory only. A crash/force-quit between its two phases leaves the
+batch's photos under hidden `.photoapp-rename-<token>-<n>-<original name>` names (the original name
+is kept at the end so they can be renamed back by hand; nothing is deleted). A crash AFTER the files
+moved but BEFORE the catalog transaction commits leaves the catalog listing the old names, so every
+photo shows as Missing and Locate… must be run per photo (or per folder via multi-select Locate…).
+Recommended fix if it ever bites: a write-ahead `pending` batch row saved before any file moves,
+flipped to applied in the same transaction as the path update, and reconciled on launch (roll the
+files forward or back to match).
 
 ## Working agreements
 1. One item per session, smallest viable slice, Plan Mode first (CLAUDE.md).

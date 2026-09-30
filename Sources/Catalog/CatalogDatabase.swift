@@ -110,6 +110,7 @@ final class CatalogDatabase: Sendable {
         Migration006CollectionFolderPathIndex.register(in: &migrator)
         Migration007PickRejectFlags.register(in: &migrator)
         Migration008ColorLabels.register(in: &migrator)
+        Migration009RenameLog.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 
@@ -312,6 +313,131 @@ final class CatalogDatabase: Sendable {
                 relocated.insert(move.photoID)
             }
             return relocated
+        }
+    }
+
+    // MARK: - Batch rename (Library "Rename Files…")
+
+    /// Points each catalog row at its renamed file and logs the batch, in ONE
+    /// transaction (any throw leaves both the rows and the log untouched).
+    /// The files themselves were already moved by `RenameEngine`; this is the
+    /// catalog half. Returns the new batch's id.
+    ///
+    /// Every move must still match reality: the row must exist and currently
+    /// hold `oldPath` (else `.pathChanged`/`.photoMissing`), and no photo
+    /// OUTSIDE the batch may hold a `newPath` (else `.pathTaken`). Paths are
+    /// updated in two passes — to unique temporary values, then to the finals
+    /// — because a chain (a→b while b→c) or a swap would otherwise trip the
+    /// `path` UNIQUE constraint mid-batch. Row ids never change, so collection
+    /// memberships, ratings, flags and labels ride along untouched.
+    ///
+    /// Older batches are deleted in the same transaction: only the most
+    /// recent rename is undoable.
+    func renamePhotos(_ moves: [RenameMove]) async throws -> Int64 {
+        // File sizes are read BEFORE taking the writer lock — no disk I/O inside the write closure.
+        let sizes = Self.fileSizes(atPaths: moves.map(\.newPath))
+        return try await dbQueue.write { db in
+            try Self.applyPathMoves(moves, sizes: sizes, in: db)
+            _ = try RenameBatchRecord.deleteAll(db)
+            var batch = RenameBatchRecord(id: nil, createdAt: Date())
+            try batch.insert(db)
+            guard let batchID = batch.id else { throw RenameCatalogError.noLoggedRename }
+            for move in moves {
+                try RenameEntryRecord(
+                    batchId: batchID, photoId: move.photoID, oldPath: move.oldPath, newPath: move.newPath
+                ).insert(db)
+            }
+            return batchID
+        }
+    }
+
+    /// The most recent applied rename batch, if any.
+    func lastRenameLog() async throws -> LoggedRename? {
+        try await dbQueue.read { db in
+            guard let batch = try RenameBatchRecord.order(Column("id").desc).fetchOne(db), let batchID = batch.id else {
+                return nil
+            }
+            let entries = try RenameEntryRecord.filter(Column("batchId") == batchID)
+                .order(Column("photoId")).fetchAll(db)
+            return LoggedRename(
+                batchID: batchID, createdAt: batch.createdAt,
+                moves: entries.map { RenameMove(photoID: $0.photoId, oldPath: $0.oldPath, newPath: $0.newPath) }
+            )
+        }
+    }
+
+    /// Rows in `rename_entry` — lets a test prove older batches were really deleted
+    /// (same testing-seam precedent as `insertCollectionForTesting`).
+    func renameEntryCountForTesting() async throws -> Int {
+        try await dbQueue.read { db in try RenameEntryRecord.fetchCount(db) }
+    }
+
+    /// Checks — WITHOUT changing anything — that undoing `log` is still valid:
+    /// every photo exists and still sits at its logged `newPath`. Called before
+    /// any file is moved back, so an undo of a stale batch is refused up front.
+    func validateUndo(of log: LoggedRename) async throws {
+        try await dbQueue.read { db in
+            for move in log.moves {
+                guard let photo = try Photo.filter(Photo.Columns.id == move.photoID).fetchOne(db) else {
+                    throw RenameCatalogError.photoMissing(move.photoID)
+                }
+                guard photo.path == move.newPath else { throw RenameCatalogError.pathChanged(move.photoID) }
+            }
+        }
+    }
+
+    /// The catalog half of an undo: puts every row back at its `oldPath` and
+    /// deletes the batch, in one transaction (the files were already moved
+    /// back). Refuses, changing nothing, if any row has moved since.
+    func revertRenameBatch(_ log: LoggedRename) async throws {
+        let sizes = Self.fileSizes(atPaths: log.moves.map(\.oldPath))
+        try await dbQueue.write { db in
+            try Self.applyPathMoves(log.moves.map(\.inverse), sizes: sizes, in: db)
+            _ = try RenameBatchRecord.filter(Column("id") == log.batchID).deleteAll(db)
+        }
+    }
+
+    private static func fileSizes(atPaths paths: [String]) -> [String: Int64] {
+        var sizes: [String: Int64] = [:]
+        for path in paths {
+            if let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int64 { sizes[path] = size }
+        }
+        return sizes
+    }
+
+    /// Shared by `renamePhotos` and `revertRenameBatch`: validates every move
+    /// against current rows, then rewrites paths in two passes (temp → final).
+    private static func applyPathMoves(_ moves: [RenameMove], sizes: [String: Int64], in db: Database) throws {
+        let batchIDs = Set(moves.map(\.photoID))
+        var photos: [Int64: Photo] = [:]
+        for move in moves {
+            guard let photo = try Photo.filter(Photo.Columns.id == move.photoID).fetchOne(db) else {
+                throw RenameCatalogError.photoMissing(move.photoID)
+            }
+            guard photo.path == move.oldPath else { throw RenameCatalogError.pathChanged(move.photoID) }
+            // Case-insensitive for ASCII only (SQLite NOCASE): SQLite's `=` is case-sensitive but APFS isn't, so a
+            // catalogued photo at a differently-cased path could be the very same file. This is a best-effort catalog
+            // guard — non-ASCII case (É/é) and NFC/NFD forms can still alias here; the engine's RENAME_EXCL is what
+            // guarantees no FILE is ever overwritten.
+            let taken = try Photo.filter(Photo.Columns.path.collating(.nocase) == move.newPath)
+                .filter(!batchIDs.contains(Photo.Columns.id)).fetchCount(db)
+            guard taken == 0 else { throw RenameCatalogError.pathTaken(move.newPath) }
+            photos[move.photoID] = photo
+        }
+        // Pass 1: park every row on a unique temporary path so pass 2 can't collide.
+        for move in moves {
+            guard var photo = photos[move.photoID] else { continue }
+            photo.path = "\(move.oldPath).renaming-\(move.photoID)"
+            try photo.update(db)
+            photos[move.photoID] = photo
+        }
+        // Pass 2: final paths.
+        for move in moves {
+            guard var photo = photos[move.photoID] else { continue }
+            photo.path = move.newPath
+            photo.filename = URL(fileURLWithPath: move.newPath).lastPathComponent
+            if let size = sizes[move.newPath] { photo.fileSize = size }
+            try photo.update(db)
         }
     }
 

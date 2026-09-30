@@ -348,5 +348,29 @@ final class PhotoExporterTests: XCTestCase {
         }
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: out.path), [])
     }
+
+    // MARK: - Collision suffix vs the 255-byte limit (D39)
+
+    func testACollisionSuffixNeverPushesTheNamePast255Bytes() throws {
+        // 250 + ".jpg" = 254 bytes fits; adding " (2)" would make 258.
+        let base = String(repeating: "a", count: 250)
+        try Data().write(to: tempDir.appendingPathComponent(base + ".jpg"))
+        let url = PhotoExporter.uniqueFileURL(baseName: base, fileExtension: "jpg", in: tempDir)
+        XCTAssertLessThanOrEqual(url.lastPathComponent.utf8.count, 255)
+        XCTAssertTrue(url.lastPathComponent.hasSuffix(" (2).jpg"), url.lastPathComponent)
+        XCTAssertNotEqual(url.lastPathComponent, base + ".jpg")
+    }
+
+    func testTrimmingNeverSplitsAMultiByteCharacterAndKeepsTheSuffixWhole() {
+        let base = String(repeating: "日", count: 84) // 252 bytes
+        let fitted = PhotoExporter.baseNameFitting(base, suffix: " (12)", fileExtension: "jpg")
+        XCTAssertTrue(fitted.hasSuffix(" (12)"))
+        XCTAssertLessThanOrEqual((fitted + ".jpg").utf8.count, 255)
+        XCTAssertTrue(fitted.dropLast(5).allSatisfy { $0 == "日" }) // only whole characters remain
+    }
+
+    func testShortNamesAreNotTouchedByTheFitting() {
+        XCTAssertEqual(PhotoExporter.baseNameFitting("IMG_0001", suffix: " (2)", fileExtension: "jpg"), "IMG_0001 (2)")
+    }
 }
 

@@ -301,10 +301,26 @@ enum PhotoExporter {
         while FileManager.default.fileExists(atPath: candidate.path)
             || FileManager.default.fileExists(atPath: SidecarStore.sidecarURL(for: candidate).path) {
             candidate = folder
-                .appendingPathComponent("\(baseName) (\(suffix))")
+                .appendingPathComponent(baseNameFitting(baseName, suffix: " (\(suffix))", fileExtension: fileExtension))
                 .appendingPathExtension(fileExtension)
             suffix += 1
         }
         return candidate
+    }
+
+    /// `baseName + suffix`, with whole CHARACTERS trimmed off the end of
+    /// `baseName` until the full file name (`base + suffix + "." + ext`) fits
+    /// in 255 UTF-8 bytes (`NAME_MAX`). IMPROVEMENTS.md D39: a base that passed
+    /// the length check WITHOUT its " (2)" suffix could exceed it once the
+    /// suffix was added, and `fileExists` reports a too-long path as absent,
+    /// so the collision loop returned an unwritable name. Never splits a
+    /// character or scalar; the suffix itself is always kept whole.
+    static func baseNameFitting(_ baseName: String, suffix: String, fileExtension: String) -> String {
+        let reserved = suffix.utf8.count + 1 + fileExtension.utf8.count // suffix + "." + ext
+        var trimmed = baseName
+        while trimmed.utf8.count + reserved > 255, !trimmed.isEmpty {
+            trimmed.removeLast()
+        }
+        return trimmed + suffix
     }
 }

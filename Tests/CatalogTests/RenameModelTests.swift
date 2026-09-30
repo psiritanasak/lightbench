@@ -397,7 +397,9 @@ final class RenameModelTests: XCTestCase {
         try await beginAndSettle(Array(photos.prefix(1))) // presented, but `sheetDidAppear` is never called
         model.begin(photos: photos, catalog: catalog, providers: providers)
         XCTAssertEqual(model.photoCount, 2)
-        XCTAssertTrue(model.isPresentingSheet)
+        // Re-presented on the NEXT main-queue turn (false -> true in one pass would be coalesced by SwiftUI).
+        XCTAssertFalse(model.isPresentingSheet)
+        try await waitUntil("the sheet to be re-presented") { self.model.isPresentingSheet }
     }
 
     func testTheSheetDisappearingResetsThePresentedState() async throws {
@@ -521,3 +523,31 @@ final class RenameModelTests: XCTestCase {
     }
 }
 
+
+/// The rule for "is it unsafe to rename or undo right now" (pure, so the wording and the catch-all are pinned).
+final class RenameBusyStateTests: XCTestCase {
+    func testNothingBusyMeansNoReason() {
+        XCTAssertNil(RenameBusyState().reason)
+    }
+
+    func testEachFlagProducesItsOwnReason() {
+        XCTAssertNotNil(RenameBusyState(isLoadInFlight: true).reason)
+        XCTAssertNotNil(RenameBusyState(isExporting: true).reason)
+        XCTAssertNotNil(RenameBusyState(isExportSheetOpen: true).reason)
+        XCTAssertNotNil(RenameBusyState(isEnhancing: true).reason)
+        XCTAssertNotNil(RenameBusyState(isImporting: true).reason)
+        XCTAssertNotNil(RenameBusyState(hasPendingPaste: true).reason)
+        XCTAssertTrue(RenameBusyState(isImporting: true).reason?.contains("import") ?? false)
+        XCTAssertTrue(RenameBusyState(isEnhancing: true).reason?.contains("Enhance") ?? false)
+    }
+
+    /// While ANY modal file panel is up (Paste's folder grant, an import/locate picker, Export's destination)
+    /// menu-driven work keeps running — so an open panel alone must refuse a rename/undo.
+    func testAnOpenModalPanelAloneBlocksAndTakesPrecedence() {
+        XCTAssertEqual(RenameBusyState(hasModalPanel: true).reason, "Finish or cancel the open dialog first.")
+        XCTAssertEqual(
+            RenameBusyState(isLoadInFlight: true, isImporting: true, hasModalPanel: true).reason,
+            "Finish or cancel the open dialog first."
+        )
+    }
+}

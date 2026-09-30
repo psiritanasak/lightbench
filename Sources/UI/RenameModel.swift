@@ -11,6 +11,31 @@ struct RenameProviders {
     var busyReason: () -> String?
 }
 
+/// Everything that makes a rename/undo unsafe RIGHT NOW, as plain flags so the rule (and its wording)
+/// is unit-testable; `ContentView` fills it from the live models. `hasModalPanel` is the catch-all:
+/// while ANY `NSOpenPanel.runModal()` is up (Paste's folder grant, an import/locate picker, Export's
+/// destination), menu-driven main-actor work keeps running — so a rename/undo started then could act
+/// on paths that panel's action is about to use.
+struct RenameBusyState {
+    var isLoadInFlight = false
+    var isExporting = false
+    var isExportSheetOpen = false
+    var isEnhancing = false
+    var isImporting = false
+    var hasPendingPaste = false
+    var hasModalPanel = false
+
+    var reason: String? {
+        if hasModalPanel { return "Finish or cancel the open dialog first." }
+        if isLoadInFlight { return "A photo is still loading — try again in a moment." }
+        if isExporting || isExportSheetOpen { return "An export is running or being set up — finish or cancel it first." }
+        if isEnhancing { return "Enhance is running — wait for it to finish." }
+        if isImporting { return "An import is running — wait for it to finish." }
+        if hasPendingPaste { return "Finish or cancel the Paste Settings prompt first." }
+        return nil
+    }
+}
+
 /// Owns the Library's "Rename Files…" sheet (template, live preview, apply) and "Undo Rename".
 /// `@StateObject` on `PhotoAppApp` so the Photo menu's items and the Library toolbar act on the
 /// SAME instance (same reasoning as `PasteSettingsModel`).
@@ -93,7 +118,8 @@ final class RenameModel: ObservableObject {
     func begin(photos: [Photo], catalog: CatalogModel, providers: RenameProviders) {
         // A sheet that was requested but never appeared (SwiftUI drops a presentation made while another
         // is up) would otherwise leave `isPresentingSheet` true forever and block every later rename.
-        if isPresentingSheet && !sheetIsVisible && !isWorking { isPresentingSheet = false }
+        let wasStale = isPresentingSheet && !sheetIsVisible && !isWorking
+        if wasStale { isPresentingSheet = false }
         guard !isWorking, !isPresentingSheet else { return }
         if let reason = providers.busyReason() {
             statusMessage = reason
@@ -116,16 +142,26 @@ final class RenameModel: ObservableObject {
         plan = nil
         sheetError = nil
         isLoadingOwners = true
-        isPresentingSheet = true
-        recomputePlan()
-        Task { [weak self] in
-            let owners = await catalog.cataloguedPathOwners()
-            await MainActor.run {
-                guard let self, self.generation == myGeneration else { return }
-                self.pathOwners = owners
-                self.isLoadingOwners = false
-                self.recomputePlan()
+        let present = { [weak self] in
+            guard let self, self.generation == myGeneration else { return }
+            self.isPresentingSheet = true
+            self.recomputePlan()
+            Task { [weak self] in
+                let owners = await catalog.cataloguedPathOwners()
+                await MainActor.run {
+                    guard let self, self.generation == myGeneration else { return }
+                    self.pathOwners = owners
+                    self.isLoadingOwners = false
+                    self.recomputePlan()
+                }
             }
+        }
+        if wasStale {
+            // Flipping false -> true inside ONE synchronous pass would be coalesced by SwiftUI into "no
+            // change" and the dropped presentation would never be retried; present on the NEXT main-queue turn.
+            DispatchQueue.main.async(execute: present)
+        } else {
+            present()
         }
     }
 
@@ -273,6 +309,9 @@ final class RenameModel: ObservableObject {
             let count = try await catalog.applyRename(moves)
             isPresentingSheet = false
             canUndo = true
+            // An alert raised in the same pass as a sheet's dismissal can be dropped by macOS; wait a beat.
+            // (`isWorking` stays true until this returns, so nothing else can start in the gap.)
+            try? await Task.sleep(nanoseconds: 350_000_000)
             statusMessage = "Renamed \(count) photo\(count == 1 ? "" : "s"). Use Undo Rename to put the names back."
         } catch {
             // `report`, not `sheetError`: if the sheet vanished mid-apply the message (which may be the

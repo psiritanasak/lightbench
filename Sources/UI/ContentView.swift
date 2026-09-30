@@ -32,12 +32,15 @@ struct ContentView: View {
         RenameProviders(
             openPhotoPath: { document.currentURL?.path },
             busyReason: {
-                if document.isLoadInFlight { return "A photo is still loading — try again in a moment." }
-                if exportModel.isExporting || exportModel.isPresentingOptions { return "An export is running or being set up — finish or cancel it first." }
-                if enhanceModel.isEnhancing { return "Enhance is running — wait for it to finish." }
-                if catalog.isImporting { return "An import is running — wait for it to finish." }
-                if pasteModel.pendingTargets != nil { return "Finish or cancel the Paste Settings prompt first." }
-                return nil
+                RenameBusyState(
+                    isLoadInFlight: document.isLoadInFlight,
+                    isExporting: exportModel.isExporting,
+                    isExportSheetOpen: exportModel.isPresentingOptions,
+                    isEnhancing: enhanceModel.isEnhancing,
+                    isImporting: catalog.isImporting,
+                    hasPendingPaste: pasteModel.pendingTargets != nil,
+                    hasModalPanel: NSApp.modalWindow != nil
+                ).reason
             }
         )
     }
@@ -957,7 +960,10 @@ struct ContentView: View {
                         // if it fails rather than risk writing over a
                         // target that just became "the open photo" (or
                         // vice versa) mid-batch.
-                        canProceed: { !document.isLoadInFlight && document.currentURL?.path == openPhotoPath },
+                        canProceed: {
+                            !document.isLoadInFlight && !renameModel.isWorking
+                                && document.currentURL?.path == openPhotoPath
+                        },
                         applyToOpenPhoto: { source in
                             // Cheap backstop, not the primary guard (that's
                             // `canProceed` above) — re-verified once more

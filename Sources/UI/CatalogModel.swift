@@ -257,6 +257,8 @@ final class CatalogModel: ObservableObject {
         panel.message = "Choose a folder of photos to import into the catalog."
         panel.prompt = "Import"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
+        // Re-check AFTER the panel: a rename/undo may have started while it was up.
+        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
 
         // Capture + activate access right away, synchronously — the user
         // just granted it via this exact panel, so there's no extra prompt
@@ -313,6 +315,8 @@ final class CatalogModel: ObservableObject {
         panel.message = "Choose a folder to import as a nested collection tree, mirroring its subfolders."
         panel.prompt = "Import"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
+        // Re-check AFTER the panel: a rename/undo may have started while it was up.
+        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
 
         let accessWarning = activateFolderAccess(for: folder)
 
@@ -617,6 +621,8 @@ final class CatalogModel: ObservableObject {
         panel.message = "Choose the folder \"\(photo.filename)\" was moved to."
         panel.prompt = "Locate"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
+        // Re-check AFTER the panel: a rename/undo may have started while it was up.
+        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
         // Captured, not treated as fatal — `activateFolderAccess` returns
         // a warning for TWO independent failure modes, only one of which
         // actually blocks this relocate: if only the BOOKMARK write
@@ -702,6 +708,8 @@ final class CatalogModel: ObservableObject {
         panel.message = "Choose the folder these \(missing.count) photo(s) were moved to."
         panel.prompt = "Locate"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
+        // Re-check AFTER the panel: a rename/undo may have started while it was up.
+        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
         // See `relocatePhoto(_:)`'s own doc comment for why this is
         // captured and folded into the summary rather than treated as
         // unconditionally fatal.

@@ -7,6 +7,8 @@ rounds, live-verification detail, measured numbers) lives in
 in one pass when resuming after a cutoff, not accumulate into another log.
 
 ## Current phase
+**D34 SHIPPED (2026-09-30)** — the test host no longer opens the real catalog or prunes real folder bookmarks (see IMPROVEMENTS.md D34). 1375 tests pass; the real catalog's mtime/contents were identical before and after a full test run.
+
 **Pick/Reject flags (2026-09-29)** — three-state `FlagStatus` replaces
 `isFlagged` (Migration 007, `LibraryFlagFilter`, P/X/U keys, dimmed
 rejects). 1370 tests pass. LIVE-VERIFIED 2026-09-30 (Release build, user's

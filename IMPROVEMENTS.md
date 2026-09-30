@@ -2147,17 +2147,31 @@ behavior change at this panel's scale).
 
 ---
 
-### D34. `xcodebuild test` runs migrations against the user's REAL catalog (found 2026-09-30, Pick/Reject live check)
+### D34. `xcodebuild test` ran migrations against the user's REAL catalog (found 2026-09-30, Pick/Reject live check) — SHIPPED 2026-09-30
 
-The unit-test bundle's host is the app itself; `CatalogModel.init()` opens
+The unit-test bundle's host is the app itself; `CatalogModel.init()` opened
 the on-disk catalog (`~/Library/Containers/com.photoapp.PhotoApp/Data/Library/
 Application Support/PhotoApp/catalog.sqlite`) at launch, so running the test
-suite applies any pending migration (007 here) to the developer's real
-catalog before a backup can be taken. Harmless for Migration 007 (verified
+suite applied any pending migration (007 there) to the developer's real
+catalog before a backup could be taken. Harmless for Migration 007 (verified
 against a Time Machine snapshot: 1094 photos / 0 flagged before and after),
-but a destructive future migration would run unattended. Options: have the
-test host detect XCTest (`XCTestConfigurationFilePath`) and use an in-memory
-or temp-directory catalog, or back the file up before migrating. Not fixed.
+but a destructive future migration would have run unattended.
+
+**Fixed:** `CatalogDatabase.isRunningUnderXCTest` (OR of the three XCTest
+environment markers — a missing marker fails OPEN, back to the real catalog)
+and `catalogDirectoryURL`/`defaultCatalogDirectory`, which return a
+per-process, never-deleted temp directory under XCTest and the unchanged
+Application Support directory otherwise. `CatalogModel.init()` also skips
+`activateKnownFolders()` under XCTest — reviewer-caught: it deletes
+unresolvable bookmarks from the real `UserDefaults.standard`, so every test
+run could prune the developer's real library-folder bookmarks. Mutation-
+tested both ways (broken detection; broken branch): tests fail, and a
+mutation run wrote a stray file into the real container once, which is why
+the tests that write now skip unless the directory is provably under temp.
+
+Still open, out of scope: Xcode Previews (`XCODE_RUNNING_FOR_PREVIEWS`) also
+open the real catalog; Swift Testing and non-`xcodebuild` test plans were not
+verified to set the markers.
 
 ## Working agreements for whichever agent implements
 

@@ -8,7 +8,14 @@ improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
 ## Current phase
-Phases 1-7 complete; Phase 8 (Polish) not started. Working tree clean.
+**PHASE 8 COMPLETE (2026-09-30) — ALL ROADMAP ITEMS 1-8 ARE NOW DONE.** Closed by
+a measured large-image + edge-case audit (no code change needed; see
+CLAUDE.md item 8 and `docs/ROADMAP_HISTORY.md` "Phase 8 close-out" for the
+numbers). Two recorded findings, deliberately unfixed: D36 (heavy edits export
+superlinearly slowly on very large images) and D37 (a truncated JPEG exports without
+warning). Live check not verified: pan/zoom and clean slider-drag latency at
+96/200MP. Nothing is in progress; the working tree was clean after the
+temporary harness was deleted.
 
 Recently shipped (newest first; details in history):
 - **D34 (2026-09-30)** — test host no longer opens the real catalog or prunes
@@ -40,8 +47,9 @@ pass `model: "opus"` when invoking it.
 None.
 
 ## Exact next step
-Pick a new feature with the user (one per session): CLAUDE.md's roadmap gaps
-list (Tier 1 / Tier 2), Phase 8 polish, or an open item in `IMPROVEMENTS.md`.
+No roadmap items remain (Phase 8 closed 2026-09-30). Pick a new feature with the
+user (one per session, Plan Mode first): CLAUDE.md's roadmap gaps list (Tier 1 /
+Tier 2) or an open item in `IMPROVEMENTS.md` (incl. the Phase 8 findings D36/D37).
 Feature-gap roadmap vs. Lightroom: **IMPROVEMENTS.md D35** (prioritized list). Other candidate: **D28** (pre-existing `saveSidecarNow`
 load-during-save race onto the wrong sidecar — a data-integrity hazard on every
 debounced save). Also open there: D31/D32 (security-scope gaps), D13 (phantom

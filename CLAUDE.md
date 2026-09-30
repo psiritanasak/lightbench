@@ -86,7 +86,11 @@ measured-but-counterintuitive behavior that isn't repeated here.
    - Second custom Core Image kernel in this area: `ColorRange.cikernel`
    - Known non-blocking perf finding: `.brush` ∩ `.brush` with Clarity exceeds the 16ms/60fps budget on full-res RAW frames (interactive/proxied path stays under budget) — see history doc before optimizing
    - Explicitly out of scope, needs its own research spike: AI Subject/Sky/Object select masks, Depth Range masks
-8. Polish: tiled rendering for large images, perf, edge cases — not started
+8. Polish: large-image perf + edge cases — ✅ COMPLETE (2026-09-30), via a MEASURED audit rather than new code (export/thumbnail/proxy paths; interactive pan/zoom and slider-drag latency at ≥96MP NOT verified)
+   - Explicit tiled rendering was NOT built: measured unnecessary. Core Image's own tiling handled every size tried (24MP, 96MP, 200MP, and a 30000x400 strip, incl. widths above the 16384px GPU texture limit) with correct output dimensions and no crash/error; peak process RSS ≤1.4GB on an 8GB machine (RSS only, GPU memory not measured).
+   - One recorded, deliberately unfixed finding: a heavy edit (Clarity+Dehaze+Texture+NR+a mask) exports superlinearly slowly (already 15.5x for 4x area at 96MP) (1.4s @24MP, 21.8s @96MP, 405s @200MP; exposure-only 200MP is 8.3s) — IMPROVEMENTS.md D36. Do not re-attempt as "tiling"; the 16384px width is NOT the trigger (a 16000x12500 image was just as slow).
+   - Edge-case matrix (1x1, 1x4000, grayscale, 16-bit PNG/TIFF, CMYK, EXIF-rotated, alpha, zero-byte, non-image bytes) all behave; a truncated JPEG exports without error (D37). Full numbers in `docs/ROADMAP_HISTORY.md`.
+   - Earlier Phase 8 slices (D16 mask-Clarity perf, no viable fix; the 4096px cliff finding; catalog nits) are in IMPROVEMENTS.md D16 and `docs/PROGRESS_HISTORY.md`.
 
 One feature per session. Do not start a later phase while an earlier one has open issues.
 

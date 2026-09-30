@@ -2768,3 +2768,51 @@ thumbnails dimmed to 0.45. Reviewer: FIX FIRST -> fixes (misplaced doc
 comments, menu VoiceOver labels, a `toggledPick` unit test). The migration
 upgrade test builds a real pre-007 database and would fail if either the
 UPDATE or the column drop were removed.
+
+## Phase 8 close-out: large-image + edge-case audit (2026-09-30)
+Approach chosen with the user: "measure first, fix what breaks." A temporary
+XCTest harness (run one size per process so a crash/memory blow-up can't
+take the rest down; deleted afterwards) drove the real code paths on scratch
+fixtures streamed to disk (never the user's library). Machine: Apple M1-class,
+8 CPUs, 8.0GB RAM. Edit set ("heavy"): exposure, contrast, saturation,
+vibrance, Clarity, Texture, Dehaze, curve shadows, noise reduction, plus one
+radial mask with exposure+Clarity. Peak = process `ru_maxrss` (GPU memory not
+included).
+
+| Size | Thumbnail (edited) | Proxy @0.25 | Full-size heavy-edit JPEG export | Peak RSS |
+|---|---|---|---|---|
+| 6016x4016 (24MP) | 0.42s | 0.11s | 1.41s | 180MB |
+| 12000x8000 (96MP) | 0.13s | 2.19s | 21.81s | 556MB |
+| 20000x10000 (200MP) | 0.53s | 9.70s | 405.31s | 921MB |
+| 30000x400 | 0.32s | 0.40s | 1.29s | 238MB |
+
+Every export's decoded dimensions matched its source. Diagnostics for the
+200MP slowness: 16000x12500 (200MP, both sides <=16384) heavy = 478.36s,
+peak 1009MB, so the 16384px texture limit is NOT the cause; 20000x10000 with
+exposure only = 8.26s (peak 1395MB), so the cost lives in the heavy stages,
+not the pipeline base. The per-stage cause was NOT profiled: extent-fraction
+radii in Clarity/Dehaze/Texture would predict ~area^1.5, but growth was 15.5x
+for 4x area (24->96MP) and 18.6x for 2.08x area (96->200MP), which looks more
+like a cliff (D17's ROI dilation, or memory pressure on an 8GB machine) than
+smooth radius scaling. Possibly related to D17's ROI dilation (unverified). Not fixed: correct output,
+RSS-only peaks (GPU memory not measured) well under the 60%-of-RAM threshold; recorded as IMPROVEMENTS.md D36.
+
+Edge-case matrix (open/thumbnail/export, small files): 1x1, 1x4000,
+grayscale JPEG, 16-bit PNG, CMYK JPEG, EXIF orientation 6 and 8 (dimensions
+swap correctly), PNG with alpha, 16-bit TIFF all decode, thumbnail and export
+correctly. Zero-byte and non-image bytes named .jpg return a clean
+`unreadableSource` error (no crash, no hang). A truncated JPEG decodes and
+exports with no error (partial content) — IMPROVEMENTS.md D37.
+
+Live check (Release build, scratch JPEGs, user-approved automation): 12000x8000
+and 20000x10000 open via Open... and draw in the Metal view at the correct
+aspect; an Exposure drag on each visibly re-rendered (200MP: mean canvas luma
+123.6 in the capture ~4s after dismissing the sidecar prompt, 178.2 in the next
+capture ~3s later and unchanged after); app RSS 162MB at
+200MP. NOT verified: pan/zoom at these sizes, and slider-drag latency (the
+sidecar folder-access prompt interrupts the run loop, so timing was not clean).
+Not tested at all: a large RAW (only a D610 is on hand and the RAW path was
+already measured in Phase 6), and Enhance at these sizes (already guarded by
+`SuperResolutionUpscaler.maxTextureDimension` with a Lanczos fallback and
+unit tests).
+

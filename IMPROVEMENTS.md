@@ -44,7 +44,7 @@ Sources: Lightroom Classic releases 14.4 (Jun 2025) through 15.6 (Sep 2026) as s
 6. **Multi-photo**: HDR merge, Panorama merge, focus stacking, granular Sync Settings dialog, Survey/Reference view.
 7. **Culling / faces**: Assisted Culling, duplicate detection, face detection + People view (R: Faces panel with Eye Focus / Eyes Open scores, June 2026).
 8. **Persist edit history** across sessions (ours is in-memory), Smart Previews (offline editing), folder move/rename inside the app, Soft Proofing, Print/Slideshow/Map (low value for this app).
-9. **Phase 8 polish** (tiled rendering, perf) and the open items below (start with D28).
+9. ~~Phase 8 polish (tiled rendering, perf)~~ — DONE 2026-09-30 by measured audit (see D36/D37); start with the open items below (D28).
 
 **Additions from the release-note pass (14.4 → 15.6), not covered in the list above:**
 - **Retouch**: automatic Dust/sensor-spot removal (15.0), Distraction Remove for people and reflections (14.4, improved 15.0/15.6), shadow + reflection detection when removing an object (15.0). Fold into item 3 — a classic spot-detect + heal pass could cover dust without ML.
@@ -1053,6 +1053,31 @@ until one is actually picked up:
   for the whole stroke; there's no equivalent of a pressure-sensitive
   brush that varies width along the path.
 
+
+### D36. Heavy edits export superlinearly slowly on very large images (Phase 8 audit, 2026-09-30) — recorded, not fixed
+
+Measured, 8GB machine, Clarity+Dehaze+Texture+NR+one mask: 1.41s @24MP,
+21.81s @96MP, 405.31s @200MP (20000x10000), 478.36s @200MP (16000x12500 —
+both sides under 16384, so NOT the GPU texture limit). Exposure-only 200MP:
+8.26s. Correct output every time; peak RSS <=1.4GB (RSS only — GPU memory not
+measured). Only established: the cost lives in the heavy stages (heavy vs
+exposure-only), not the image size limit. NOT profiled per stage, so the cause
+is an unverified hypothesis: extent-fraction radii in Clarity/Dehaze/Texture
+would predict roughly area^1.5, but the measured growth (15.5x for 4x area,
+then 18.6x for 2.08x area) looks more like a cliff — candidates are D17's ROI
+dilation and memory pressure on an 8GB machine. No user-visible workaround
+needed for the D610 (24MP: 1.4s). If it ever matters: profile which stage dominates at 200MP,
+consider capping those radii's absolute pixel size, or a progress/cancel UI
+for exports. Do not re-attempt as "tiled rendering" — Core Image's own tiling
+did not fail. Full table: `docs/ROADMAP_HISTORY.md` "Phase 8 close-out".
+
+### D37. A truncated JPEG opens and exports without any warning (Phase 8 audit, 2026-09-30) — nit
+
+ImageIO decodes what bytes exist; `PhotoExporter.export` therefore writes a
+JPEG of partial content (output pixels not inspected), reporting success. A
+corrupt-on-disk photo could be exported believing it complete. Detectable via
+`CGImageSourceGetStatus` / a decode-completeness check at the open and export
+boundaries. Not fixed (no report of it happening).
 
 ## Working agreements
 1. One item per session, smallest viable slice, Plan Mode first (CLAUDE.md).

@@ -46,3 +46,13 @@ Feature-gap roadmap vs. Lightroom: **IMPROVEMENTS.md D35** (prioritized list). O
 load-during-save race onto the wrong sidecar — a data-integrity hazard on every
 debounced save). Also open there: D31/D32 (security-scope gaps), D13 (phantom
 brush mask on photo switch), D22/D24/D26 (design gaps), D20 keyboard half.
+
+### Planned next slices (from IMPROVEMENTS.md D35, one per session, Plan Mode first)
+1. **Color labels + batch rename** (Library; cheap wins, new migration 008) — or, if preferring AI, the **Vision subject-mask feasibility spike** (`VNGenerateForegroundInstanceMaskRequest`, probe test like the MetalFX one).
+2. **Profiles / LUTs** + small Develop gaps (Vignette Softness, B&W panel, Color Grading Blending, Point Color Variance).
+3. **Spot removal**: manual heal/clone, then automatic dust detection (no ML).
+4. **AI masks** (Subject/Sky/Background/People, mask Feather/Edge refine) after the spike.
+5. **Library metadata**: keywords, IPTC/EXIF, Smart Collections, stacks, duplicate detection, whole-folder relocate.
+6. **Export upgrades** (metadata, watermark, color space, sharpening, naming templates).
+7. **HDR/EDR display path**, HDR/Panorama merge, Enhance Denoise, persisted edit history.
+Side track when a small session is wanted: D28 (sidecar save race).

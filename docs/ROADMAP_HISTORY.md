@@ -2848,3 +2848,41 @@ registered under automation (Clarity, Contrast and Exposure sliders did). Anomal
 canvas once at 96MP after zoom/pan + exposure/contrast/Clarity edits and did NOT
 reproduce on a fresh open of the same saved edits (IMPROVEMENTS.md D38).
 
+## Batch rename (2026-09-30) — Export naming + Library "Rename Files…" with Undo
+User-chosen scope: both features on one shared template engine; safety = preview + collision refusal + Undo.
+Commits: `b4bcb3a` naming engine + `CaptureDate`; `38d9c5f` Export naming (`ExportNamePreview` seam);
+`08968f5` rename plan/engine/log/applier + Migration 009 + D39 fix; then the UI (`RenameModel`, `RenameSheetView`,
+`CatalogModel` rename methods, toolbar/Photo-menu wiring) merged from `wip/batch-rename-commit4` (last commit
+`1d93a06`); docs commit follows this entry.
+
+**Why it is the riskiest feature so far:** first time the app changes the on-disk NAMES of the user's originals.
+Design decisions worth knowing before touching it:
+- Files first, then the catalog (one GRDB transaction that also writes/trims the rename log to the last batch,
+  two-pass path update so chains/swaps don't trip the UNIQUE `path`); a failure in either half rolls the other back.
+- `RenameEngine`: `renamex_np(RENAME_EXCL)` (fails instead of replacing; check-then-rename fallback only where the
+  volume lacks it), two phases through hidden `.photoapp-rename-<token>-<n>-<original>` temp names, in-memory journal
+  replayed backwards on failure, a sidecar is only ever moved WITH its photo and a foreign sidecar at the destination
+  is refused. Known gap: a crash between phases leaves the batch hidden (D40).
+- `RenamePlan` is pure and all-or-nothing: any blocked photo (collision incl. case/NFC folding, existing file/sidecar/
+  catalog path, missing source, open in the Editor, target = the Editor's open photo, selected twice) blocks the batch.
+- `RenameModel` re-plans against fresh disk/catalog state right before applying, and re-checks AFTER the modal folder
+  prompt with no `await` before acting; refuses while anything else is busy or ANY `runModal` panel is up
+  (`RenameBusyState`, `NSApp.modalWindow`); other catalog mutators (import/locate/remove) refuse while
+  `isRenameInProgress`; every other open/export/enhance/paste entry point is gated on `renameModel.isWorking`.
+- Reviews: commit 3 took 2 rounds (found the foreign-sidecar-on-undo gap, wrong undo recovery message, crash
+  breadcrumbs, lstat vs dangling symlinks, case-insensitive catalog check); the UI took 5 rounds (gating of other
+  features during a rename, checks moved AFTER the folder prompt, generation tokens, canonical path matching,
+  modal-panel catch-all, error routing when the sheet vanishes). Every fix was mutation-checked.
+
+**Live verification (2026-09-30):** Release build, 5 scratch JPEGs with EXIF dates (one with an existing sidecar)
+imported into the REAL catalog (backed up first; Migration 009 applied on launch). Sheet opened from the selection
+menu; preview `{date}_{seq:2}` showed each photo's own capture date and grid-order numbers; template `same` showed 5
+blocked rows in red and Rename disabled; Apply from the attached sheet passed the busy check (attached sheet is not
+`NSApp.modalWindow`) and reached the folder-access prompt (sheet dimmed, spinner, buttons disabled); after granting,
+files + the sidecar were renamed on disk, the 5 rows were updated, the log held 1 batch / 5 entries, and the success
+alert appeared; "Undo Rename" from the Photo menu restored files, sidecar and rows and cleared the log. The scratch
+rows were then deleted; the catalog matched the pre-run baseline exactly (1094 photos, 0 flagged/labeled, 15
+collections, rating sum 11, path-length sum 63679, integrity ok) apart from Migration 009. NOT verified live: Export
+naming sheet, Photo-menu "Rename Files…", the Editor-open block, post-rename thumbnails, multi-folder selections,
+real-SwiftUI re-present of a dropped sheet, alert timing on slow machines.
+

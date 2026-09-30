@@ -8,25 +8,25 @@ improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
 ## Current phase
-**BATCH RENAME — IN PROGRESS (paused on usage limit, 2026-09-30).** Commits 1-3 of 5 are on `master`
-(naming engine `b4bcb3a`, Export naming `38d9c5f`, rename engine/plan/log/undo + Migration 009 `08968f5`).
-Commit 4 (RenameModel + RenameSheetView + toolbar/Photo-menu wiring + CatalogModel rename methods) is committed
-ONLY on branch `wip/batch-rename-commit4` — NOT reviewer-approved. It builds and the full suite passed at the last
-run, but the last reviewer round was FIX FIRST with these still OPEN (plan: `~/.claude/plans/sharded-prancing-pillow.md`):
-1. Gate Import Folder / Import Folder Tree, Locate (single+batch), Remove on a rename/undo in progress — plan: a
-   `CatalogModel.isRenameInProgress` flag set by `RenameModel` while `isWorking`, with guards at the top of
-   `importFolder`, `importFolderTree`, `relocatePhoto`, `relocateSelectedPhotos`, `removePhoto`; add an
-   `isImporting` flag (none exists) and include "import in progress" in `renameProviders.busyReason`.
-2. Sheet can strand `isPresentingSheet == true`: track visibility (`onAppear`/`onDisappear` -> model), treat
-   presented-but-not-visible-and-not-working as stale in `begin`; add `.interactiveDismissDisabled(model.isWorking)`;
-   route the `catch` in `performApply` through `report()`.
-3. Photo menu "Undo Rename"/"Paste Settings": also disable while `renameModel.isPresentingSheet`; guard the Paste
-   confirm button on `renameModel.isWorking`.
-4. `RenamePlan`: also block a row whose TARGET path is the photo open in the Editor (new block case + test).
-Then: re-run reviewer (Opus), merge the branch, do a LIVE check of the sheet/menus/undo in a Release build (back up the
-real catalog first; scratch photos only; Migration 009 applies on first real launch), then commit 5 (docs: CLAUDE.md,
-PROGRESS.md, IMPROVEMENTS.md D41/D42, ROADMAP_HISTORY). Not built by design: D40 crash-recovery journal, D41 Editor
-"close photo" (last-opened photo blocks renaming it), D42 preview debounce.
+**BATCH RENAME — SHIPPED (2026-09-30), 5 commits, all reviewer-approved (the engine took 2 review rounds, the UI 5).** A shared naming-template
+engine (`NamingTemplate`: `{name} {seq} {seq:N} {date} {datetime} {rating} {label} {flag}`; `CaptureDate` reads EXIF)
+drives (1) **Export file naming** (`ExportSettings.namingTemplate`, default `{name}` = unchanged behavior, live example +
+errors in the options sheet) and (2) **Library "Rename Files…"** (selection menu + Photo menu) with a live old→new preview
+that renames the ORIGINAL files, their `.photoapp.json` sidecars and the catalog rows together, all-or-nothing, with
+**Undo Rename** (Migration 009 keeps the last batch). Safety model: no-overwrite `renamex_np(RENAME_EXCL)` moves, two-phase
+(chains/swaps/case-only legal), journal + rollback, files-then-catalog with rollback either way, re-plan right before
+applying, refusal while the photo is open in the Editor / a load, export, Enhance, import or ANY modal panel is active
+(`RenameBusyState`, `CatalogModel.isRenameInProgress`), write access for every folder, single-flight. Also fixed D39
+(collision suffix vs 255 bytes). 1573 tests, 0 failures at the final run. **LIVE-VERIFIED** (Release build, scratch photos, real catalog backed up
+first, every change undone — catalog identical to baseline afterward except the new Migration 009): sheet from the
+selection menu, live preview using each photo's EXIF date + grid-order sequence, a same-name template refused with red
+reasons and Rename disabled, Apply through the attached sheet (an attached SwiftUI sheet is NOT `NSApp.modalWindow`,
+verified), the folder-access prompt, the success alert, files + sidecar renamed on disk, catalog rows updated, Undo
+Rename from the Photo menu restoring files/sidecar/rows and clearing the log. NOT verified live: Export naming sheet,
+Photo-menu "Rename Files…", the Editor-open block, thumbnails after a rename (dimmed behind the alert), multi-folder
+selections, a dropped-sheet re-present in real SwiftUI (model-tested only), alert timing on slow machines (D43).
+Open, accepted: D40 (crash-recovery journal), D41 (no "close photo" — the last-opened photo blocks renaming it), D42
+(preview disk checks on the main actor), D43 (alert timed, not tied to dismissal).
 
 **PHASE 8 COMPLETE (2026-09-30) — ALL ROADMAP ITEMS 1-8 ARE DONE**, closed by a measured
 large-image + edge-case audit plus a follow-up (numbers: CLAUDE.md item 8,
@@ -41,6 +41,8 @@ large-image + edge-case audit plus a follow-up (numbers: CLAUDE.md item 8,
 Nothing in progress; working tree clean apart from these docs.
 
 Recently shipped (newest first; details in history):
+- **Batch rename (2026-09-30)** — see the paragraph above: naming templates for Export + Library "Rename Files…" with Undo Rename
+  (Migration 009); live-verified on the real catalog (all changes undone).
 - **Color labels (2026-09-30)** — `ColorLabel` (red/yellow/green/blue/purple),
   Migration 008, `LibraryLabelFilter` + Label picker, colored dot on thumbnails,
   per-cell Color Label menu, keys 6-9 (red/yellow/green/blue; purple menu-only).
@@ -48,7 +50,7 @@ Recently shipped (newest first; details in history):
   Live-verified in a Release build against the real catalog (backed up first,
   every change undone): migration applied, menu label + dot, DB value, Label
   filter. NOT verified: keys 6-9 (need a focused grid cell; synthetic key events
-  have not reached the grid before). Batch rename is NOT done (next slice).
+  have not reached the grid before).
 - **D34 (2026-09-30)** — test host no longer opens the real catalog or prunes
   real folder bookmarks. 1375 tests pass.
 - **Pick/Reject flags (2026-09-29)** — `FlagStatus`, Migration 007, P/X/U keys,
@@ -87,7 +89,7 @@ debounced save). Also open there: D31/D32 (security-scope gaps), D13 (phantom
 brush mask on photo switch), D22/D24/D26 (design gaps), D20 keyboard half.
 
 ### Planned next slices (from IMPROVEMENTS.md D35, one per session, Plan Mode first)
-1. ~~Color labels~~ ✅ shipped. **Batch rename** (Library + inside Export; next Library slice) — or, if preferring AI, the **Vision subject-mask feasibility spike** (`VNGenerateForegroundInstanceMaskRequest`, probe test like the MetalFX one).
+1. ~~Color labels~~ ✅ shipped. ~~Batch rename~~ ✅ shipped. Next: the **Vision subject-mask feasibility spike** (`VNGenerateForegroundInstanceMaskRequest`, probe test like the MetalFX one).
 2. **Profiles / LUTs** + small Develop gaps (Vignette Softness, B&W panel, Color Grading Blending, Point Color Variance).
 3. **Spot removal**: manual heal/clone, then automatic dust detection (no ML).
 4. **AI masks** (Subject/Sky/Background/People, mask Feather/Edge refine) after the spike.

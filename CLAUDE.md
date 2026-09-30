@@ -122,6 +122,11 @@ user-confirmed to build — pick from those first when choosing the next slice.
 backlog above when picking what's next; Curves v2 previously lived only in the
 backlog and was missed once for that reason.)
 
+**Broader parity backlog (2026-09-30):** `IMPROVEMENTS.md` D35 holds the prioritized list of
+Lightroom Classic gaps beyond Develop — profiles/LUTs, AI masks (Vision/Core ML), spot removal,
+Library metadata/keywords/Smart Collections, export upgrades, HDR/panorama merge, culling/faces.
+Check it alongside this section when choosing the next slice.
+
 **Tier 1 (fits the existing global-adjustment architecture — new `EditState`
 field(s) + `EditPipeline` stage(s) + `AdjustTabView` section):**
 - Texture / Clarity — ✅ SHIPPED (see Phase 2 backlog above; do not re-add `definition`)

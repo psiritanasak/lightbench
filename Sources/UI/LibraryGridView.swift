@@ -360,6 +360,9 @@ struct LibraryGridView: View {
             if let digit = character.wholeNumberValue, (0...5).contains(digit) {
                 return setRatingOnFocused(digit, in: displayed)
             }
+            if let label = ColorLabel.forKey(character) {
+                return setLabelOnFocused(label, in: displayed)
+            }
             switch character {
             case ".", "f", "F": return setFlagOnFocused(nil, in: displayed)
             case "p", "P": return setFlagOnFocused(.picked, in: displayed)
@@ -421,6 +424,17 @@ struct LibraryGridView: View {
         return .handled
     }
 
+    /// `6`-`9` toggle red/yellow/green/blue: pressing the photo's current
+    /// label's key clears it.
+    private func setLabelOnFocused(_ label: ColorLabel, in photos: [Photo]) -> KeyPress.Result {
+        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.path == path }) else {
+            return .ignored
+        }
+        catalog.setColorLabel(photo.colorLabel.toggled(to: label), for: photo)
+        advanceFocusIfNoLongerVisible(previousPath: path, previousList: photos)
+        return .handled
+    }
+
     /// `.`/`f` toggle Pick (a Rejected photo goes back to unflagged rather
     /// than straight to Picked); `p`/`x`/`u` set Pick/Reject/Unflag directly.
     private func setFlagOnFocused(_ status: FlagStatus?, in photos: [Photo]) -> KeyPress.Result {
@@ -432,9 +446,10 @@ struct LibraryGridView: View {
         return .handled
     }
 
-    /// Reviewer-caught: rating/flagging the focused photo can filter it
+    /// Reviewer-caught: rating/flagging/labeling the focused photo can filter it
     /// OUT of `displayedPhotos` (e.g. rating it below `catalog.minimumRating`,
-    /// or unflagging it while `catalog.flagFilter` is `.picked`) — without this,
+    /// unflagging it while `catalog.flagFilter` is `.picked`, or relabeling
+    /// it while `catalog.labelFilter` is a different color) — without this,
     /// focus would silently keep pointing at a now-invisible photo until
     /// the next arrow press reset it all the way back to the grid's first
     /// item. Instead, moves focus to whichever photo now occupies the SAME
@@ -468,6 +483,13 @@ struct LibraryGridView: View {
 
             Picker("Flag", selection: $catalog.flagFilter) {
                 ForEach(LibraryFlagFilter.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .frame(maxWidth: 150)
+
+            Picker("Label", selection: $catalog.labelFilter) {
+                ForEach(LibraryLabelFilter.allCases) { option in
                     Text(option.label).tag(option)
                 }
             }
@@ -549,7 +571,7 @@ struct LibraryGridView: View {
                 .foregroundStyle(.secondary)
             Text("No photos match")
                 .font(.headline)
-            Text("Try a different search or adjust the rating/flag filters.")
+            Text("Try a different search or adjust the rating/flag/label filters.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -697,7 +719,7 @@ private struct LibraryThumbnailCell: View {
                 }
                 .opacity(photo.flagStatus == .rejected ? 0.45 : 1)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(isMissing ? "\(photo.filename), missing" : photo.filename)
+                .accessibilityLabel(thumbnailAccessibilityLabel)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { onTap() }
                 // Always-visible selection checkbox — tapping IT toggles
@@ -728,6 +750,16 @@ private struct LibraryThumbnailCell: View {
             .overlay(alignment: .bottomTrailing) {
                 if hasEdits {
                     editedBadge
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if photo.colorLabel != .none {
+                    Circle()
+                        .fill(photo.colorLabel.color)
+                        .overlay(Circle().stroke(.black.opacity(0.5), lineWidth: 1))
+                        .frame(width: 12, height: 12)
+                        .padding(6)
+                        .accessibilityHidden(true)
                 }
             }
             // D4 (IMPROVEMENTS.md): the keyboard-focus ring — deliberately
@@ -831,6 +863,24 @@ private struct LibraryThumbnailCell: View {
                             .accessibilityElement(children: .combine)
                             .accessibilityLabel(
                                 photo.flagStatus == status ? "\(status.menuTitle), current" : status.menuTitle
+                            )
+                        }
+                    }
+                    Divider()
+                    ForEach(ColorLabel.menuOrder, id: \.self) { label in
+                        Button {
+                            catalog.setColorLabel(label, for: photo)
+                        } label: {
+                            HStack {
+                                Text(label.menuTitle)
+                                Spacer()
+                                if photo.colorLabel == label {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(
+                                photo.colorLabel == label ? "\(label.menuTitle), current" : label.menuTitle
                             )
                         }
                     }
@@ -974,6 +1024,15 @@ private struct LibraryThumbnailCell: View {
             image = thumb
             isMissing = missing
         }
+    }
+
+    /// The thumbnail's one VoiceOver label: filename, plus "missing" and/or
+    /// the color label so the dot (which is hidden from AT) isn't lost.
+    private var thumbnailAccessibilityLabel: String {
+        var parts = [photo.filename]
+        if isMissing { parts.append("missing") }
+        if photo.colorLabel != .none { parts.append(photo.colorLabel.accessibilityName) }
+        return parts.joined(separator: ", ")
     }
 
     /// D5 (IMPROVEMENTS.md): replaces a stale/indefinite thumbnail state

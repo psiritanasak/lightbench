@@ -21,6 +21,26 @@ struct ContentView: View {
     /// needs to act on the SAME instance the toolbar buttons below do.
     @ObservedObject var pasteModel: PasteSettingsModel
 
+    /// The Library's "Rename Files…" sheet and "Undo Rename". Owned by `PhotoAppApp` (its Photo-menu
+    /// items must reach the same instance); those items only set `renameModel.request`, which this
+    /// view performs below because only it can see the selection and the Export/Enhance state.
+    @ObservedObject var renameModel: RenameModel
+
+    /// What batch rename must re-check at APPLY and UNDO time (see `RenameModel`): a load in flight,
+    /// a running Export/Enhance, or an open paste confirmation makes renaming unsafe right now.
+    private var renameProviders: RenameProviders {
+        RenameProviders(
+            openPhotoPath: { document.currentURL?.path },
+            busyReason: {
+                if document.isLoadInFlight { return "A photo is still loading — try again in a moment." }
+                if exportModel.isExporting || exportModel.isPresentingOptions { return "An export is running or being set up — finish or cancel it first." }
+                if enhanceModel.isEnhancing { return "Enhance is running — wait for it to finish." }
+                if pasteModel.pendingTargets != nil { return "Finish or cancel the Paste Settings prompt first." }
+                return nil
+            }
+        )
+    }
+
     /// Phase 5 slice 1: batch export. Scoped to this view (not lifted to
     /// `PhotoAppApp`) — unlike `document`/`catalog`, nothing outside this
     /// view (no Scene-level command, no other view) needs to observe it.
@@ -1054,6 +1074,7 @@ struct ContentView: View {
                 ExportOptionsView(
                     exportModel: exportModel, photoCount: photosToExport.count, previewPhoto: photosToExport.first
                 ) {
+                    guard !renameModel.isWorking else { return }
                     exportModel.runExport(photos: photosToExport)
                 }
             }
@@ -1070,6 +1091,40 @@ struct ContentView: View {
                 Button("OK") {}
             } message: { message in
                 Text(message)
+            }
+            .sheet(isPresented: $renameModel.isPresentingSheet) {
+                RenameSheetView(model: renameModel)
+            }
+            .alert(
+                "Rename",
+                isPresented: Binding(
+                    get: { renameModel.statusMessage != nil },
+                    set: { isPresented in
+                        if !isPresented { renameModel.statusMessage = nil }
+                    }
+                ),
+                presenting: renameModel.statusMessage
+            ) { _ in
+                Button("OK") {}
+            } message: { message in
+                Text(message)
+            }
+            // The Photo menu can't see the selection or the Export/Enhance state, so it only sets
+            // `request`; this view performs it with its own providers, then clears it.
+            .onChange(of: renameModel.request) { _, request in
+                guard let request else { return }
+                renameModel.request = nil
+                switch request {
+                case .rename:
+                    renameModel.begin(photos: selectedPhotosVisibleInGrid, catalog: catalog, providers: renameProviders)
+                case .undo:
+                    renameModel.undo(catalog: catalog, providers: renameProviders)
+                }
+            }
+            // "Undo Rename" is only offered when a batch is logged; the catalog opens asynchronously,
+            // so re-check as the library loads/changes.
+            .task(id: catalog.photos.count) {
+                await renameModel.refreshCanUndo(catalog: catalog)
             }
             .overlay(alignment: .bottom) {
                 if let progress = exportModel.progress {
@@ -1329,8 +1384,10 @@ struct ContentView: View {
             }
             Menu {
                 Button("Open…") {
+                    guard !renameModel.isWorking else { return }
                     Task { await document.openImage() }
                 }
+                .disabled(renameModel.isWorking)
                 Button("Import Folder…") {
                     catalog.importFolder()
                 }
@@ -1348,7 +1405,7 @@ struct ContentView: View {
                 } label: {
                     Label(exportButtonTitle, systemImage: "square.and.arrow.up")
                 }
-                .disabled(photosToExport.isEmpty || exportModel.isExporting)
+                .disabled(photosToExport.isEmpty || exportModel.isExporting || renameModel.isWorking)
                 .help(exportButtonTitle)
 
                 // Deliberately the RAW `catalog.selectedPhotoIDs`, not
@@ -1382,6 +1439,16 @@ struct ContentView: View {
                         }
                         .disabled(selectedPhotosVisibleInGrid.isEmpty)
 
+                        Button("Rename Files (\(selectedPhotosVisibleInGrid.count))…") {
+                            renameModel.begin(photos: selectedPhotosVisibleInGrid, catalog: catalog, providers: renameProviders)
+                        }
+                        .disabled(selectedPhotosVisibleInGrid.isEmpty || renameModel.isWorking || document.isLoadInFlight)
+
+                        Button("Undo Rename") {
+                            renameModel.undo(catalog: catalog, providers: renameProviders)
+                        }
+                        .disabled(!renameModel.canUndo || renameModel.isWorking || document.isLoadInFlight)
+
                         Button("Paste Settings (\(selectedPhotosVisibleInGrid.count))…") {
                             pasteModel.requestPaste(onto: selectedPhotosVisibleInGrid)
                         }
@@ -1400,7 +1467,7 @@ struct ContentView: View {
                         // for the complete, multi-layered story.
                         .disabled(
                             pasteModel.copied == nil || selectedPhotosVisibleInGrid.isEmpty
-                                || document.isLoadInFlight
+                                || document.isLoadInFlight || renameModel.isWorking
                         )
 
                         Divider()
@@ -1497,6 +1564,7 @@ struct ContentView: View {
                 // Settings" just above — `enhanceModel.enhance` reads
                 // exactly what's on screen right now, including an edit
                 // still inside its debounce window.
+                guard !renameModel.isWorking else { return }
                 enhanceModel.enhance(sourceURL: document.currentURL, editState: document.editState, catalog: catalog)
             } label: {
                 Label("Enhance", systemImage: "square.resize.up")
@@ -1506,7 +1574,10 @@ struct ContentView: View {
             // `isLoadInFlight`/`isEnhancing` both gate this: a photo
             // switch or an enhance already in progress must not let a
             // second click start a second one on top of it.
-            .disabled(document.currentImage == nil || document.isLoadInFlight || enhanceModel.isEnhancing)
+            .disabled(
+                document.currentImage == nil || document.isLoadInFlight || enhanceModel.isEnhancing
+                    || renameModel.isWorking
+            )
         }
     }
 
@@ -1589,6 +1660,9 @@ struct ContentView: View {
                 // indicator (`document.isLoadingImage`) is actually visible
                 // instead of the user staring at an unchanged Library grid
                 // during the gap.
+                // Never load a photo while a rename/undo is moving files (it could read "no sidecar"
+                // in the temp window and then save edits to a path that is about to vanish).
+                guard !renameModel.isWorking else { return }
                 showLibrary = false
                 Task {
                     await catalog.ensureAccessActive(forPhotoAt: photo.path)
@@ -1628,6 +1702,7 @@ struct ContentView: View {
             editorSplitView
             if isFilmstripVisible {
                 EditorFilmstripView(catalog: catalog, currentURL: document.currentURL) { photo in
+                    guard !renameModel.isWorking else { return }
                     Task {
                         await catalog.ensureAccessActive(forPhotoAt: photo.path)
                         await document.load(from: URL(fileURLWithPath: photo.path))
@@ -2164,6 +2239,6 @@ struct ContentView: View {
 #Preview {
     ContentView(
         document: ImageDocumentModel(), catalog: CatalogModel(), pasteModel: PasteSettingsModel(),
-        showLibrary: .constant(false)
+        renameModel: RenameModel(), showLibrary: .constant(false)
     )
 }

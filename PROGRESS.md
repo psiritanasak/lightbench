@@ -8,6 +8,26 @@ improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
 ## Current phase
+**BATCH RENAME — IN PROGRESS (paused on usage limit, 2026-09-30).** Commits 1-3 of 5 are on `master`
+(naming engine `b4bcb3a`, Export naming `38d9c5f`, rename engine/plan/log/undo + Migration 009 `08968f5`).
+Commit 4 (RenameModel + RenameSheetView + toolbar/Photo-menu wiring + CatalogModel rename methods) is committed
+ONLY on branch `wip/batch-rename-commit4` — NOT reviewer-approved. It builds and the full suite passed at the last
+run, but the last reviewer round was FIX FIRST with these still OPEN (plan: `~/.claude/plans/sharded-prancing-pillow.md`):
+1. Gate Import Folder / Import Folder Tree, Locate (single+batch), Remove on a rename/undo in progress — plan: a
+   `CatalogModel.isRenameInProgress` flag set by `RenameModel` while `isWorking`, with guards at the top of
+   `importFolder`, `importFolderTree`, `relocatePhoto`, `relocateSelectedPhotos`, `removePhoto`; add an
+   `isImporting` flag (none exists) and include "import in progress" in `renameProviders.busyReason`.
+2. Sheet can strand `isPresentingSheet == true`: track visibility (`onAppear`/`onDisappear` -> model), treat
+   presented-but-not-visible-and-not-working as stale in `begin`; add `.interactiveDismissDisabled(model.isWorking)`;
+   route the `catch` in `performApply` through `report()`.
+3. Photo menu "Undo Rename"/"Paste Settings": also disable while `renameModel.isPresentingSheet`; guard the Paste
+   confirm button on `renameModel.isWorking`.
+4. `RenamePlan`: also block a row whose TARGET path is the photo open in the Editor (new block case + test).
+Then: re-run reviewer (Opus), merge the branch, do a LIVE check of the sheet/menus/undo in a Release build (back up the
+real catalog first; scratch photos only; Migration 009 applies on first real launch), then commit 5 (docs: CLAUDE.md,
+PROGRESS.md, IMPROVEMENTS.md D41/D42, ROADMAP_HISTORY). Not built by design: D40 crash-recovery journal, D41 Editor
+"close photo" (last-opened photo blocks renaming it), D42 preview debounce.
+
 **PHASE 8 COMPLETE (2026-09-30) — ALL ROADMAP ITEMS 1-8 ARE DONE**, closed by a measured
 large-image + edge-case audit plus a follow-up (numbers: CLAUDE.md item 8,
 `docs/ROADMAP_HISTORY.md` "Phase 8 close-out" and "Phase 8 follow-up"):

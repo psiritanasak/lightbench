@@ -20,6 +20,12 @@ struct PhotoAppApp: App {
     /// buttons in `ContentView` do.
     @StateObject private var pasteModel = PasteSettingsModel()
 
+    /// Owns the Library's "Rename Files…" sheet and "Undo Rename". Owned here, same reasoning as
+    /// `pasteModel`: the Photo menu's items below (Scene-level) must act on the SAME instance the
+    /// toolbar menu in `ContentView` does — the menu only sets `renameModel.request`; `ContentView`
+    /// (which can see the selection and the Export/Enhance state) performs it.
+    @StateObject private var renameModel = RenameModel()
+
     /// Whether the window is showing the Library grid instead of the Editor.
     /// Presentation-only, and `ContentView`'s own `@State` until the Photo
     /// menu below needed it: prev/next is EDITOR navigation, so it must
@@ -30,7 +36,10 @@ struct PhotoAppApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(document: document, catalog: catalog, pasteModel: pasteModel, showLibrary: $showLibrary)
+            ContentView(
+                document: document, catalog: catalog, pasteModel: pasteModel, renameModel: renameModel,
+                showLibrary: $showLibrary
+            )
         }
         .commands {
             // Replaces macOS's default (inert) Edit > Undo/Redo items —
@@ -64,10 +73,10 @@ struct PhotoAppApp: App {
                 let neighbors = photoNeighbors
                 Button("Previous Photo") { open(neighbors.previous) }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
-                    .disabled(neighbors.previous == nil)
+                    .disabled(neighbors.previous == nil || renameModel.isWorking)
                 Button("Next Photo") { open(neighbors.next) }
                     .keyboardShortcut(.rightArrow, modifiers: .command)
-                    .disabled(neighbors.next == nil)
+                    .disabled(neighbors.next == nil || renameModel.isWorking)
                 Divider()
                 // Copy/Paste Edit Settings — Lightroom's own Photo-menu
                 // placement and shortcuts. "Paste Settings" here shows the
@@ -93,7 +102,15 @@ struct PhotoAppApp: App {
                 // independently, not just the toolbar button's copy of it.
                 .disabled(
                     pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight
+                        || renameModel.isWorking
                 )
+                Divider()
+                // Batch rename: no default shortcut (matches Enhance). These only REQUEST — `ContentView`
+                // performs the request with its own selection and busy-state providers.
+                Button("Rename Files…") { renameModel.request = .rename }
+                    .disabled(catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight)
+                Button("Undo Rename") { renameModel.request = .undo }
+                    .disabled(!renameModel.canUndo || renameModel.isWorking || document.isLoadInFlight)
             }
         }
     }
@@ -125,7 +142,8 @@ struct PhotoAppApp: App {
     /// the very photo their own `.disabled` was computed from, rather than
     /// re-deriving it when clicked.
     private func open(_ photo: Photo?) {
-        guard let photo else { return }
+        // Not while a batch rename/undo is moving files (see `RenameModel`).
+        guard let photo, !renameModel.isWorking else { return }
         Task {
             await catalog.ensureAccessActive(forPhotoAt: photo.path)
             await document.load(from: URL(fileURLWithPath: photo.path))

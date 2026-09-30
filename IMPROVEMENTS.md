@@ -1150,6 +1150,23 @@ Recommended fix if it ever bites: a write-ahead `pending` batch row saved before
 flipped to applied in the same transaction as the path update, and reconciled on launch (roll the
 files forward or back to match).
 
+### D41. The Editor has no "close" action, so the last-opened photo blocks renaming it (batch-rename commit 4 review, 2026-09-30) — open, worked around
+
+`ImageDocumentModel.currentURL` is never cleared, so the last photo opened stays "loaded in the
+Editor" even while the Library grid is showing. `RenamePlan` (rightly) refuses to rename a photo the
+Editor holds — its debounced sidecar save would otherwise write to the OLD sidecar path — so selecting a
+whole folder that includes the last-edited photo makes the entire batch inapplicable, and Undo Rename
+refuses the same way. Current workaround (stated in the blocked row's message): open a different photo in
+the Editor first. Better fix: a real "close photo" (flush the pending save, clear `currentURL`/image) when
+the user enters the Library, or retarget the document to the new path after a rename.
+
+### D42. Rename preview does its disk checks on the main actor on every keystroke (batch-rename commit 4 review, 2026-09-30) — open, accepted
+
+`RenamePlan.make` runs about three `fileExists` calls per photo synchronously on the main actor each
+time the template or start number changes: roughly 3,000 `stat`s per keystroke at 1,000 photos — fine on
+a local SSD, noticeable on a network volume or slow external drive. Not measured. If it ever hurts,
+debounce `RenameModel.recomputePlan` (~150 ms) and/or move the plan build off the main actor.
+
 ## Working agreements
 1. One item per session, smallest viable slice, Plan Mode first (CLAUDE.md).
 2. Performance items: measure before and after on a real large photo/library; record numbers in PROGRESS.md.

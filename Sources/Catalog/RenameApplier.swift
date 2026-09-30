@@ -40,9 +40,14 @@ enum RenameApplier {
     static func undoLast(
         database: CatalogDatabase,
         move: RenameEngine.MoveFunction = RenameEngine.exclusiveMove,
-        afterFilesMoved: () async throws -> Void = {}
+        afterFilesMoved: () async throws -> Void = {},
+        expectedBatchID: Int64? = nil
     ) async throws -> Int {
         guard let log = try await database.lastRenameLog() else { throw RenameCatalogError.noLoggedRename }
+        // The caller checked (Editor, folder access) against ONE batch; never undo a different, newer one.
+        if let expectedBatchID, log.batchID != expectedBatchID {
+            throw Failure(message: "The rename history changed — nothing was undone. Try Undo Rename again.")
+        }
         try await database.validateUndo(of: log)
         let inverse = log.moves.map(\.inverse)
         do {

@@ -35,7 +35,7 @@ enum RenameBlock: Equatable, Sendable {
         case .targetSidecarExists: return "A leftover edit file with that name already exists."
         case .targetCatalogued: return "Another photo in the library uses that name."
         case .sourceMissing: return "The file is missing or can't be accessed."
-        case .openInEditor: return "Open in the Editor — close it first."
+        case .openInEditor: return "Loaded in the Editor — open a different photo first."
         }
     }
 }
@@ -89,6 +89,22 @@ struct RenamePlan: Equatable, Sendable {
     /// `==` is not.
     static func key(forFileName name: String) -> String {
         name.precomposedStringWithCanonicalMapping.lowercased()
+    }
+
+    /// True when two path strings name the same file: same (case/normalization-folded) file name AND
+    /// the same location once symlinks and `.`/`..` are resolved — so `/tmp/x.jpg` vs
+    /// `/private/tmp/x.jpg`, or a differently-cased spelling from File > Open…, still match. (The
+    /// file-name check runs first so the symlink resolution — file I/O — only happens for candidates.)
+    static func isSamePath(_ a: String, _ b: String) -> Bool {
+        guard key(forFileName: URL(fileURLWithPath: a).lastPathComponent)
+            == key(forFileName: URL(fileURLWithPath: b).lastPathComponent)
+        else { return false }
+        return canonicalPath(a) == canonicalPath(b)
+    }
+
+    private static func canonicalPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardized.path
+            .precomposedStringWithCanonicalMapping.lowercased()
     }
 
     private static func key(folder: String, name: String) -> String {
@@ -180,7 +196,7 @@ struct RenamePlan: Equatable, Sendable {
 
             if !environment.fileExists(d.photo.path) {
                 drafts[index].block = .sourceMissing
-            } else if environment.openPhotoPath == d.photo.path {
+            } else if let open = environment.openPhotoPath, isSamePath(open, d.photo.path) {
                 drafts[index].block = .openInEditor
             } else if !sameFileCaseOnly { // (a case-only rename's target checks are the engine's job: RENAME_EXCL + its sidecar check)
                 let targetKey = key(folder: d.folder, name: newName)

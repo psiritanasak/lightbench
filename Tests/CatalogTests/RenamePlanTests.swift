@@ -187,6 +187,14 @@ final class RenamePlanTests: XCTestCase {
         XCTAssertFalse(p.isApplicable)
     }
 
+    func testIsSamePathIgnoresCaseNormalizationAndDotSegments() {
+        XCTAssertTrue(RenamePlan.isSamePath("/f/IMG.jpg", "/f/img.JPG"))
+        XCTAssertTrue(RenamePlan.isSamePath("/f/caf\u{e9}.jpg", "/f/cafe\u{301}.jpg"))
+        XCTAssertTrue(RenamePlan.isSamePath("/f/sub/../a.jpg", "/f/a.jpg"))
+        XCTAssertFalse(RenamePlan.isSamePath("/f/a.jpg", "/g/a.jpg"))
+        XCTAssertFalse(RenamePlan.isSamePath("/f/a.jpg", "/f/b.jpg"))
+    }
+
     func testEveryBlockHasAHumanReadableMessage() {
         let all: [RenameBlock] = [.notCatalogued, .selectedTwice, .template(.emptyResult), .collidesWithBatch("x.jpg"), .targetExists,
                                   .targetSidecarExists, .targetCatalogued, .sourceMissing, .openInEditor]

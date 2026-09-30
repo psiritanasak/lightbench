@@ -235,6 +235,27 @@ final class RenameApplierTests: XCTestCase {
         XCTAssertNotNil(log) // still undoable once the user frees the name
     }
 
+    /// The caller checked (Editor, folder access) against ONE batch — never undo a different, newer one.
+    func testUndoRefusesToUndoADifferentBatchThanTheOneTheCallerChecked() async throws {
+        let photos = try await importFiles(["a.jpg", "b.jpg"])
+        let (a, b) = (try need(photos["a.jpg"]), try need(photos["b.jpg"]))
+        _ = try await RenameApplier.apply([move(a, to: "a2.jpg")], database: db)
+        let checked = try need(try await db.lastRenameLog())
+        let b1 = try need(try await db.allPhotos().first { $0.id == b.id })
+        _ = try await RenameApplier.apply([move(b1, to: "b2.jpg")], database: db) // a newer batch arrives
+        let before = try listing()
+
+        do {
+            _ = try await RenameApplier.undoLast(database: db, expectedBatchID: checked.batchID)
+            XCTFail("expected the undo to refuse")
+        } catch let error as RenameApplier.Failure {
+            XCTAssertTrue(error.message.contains("history changed"), error.message)
+        }
+        XCTAssertEqual(try listing(), before)
+        let matching = try await RenameApplier.undoLast(database: db, expectedBatchID: try need(try await db.lastRenameLog()).batchID)
+        XCTAssertEqual(matching, 1) // the CURRENT batch id is accepted
+    }
+
     // MARK: Undo hardening (batch-rename commit 3 review)
 
     /// A stale Editor save can drop `<old name>.photoapp.json` after the rename. Undo (which has no planner)

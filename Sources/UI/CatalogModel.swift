@@ -414,6 +414,62 @@ final class CatalogModel: ObservableObject {
         return photo
     }
 
+    // MARK: - Batch rename (Library "Rename Files…")
+
+    /// Every catalogued path → its photo id (the WHOLE catalog, not just the folder/collection on
+    /// screen), so the rename plan can refuse a target another photo already owns even if that photo
+    /// isn't in view. Empty when the catalog isn't ready.
+    func cataloguedPathOwners() async -> [String: Int64] {
+        guard let database, let all = try? await database.allPhotos() else { return [:] }
+        return Dictionary(all.compactMap { photo in photo.id.map { (photo.path, $0) } }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The most recent applied rename batch (what "Undo Rename" would undo), if any.
+    func lastRenameLog() async -> LoggedRename? {
+        guard let database else { return nil }
+        return try? await database.lastRenameLog()
+    }
+
+    /// Renames `moves` (files + sidecars + catalog rows, all-or-nothing — see `RenameApplier`), then
+    /// invalidates the thumbnails at BOTH the old and new paths (the thumbnail cache is keyed by
+    /// path), re-points the keyboard focus if it sat on a renamed photo, and refreshes the grid.
+    /// The blocking file I/O runs detached, off the main actor.
+    func applyRename(_ moves: [RenameMove]) async throws -> Int {
+        guard let database else {
+            throw CatalogDatabaseError(message: "The photo catalog isn't ready yet — try again in a moment.")
+        }
+        let count = try await Task.detached { try await RenameApplier.apply(moves, database: database) }.value
+        await afterRename(moves)
+        return count
+    }
+
+    /// Undoes the most recent rename batch (see `RenameApplier.undoLast`), with the same cache and
+    /// focus housekeeping. Returns how many photos were restored.
+    func undoLastRename(expectedBatchID: Int64? = nil) async throws -> Int {
+        guard let database else {
+            throw CatalogDatabaseError(message: "The photo catalog isn't ready yet — try again in a moment.")
+        }
+        let log = try await database.lastRenameLog()
+        let count = try await Task.detached {
+            try await RenameApplier.undoLast(database: database, expectedBatchID: expectedBatchID)
+        }.value
+        await afterRename((log?.moves ?? []).map(\.inverse))
+        return count
+    }
+
+    /// Thumbnails are cached by PATH, so both names go stale; focus is tracked by path too. (Known, low
+    /// severity: a thumbnail already being decoded for an OLD path when the rename lands can finish after
+    /// this invalidation and cache a stale image under that dead path — nothing displays it, and an
+    /// Undo invalidates again.)
+    private func afterRename(_ moves: [RenameMove]) async {
+        for move in moves {
+            invalidateThumbnail(for: URL(fileURLWithPath: move.oldPath))
+            invalidateThumbnail(for: URL(fileURLWithPath: move.newPath))
+            if focusedPhotoPath == move.oldPath { focusedPhotoPath = move.newPath }
+        }
+        await refresh()
+    }
+
     /// Returns a small thumbnail for `photo`, decoded (and cached) off the
     /// main thread. Requires `photo`'s containing folder to currently have
     /// active security scope — true for a folder imported this session,

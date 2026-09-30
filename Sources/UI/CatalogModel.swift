@@ -86,6 +86,7 @@ final class CatalogModel: ObservableObject {
     /// filter. See `LibraryFilterSort.apply`'s own doc comment.
     @Published var minimumRating: Int = 0
     @Published var flagFilter: LibraryFlagFilter = .all
+    @Published var labelFilter: LibraryLabelFilter = .all
     @Published var searchText: String = ""
 
     /// What the Library grid actually renders — `photos` (the
@@ -100,17 +101,19 @@ final class CatalogModel: ObservableObject {
     var displayedPhotos: [Photo] {
         LibraryFilterSort.apply(
             to: photos, sort: sortOption, minimumRating: minimumRating,
-            flagFilter: flagFilter, searchText: searchText
+            flagFilter: flagFilter, searchText: searchText,
+            labelFilter: labelFilter
         )
     }
 
-    /// Resets all four sort/filter/search fields to their defaults — the
+    /// Resets all five sort/filter/search fields to their defaults — the
     /// Library grid's "Clear Filters" action, for when they've filtered
     /// the current source set down to nothing.
     func clearLibraryFilters() {
         sortOption = .dateOldest
         minimumRating = 0
         flagFilter = .all
+        labelFilter = .all
         searchText = ""
     }
 
@@ -808,6 +811,15 @@ final class CatalogModel: ObservableObject {
         updatePhotoInPlace(id: id) { $0.flagStatus = status }
         Task.detached { [weak self] in
             do { try await database.setFlagStatus(status, for: id) } catch { await self?.refresh() }
+        }
+    }
+
+    /// Sets `photo`'s color label — same local-first shape/reasoning as `setFlagStatus`.
+    func setColorLabel(_ label: ColorLabel, for photo: Photo) {
+        guard let database, let id = photo.id else { return }
+        updatePhotoInPlace(id: id) { $0.colorLabel = label }
+        Task.detached { [weak self] in
+            do { try await database.setColorLabel(label, for: id) } catch { await self?.refresh() }
         }
     }
 

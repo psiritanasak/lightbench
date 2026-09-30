@@ -109,6 +109,7 @@ final class CatalogDatabase: Sendable {
         Migration005Presets.register(in: &migrator)
         Migration006CollectionFolderPathIndex.register(in: &migrator)
         Migration007PickRejectFlags.register(in: &migrator)
+        Migration008ColorLabels.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 
@@ -229,6 +230,14 @@ final class CatalogDatabase: Sendable {
         try await dbQueue.write { db in
             try Photo.filter(Photo.Columns.id == photoID)
                 .updateAll(db, Photo.Columns.rating.set(to: clamped))
+        }
+    }
+
+    /// Sets `photoID`'s color label.
+    func setColorLabel(_ label: ColorLabel, for photoID: Int64) async throws {
+        try await dbQueue.write { db in
+            try Photo.filter(Photo.Columns.id == photoID)
+                .updateAll(db, Photo.Columns.colorLabel.set(to: label))
         }
     }
 
@@ -385,7 +394,7 @@ final class CatalogDatabase: Sendable {
     }
 
     /// Renames `id` to `name` (D5, IMPROVEMENTS.md) — the project's first
-    /// `UPDATE` on any table other than `photo` (`setRating`/`setFlagStatus`
+    /// `UPDATE` on any table other than `photo` (`setRating`/`setFlagStatus`/`setColorLabel`
     /// above are the only prior precedent for this shape). Trimming/empty
     /// validation happens in `CatalogModel`, not here — this method trusts
     /// its input, matching `createCollection`'s own split of concerns.

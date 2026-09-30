@@ -48,8 +48,39 @@ enum LibraryFlagFilter: CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Which color labels the Library grid shows. `.all` is the default.
+enum LibraryLabelFilter: CaseIterable, Identifiable, Sendable {
+    case all, unlabeled, red, yellow, green, blue, purple
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .all: return "All Labels"
+        case .unlabeled: return "No Label"
+        case .red: return "Red"
+        case .yellow: return "Yellow"
+        case .green: return "Green"
+        case .blue: return "Blue"
+        case .purple: return "Purple"
+        }
+    }
+
+    func matches(_ label: ColorLabel) -> Bool {
+        switch self {
+        case .all: return true
+        case .unlabeled: return label == .none
+        case .red: return label == .red
+        case .yellow: return label == .yellow
+        case .green: return label == .green
+        case .blue: return label == .blue
+        case .purple: return label == .purple
+        }
+    }
+}
+
 /// Pure, SwiftUI/GRDB-independent Library grid refinement — sort + rating/
-/// flag/filename filtering, applied entirely in memory to whatever source
+/// flag/label/filename filtering, applied entirely in memory to whatever source
 /// set `CatalogModel.photos` already holds (the sidebar's Collection/Folder
 /// selection). Extracted as a standalone type specifically so this logic
 /// gets direct unit test coverage, matching this project's established
@@ -65,11 +96,17 @@ enum LibraryFilterSort {
     ///   - searchText: case-insensitive substring match against
     ///     `filename`, trimmed of leading/trailing whitespace first; an
     ///     empty (or whitespace-only) string means no search filter.
+    ///   - labelFilter: which color label(s) to keep; `.all` (the default)
+    ///     means no label filter.
     static func apply(
         to photos: [Photo], sort: LibrarySortOption,
-        minimumRating: Int, flagFilter: LibraryFlagFilter, searchText: String
+        minimumRating: Int, flagFilter: LibraryFlagFilter, searchText: String,
+        labelFilter: LibraryLabelFilter = .all
     ) -> [Photo] {
         var result = photos
+        if labelFilter != .all {
+            result = result.filter { labelFilter.matches($0.colorLabel) }
+        }
         if flagFilter != .all {
             result = result.filter { flagFilter.matches($0.flagStatus) }
         }

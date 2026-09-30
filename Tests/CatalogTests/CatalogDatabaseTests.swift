@@ -140,6 +140,52 @@ final class CatalogDatabaseTests: XCTestCase {
         }
     }
 
+    func testSetColorLabelStoresEveryLabel() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importPhotos(at: [URL(fileURLWithPath: "/tmp/a.jpg")])
+        let importedPhotos = try await db.allPhotos()
+        let id = try XCTUnwrap(importedPhotos.first?.id)
+        XCTAssertEqual(importedPhotos.first?.colorLabel, ColorLabel.none)
+
+        for label in ColorLabel.allCases {
+            try await db.setColorLabel(label, for: id)
+            let stored = try await db.allPhotos().first
+            XCTAssertEqual(stored?.colorLabel, label)
+        }
+    }
+
+    /// A catalog created before Migration 008 (migrated only through 007,
+    /// with an existing row) upgrades in place: the row survives and reads
+    /// back as "no label".
+    func testMigration008AddsColorLabelDefaultingExistingRowsToNone() async throws {
+        let path = NSTemporaryDirectory() + "catalog-\(UUID().uuidString).sqlite"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        do {
+            let queue = try DatabaseQueue(path: path)
+            var migrator = DatabaseMigrator()
+            Migration001Initial.register(in: &migrator)
+            Migration002RatingsAndFlags.register(in: &migrator)
+            Migration003Collections.register(in: &migrator)
+            Migration004FolderCollections.register(in: &migrator)
+            Migration005Presets.register(in: &migrator)
+            Migration006CollectionFolderPathIndex.register(in: &migrator)
+            Migration007PickRejectFlags.register(in: &migrator)
+            try migrator.migrate(queue)
+            try await queue.write { db in
+                try db.execute(sql: """
+                    INSERT INTO photo (path, filename, importedAt, rating, flagStatus)
+                    VALUES ('/tmp/old.jpg', 'old.jpg', '2026-01-01 00:00:00', 4, 1)
+                    """)
+            }
+        }
+
+        let db = try CatalogDatabase(path: path)
+        let photo = try await db.allPhotos().first { $0.filename == "old.jpg" }
+        XCTAssertEqual(photo?.colorLabel, ColorLabel.none)
+        XCTAssertEqual(photo?.rating, 4)
+        XCTAssertEqual(photo?.flagStatus, .picked)
+    }
+
     /// A catalog created before Migration 007 (migrated only through 006,
     /// with real flagged/unflagged rows) must upgrade in place: flagged rows
     /// become Picks, and the old boolean column is gone.

@@ -11,6 +11,19 @@ enum FlagStatus: Int, Codable, CaseIterable, Sendable, DatabaseValueConvertible 
     case picked = 1
 }
 
+/// Lightroom-style color label. Raw values are what the `colorLabel` column
+/// stores; `none` is `0` so `Migrations/008_color_labels.swift`'s
+/// `defaults(to: 0)` means "no label". Purple has no default keyboard key
+/// (Lightroom's own 6-9 map to red/yellow/green/blue) and is menu-only.
+enum ColorLabel: Int, Codable, CaseIterable, Sendable, DatabaseValueConvertible {
+    case none = 0
+    case red = 1
+    case yellow = 2
+    case green = 3
+    case blue = 4
+    case purple = 5
+}
+
 /// A catalogued photo: metadata/path only, per Phase 4 slice 1's explicit
 /// scope. The original file itself is never touched — this row just
 /// records where it lives and when it was imported, matching the app's
@@ -23,9 +36,10 @@ enum FlagStatus: Int, Codable, CaseIterable, Sendable, DatabaseValueConvertible 
 ///
 /// `rating` added in `Migrations/002_ratings_and_flags.swift` (Phase 4
 /// slice 3); `flagStatus` replaced that migration's boolean `isFlagged` in
-/// `Migrations/007_pick_reject_flags.swift`. Defaults here (`0`/`.none`)
+/// `Migrations/007_pick_reject_flags.swift`; `colorLabel` added in
+/// `Migrations/008_color_labels.swift`. Defaults here (`0`/`.none`/`.none`)
 /// match those migrations' own `defaults(to:)`, so existing construction
-/// sites (e.g. `CatalogDatabase.importPhotos`, which never sets these two
+/// sites (e.g. `CatalogDatabase.importPhotos`, which never sets these three
 /// fields) keep compiling unchanged. `rating`'s valid range (0...5) is enforced
 /// at the call site that sets it (`CatalogDatabase.setRating`), not here
 /// — matching this project's `EditState` precedent of not
@@ -38,6 +52,8 @@ struct Photo: Codable, Equatable, Identifiable, Sendable {
     var importedAt: Date
     var rating: Int = 0
     var flagStatus: FlagStatus = .none
+    /// Added in `Migrations/008_color_labels.swift`; default matches its `defaults(to: 0)`.
+    var colorLabel: ColorLabel = .none
 }
 
 // MARK: - GRDB conformances
@@ -53,6 +69,7 @@ extension Photo: FetchableRecord, MutablePersistableRecord, TableRecord {
         static let importedAt = Column(CodingKeys.importedAt)
         static let rating = Column(CodingKeys.rating)
         static let flagStatus = Column(CodingKeys.flagStatus)
+        static let colorLabel = Column(CodingKeys.colorLabel)
     }
 
     /// GRDB calls this after a successful `INSERT` so `id` reflects the

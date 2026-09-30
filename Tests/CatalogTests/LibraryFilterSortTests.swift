@@ -7,10 +7,11 @@ import XCTest
 /// (`CropAspectMath`, `CompareLayout`, `ZoomPanGeometry`).
 final class LibraryFilterSortTests: XCTestCase {
     private func photo(
-        id: Int64, filename: String, importedAt: Date, rating: Int = 0, flagStatus: FlagStatus = .none
+        id: Int64, filename: String, importedAt: Date, rating: Int = 0, flagStatus: FlagStatus = .none,
+        colorLabel: ColorLabel = .none
     ) -> Photo {
         Photo(id: id, path: "/tmp/\(filename)", filename: filename, fileSize: nil, importedAt: importedAt,
-              rating: rating, flagStatus: flagStatus)
+              rating: rating, flagStatus: flagStatus, colorLabel: colorLabel)
     }
 
     private let day0 = Date(timeIntervalSince1970: 0)
@@ -158,5 +159,73 @@ final class LibraryFilterSortTests: XCTestCase {
     func testEmptyInputReturnsEmptyOutput() {
         let result = LibraryFilterSort.apply(to: [], sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "")
         XCTAssertTrue(result.isEmpty)
+    }
+    // MARK: - Color label filter
+
+    private func labeledSet() -> [Photo] {
+        [
+            photo(id: 1, filename: "a", importedAt: day0, colorLabel: .red),
+            photo(id: 2, filename: "b", importedAt: day1, colorLabel: .blue),
+            photo(id: 3, filename: "c", importedAt: day2),
+            photo(id: 4, filename: "d", importedAt: day2, colorLabel: .red)
+        ]
+    }
+
+    func testLabelFilterAllKeepsEverything() {
+        let result = LibraryFilterSort.apply(
+            to: labeledSet(), sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "",
+            labelFilter: .all)
+        XCTAssertEqual(result.count, 4)
+    }
+
+    func testLabelFilterMatchesOnlyThatColor() {
+        let result = LibraryFilterSort.apply(
+            to: labeledSet(), sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "",
+            labelFilter: .red)
+        XCTAssertEqual(Set(result.compactMap(\.id)), [1, 4])
+    }
+
+    func testLabelFilterUnlabeledMatchesOnlyPhotosWithNoLabel() {
+        let result = LibraryFilterSort.apply(
+            to: labeledSet(), sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "",
+            labelFilter: .unlabeled)
+        XCTAssertEqual(result.compactMap(\.id), [3])
+    }
+
+    func testLabelFilterIsAnEmptyResultForAColorNobodyHas() {
+        let result = LibraryFilterSort.apply(
+            to: labeledSet(), sort: .dateOldest, minimumRating: 0, flagFilter: .all, searchText: "",
+            labelFilter: .purple)
+        XCTAssertTrue(result.isEmpty)
+    }
+
+    func testLabelFilterCombinesWithFlagFilter() {
+        let photos = [
+            photo(id: 1, filename: "a", importedAt: day0, flagStatus: .picked, colorLabel: .red),
+            photo(id: 2, filename: "b", importedAt: day1, flagStatus: .none, colorLabel: .red),
+            photo(id: 3, filename: "c", importedAt: day2, flagStatus: .picked, colorLabel: .blue)
+        ]
+        let result = LibraryFilterSort.apply(
+            to: photos, sort: .dateOldest, minimumRating: 0, flagFilter: .picked, searchText: "",
+            labelFilter: .red)
+        XCTAssertEqual(result.compactMap(\.id), [1])
+    }
+
+    func testEveryLabelFilterCaseMatchesExactlyItsOwnLabel() {
+        for filter in LibraryLabelFilter.allCases {
+            for label in ColorLabel.allCases {
+                let expected: Bool
+                switch filter {
+                case .all: expected = true
+                case .unlabeled: expected = label == .none
+                case .red: expected = label == .red
+                case .yellow: expected = label == .yellow
+                case .green: expected = label == .green
+                case .blue: expected = label == .blue
+                case .purple: expected = label == .purple
+                }
+                XCTAssertEqual(filter.matches(label), expected, "\(filter) vs \(label)")
+            }
+        }
     }
 }

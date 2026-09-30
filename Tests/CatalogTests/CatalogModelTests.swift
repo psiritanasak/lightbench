@@ -118,6 +118,27 @@ final class CatalogModelTests: XCTestCase {
         XCTAssertEqual(model.photos.first?.rating, 5, "the grid must show the most recent tap")
     }
 
+    func testSetColorLabelUpdatesPublishedPhotosSynchronouslyAndPersists() async throws {
+        let model = await makeModel()
+        let photo = try XCTUnwrap(model.photos.first)
+
+        model.setColorLabel(.green, for: photo)
+
+        XCTAssertEqual(model.photos.first?.colorLabel, .green)
+        try await waitUntil("color label to reach the database") {
+            try await self.database.allPhotos().first { $0.path == photo.path }?.colorLabel == .green
+        }
+    }
+
+    func testClearLibraryFiltersResetsTheLabelFilter() async throws {
+        let model = await makeModel()
+        model.labelFilter = .red
+
+        model.clearLibraryFilters()
+
+        XCTAssertEqual(model.labelFilter, .all)
+    }
+
     func testSetRatingPersistsToTheCatalog() async throws {
         let model = await makeModel()
         let photo = try XCTUnwrap(model.photos.first)

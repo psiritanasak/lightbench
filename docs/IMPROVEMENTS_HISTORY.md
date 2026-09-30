@@ -1142,3 +1142,20 @@ the tests that write now skip unless the directory is provably under temp.
 Still open, out of scope: Xcode Previews (`XCODE_RUNNING_FOR_PREVIEWS`) also
 open the real catalog; Swift Testing and non-`xcodebuild` test plans were not
 verified to set the markers.
+
+### D37. A truncated JPEG/PNG exported or enhanced without any warning (Phase 8 audit, 2026-09-30) — SHIPPED 2026-09-30
+
+`SourceIntegrity` (`Sources/Rendering/SourceIntegrity.swift`) now makes
+`PhotoExporter.export` and `PhotoEnhancer.enhance` refuse a source whose JPEG
+never reaches its EOI marker / PNG never reaches IEND (`incompleteSource`
+errors; nothing written). Measured first: ImageIO's `CGImageSourceGetStatus`
+says `complete` for every truncated JPEG/PNG/TIFF cut, so it could not be
+used; a truncated TIFF already fails to decode. The Editor and thumbnails
+deliberately still open a damaged photo. Validated read-only against the
+developer's real 1094-photo library: 0 false refusals (95 JPEG + 49 PNG
+complete; RAW/HEIC/TIFF left alone).
+
+Known, accepted: a JPEG/PNG with COMPLETE pixel data but no final EOI/IEND is
+also refused (indistinguishable from a cut without decoding every MCU) —
+pinned by a test, absent from the real library. Not atomic with the decode
+that follows. Other formats (HEIC/WebP/GIF/BMP/TIFF/RAW) are unchecked.

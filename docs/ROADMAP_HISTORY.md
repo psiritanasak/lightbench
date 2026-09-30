@@ -2816,3 +2816,35 @@ already measured in Phase 6), and Enhance at these sizes (already guarded by
 `SuperResolutionUpscaler.maxTextureDimension` with a Lanczos fallback and
 unit tests).
 
+## Phase 8 follow-up (2026-09-30): D37 shipped, D36 profiled, live interactive pass
+**D37 (shipped).** ImageIO's `CGImageSourceGetStatus` reports `complete` for
+truncated JPEG/PNG/TIFF at every cut (90/50/10% and last 16 bytes) so it can't
+detect truncation; a truncated TIFF already fails to decode. `SourceIntegrity`
+walks the JPEG segments / PNG chunks to the end marker; export and Enhance throw
+`incompleteSource` on positive evidence only. Real library (1094 photos):
+95 JPEG + 49 PNG complete; 930 NEF, 7 HEIC, 1 TIFF and 1 TIFF-named-.jpg unchecked;
+11 unreadable/missing; 0 flagged (95+49+930+7+1+1+11 = 1094). Known,
+accepted: a JPEG/PNG with complete pixel data but no final EOI/IEND is refused.
+
+**D36 (profiled, not fixed).** Full per-stage table lives in IMPROVEMENTS.md D36.
+Headline (noisy fixtures, full-size JPEG export, single runs, ranges up to 2x):
+exposure baseline 0.14s/8.74s/30.92s at 24/96/200MP; Clarity alone 0.24/7.47/33.53;
+Dehaze alone 0.57/9.06/78.82; Clarity+Dehaze 0.70/15.13-27.09/208.84; everything at
+96MP 48.19-97.30s noisy vs 18.97s noiseless. Machine: 8GB, 4.0-4.6GB swap in use.
+
+**Live interactive pass** (Release build, scratch JPEGs 12000x8000 and 20000x10000,
+scratch folder granted once; frames = canvas screenshots every ~0.2s starting after
+the input command returned, so times are release-to-visible-change and include
+~0.2s capture latency). Synthetic scroll-wheel events (CGEvent) reach the app.
+96MP: pan +0.23s; Contrast +0.5s; zoom-in first visible change ~1.5s after the last
+event (single jump); zoom-out partial at once, final +1.4s; Clarity -100% first change
++14.6s, settled +20.5s. 200MP: pan +0.24s; zoom-in +2.5s; zoom-out partial +0.2s, final
++6.6s; Contrast +51% changed +6.3s after release (plus a near-zero 0.12-diff frame blip at +6.0s). INVALID and withdrawn: an
+earlier "Clarity/Dehaze drag" timing whose sliders never moved (sidecar showed
+clarity 0, dehaze 0). NOT measured: Dehaze slider latency — three drag attempts never
+registered under automation (Clarity, Contrast and Exposure sliders did). Anomalies
+(not root-caused): an invisible "Open" panel wedged the app twice until quit
+(automation-related suspected); a transient solid-green rectangle appeared on the
+canvas once at 96MP after zoom/pan + exposure/contrast/Clarity edits and did NOT
+reproduce on a fresh open of the same saved edits (IMPROVEMENTS.md D38).
+

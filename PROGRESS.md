@@ -8,14 +8,17 @@ improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
 ## Current phase
-**PHASE 8 COMPLETE (2026-09-30) — ALL ROADMAP ITEMS 1-8 ARE NOW DONE.** Closed by
-a measured large-image + edge-case audit (no code change needed; see
-CLAUDE.md item 8 and `docs/ROADMAP_HISTORY.md` "Phase 8 close-out" for the
-numbers). Two recorded findings, deliberately unfixed: D36 (heavy edits export
-superlinearly slowly on very large images) and D37 (a truncated JPEG exports without
-warning). Live check not verified: pan/zoom and clean slider-drag latency at
-96/200MP. Nothing is in progress; the working tree was clean after the
-temporary harness was deleted.
+**PHASE 8 COMPLETE (2026-09-30) — ALL ROADMAP ITEMS 1-8 ARE DONE**, closed by a measured
+large-image + edge-case audit plus a follow-up (numbers: CLAUDE.md item 8,
+`docs/ROADMAP_HISTORY.md` "Phase 8 close-out" and "Phase 8 follow-up"):
+- **D37 SHIPPED** — export and Enhance refuse a truncated JPEG/PNG
+  (`SourceIntegrity`, 1399 tests at the time; validated against the real library, 0 false refusals).
+- **D36 PROFILED, not fixed** — cost is the Clarity+Dehaze combination, not any one
+  stage; untested output-identical idea recorded in IMPROVEMENTS.md D36.
+- **Live pass done** — zoom/pan/slider latency measured at 96MP and 200MP; Dehaze
+  slider drags never registered under automation so that case is unmeasured.
+- **D38 (open, unreproduced)** — one transient solid-green rectangle on the canvas.
+Nothing in progress; working tree clean apart from these docs.
 
 Recently shipped (newest first; details in history):
 - **Color labels (2026-09-30)** — `ColorLabel` (red/yellow/green/blue/purple),
@@ -57,7 +60,7 @@ None.
 ## Exact next step
 No roadmap items remain (Phase 8 closed 2026-09-30). Pick a new feature with the
 user (one per session, Plan Mode first): CLAUDE.md's roadmap gaps list (Tier 1 /
-Tier 2) or an open item in `IMPROVEMENTS.md` (incl. the Phase 8 findings D36/D37).
+Tier 2) or an open item in `IMPROVEMENTS.md` (incl. the Phase 8 findings D36/D38).
 Feature-gap roadmap vs. Lightroom: **IMPROVEMENTS.md D35** (prioritized list). Other candidate: **D28** (pre-existing `saveSidecarNow`
 load-during-save race onto the wrong sidecar — a data-integrity hazard on every
 debounced save). Also open there: D31/D32 (security-scope gaps), D13 (phantom

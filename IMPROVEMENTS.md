@@ -26,6 +26,7 @@ performance items, MEASURE before and after.
 - **D33** — Ghost selection IDs make Export/Add-to-Collection UI silently misleading (reviewer-caught while correcting a stale nit, 2026-09-29) — SHIPPED 2026-09-29
 - **D7** — Code design: split ContentView.swift (1352 lines) — SHIPPED 2026-08-28
 - **D34** — `xcodebuild test` ran migrations against the user's REAL catalog (found 2026-09-30, Pick/Reject live check) — SHIPPED 2026-09-30
+- **D37** — A truncated JPEG/PNG exported or enhanced without any warning (Phase 8 audit, 2026-09-30) — SHIPPED 2026-09-30
 
 Residual open items from shipped entries:
 - **D14** — mask/point-color *selection* state (`selectedMaskID`/`selectedPointColorID`) is still a 3-way inconsistent mix across the arm sites (no functional consequence found); `SelectiveColor.cikernel`'s `rgb2hsl` has no negative-channel clamp. Full text in history.
@@ -44,7 +45,7 @@ Sources: Lightroom Classic releases 14.4 (Jun 2025) through 15.6 (Sep 2026) as s
 6. **Multi-photo**: HDR merge, Panorama merge, focus stacking, granular Sync Settings dialog, Survey/Reference view.
 7. **Culling / faces**: Assisted Culling, duplicate detection, face detection + People view (R: Faces panel with Eye Focus / Eyes Open scores, June 2026).
 8. **Persist edit history** across sessions (ours is in-memory), Smart Previews (offline editing), folder move/rename inside the app, Soft Proofing, Print/Slideshow/Map (low value for this app).
-9. ~~Phase 8 polish (tiled rendering, perf)~~ — DONE 2026-09-30 by measured audit (see D36/D37); start with the open items below (D28).
+9. ~~Phase 8 polish (tiled rendering, perf)~~ — DONE 2026-09-30 by measured audit (see D36/D38); start with the open items below (D28).
 
 **Additions from the release-note pass (14.4 → 15.6), not covered in the list above:**
 - **Retouch**: automatic Dust/sensor-spot removal (15.0), Distraction Remove for people and reflections (14.4, improved 15.0/15.6), shadow + reflection detection when removing an object (15.0). Fold into item 3 — a classic spot-detect + heal pass could cover dust without ML.
@@ -1054,39 +1055,79 @@ until one is actually picked up:
   brush that varies width along the path.
 
 
-### D36. Heavy edits export superlinearly slowly on very large images (Phase 8 audit, 2026-09-30) — recorded, not fixed
+### D36. Heavy edits export superlinearly slowly on very large images (Phase 8 audit, 2026-09-30) — recorded, not fixed; PROFILED per stage 2026-09-30
 
-Measured, 8GB machine, Clarity+Dehaze+Texture+NR+one mask: 1.41s @24MP,
-21.81s @96MP, 405.31s @200MP (20000x10000), 478.36s @200MP (16000x12500 —
-both sides under 16384, so NOT the GPU texture limit). Exposure-only 200MP:
-8.26s. Correct output every time; peak RSS <=1.4GB (RSS only — GPU memory not
-measured). Only established: the cost lives in the heavy stages (heavy vs
-exposure-only), not the image size limit. NOT profiled per stage, so the cause
-is an unverified hypothesis: extent-fraction radii in Clarity/Dehaze/Texture
-would predict roughly area^1.5, but the measured growth (15.5x for 4x area,
-then 18.6x for 2.08x area) looks more like a cliff — candidates are D17's ROI
-dilation and memory pressure on an 8GB machine. No user-visible workaround
-needed for the D610 (24MP: 1.4s). If it ever matters: profile which stage dominates at 200MP,
-consider capping those radii's absolute pixel size, or a progress/cancel UI
-for exports. Do not re-attempt as "tiled rendering" — Core Image's own tiling
-did not fail. Full table: `docs/ROADMAP_HISTORY.md` "Phase 8 close-out".
+Audit (8GB machine, all stages at once: Clarity+Dehaze+Texture+NR+contrast/
+saturation/vibrance/curve+one mask): 1.41s @24MP, 21.81s @96MP, 405.31s @200MP
+(20000x10000), 478.36s @200MP (16000x12500 — both sides under 16384, so NOT
+the GPU texture limit). Exposure-only 200MP: 8.26s. Correct output every time.
 
-### D37. A truncated JPEG/PNG exported or enhanced without any warning (Phase 8 audit, 2026-09-30) — SHIPPED 2026-09-30
+**Per-stage profile (temporary harness, `PhotoExporter.export` to full-size
+JPEG, one process per run, scratch fixtures; harness deleted).** Two fixture
+families, because CONTENT MATTERS: "noisy" (gradient + ±12 pixel noise, JPEG
+entropy-heavy) and "noiseless" (smooth gradient). Exposure-only baseline:
+noisy 0.14s @24MP / 8.74s @96MP / 30.92s @200MP (RSS 1195MB); noiseless
+2.02s @96MP (noiseless 96MP "everything": 18.97s) — the noisy baseline is
+probably mostly JPEG decode/encode rather than the pipeline (an INFERENCE from
+8.74s vs 2.02s; the codec was not timed on its own).
 
-`SourceIntegrity` (`Sources/Rendering/SourceIntegrity.swift`) now makes
-`PhotoExporter.export` and `PhotoEnhancer.enhance` refuse a source whose JPEG
-never reaches its EOI marker / PNG never reaches IEND (`incompleteSource`
-errors; nothing written). Measured first: ImageIO's `CGImageSourceGetStatus`
-says `complete` for every truncated JPEG/PNG/TIFF cut, so it could not be
-used; a truncated TIFF already fails to decode. The Editor and thumbnails
-deliberately still open a damaged photo. Validated read-only against the
-developer's real 1094-photo library: 0 false refusals (95 JPEG + 49 PNG
-complete; RAW/HEIC/TIFF left alone).
+| noisy fixture, export seconds | 24MP | 96MP | 200MP |
+|---|---|---|---|
+| exposure (baseline) | 0.14 | 8.74 | 30.92 |
+| Clarity alone | 0.24 | 7.47 | 33.53 |
+| Texture / NR / mask alone | 0.24 / 0.15 / 0.23 | 7.31 / 8.44 / 7.53 | not run |
+| Dehaze alone | 0.57 (1.82 first run) | 9.06 | 78.82 |
+| Clarity + Dehaze | 0.70 (0.75 first run) | 27.09 first / 15.13 repeat | 208.84 |
+| everything | 1.14 (first run) | 97.30 first / 48.19 repeat | not run |
 
-Known, accepted: a JPEG/PNG with COMPLETE pixel data but no final EOI/IEND is
-also refused (indistinguishable from a cut without decoding every MCU) —
-pinned by a test, absent from the real library. Not atomic with the decode
-that follows. Other formats (HEIC/WebP/GIF/BMP/TIFF/RAW) are unchecked.
+What is MEASURED: (1) no single stage is expensive at <=96MP — every one lands
+within about +-1.5s of the baseline (Texture is the extreme, 7.31 vs 8.74); (2) Dehaze alone has a cliff between 96MP
+(+0.3s over baseline) and 200MP (+47.9s); Clarity alone stays cheap (+2.6s at
+200MP); (3) the combination is strongly SUPER-ADDITIVE and the excess grows with
+size: Clarity+Dehaze is additive at 24MP (+0.56s vs parts +0.53s), but +6.4..
++18.4s at 96MP against parts summing to about -1s (i.e. no added cost), and +177.9s at 200MP against
+parts summing to +50.5s; (4) run-to-run spread is up to 2x on this machine
+(4.0-4.6GB of its 8GB swap in use; the first 96MP "everything" run also
+swapped out 34,540 pages), so treat single numbers as ranges; (5) RSS peaks
+across all profiled runs stayed <=1195MB, and all four profiled 200MP runs had 0
+swap-outs, so paging during those runs does not explain them (GPU memory, which
+on unified memory is system memory, was not measured); (6) the first run of a
+Dehaze config in a fresh process is slower (24MP: 1.82s vs 0.57s).
+
+What is HYPOTHESIS (not proven): the first-run slowness in (6) is presumably
+shader compilation; and the super-additive excess is D17's ROI
+dilation — Clarity's wide blur requests a dilated region from Dehaze's
+morphology/blur, and because the radii are extent fractions (Clarity 0.04,
+Dehaze 0.0125 / atmosphere 0.02 of min(extent)) while Core Image's working
+tile size does not grow, the recompute overhead grows with image size.
+
+Decision (Phase 8 follow-up gate): NOT fixed. No single stage dominates, and a
+blur-radius cap would change output for existing photos. No user-visible
+workaround needed for the D610 (24MP: 1.4s all-stages). One cheap, output-
+identical candidate is UNTESTED here: materializing an intermediate after
+Dehaze above a size threshold (`insertingIntermediate()`; D16 measured it
+flat-to-worse for masks, so it must be measured for this Dehaze->Clarity case
+before anyone ships it). Also possible: a progress/cancel UI for very large
+exports. Do not re-attempt as "tiled rendering" — Core Image's own tiling did
+not fail. Audit table: `docs/ROADMAP_HISTORY.md` "Phase 8 close-out".
+
+Live interactive latency (Release app, same machine; `docs/ROADMAP_HISTORY.md`
+"Phase 8 follow-up"): release-to-visible-change at 96MP is ~0.5s for Contrast but
+~14.6s (settled ~20.5s) for Clarity -100%; at 200MP Contrast +51% takes ~6.3s and
+zoom-out ~6.6s. Heavy-combination (Dehaze) slider latency NOT measured.
+
+### D38. Transient solid-green rectangle on the canvas at 96MP (Phase 8 live pass, 2026-09-30) — open, NOT reproduced
+
+Once, during a 96MP session (zoom in/out + pan, then Exposure +1.58 EV,
+Contrast +51%, Clarity -100% edits), a solid pure-green rectangle (bottom-right of
+the canvas, roughly the last ~40% of one edge) covered part of an otherwise correct
+frame — pure green is not a colour present in the source gradient, and an
+uninitialized/zeroed YCbCr-style tile would look like this. The same photo with the
+same SAVED edits, reopened after a relaunch at fit zoom, rendered with no artifact.
+Seen only after the app had also become unresponsive behind an invisible "Open"
+panel, so heavy queued renders / GPU memory pressure on the 8GB machine are
+suspects, but nothing was verified. If it recurs: capture it, note zoom/pan state
+and pending edits, and check whether it clears after a re-render. Not investigated.
 
 ## Working agreements
 1. One item per session, smallest viable slice, Plan Mode first (CLAUDE.md).

@@ -89,7 +89,7 @@ debounced save). Also open there: D31/D32 (security-scope gaps), D13 (phantom
 brush mask on photo switch), D22/D24/D26 (design gaps), D20 keyboard half.
 
 ### Planned next slices (from IMPROVEMENTS.md D35, one per session, Plan Mode first)
-1. ~~Color labels~~ ✅ shipped. ~~Batch rename~~ ✅ shipped. ~~Vision subject-mask feasibility spike~~ ✅ done — GO (see docs/ROADMAP_HISTORY.md). ~~`.subject` mask kind v1~~ ✅ shipped (2026-10-01, code + tests; NOT yet live-verified in the app — see docs/ROADMAP_HISTORY.md). Next candidates: Subject feather/edge refine, per-person selection, Sky/Object masks (own spike), then Profiles/LUTs.
+1. ~~Color labels~~ ✅ shipped. ~~Batch rename~~ ✅ shipped. ~~Vision subject-mask feasibility spike~~ ✅ done — GO (see docs/ROADMAP_HISTORY.md). ~~`.subject` mask kind v1~~ ✅ shipped (2026-10-01, code + tests + live-verified on a real group photo — see docs/ROADMAP_HISTORY.md for what was and wasn't covered). Next candidates: Subject feather/edge refine, per-person selection, Sky/Object masks (own spike), then Profiles/LUTs.
 2. **Profiles / LUTs** + small Develop gaps (Vignette Softness, B&W panel, Color Grading Blending, Point Color Variance).
 3. **Spot removal**: manual heal/clone, then automatic dust detection (no ML).
 4. **AI masks** (Subject/Sky/Background/People, mask Feather/Edge refine) after the spike.

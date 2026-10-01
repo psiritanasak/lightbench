@@ -135,6 +135,36 @@ final class RetouchPipelineTests: XCTestCase {
         }
     }
 
+    /// MEASURED live (screenshot pixels: a 1 px column ~3% darker at the left/right edge of every spot's box): the app
+    /// renders the pipeline output DOWNSCALED to the view, and Core Image applies that scale to the merge kernel's
+    /// inputs BEFORE the kernel runs — so the patch (transparent outside its box) is bilinearly mixed with transparent at
+    /// its edge and the merge writes that partly transparent edge over the base. A full-resolution render never shows it
+    /// (the earlier seam test passed), hence this test renders through a downscale.
+    func testDownscaledRenderLeavesNoSeamAtTheBoxEdge() {
+        let input = image(400, 400) { x, y in Float(0.3 + 0.2 * x / 400 + 0.1 * y / 400) }
+        for mode in [RetouchMode.clone, .heal] {
+            let s = spot(x: 0.5123, y: 0.4877, radius: 0.0233, dx: 0.17, mode: mode, feather: 0.4)
+            let scale = 0.37
+            func scaled(_ i: CIImage) -> CIImage { i.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) }
+            let with = scaled(render(state([s]), input)), without = scaled(render(EditState(), input))
+            let w = 148, h = 148
+            var a = [Float](repeating: 0, count: w * h * 4), b = a
+            context.render(with, toBitmap: &a, rowBytes: w * 16, bounds: CGRect(x: 0, y: 0, width: w, height: h), format: .RGBAf, colorSpace: linearSpace)
+            context.render(without, toBitmap: &b, rowBytes: w * 16, bounds: CGRect(x: 0, y: 0, width: w, height: h), format: .RGBAf, colorSpace: linearSpace)
+            let cx = 0.5123 * 400 * scale, cy = 0.4877 * 400 * scale
+            let feathered = 0.0233 * 400 * 1.24 * scale
+            var worst: Float = 0
+            for row in 0..<h { for x in 0..<w {
+                let yUp = Double(h - 1 - row)
+                if hypot(Double(x) + 0.5 - cx, yUp + 0.5 - cy) > feathered + 2.5 {
+                    let i = (row * w + x) * 4
+                    worst = max(worst, abs(a[i] - b[i]), abs(a[i + 3] - b[i + 3]))
+                }
+            } }
+            XCTAssertLessThan(worst, 2e-3, "\(mode): a box-edge seam appears only in a downscaled render")
+        }
+    }
+
     // MARK: Heal
 
     /// Dest area (around x=100) is flat 0.2; the source area (around x=300) is 0.5 with a fine checker texture.

@@ -1199,3 +1199,14 @@ the message and raise it from `sheetDidDisappear`.
 - `.cube` limits: only 0-1 domain (DOMAIN_MIN/MAX/LUT_3D_INPUT_RANGE other than 0 1 rejected), out-of-range entries clamp, 1D LUTs rejected, sizes 2-65.
 - Look math is not pinned per photo: retuning a built-in look changes existing edits (same as `kMaxTransformAspectStretch`).
 - `loadAll()` runs synchronously on the main thread at launch (needed for ordering); many large LUTs would slow launch.
+
+
+### D46. Spot removal v1 follow-ups (2026-10-02) — open, low/medium
+- **Unexplained transient seam**: in 3 early live captures a 1 px column ~3% darker appeared at the left/right edges of a spot's bounding box; not reproduced in 10 later captures or numerically (18 render configurations incl. ProxyBuilder proxies, Metal RGBAh, downscales). If seen again, capture the exact action sequence; suspect a stale-frame/overlay-layout artifact.
+- **Placement/moving needs identity geometry** (spots are stored in the unedited source frame; the tap -> source inverse of straighten/perspective/scale/flip/crop is not built). A general coordinate-image inverse would lift this.
+- **No click-to-place**: Add Spot drops at the centre (spiral for later ones) and you drag; no armed tap/keyboard-crosshair placement, no Escape-to-deselect, no radius drag handle (Size slider only).
+- **Auto-source is unreliable on strong texture** (spike); heal vs clone is mixed on textured content; the user must drag the source.
+- **Full-resolution cost** ~55-80 ms per spot per render (each spot is a full-frame merge pass; spike number, not re-measured with `RetouchMerge`); merging non-overlapping patches before compositing would cut it.
+- Fractional source offsets soften the copied texture (bilinear shift); premultiplied-alpha caveat for sources with varying alpha; tiny-radius heal at thumbnail scale drifts toward a softened clone; a heal from a dark textured source into a bright destination amplifies the texture (perceptual-domain property).
+- Auto Tone / Fix Color Cast sample without the spots (`geometryOnlySamplingState`).
+- Not verified live: Clone mode, circle dragging (unit-tested math), off-centre spot following a flip (unit-tested), Undo/Redo of spot edits, the 50-spot cap message.

@@ -2886,3 +2886,42 @@ collections, rating sum 11, path-length sum 63679, integrity ok) apart from Migr
 naming sheet, Photo-menu "Rename Files…", the Editor-open block, post-rename thumbnails, multi-folder selections,
 real-SwiftUI re-present of a dropped sheet, alert timing on slow machines.
 
+
+## Vision subject-mask feasibility spike (2026-10-01) — decision: GO for a `.subject` mask kind
+
+Spike only: no `MaskKind`, no `EditState` field, no UI. Permanent probe:
+`Tests/RenderingTests/VisionSubjectMaskProbeTests.swift` (3 tests; orientation test mutation-checked — moving
+the fixture subject to the right half makes it fail). Numbers below come from a temporary scratchpad harness
+(deleted), run on this Apple M1 8GB machine; real photos were COPIED to the scratchpad, originals untouched.
+
+Measured (`VNGenerateForegroundInstanceMaskRequest`, revision 1 = `currentRevision`):
+- Works; empty result on a featureless gradient is `results?.first == nil` (no error, ~16ms).
+- Native `instanceMask` is a fixed 512x512 8-bit (`OneComponent8`) raster for every input whose native size was printed (1500x1000 synthetic and the three real photos that found a subject: 3024x4032, 8192x5464, 6016x4016 NEF;
+  the other synthetic sizes only had latency measured). `generateScaledMaskForImage` returns input-sized 32-bit float (`OneComponent32Float`), extent
+  exactly equal to the input.
+- Orientation: synthetic left-third subject put all mask mass on the left (right half 0.0). Passing `.right` to the
+  handler still produced a 512x512 observation. Via `CIRAWFilter` (unoriented output) the mask aligned with the
+  rendered pixels — the mask follows whatever pixels it is given.
+- Determinism: 5 runs on the same input, native masks byte-identical (in-process; cross-OS-version not testable here).
+- Latency (warm, request / scale-to-input ms): 1024x683 15/6; 1600x1067 17/7; 3000x2000 22/11; 6016x4016 43/35-48;
+  real photos warm: IMG_6328 (3024x4032) 28/20, DSC_1532 NEF (6016x4016) 24/42, 4K2A0050 JPEG (8192x5464) 422/397
+  (cold first pass on that file 444/482). The 8192 file is an outlier vs. the 6016 figures; cause not investigated
+  (size, content, or JPEG decode — unexplained). First call in a process: ~0.33-0.93s cold. RSS delta at 6016x4016: ~89MB.
+- Real photos: 5-person group on a ridge: 4 instances found with clean silhouettes (viewed), the crouching 5th person was
+  NOT selected (a model limitation — a user would need Add/brush-subtract refinement); underwater divers (3 overlapping): 1 instance covering all three as one blob, tight edges (viewed); unoriented D610 RAW (DSC_1532): single standing figure, good. No subject found
+  on one phone JPEG and one D610 RAW (observation nil) — the empty path is real, not hypothetical.
+
+Recommended architecture for the follow-up slice (not built):
+- Native mask is only 512x512 8-bit => tiny to persist (256 KiB uncompressed (512x512x1); PNG size not measured; confirm in the slice) and
+  edges come from model upscaling, so a Feather/edge-refine control (Lightroom has one) is likely wanted.
+- Determinism is only established in-process on this OS; a model update can change masks, so PERSIST the raster
+  (sidecar-adjacent or embedded) with the request revision pinned, like `rawDecoderVersionPin`; do not recompute on
+  every render. Compute once on user action off the main thread (~0.4s+ for big files; cold start up to ~1s).
+- Pipeline fit: a `CGImage`/CI-backed finite-extent mask matches the `.brush` kind's contract in
+  `maskImageAndRegion` (no new kernel; combine/intersect/subtract reuse `Mask.combineMode`). NOT yet verified by an
+  end-to-end render — the first slice must prove it.
+- Cut: Sky/Landscape/Object/Depth masks are NOT provided by this request (would need a Core ML model or other API) —
+  still separate spikes. Multi-instance selection (pick which person) is available via `allInstances`/pixel hit-test.
+- A persisted raster is tied to the pixel space it was computed in (unlike `.brush`, re-rasterized from geometry each
+  render): the slice must define the stage it is computed/applied in (pre/post orientation, crop, transform) and how it
+  is resampled to proxy vs. full-res extents.

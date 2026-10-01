@@ -89,7 +89,7 @@ debounced save). Also open there: D31/D32 (security-scope gaps), D13 (phantom
 brush mask on photo switch), D22/D24/D26 (design gaps), D20 keyboard half.
 
 ### Planned next slices (from IMPROVEMENTS.md D35, one per session, Plan Mode first)
-1. ~~Color labels~~ ✅ shipped. ~~Batch rename~~ ✅ shipped. Next: the **Vision subject-mask feasibility spike** (`VNGenerateForegroundInstanceMaskRequest`, probe test like the MetalFX one).
+1. ~~Color labels~~ ✅ shipped. ~~Batch rename~~ ✅ shipped. ~~Vision subject-mask feasibility spike~~ ✅ done — GO (see docs/ROADMAP_HISTORY.md). Next: the `.subject` mask kind slice (persisted raster + revision pin, prove end-to-end render through `maskImageAndRegion`, Feather control).
 2. **Profiles / LUTs** + small Develop gaps (Vignette Softness, B&W panel, Color Grading Blending, Point Color Variance).
 3. **Spot removal**: manual heal/clone, then automatic dust detection (no ML).
 4. **AI masks** (Subject/Sky/Background/People, mask Feather/Edge refine) after the spike.

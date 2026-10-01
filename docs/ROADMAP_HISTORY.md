@@ -2925,3 +2925,25 @@ Recommended architecture for the follow-up slice (not built):
 - A persisted raster is tied to the pixel space it was computed in (unlike `.brush`, re-rasterized from geometry each
   render): the slice must define the stage it is computed/applied in (pre/post orientation, crop, transform) and how it
   is resampled to proxy vs. full-res extents.
+
+## AI Subject mask — `MaskKind.subject` v1 (2026-10-01): Subject + Invert
+
+Follows the Vision spike above. 4 commits, each reviewed by `reviewer` (Opus) and mutation-checked; suite 1573 -> 1607 tests, 0 failures.
+
+Design (decided in Plan Mode, scope chosen by the user: "Subject + Invert"):
+- **Persisted raster, not parameters.** `Mask.subjectMaskPNG` (8-bit gray PNG, row 0 = top), `subjectMaskRevision` (provenance only, from `request.revision`), `invertSelection` (`.subject` only). Decode is `try?` per field so a corrupt blob loses only the raster. Presets/Paste already exclude `masks`. Fallback ids mix PNG presence/length/bytes, invert, revision.
+- **Coordinate space.** The raster is in the frame of the UNEDITED oriented source (`ImageDocumentModel.currentImage`). `EditPipeline.subjectMaskImages` stretches it over the pipeline's input extent and runs it through `applyGeometry` (extracted from `apply`, byte-identical for the photo) so it follows straighten/perspective/scale/flip/crop and works at proxy/thumbnail/export sizes. Stronger than `.brush`, which is expressed in post-crop fractions.
+- **Raster -> mask image.** Unmanaged decode (`[.colorSpace: NSNull()]`); `CIColorMatrix` with bias (1,1,1,0) and alpha = gray yields premultiplied RGB == alpha == gray. Copying gray into RGB too gave gray² (a raster value 128 blended at 0.25 coverage — caught by the 128-value test, not by 0/255 tests). Decode cache: 4 entries keyed by PNG `Data`.
+- **Invert** reuses `invertedMaskImage`; a missing/undecodable raster selects NOTHING even when inverted. Zero-adjustment subject masks still serve as combine operands (a reviewer-motivated test caught that identity masks must not be skipped when building rasters).
+- **Generator** (`SubjectMaskGenerator`, the only Vision importer): 1024px long-side cap (Lanczos after `clampedToExtent`), scaled mask quantized to 8-bit. Single-flight `ImageDocumentModel.selectSubject` with the `analysisGeneration` stale guard, one undo step; Subject button + Invert/Recompute rows; own alert (ContentView's body is at the type-checker limit).
+
+Measured (throwaway harnesses, deleted; this M1 8GB machine):
+- PNG size at the 1024 cap on real photos: 20434 B (3024x4032 JPEG, generate 462ms), 37957 B (8192x5464 JPEG, 337ms), 8858 B (6016x4016 NEF, 711ms) -> base64 in the sidecar 11-51 KB (well under the 100 KB threshold set in the plan).
+- `Data ==` on the PNG 0.3-1.0 us; whole-`EditState ==` with a PNG 1.1 us.
+- Pipeline at 6016x4016 with one subject mask: graph build 0.17 ms; render to 1600x1000 2.0 ms (no mask), 20.8 ms (subject mask + contrast, FIRST of three runs, likely cold), 5.4 ms (inverted, later run). Noisy single-process numbers on a flat synthetic image — not a frame-budget claim.
+
+Review findings worth remembering: (1) a reviewer measured a half-strength border column with the clamp after the transforms; NOT reproducible through `apply()` here (0.8 everywhere, both orders and no clamp), so the clamp-first order is kept as defensive and its edge test is a behavior guard that no mutation fails — said so in the code comment; (2) crop keeps source coordinates, so a crop test cannot prove the geometry chain runs — the flip/scale/origin tests do (a first non-zero-origin fixture was too weak: a 37px shift passed even with the translate removed; 500px fails); (3) the generator<->renderer vertical convention is pinned by an end-to-end test using a top-placed figure and a mirrored probe.
+
+Known v1 cuts (IMPROVEMENTS.md): no Feather/edge refine, no per-person selection (all foreground instances), no on-image overlay, no Sky/Object/Depth, Invert only on `.subject`, Vision sees unedited pixels, an older build opens a `.subject` sidecar as a default `.radial`, a recompute that returns identical bytes adds no undo step, after a photo switch mid-flight the Subject button stays disabled until the old pass ends (~1s).
+
+NOT verified live in the app (needs the user's screen-automation OK): Add Subject on a real photo, Invert, crop/flip after creating, Undo, reopen persistence, the no-subject alert, Recompute.

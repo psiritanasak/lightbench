@@ -33,6 +33,11 @@ struct AdjustPanelState {
     var isEffectsSectionExpanded = false
     var isRedEyeSectionExpanded = false
 
+    /// Spot removal ("Remove" section): whether it is expanded, and which spot's controls + on-image circles are
+    /// shown. Collapsing the section clears the selection (so the overlay hides), like Masks.
+    var isRetouchSectionExpanded = false
+    var selectedRetouchSpotID: UUID?
+
     /// Whether the Levels histogram shows luminance only or luminance +
     /// per-channel RGB overlays. Presentation-only — `HistogramData` always
     /// carries all four; this just controls what `HistogramView` draws.
@@ -325,6 +330,7 @@ struct AdjustTabView: View {
                 redEyeSection
             }
             Divider()
+            retouchSectionContainer
             AdjustSectionContainer(icon: "circle.dashed", title: "Masks", isExpanded: masksSectionExpandedBinding) {
                 masksSection
             }
@@ -1173,6 +1179,7 @@ struct AdjustTabView: View {
     /// kind. A mask kind with no overlay has nothing to protect.
     private func select(_ mask: Mask) {
         panel.selectedMaskID = mask.id
+        panel.selectedRetouchSpotID = nil // two overlays' drag handles must never be live at once
         interactionMode = .none
         if hasOnImageOverlay(mask.kind) {
             onEnterPointPickingMode()
@@ -1472,6 +1479,132 @@ struct AdjustTabView: View {
     /// type-checker failure from packing too much into one `@ViewBuilder`
     /// closure (the toolbar's `.toolbar {}`), so this stays a flat list of
     /// plain rows.
+    // MARK: - Remove (spot removal)
+
+    private var retouchSectionExpandedBinding: Binding<Bool> {
+        Binding(
+            get: { panel.isRetouchSectionExpanded },
+            set: { newValue in
+                var next = panel
+                next.isRetouchSectionExpanded = newValue
+                if !newValue { next.selectedRetouchSpotID = nil }
+                panel = next
+            }
+        )
+    }
+
+    /// One computed property so `body`'s already-long `VStack` gains a single child (like `looksSectionContainer`).
+    private var retouchSectionContainer: some View {
+        Group {
+            AdjustSectionContainer(icon: "bandage", title: "Remove", isExpanded: retouchSectionExpandedBinding) {
+                retouchSection
+            }
+            Divider()
+        }
+    }
+
+    private var retouchSection: some View {
+        let spots = document.editState.retouchSpots
+        let identity = document.editState.isGeometryAtIdentity
+        return Group {
+            if !identity {
+                Text("Reset crop, straighten, perspective, scale and flip to add or move spots. Existing spots still apply.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            Button {
+                if let id = document.addRetouchSpot() { selectRetouchSpot(id) }
+            } label: {
+                Label("Add Spot", systemImage: "plus.circle").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(document.currentImage == nil || !identity || spots.count >= EditState.maxRetouchSpots)
+            .accessibilityLabel("Add Spot")
+            .alert(
+                "Spot Removal",
+                isPresented: Binding(get: { document.retouchMessage != nil }, set: { if !$0 { document.retouchMessage = nil } })
+            ) {
+                Button("OK") {}
+            } message: {
+                Text(document.retouchMessage ?? "")
+            }
+            if spots.isEmpty {
+                Text("No spots yet. Add one, drag it onto the blemish, and drag the dashed circle to the area to copy from.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(spots.enumerated()), id: \.element.id) { index, spot in
+                    retouchSpotRow(number: index + 1, spot: spot)
+                }
+            }
+            if let id = panel.selectedRetouchSpotID, let binding = $document.editState.retouchSpot(id: id) {
+                retouchSpotDetail(binding: binding, id: id).id(id)
+            }
+        }
+    }
+
+    /// Selecting a spot shows its on-image circles, which are positioned against the UN-ZOOMED single-image fit
+    /// rect: like selecting a mask with an overlay, reset zoom/Compare (`onEnterPointPickingMode`), clear the other
+    /// overlay-owning selections and any armed point mode, so two sets of drag handles are never live at once.
+    private func selectRetouchSpot(_ id: UUID) {
+        panel.selectedMaskID = nil
+        panel.selectedPointColorID = nil
+        interactionMode = .none
+        panel.selectedRetouchSpotID = id
+        onEnterPointPickingMode()
+    }
+
+    private func retouchSpotRow(number: Int, spot: RetouchSpot) -> some View {
+        let isSelected = panel.selectedRetouchSpotID == spot.id
+        return HStack {
+            Button {
+                selectRetouchSpot(spot.id)
+            } label: {
+                Label("Spot \(number) — \(spot.mode == .heal ? "Heal" : "Clone")", systemImage: "circle.dotted")
+            }
+            .buttonStyle(.plain)
+            .fontWeight(isSelected ? .semibold : .regular)
+            .accessibilityLabel("Spot \(number), \(spot.mode == .heal ? "Heal" : "Clone")")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+            Spacer()
+            Button {
+                document.editState.retouchSpots.removeAll { $0.id == spot.id }
+                if panel.selectedRetouchSpotID == spot.id { panel.selectedRetouchSpotID = nil }
+            } label: { Image(systemName: "trash") }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .accessibilityLabel("Delete Spot \(number)")
+        }
+    }
+
+    @ViewBuilder private func retouchSpotDetail(binding: Binding<RetouchSpot>, id: UUID) -> some View {
+        Picker("Mode", selection: binding.mode) {
+            Text("Heal").tag(RetouchMode.heal)
+            Text("Clone").tag(RetouchMode.clone)
+        }
+        .pickerStyle(.segmented)
+        .accessibilityLabel("Spot mode")
+        EditSliderRow(
+            label: "Size", value: binding.radius,
+            range: RetouchSpot.radiusRange, identity: 0.015, displayMultiplier: 100
+        ) { String(format: "%.1f%%", $0 * 100) }
+        EditSliderRow(
+            label: "Feather", value: binding.feather, range: 0...1, identity: 0.5, displayMultiplier: 100
+        ) { String(format: "%.0f%%", $0 * 100) }
+        EditSliderRow(
+            label: "Opacity", value: binding.opacity, range: 0...1, identity: 1, displayMultiplier: 100
+        ) { String(format: "%.0f%%", $0 * 100) }
+        // The source circle is draggable on the image, but a mouse-only surface needs an AT-adjustable twin.
+        EditSliderRow(
+            label: "Source X", value: binding.sourceDX, range: -1...1, identity: 0.06, displayMultiplier: 100
+        ) { String(format: "%+.1f%%", $0 * 100) }
+        EditSliderRow(
+            label: "Source Y", value: binding.sourceDY, range: -1...1, identity: 0, displayMultiplier: 100
+        ) { String(format: "%+.1f%%", $0 * 100) }
+        Button("Find Source") { document.findRetouchSource(for: id) }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel("Find Source Automatically")
+    }
+
     // MARK: - Looks
 
     /// First section in the sidebar: a look is the base rendering the sliders below it act on (the pipeline

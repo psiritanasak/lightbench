@@ -196,7 +196,18 @@ struct ContentView: View {
         // reasoning, same un-zoomed assumption in its own tap-capture layer.
         document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance
             && !isPlacingRedEyeCorrections && !isEditingOverlayMask && !isPaintingBrush && !isPickingColorRange
-            && !isPickingPointColor
+            && !isPickingPointColor && !isEditingRetouchSpot
+    }
+
+    /// Spot removal: whether a spot is selected in the (expanded) Remove section at identity geometry — the only
+    /// state in which its on-image circles are drawn. Resolved against the LIVE array (Undo/Revert can delete the
+    /// selected spot without passing through any disarm site) and, like every overlay, it blocks zoom/pan because the
+    /// circles are positioned against the un-zoomed `currentFitRect`.
+    private var isEditingRetouchSpot: Bool {
+        guard adjustPanel.isRetouchSectionExpanded, !isCroppingActive,
+              document.editState.isGeometryAtIdentity,
+              let id = adjustPanel.selectedRetouchSpotID else { return false }
+        return document.editState.retouchSpots.contains { $0.id == id }
     }
 
     /// Phase 7 slice 2: the mask `adjustPanel.selectedMaskID` currently
@@ -1181,6 +1192,7 @@ struct ContentView: View {
             interactionMode = .none
             adjustPanel.selectedMaskID = nil
             adjustPanel.selectedPointColorID = nil
+            adjustPanel.selectedRetouchSpotID = nil
             compareMode = .off
             splitOrientation = .vertical
             splitPosition = 0.5
@@ -1197,6 +1209,7 @@ struct ContentView: View {
                 interactionMode = .none
                 adjustPanel.selectedMaskID = nil
                 adjustPanel.selectedPointColorID = nil
+                adjustPanel.selectedRetouchSpotID = nil
                 compareMode = .off
                 zoomScale = 1
                 panOffset = .zero
@@ -1642,6 +1655,7 @@ struct ContentView: View {
                     // clear right above.
                     adjustPanel.selectedMaskID = nil
                     adjustPanel.selectedPointColorID = nil
+                    adjustPanel.selectedRetouchSpotID = nil // its circles are positioned against the single-image fit rect
                 }
             }
         }
@@ -2005,6 +2019,15 @@ struct ContentView: View {
                 // silently falling through.
                 EmptyView()
             }
+        }
+        // Spot removal: the selected spot's on-image circles (spot + dashed source), identity geometry only. Gated
+        // against every armed point-interaction mode like the mask overlay above.
+        if isEditingRetouchSpot, !isPickingWhiteBalance, !isPlacingRedEyeCorrections, !isPickingColorRange,
+           !isPickingPointColor, !isPaintingBrush,
+           let id = adjustPanel.selectedRetouchSpotID,
+           let spotBinding = $document.editState.retouchSpot(id: id),
+           let fitRect = currentFitRect {
+            RetouchOverlayView(fitRect: fitRect, spot: spotBinding)
         }
         // Phase 7 slice 5 (second half): the Color Range eyedropper's
         // tap-capture layer — mirrors the WB eyedropper's own capture

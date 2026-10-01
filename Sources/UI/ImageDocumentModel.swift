@@ -1068,6 +1068,65 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    // MARK: - Spot removal
+
+    /// Shown by the Remove section's own alert (placement refusals, a failed auto-source).
+    @Published var retouchMessage: String?
+
+    /// Appends a spot in the middle of the frame and finds its source in the background. Refused (with a message)
+    /// unless the geometry is at identity — spots live in the unedited source frame and the on-image editing math
+    /// only holds there (see `RetouchSpot`) — and at the 50-spot cap. Returns the new spot's id.
+    @discardableResult
+    func addRetouchSpot() -> UUID? {
+        guard currentImage != nil else { return nil }
+        guard editState.isGeometryAtIdentity else {
+            retouchMessage = "Reset crop, straighten, perspective, scale and flip to add or move spots. Existing spots still apply."
+            return nil
+        }
+        guard let spot = RetouchOverlayGeometry.newSpot(existingCount: editState.retouchSpots.count) else {
+            retouchMessage = "A photo can have at most \(EditState.maxRetouchSpots) spots."
+            return nil
+        }
+        editState.retouchSpots.append(spot)
+        findRetouchSource(for: spot.id, reportFailure: false)
+        return spot.id
+    }
+
+    /// Searches (off the main thread) for a good source for the spot `id` and writes the offset if the spot still
+    /// exists and the photo has not changed meanwhile (`analysisGeneration`). The search is a convenience that works
+    /// on smooth content and is unreliable on strong texture (docs/ROADMAP_HISTORY.md spike): when it finds nothing
+    /// the existing offset is kept and — only for an explicit "Find Source" press — the user is told to drag the
+    /// source circle.
+    func findRetouchSource(for id: UUID, reportFailure: Bool = true) {
+        guard let currentImage, let spot = editState.retouchSpots.first(where: { $0.id == id }), spot.isFinite else { return }
+        let obstacles = editState.retouchSpots.filter { $0.id != id }
+            .map { RetouchSourceSearch.Obstacle(x: $0.x, y: $0.y, radius: $0.radius) }
+        let myGeneration = analysisGeneration
+        Task { @MainActor [weak self] in
+            let found = await Task.detached(priority: .userInitiated) { () -> RetouchSourceSearch.Result? in
+                guard let bitmap = RetouchSourceBitmap.make(from: currentImage) else { return nil }
+                return RetouchSourceSearch.bestSource(
+                    in: bitmap, x: spot.x, y: spot.y, radius: spot.radius, avoiding: obstacles)
+            }.value
+            guard let self, self.analysisGeneration == myGeneration else { return }
+            // Write only if the spot is STILL what the search was run for: the next thing a user does after Add Spot is
+            // drag it onto the blemish, or set the source by hand — an offset computed for the old centre/radius would
+            // overwrite that choice or point at an unchecked place (another spot, off-frame).
+            guard let index = self.editState.retouchSpots.firstIndex(where: { $0.id == id }) else { return }
+            let live = self.editState.retouchSpots[index]
+            guard live.x == spot.x, live.y == spot.y, live.radius == spot.radius,
+                  live.sourceDX == spot.sourceDX, live.sourceDY == spot.sourceDY else { return }
+            guard let found else {
+                if reportFailure {
+                    self.retouchMessage = "No good source was found automatically — drag the dashed circle to choose one."
+                }
+                return
+            }
+            self.editState.retouchSpots[index].sourceDX = found.dx
+            self.editState.retouchSpots[index].sourceDY = found.dy
+        }
+    }
+
     // MARK: - Subject mask (AI)
 
     /// Runs Vision on the UNEDITED current image and commits ONE undo step: appends a new `.subject`
@@ -1212,6 +1271,7 @@ final class ImageDocumentModel: ObservableObject {
         refreshHistoryState()
         analysisGeneration += 1
         subjectMaskMessage = nil // a late "no subject" must not pop up about the NEXT photo
+        retouchMessage = nil // likewise a late "no good source"
     }
 
     /// Undoes the most recent undo step. First flushes any in-progress burst

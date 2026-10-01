@@ -126,6 +126,10 @@ final class ImageDocumentModel: ObservableObject {
     /// its job (too dark to sample, or a cast too strong to fully correct)
     /// — mirrors `loadErrorMessage`'s alert-binding pattern.
     @Published var whiteBalanceSampleMessage: String?
+    /// Shown by its own alert (not `whiteBalanceSampleMessage`'s "Color Sample" one) — `selectSubject` outcomes.
+    @Published var subjectMaskMessage: String?
+    /// True while a Vision subject pass is running (disables the Subject buttons: single-flight).
+    @Published private(set) var isSelectingSubject = false
 
     private var histogramWorkItem: DispatchWorkItem?
     /// Guards against an out-of-order background histogram result (an OLDER
@@ -1064,6 +1068,69 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    // MARK: - Subject mask (AI)
+
+    /// Runs Vision on the UNEDITED current image and commits ONE undo step: appends a new `.subject`
+    /// mask (all adjustments 0 — the user then dials them in), or, when `maskID` names an existing
+    /// subject mask, replaces that mask's raster ("Recompute Subject"). Same shape as `autoTone()`:
+    /// detached work, `analysisGeneration` stale-write guard. `completion` gets the affected mask's id
+    /// on success, `nil` otherwise (no subject / failed / refused / stale). A recompute that yields the
+    /// identical raster still reports success but adds no undo step (`EditHistory` drops an unchanged state).
+    func selectSubject(replacing maskID: UUID? = nil, completion: ((UUID?) -> Void)? = nil) {
+        guard !isSelectingSubject else { completion?(nil); return } // double click: the first run is still going
+        guard let currentImage, !isLoadInFlight else {
+            subjectMaskMessage = "Wait for the photo to finish loading, then try again."
+            completion?(nil)
+            return
+        }
+        isSelectingSubject = true
+        let myGeneration = analysisGeneration
+        // The completion stays on the main actor (it is never captured by the detached work).
+        Task { @MainActor [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                SubjectMaskGenerator.generate(from: currentImage)
+            }.value
+            do { // (scope only: keeps the `self` unwrap local to the main-actor continuation)
+                guard let self else { return }
+                self.isSelectingSubject = false
+                // The photo changed while Vision ran: drop the result rather than land it on another photo.
+                guard self.analysisGeneration == myGeneration else { completion?(nil); return }
+                switch result {
+                case .noSubject:
+                    self.subjectMaskMessage = "No subject was found in this photo."
+                    completion?(nil)
+                case .failed(let reason):
+                    self.subjectMaskMessage = reason
+                    completion?(nil)
+                case .mask(let png, let revision):
+                    self.finalizePendingCommit()
+                    var next = self.editState
+                    var affected: UUID?
+                    if let maskID, let index = next.masks.firstIndex(where: { $0.id == maskID && $0.kind == .subject }) {
+                        next.masks[index].subjectMaskPNG = png
+                        next.masks[index].subjectMaskRevision = revision
+                        affected = maskID
+                    } else if maskID == nil {
+                        var mask = Mask()
+                        mask.kind = .subject
+                        mask.subjectMaskPNG = png
+                        mask.subjectMaskRevision = revision
+                        next.masks.append(mask)
+                        affected = mask.id
+                    }
+                    guard let affected else { // the mask being recomputed was deleted while Vision ran
+                        self.subjectMaskMessage = "That mask was deleted before its subject was found."
+                        completion?(nil)
+                        return
+                    }
+                    self.history.commit(next, summary: maskID == nil ? "Select Subject" : "Recompute Subject")
+                    self.applyHistoryState(self.history.current)
+                    completion?(affected)
+                }
+            }
+        }
+    }
+
     // MARK: - Undo/Redo
 
     /// Called from `editState`'s `didSet` for every write that ISN'T an
@@ -1139,6 +1206,7 @@ final class ImageDocumentModel: ObservableObject {
         history = EditHistory(editState, initialSummary: "Opened")
         refreshHistoryState()
         analysisGeneration += 1
+        subjectMaskMessage = nil // a late "no subject" must not pop up about the NEXT photo
     }
 
     /// Undoes the most recent undo step. First flushes any in-progress burst

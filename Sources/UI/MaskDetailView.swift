@@ -94,6 +94,10 @@ struct MaskDetailView: View {
     /// `.colorRange` only — called when "Pick Color"/"Re-pick Color" is
     /// tapped. `nil` for every other kind, same shape as `onBeginBrushStroke`.
     var onBeginColorPick: (() -> Void)?
+    /// `.subject` only — re-runs Vision and replaces this mask's raster. `nil` for every other kind.
+    var onRecomputeSubject: (() -> Void)?
+    /// A Vision pass is in flight (any mask): the recompute button waits.
+    var isRecomputingSubject = false
     /// Phase 7 slice 6, Session B — every OTHER mask on this photo,
     /// pre-labeled, that `mask` could combine against. Empty (the
     /// default) on a photo with only this one mask, which is what makes
@@ -190,7 +194,26 @@ struct MaskDetailView: View {
         case .brush: brushShapeRows
         case .luminanceRange: luminanceRangeShapeRows
         case .colorRange: colorRangeShapeRows
-        case .subject: EmptyView() // controls arrive with the Subject UI commit
+        case .subject: subjectShapeRows
+        }
+    }
+
+    /// Everything the subject kind has: Invert (select the background instead) and Recompute. The
+    /// selection itself is a persisted Vision raster, so there is no geometry to adjust (v1: no feather,
+    /// no per-person choice — see IMPROVEMENTS.md).
+    private var subjectShapeRows: some View {
+        Group {
+            Toggle("Invert (select background)", isOn: $mask.invertSelection)
+                .accessibilityLabel("Invert Subject Selection")
+            Button(isRecomputingSubject ? "Finding…" : "Recompute Subject") {
+                onRecomputeSubject?()
+            }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+            .disabled(isRecomputingSubject)
+            if mask.subjectMaskPNG == nil {
+                Text("No subject stored for this mask.").font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 

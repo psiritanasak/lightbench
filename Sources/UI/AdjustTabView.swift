@@ -877,7 +877,10 @@ struct AdjustTabView: View {
                 // snapshot instead of the live value.
                 var next = panel
                 next.isMasksSectionExpanded = newValue
-                if !newValue { next.selectedMaskID = nil }
+                if !newValue {
+                    next.selectedMaskID = nil
+                    document.subjectMaskMessage = nil // its alert lives inside this section
+                }
                 panel = next
                 if !newValue {
                     interactionMode.disarmMaskModes()
@@ -946,7 +949,26 @@ struct AdjustTabView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .accessibilityLabel("Add Color Range Mask")
-                    Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
+                    Button(document.isSelectingSubject ? "Finding…" : "Subject") {
+                        addSubjectMask()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .disabled(document.isSelectingSubject)
+                    .accessibilityLabel("Add Subject Mask")
+                    .accessibilityValue(document.isSelectingSubject ? "Finding subject" : "")
+                    // Attached here, not in `ContentView` (whose `body` already hit the type-checker limit
+                    // with one more `.alert`). The message is set by `ImageDocumentModel.selectSubject`.
+                    .alert(
+                        "Subject Mask",
+                        isPresented: Binding(
+                            get: { document.subjectMaskMessage != nil },
+                            set: { if !$0 { document.subjectMaskMessage = nil } }
+                        )
+                    ) {
+                        Button("OK") {}
+                    } message: {
+                        Text(document.subjectMaskMessage ?? "")
+                    }
                 }
             }
             .disabled(document.currentImage == nil)
@@ -1015,6 +1037,22 @@ struct AdjustTabView: View {
         }
     }
 
+    /// `.subject` is NOT added through `addMask(kind:)`: the mask only exists once Vision has produced
+    /// a raster (async), so there is no useful empty mask to create and select up front. Selecting it
+    /// afterwards happens only if the user hasn't changed mode/selection or collapsed the section in
+    /// the meantime — `select(_:)` would otherwise cancel e.g. a brush or eyedropper they armed while
+    /// Vision ran.
+    private func addSubjectMask() {
+        let modeAtClick = interactionMode
+        let selectionAtClick = panel.selectedMaskID
+        document.selectSubject { id in
+            guard let id, let mask = document.editState.masks.first(where: { $0.id == id }),
+                  panel.isMasksSectionExpanded, interactionMode == modeAtClick,
+                  panel.selectedMaskID == selectionAtClick else { return }
+            select(mask)
+        }
+    }
+
     /// Whether `kind` draws an on-image overlay positioned against
     /// `currentFitRect`. Exhaustive on purpose — a future kind must fail
     /// to COMPILE here rather than silently inherit either answer (the
@@ -1064,6 +1102,8 @@ struct AdjustTabView: View {
                 mask: binding,
                 onBeginBrushStroke: binding.wrappedValue.kind == .brush ? { beginBrushStroke(for: id) } : nil,
                 onBeginColorPick: binding.wrappedValue.kind == .colorRange ? { beginColorPick(for: id) } : nil,
+                onRecomputeSubject: binding.wrappedValue.kind == .subject ? { document.selectSubject(replacing: id) } : nil,
+                isRecomputingSubject: document.isSelectingSubject,
                 // Recomputed on every body evaluation from the live
                 // masks array (Phase 7 slice 6, Session B) — adding or
                 // deleting a mask refreshes the combine-target picker for

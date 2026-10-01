@@ -80,7 +80,8 @@ enum EditPipeline {
         _ state: EditState, to input: CIImage, truncatingColorAt truncation: ColorSampleTruncation? = nil
     ) -> CIImage {
         var image = input
-        image = applyWhiteBalance(state, to: image)           // scene-linear, first
+        image = applyRetouch(state, to: image)                // pixel repair (spot removal), source frame, before everything
+        image = applyWhiteBalance(state, to: image)           // scene-linear
         image = applyExposure(state.exposureEV, to: image)    // scene-linear
         image = applyPerceptualAdjustments(state, to: image, truncatingColorAt: truncation)  // sRGB-gamma domain
         image = applyGeometry(state, to: image)               // straighten → perspective → scale/aspect → flip → crop
@@ -132,6 +133,136 @@ enum EditPipeline {
         image = applyFlip(state, to: image)                   // geometric, before crop
         image = applyCrop(state, to: image)                   // geometric
         return image
+    }
+
+    // MARK: - Retouch (spot removal)
+
+    private static let retouchGeometryKernel: CIKernel? = loadKernel("RetouchGeometry")
+    private static let retouchHealDiffKernel: CIColorKernel? = loadColorKernel("RetouchHealDiff")
+    private static let retouchHealCombineKernel: CIColorKernel? = loadColorKernel("RetouchHealCombine")
+    private static let retouchCloneKernel: CIColorKernel? = loadColorKernel("RetouchClone")
+    private static let retouchMergeKernel: CIColorKernel? = loadColorKernel("RetouchMerge")
+
+    private static func loadKernel(_ name: String) -> CIKernel? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return CIKernel(source: source)
+    }
+
+    private static func loadColorKernel(_ name: String) -> CIColorKernel? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return CIColorKernel(source: source)
+    }
+
+    /// Spots that will actually change pixels: finite and not fully transparent.
+    private static func activeRetouchSpots(_ state: EditState) -> [RetouchSpot] {
+        state.retouchSpots.prefix(EditState.maxRetouchSpots).filter { $0.isFinite && $0.opacity > 0 }.map(\.clamped)
+    }
+
+    /// Spot removal: each `RetouchSpot` repairs a feathered disc from a displaced SOURCE disc, either CLONING it
+    /// or HEALING it. The very FIRST stage, on the UNEDITED source frame (before white balance and before every
+    /// geometry stage): spots are stored in that frame, so they stay on their content when the photo is later
+    /// cropped/rotated/flipped, sources can come from content that is later cropped away, and all later sliders
+    /// treat repaired pixels like any others. Spots apply SEQUENTIALLY (a later spot may borrow an earlier
+    /// spot's repaired pixels).
+    ///
+    /// The whole block runs in the PERCEPTUAL (sRGB-gamma) domain — MEASURED in the spike (a linear-domain heal
+    /// left pale halos, 0.0379 vs 0.0165 halo error on the hardest case) — as one encode before and one decode
+    /// after, only when at least one spot is active (no active spot returns the input untouched).
+    ///
+    /// HEAL = source patch + a smooth correction membrane: the destination-minus-source difference over an annulus
+    /// just outside the spot, blurred and normalised by the blurred ring weight (`RetouchHealDiff`/
+    /// `RetouchHealCombine`), so the copied texture takes on the destination's surrounding tone and color.
+    /// CLONE = the copied patch as is. Both blend through the feathered disc and `opacity`.
+    ///
+    /// Everything is a FRACTION of the input extent (centre of width/height; radius and offset of the min side), so
+    /// proxy/thumbnail/export renders repair the same place. The source centre is clamped so its whole disc stays
+    /// inside the frame (an off-frame source would otherwise smear the clamped edge): deterministic, and the stored
+    /// offset is not modified. Each spot touches only its own bounding box, so the graph cost is O(spots) and each
+    /// spot adds one full-frame merge pass. SPIKE number (measured with `composited(over:)` as the merge, NOT
+    /// re-measured with `RetouchMerge`): ~55-80 ms per spot per render at 8192x5464; negligible on proxies
+    /// (see docs/ROADMAP_HISTORY.md).
+    ///
+    /// Known limits: (1) a fractional source offset is applied by a bilinear `transformed(by:)` shift, which softens
+    /// the copied texture slightly (worst at half-pixel offsets; deterministic and resolution-consistent);
+    /// (2) the repair kernels work on premultiplied RGB but keep the destination's alpha, which is only exact when
+    /// source and destination alpha agree (opaque photos; a PNG with a varying alpha channel would darken a patch
+    /// copied from a more transparent area); (3) pixel constants (1 px ring/feather edges, the 2 px margin) do not
+    /// scale with the image, so below ~1000 px on the short side a minimum-radius heal's ring thins out and drifts
+    /// toward a softened clone (thumbnails/small proxies of tiny spots look slightly different from full-res).
+    private static func applyRetouch(_ state: EditState, to image: CIImage) -> CIImage {
+        let spots = activeRetouchSpots(state)
+        guard !spots.isEmpty,
+              let geometryKernel = retouchGeometryKernel, let diffKernel = retouchHealDiffKernel,
+              let combineKernel = retouchHealCombineKernel, let cloneKernel = retouchCloneKernel,
+              let mergeKernel = retouchMergeKernel
+        else { return image }
+        let extent = image.extent
+        guard !extent.isEmpty, !extent.isInfinite else { return image }
+        let minSide = Double(min(extent.width, extent.height))
+
+        var working = encodeToPerceptual(image)
+        // A full-extent transparent canvas, so the merge kernel's inputs all span the frame.
+        let clear = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: extent)
+        for spot in spots {
+            let radius = spot.radius * minSide
+            let feathered = radius * (1 + 0.6 * spot.feather)
+            let ringIn = feathered + 1
+            let ringOut = feathered + 0.5 * radius
+            let cx = Double(extent.minX) + spot.x * Double(extent.width)
+            let cy = Double(extent.minY) + spot.y * Double(extent.height)
+            // Source centre, kept wholly inside the frame (its heal ring needs room too).
+            let margin = ringOut + 2
+            let sx = min(max(cx + spot.sourceDX * minSide, Double(extent.minX) + margin), Double(extent.maxX) - margin)
+            let sy = min(max(cy + spot.sourceDY * minSide, Double(extent.minY) + margin), Double(extent.maxY) - margin)
+            let ox = sx - cx, oy = sy - cy
+            guard sx.isFinite, sy.isFinite else { continue }
+
+            // WHOLE pixels: a fractional box makes `cropped(to:)` give its edge pixels partial coverage, and the merge
+            // then replaces the base with those partly transparent pixels — a visible 1 px rectangle (reproduced by
+            // the reviewer: alpha 0.70 on the box edge).
+            let roi = CGRect(x: cx - ringOut - 2, y: cy - ringOut - 2, width: 2 * ringOut + 4, height: 2 * ringOut + 4)
+                .integral.intersection(extent)
+            guard !roi.isEmpty else { continue }
+            guard let geometry = geometryKernel.apply(
+                extent: roi, roiCallback: { _, rect in rect },
+                arguments: [CIVector(x: cx, y: cy), radius, feathered, ringIn, ringOut]
+            ) else { continue }
+            let source = working.transformed(by: CGAffineTransform(translationX: -ox, y: -oy))
+                .clampedToExtent().cropped(to: roi)
+            let destination = working.cropped(to: roi)
+
+            let repaired: CIImage?
+            switch spot.mode {
+            case .clone:
+                repaired = cloneKernel.apply(extent: roi, arguments: [destination, source, geometry, Float(spot.opacity)])
+            case .heal:
+                guard let diff = diffKernel.apply(extent: roi, arguments: [destination, source, geometry]) else { continue }
+                let blur = CIFilter.gaussianBlur()
+                // No clampedToExtent: for normalised convolution zero padding is the textbook-correct edge (the
+                // weight in alpha drops out of the division too); clamping would repeat edge-row ring samples
+                // outward for a spot at the frame edge and over-weight them.
+                blur.inputImage = diff
+                blur.radius = Float(0.8 * radius)
+                guard let blurred = blur.outputImage?.cropped(to: roi) else { continue }
+                repaired = combineKernel.apply(
+                    extent: roi, arguments: [destination, source, blurred, geometry, Float(spot.opacity)])
+            }
+            guard let patch = repaired else { continue }
+            // Replace (not alpha-composite) the box: see `RetouchMerge.cikernel`.
+            // The MARKER must be a plain box, NOT the geometry image: MEASURED, a no-input general `CIKernel`'s output
+            // is not reliably clipped to its extent/crop in whole-region renders — `geometry.cropped(to: roi)` had
+            // alpha > 0 on all 160000 pixels of a 400x400 frame — so using it as the marker replaced the WHOLE image
+            // with the (transparent-outside) patch in any whole-frame render, while 1x1 renders looked right.
+            let marker = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1)).cropped(to: roi)
+            guard let merged = mergeKernel.apply(
+                extent: extent,
+                arguments: [working, patch.composited(over: clear), marker.composited(over: clear)]
+            ) else { continue }
+            working = merged
+        }
+        return decodeToLinear(working).cropped(to: extent)
     }
 
     // MARK: - Look (LUT profile)

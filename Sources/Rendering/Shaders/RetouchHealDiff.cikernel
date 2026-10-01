@@ -1,0 +1,11 @@
+// Retouch heal, step 1 — packs the tone/color DIFFERENCE between the destination and the source over the ring.
+//
+// Output: rgb = (destination - source) * ringWeight, alpha = ringWeight. One Gaussian blur of this image then
+// blurs numerator (rgb) and denominator (alpha) together, and `RetouchHealCombine` divides them — "normalised
+// convolution": a smooth membrane that equals the ring's average difference near the ring and interpolates
+// across the hole. Signed values (the difference can be negative) are fine: the pipeline works in float.
+// MEASURED (spot-removal spike, docs/ROADMAP_HISTORY.md): this recipe runs in the PERCEPTUAL domain; in linear it
+// leaves pale halos (rock-large halo error 0.0379 linear vs 0.0165 perceptual).
+kernel vec4 retouchHealDiff(__sample dst, __sample src, __sample geo) {
+    return vec4((dst.rgb - src.rgb) * geo.g, geo.g);
+}

@@ -1,0 +1,12 @@
+// Retouch merge — puts a repaired patch back into the image WITHOUT alpha blending.
+//
+// `repaired` is only defined inside the spot's bounding box (outside it Core Image supplies transparent black);
+// `marker` is a plain opaque box covering it (alpha 1 inside, 0 outside) — deliberately NOT the geometry image: a no-input general CIKernel's output is not reliably clipped to its extent/crop in whole-region renders (measured). Selecting by that marker
+// REPLACES the box's pixels (colour and alpha) with the repaired ones. `CIImage.composited(over:)` is wrong here:
+// the repair kernels keep the destination's alpha, so for any source with alpha < 1 a source-over composite
+// compounds the alphas (MEASURED: alpha 0.5 came out 0.75).
+kernel vec4 retouchMerge(__sample base, __sample repaired, __sample marker) {
+    return mix(base, repaired, step(0.5, marker.a));
+}
+// (`patch` is a reserved word in Core Image's kernel language — a kernel using it as a parameter name silently fails to
+// compile and `CIColorKernel(source:)` returns nil.)

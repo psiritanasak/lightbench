@@ -1,0 +1,14 @@
+// Retouch heal, step 2 — the healed pixel: the source patch plus the smooth correction membrane.
+//
+//   correction = blurred.rgb / blurred.a          (normalised convolution of the ring differences)
+//   healed     = src + correction                  (source texture, destination tone/color)
+//   out        = mix(dst, healed, mask * opacity)  (feathered, opacity-weighted)
+//
+// `blurred.a` is the blurred ring weight; the max() keeps the division finite where the ring is out of reach
+// (it can only be ~0 far from the spot, where the mask is 0 anyway). Destination alpha is preserved.
+// (`healed` not `patch`: `patch` is a reserved word in Core Image's kernel language.)
+kernel vec4 retouchHealCombine(__sample dst, __sample src, __sample blurred, __sample geo, float opacity) {
+    vec3 correction = blurred.rgb / max(blurred.a, 0.0001);
+    vec3 healed = src.rgb + correction;
+    return vec4(mix(dst.rgb, healed, geo.r * opacity), dst.a);
+}

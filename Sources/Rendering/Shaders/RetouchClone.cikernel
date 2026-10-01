@@ -1,0 +1,5 @@
+// Retouch clone — copies the source patch over the destination through the spot's feathered mask:
+//   out = mix(dst, src, mask * opacity), destination alpha preserved.
+kernel vec4 retouchClone(__sample dst, __sample src, __sample geo, float opacity) {
+    return vec4(mix(dst.rgb, src.rgb, geo.r * opacity), dst.a);
+}

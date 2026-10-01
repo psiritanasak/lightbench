@@ -1,0 +1,15 @@
+// Retouch geometry — the per-spot masks for spot removal (`EditPipeline.applyRetouch`).
+//
+// A general (not color) kernel because it needs `destCoord()`: it renders, for one spot, two weights in one
+// image so a single blur can later carry both:
+//   r = MASK:  1 inside `rFull`, falling linearly to 0 at `rFeather` (the feathered disc that gets replaced)
+//   g = RING:  1 on an annulus [ringIn, ringOut] just OUTSIDE the mask, with 1-pixel soft edges (the area whose
+//              difference to the source drives the heal's tone/color correction)
+// Distances are in the INPUT image's own pixel units (the same for every size, because EditPipeline derives
+// them from fractions of the extent). Pure geometry, no image data.
+kernel vec4 retouchGeometry(vec2 center, float rFull, float rFeather, float ringIn, float ringOut) {
+    float d = length(destCoord() - center);
+    float mask = 1.0 - clamp((d - rFull) / max(rFeather - rFull, 0.5), 0.0, 1.0);
+    float ring = clamp(d - ringIn + 0.5, 0.0, 1.0) * clamp(ringOut - d + 0.5, 0.0, 1.0);
+    return vec4(mask, ring, 0.0, 1.0);
+}

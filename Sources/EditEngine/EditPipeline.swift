@@ -1999,6 +1999,9 @@ enum EditPipeline {
                 feather: mask.feather, extent: extent
             ) else { return nil }
             return .colorRange(sel)
+        case .subject:
+            // Wired up in the pipeline commit; until then a subject mask selects nothing.
+            return nil
         }
     }
 

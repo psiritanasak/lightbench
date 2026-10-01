@@ -110,6 +110,7 @@ struct MaskDetailView: View {
         case .radial, .linear, .brush: return "Shape"
         case .luminanceRange: return "Luminance Range"
         case .colorRange: return "Color Range"
+        case .subject: return "Subject"
         }
     }
 
@@ -189,6 +190,7 @@ struct MaskDetailView: View {
         case .brush: brushShapeRows
         case .luminanceRange: luminanceRangeShapeRows
         case .colorRange: colorRangeShapeRows
+        case .subject: EmptyView() // controls arrive with the Subject UI commit
         }
     }
 

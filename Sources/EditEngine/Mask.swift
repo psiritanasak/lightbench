@@ -30,6 +30,10 @@ enum MaskKind: String, Codable {
     case brush
     case luminanceRange
     case colorRange
+    /// AI subject selection (Vision `VNGenerateForegroundInstanceMaskRequest`): the selection is a
+    /// persisted raster (`Mask.subjectMaskPNG`), not parameters. See `docs/ROADMAP_HISTORY.md`'s
+    /// Vision spike entry.
+    case subject
 }
 
 /// Phase 7 slice 6: whether — and how — a `Mask`'s own selection is
@@ -369,6 +373,26 @@ struct Mask: Identifiable, Equatable, Codable {
     /// black & white no-op exception documented on `temperature` above.
     var tint: Double = 0
 
+    // MARK: - Subject (AI) selection
+
+    /// `.subject` only. An 8-bit grayscale PNG of Vision's foreground-instance mask, in the frame of
+    /// the UNEDITED, oriented source photo (BEFORE straighten/perspective/scale/flip/crop — the
+    /// pipeline re-applies those same geometry stages to this raster so the selection follows the
+    /// photo). A model OUTPUT rather than parameters, so it is persisted instead of recomputed: Vision
+    /// can change between OS versions, and an inference per render is not affordable. `nil` = no
+    /// subject computed yet; such a mask selects nothing. JSON stores `Data` as base64.
+    var subjectMaskPNG: Data? = nil
+
+    /// `VNGenerateForegroundInstanceMaskRequest.currentRevision` when `subjectMaskPNG` was computed.
+    /// Provenance only (like `EditState.rawDecoderVersionPin`'s role for RAW); nothing branches on it yet.
+    var subjectMaskRevision: Int? = nil
+
+    /// `.subject` only (v1): select everything EXCEPT the subject — the background, plus any area
+    /// geometry reveals outside the photo's frame. Inert on every other kind. A mask with NO raster
+    /// (`subjectMaskPNG == nil` or undecodable) selects nothing REGARDLESS of this flag — inverting
+    /// "no subject known" must not light up the whole photo.
+    var invertSelection: Bool = false
+
     // MARK: - Combining
 
     /// `.none` by default — every pre-slice-6 mask/sidecar decodes to
@@ -470,6 +494,7 @@ extension Mask {
         case exposureEV, contrast, highlights, shadows
         case clarity, saturation, temperature, tint
         case combineMode, combineWithMaskID
+        case subjectMaskPNG, subjectMaskRevision, invertSelection
     }
 
     init(from decoder: Decoder) throws {
@@ -562,6 +587,11 @@ extension Mask {
         // exactly the person likely to type a non-UUID there. `try?`,
         // falling back to `nil` (== "no operand chosen").
         combineWithMaskID = (try? container.decodeIfPresent(UUID.self, forKey: .combineWithMaskID)) ?? nil
+        // `Data` decodes from a base64 string; a present-but-corrupt blob throws `dataCorrupted`, the
+        // same discard-the-whole-sidecar hazard as `kind` above, so `try?` -> nil (selects nothing).
+        subjectMaskPNG = (try? container.decodeIfPresent(Data.self, forKey: .subjectMaskPNG)) ?? nil
+        subjectMaskRevision = (try? container.decodeIfPresent(Int.self, forKey: .subjectMaskRevision)) ?? nil
+        invertSelection = (try? container.decodeIfPresent(Bool.self, forKey: .invertSelection)) ?? false
         // Reviewer-corrected (Phase 7 slice 2): falls back to a DETERMINISTIC
         // id derived from every other decoded field, not a fresh random
         // UUID — unreachable via this app's own round-trip (every mask it
@@ -583,7 +613,9 @@ extension Mask {
                 colorRangeHasTarget: colorRangeHasTarget,
                 exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
                 clarity: clarity, saturation: saturation, temperature: temperature, tint: tint,
-                combineMode: combineMode, combineWithMaskID: combineWithMaskID
+                combineMode: combineMode, combineWithMaskID: combineWithMaskID,
+                subjectMaskPNG: subjectMaskPNG, subjectMaskRevision: subjectMaskRevision,
+                invertSelection: invertSelection
             )
         }
     }
@@ -637,6 +669,9 @@ extension Mask {
     /// (one is inert, the other isn't) and must not collide. A fifth
     /// `kindSeed` arm covers `.colorRange`.
     ///
+    /// Subject note (AI Subject mask): `invertSelection`, the revision (presence flag + value) and the
+    /// PNG (presence flag, length, bytes) are mixed in as a final pass after `combineWithMaskID`'s.
+    ///
     /// Slice 6 note: `combineMode` joins the fixed-arity scalar list, via
     /// an explicit `switch` producing `0`/`1`/`2` (never `.hashValue` —
     /// same per-process-seeding reason `kindSeed` itself avoids it; never
@@ -663,7 +698,8 @@ extension Mask {
         colorRangeTargetLuminance: Double, colorRangeTolerance: Double, colorRangeHasTarget: Bool,
         exposureEV: Double, contrast: Double, highlights: Double, shadows: Double,
         clarity: Double, saturation: Double, temperature: Double, tint: Double,
-        combineMode: MaskCombineMode, combineWithMaskID: UUID?
+        combineMode: MaskCombineMode, combineWithMaskID: UUID?,
+        subjectMaskPNG: Data?, subjectMaskRevision: Int?, invertSelection: Bool
     ) -> UUID {
         let combineModeSeed: Double
         switch combineMode {
@@ -686,6 +722,7 @@ extension Mask {
         case .brush: kindSeed = 0x2545f4914f6cdd1d
         case .luminanceRange: kindSeed = 0xbf58476d1ce4e5b9
         case .colorRange: kindSeed = 0x1b873593cc9e2d51
+        case .subject: kindSeed = 0x6a09e667f3bcc909
         }
         let prime: UInt64 = 0x100000001b3
         var laneA: UInt64 = (0xcbf29ce484222325 ^ kindSeed) &* prime
@@ -707,6 +744,24 @@ extension Mask {
         laneA = (laneA ^ UInt64(combineIDBytes.count)) &* prime
         laneB = (laneB ^ UInt64(combineIDBytes.count).byteSwapped) &* prime
         for byte in combineIDBytes {
+            laneA = (laneA ^ UInt64(byte)) &* prime
+            laneB = (laneB ^ UInt64(byte).byteSwapped) &* prime
+        }
+        // Subject pass: invert flag and revision as scalars, then the PNG's length and bytes (variable
+        // length, so count first — same shape as the `brushPoints`/`combineWithMaskID` passes).
+        let subjectBytes = [UInt8](subjectMaskPNG ?? Data())
+        let subjectScalars: [UInt64] = [
+            invertSelection ? 1 : 0,
+            subjectMaskRevision == nil ? 0 : 1,
+            subjectMaskRevision.map { UInt64(bitPattern: Int64($0)) } ?? 0,
+            subjectMaskPNG == nil ? 0 : 1,
+            UInt64(subjectBytes.count)
+        ]
+        for scalar in subjectScalars {
+            laneA = (laneA ^ scalar) &* prime
+            laneB = (laneB ^ scalar.byteSwapped) &* prime
+        }
+        for byte in subjectBytes {
             laneA = (laneA ^ UInt64(byte)) &* prime
             laneB = (laneB ^ UInt64(byte).byteSwapped) &* prime
         }

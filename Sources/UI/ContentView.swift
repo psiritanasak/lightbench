@@ -238,7 +238,7 @@ struct ContentView: View {
         // draggable shape — `isEditingOverlayMask` (which this feeds) is
         // NOT the gate for the pick capture layer, `colorPickingMaskID`
         // is (see `pointAndZoomOverlays`'s own new branch).
-        case .luminanceRange, .colorRange: return false
+        case .luminanceRange, .colorRange, .subject: return false
         }
     }
 
@@ -1994,7 +1994,7 @@ struct ContentView: View {
                         onStrokeEnded: { interactionMode.disarm(.paintingBrush(maskID: id)) }
                     )
                 }
-            case .luminanceRange, .colorRange:
+            case .luminanceRange, .colorRange, .subject:
                 // Phase 7 slice 5: no on-image overlay for either kind —
                 // see `isEditingOverlayMask`'s own doc comment. This branch
                 // is unreachable in practice (the surrounding `if` already

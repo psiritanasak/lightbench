@@ -83,11 +83,7 @@ enum EditPipeline {
         image = applyWhiteBalance(state, to: image)           // scene-linear, first
         image = applyExposure(state.exposureEV, to: image)    // scene-linear
         image = applyPerceptualAdjustments(state, to: image, truncatingColorAt: truncation)  // sRGB-gamma domain
-        image = applyStraighten(state, to: image)             // geometric, before perspective
-        image = applyPerspective(state, to: image)            // geometric, before transform scale/aspect
-        image = applyTransformScale(state, to: image)         // geometric, before flip
-        image = applyFlip(state, to: image)                   // geometric, before crop
-        image = applyCrop(state, to: image)                   // geometric
+        image = applyGeometry(state, to: image)               // straighten → perspective → scale/aspect → flip → crop
         // Truncated color sampling stops HERE, after geometry but before
         // any further color stage — so the returned extent still matches
         // `ContentView.currentFitRect`'s (which is computed from a FULL,
@@ -110,7 +106,7 @@ enum EditPipeline {
         // here — just not yet re-measured for a non-identity case.
         guard truncation == nil else { return image }
         image = applyRedEye(state, to: image)                 // localized, scene-linear
-        image = applyMasks(state, to: image)                  // local adjustments, own perceptual sandwich
+        image = applyMasks(state, to: image, subjectImages: masksActive(state) ? subjectMaskImages(state, source: input) : [:])  // local adjustments, own perceptual sandwich
         image = applyDehaze(state, to: image)                 // scene restoration, scene-linear, before vignette/local contrast
         image = applyVignette(state, to: image)               // radial, scene-linear
         image = applyClarity(state, to: image)                // wide local contrast, perceptual, before detail pair
@@ -119,6 +115,22 @@ enum EditPipeline {
         image = applySharpen(state, to: image)                // detail, perceptual, before defringe
         image = applyDefringe(state, to: image)               // fringe cleanup, perceptual, after sharpen (convention, not a requirement) and before grain (real measured requirement) — see EditState.defringePurple
         image = applyGrain(state, to: image)                  // stochastic, perceptual, truly last
+        return image
+    }
+
+    // MARK: - Geometry
+
+    /// The geometric stages, in their fixed order. One function so the photo AND every AI subject
+    /// raster (`subjectMaskImages`) run through the IDENTICAL chain — a subject selection follows
+    /// later straighten/perspective/scale/flip/crop edits only because it cannot drift from the photo.
+    /// Pure geometry (reads no color field), so applying it to a mask image is exact, not approximate.
+    private static func applyGeometry(_ state: EditState, to input: CIImage) -> CIImage {
+        var image = input
+        image = applyStraighten(state, to: image)             // geometric, before perspective
+        image = applyPerspective(state, to: image)            // geometric, before transform scale/aspect
+        image = applyTransformScale(state, to: image)         // geometric, before flip
+        image = applyFlip(state, to: image)                   // geometric, before crop
+        image = applyCrop(state, to: image)                   // geometric
         return image
     }
 
@@ -1603,6 +1615,8 @@ enum EditPipeline {
         case brush(BrushMaskGeometry.Resolved)
         case luminanceRange(LuminanceRangeSelection.Resolved)
         case colorRange(ColorRangeSelection.Resolved)
+        /// Already in post-geometry frame, inversion (if any) applied; RGB == alpha == selection.
+        case subject(CIImage)
     }
 
     /// Local adjustments (Radial — Phase 7 slice 2 — Linear/graduated —
@@ -1758,7 +1772,9 @@ enum EditPipeline {
     /// throwaway-probe discipline) to be exactly the requested `extent:`,
     /// genuinely finite — see `colorRangeMaskImage`'s own comment for why
     /// its own crop is structural consistency only, not load-bearing.
-    private static func applyMasks(_ state: EditState, to image: CIImage) -> CIImage {
+    private static func applyMasks(
+        _ state: EditState, to image: CIImage, subjectImages: [UUID: CIImage] = [:]
+    ) -> CIImage {
         guard masksActive(state) else { return image }
 
         let extent = image.extent
@@ -1781,7 +1797,7 @@ enum EditPipeline {
             // below, exactly preserving the pre-slice-3 early-exit
             // ordering (a degenerate mask must never pay for a perceptual
             // round-trip it can't use).
-            guard let resolvedGeometry = resolveMaskGeometry(mask, extent: extent) else { continue }
+            guard let resolvedGeometry = resolveMaskGeometry(mask, extent: extent, subjectImages: subjectImages) else { continue }
 
             // Reviewer-caught (Phase 7 slice 2): these four MUST clamp to
             // -1...1 like the global path's own `effectiveTone(_:)` does
@@ -1902,7 +1918,7 @@ enum EditPipeline {
             if mask.combineMode != .none,
                let operandID = mask.combineWithMaskID, operandID != mask.id,
                let operand = state.masks.first(where: { $0.id == operandID }) {
-                let operandMask = resolveMaskGeometry(operand, extent: extent).flatMap {
+                let operandMask = resolveMaskGeometry(operand, extent: extent, subjectImages: subjectImages).flatMap {
                     maskImageAndRegion(for: $0, extent: extent, base: base, source: img)
                 }
                 switch mask.combineMode {
@@ -1962,7 +1978,9 @@ enum EditPipeline {
     /// actual proof this is behavior-preserving, not merely intended to
     /// be). `nil` on any kind's own degenerate-geometry case, exactly
     /// matching the `continue` each arm used when this lived inline.
-    private static func resolveMaskGeometry(_ mask: Mask, extent: CGRect) -> ResolvedMaskGeometry? {
+    private static func resolveMaskGeometry(
+        _ mask: Mask, extent: CGRect, subjectImages: [UUID: CIImage]
+    ) -> ResolvedMaskGeometry? {
         switch mask.kind {
         case .radial:
             guard let geo = RadialMaskGeometry.resolve(
@@ -2000,8 +2018,15 @@ enum EditPipeline {
             ) else { return nil }
             return .colorRange(sel)
         case .subject:
-            // Wired up in the pipeline commit; until then a subject mask selects nothing.
-            return nil
+            // No raster (never computed, or undecodable) selects NOTHING whether or not
+            // `invertSelection` is set — see `Mask.invertSelection`.
+            guard let selection = subjectImages[mask.id] else { return nil }
+            guard mask.invertSelection else { return .subject(selection) }
+            // Complement over the whole frame: areas geometry revealed outside the photo (alpha 0)
+            // become SELECTED, matching "everything except the subject".
+            let white = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1)).cropped(to: extent)
+            guard let inverted = invertedMaskImage(selection, opaqueWhite: white, extent: extent) else { return nil }
+            return .subject(inverted)
         }
     }
 
@@ -2125,6 +2150,11 @@ enum EditPipeline {
             // `.luminanceRange` — a pixel matching the target color
             // can be anywhere in frame, structurally no ROI-crop win.
             correctedRegion = sel.regionOfInterest
+        case .subject(let selection):
+            // Finite-extent raster run through the photo's own geometry: transparent (0) outside
+            // the frame it covers. Whole extent — a subject can be anywhere, no ROI win.
+            maskImage = selection.cropped(to: extent)
+            correctedRegion = extent
         }
         return (maskImage, correctedRegion)
     }
@@ -2203,6 +2233,93 @@ enum EditPipeline {
         sourceOut.inputImage = opaqueWhite
         sourceOut.backgroundImage = maskImage
         return sourceOut.outputImage?.cropped(to: extent)
+    }
+
+    /// Decoded subject rasters keyed by their PNG bytes (small LRU). A drag rebuilds the whole graph
+    /// every frame and `apply` also runs for `currentFitRect`; a PNG decode per call is not affordable.
+    private final class SubjectRasterCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [(key: Data, image: CIImage?)] = []
+        private let capacity = 4
+
+        func image(for key: Data, compute: () -> CIImage?) -> CIImage? {
+            lock.lock()
+            if let index = entries.firstIndex(where: { $0.key == key }) {
+                let hit = entries.remove(at: index)
+                entries.append(hit)
+                lock.unlock()
+                return hit.image
+            }
+            lock.unlock()
+            let value = compute()
+            lock.lock()
+            // Another thread may have computed the same key meanwhile; don't spend a second slot on it.
+            if !entries.contains(where: { $0.key == key }) { entries.append((key, value)) }
+            if entries.count > capacity { entries.removeFirst() }
+            lock.unlock()
+            return value
+        }
+    }
+    private static let subjectRasterCache = SubjectRasterCache()
+
+    /// A grayscale PNG as an unmanaged `RGB == alpha == gray` image at its own pixel size, origin
+    /// (0,0). `[.colorSpace: NSNull()]` = NO color management, so 128 stays 128/255 (a managed
+    /// decode would gamma-convert the coverage values); the color matrix sets alpha = gray and RGB = 1
+    /// (premultiplied: RGB == alpha == gray) so the image has the same RGB==alpha shape every other mask kind produces, and so geometry's
+    /// transparent fill outside the frame is a true 0 selection.
+    private static func decodedSubjectRaster(_ png: Data) -> CIImage? {
+        subjectRasterCache.image(for: png) {
+            guard let source = CGImageSourceCreateWithData(png as CFData, nil),
+                  CGImageSourceGetCount(source) > 0,
+                  let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil),
+                  cgImage.width > 0, cgImage.height > 0
+            else { return nil }
+            let gray = CIImage(cgImage: cgImage, options: [.colorSpace: NSNull()])
+            let matrix = CIFilter.colorMatrix()
+            matrix.inputImage = gray
+            // CIColorMatrix works on UNPREMULTIPLIED values and premultiplies its output: unpremultiplied
+            // (1, 1, 1, gray) comes out premultiplied as (gray, gray, gray, gray) — the RGB == alpha
+            // shape. Copying gray into R/G/B too would yield gray² (measured: 128 -> 0.25 coverage).
+            matrix.rVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+            matrix.gVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+            matrix.bVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+            matrix.aVector = CIVector(x: 1, y: 0, z: 0, w: 0)
+            matrix.biasVector = CIVector(x: 1, y: 1, z: 1, w: 0)
+            return matrix.outputImage?.cropped(to: gray.extent)
+        }
+    }
+
+    /// Every active `.subject` mask's raster, stretched over `source`'s extent (the UNEDITED frame
+    /// Vision ran on) and then carried through the photo's own `applyGeometry`, so each result lives in
+    /// the same post-geometry frame as the image `applyMasks` receives. `source` is the pipeline's
+    /// original input — at preview/thumbnail/export sizes it is the same photo at a different
+    /// resolution, so one normalized raster serves all of them.
+    private static func subjectMaskImages(_ state: EditState, source: CIImage) -> [UUID: CIImage] {
+        var result: [UUID: CIImage] = [:]
+        let sourceExtent = source.extent
+        guard !sourceExtent.isEmpty, !sourceExtent.isInfinite else { return result }
+        // Identity-adjustment masks are included on purpose: a zero-adjustment subject mask is exactly how
+        // a "shape-only" combine operand is made (see `Mask.isIdentity`).
+        for mask in state.masks where mask.kind == .subject {
+            guard let png = mask.subjectMaskPNG, let raster = decodedSubjectRaster(png) else { continue }
+            let rect = raster.extent
+            // Clamp BEFORE resampling, so the stretch sees a constant edge instead of blending the
+            // raster's border with the transparent area beyond it. A reviewer's standalone render of the
+            // mask image measured a ~0.54 border column with the clamp AFTER the transforms; the same
+            // difference was NOT reproducible through `apply()`'s blended output here (0.8 either way,
+            // at 64->400 and 512->6016), so `testFullRasterSelectsTheOutermostPixelsAtFullStrength` is a
+            // behavior guard, not proof of this ordering. The crop pins the extent to the photo's exactly.
+            let fit = raster
+                .clampedToExtent()
+                .transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+                .transformed(by: CGAffineTransform(
+                    scaleX: sourceExtent.width / rect.width, y: sourceExtent.height / rect.height))
+                .transformed(by: CGAffineTransform(translationX: sourceExtent.minX, y: sourceExtent.minY))
+                .samplingLinear()
+                .cropped(to: sourceExtent)
+            result[mask.id] = applyGeometry(state, to: fit)
+        }
+        return result
     }
 
     /// Rasterizes one Brush mask's stroke into a soft-edged `CIImage` mask

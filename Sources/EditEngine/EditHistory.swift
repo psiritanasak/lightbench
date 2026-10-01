@@ -56,8 +56,9 @@ struct EditHistory {
     /// the exact `entries.count <= limit + 1` rule (`limit` past entries
     /// plus the current one) the original two-stack version already
     /// established and `testCommitBeyondTheLimitDropsTheOldestStep` still
-    /// pins. Two `EditState` fields are unbounded: `redEyePoints` and,
-    /// since Phase 7 slice 2, `masks` — each `Mask` is ~14 `Double`s + a
+    /// pins. Three `EditState` fields are unbounded in memory: `redEyePoints`,
+    /// since Phase 7 slice 2 `masks`, and `retouchSpots` (capped at `maxRetouchSpots` on decode; the UI add site
+    /// must enforce it too) — each `Mask` is ~14 `Double`s + a
     /// `UUID` (roughly 128 bytes), so even a worst-case 100-entry cap ×
     /// 10 masks is only ~128 KB, and Swift arrays are copy-on-write
     /// besides (an entry that didn't touch `masks` shares the same buffer

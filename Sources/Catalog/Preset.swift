@@ -15,7 +15,7 @@ import GRDB
 ///
 /// Only ever applies its COLOR/TONE fields to a target photo — never crop/
 /// straighten/perspective/transformScale/transformAspect/flip or the placed
-/// `redEyePoints`, all specific to one photo's composition. See
+/// `redEyePoints`/`retouchSpots`/`masks`, all specific to one photo's composition. See
 /// `EditState.applyingPreset(onto:)`.
 struct Preset: Codable, Equatable, Identifiable, Sendable {
     var id: Int64?

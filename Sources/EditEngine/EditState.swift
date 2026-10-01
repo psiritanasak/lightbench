@@ -501,6 +501,16 @@ struct EditState: Equatable, Codable {
     /// not an inconsistency with the rest of this struct.
     var redEyePoints: [RedEyePoint] = []
 
+    // MARK: - Spot removal (Heal / Clone)
+
+    /// Spot-removal spots (`RetouchSpot`), to be applied by `EditPipeline.applyRetouch` (a later commit) as the very FIRST stage, in the
+    /// UNEDITED source frame (see `RetouchSpot`). VARIABLE-LENGTH, capped at `maxRetouchSpots`. Photo-specific
+    /// PLACEMENT, so — like `redEyePoints`/`masks` — NOT copied by `applyingPreset(onto:)`, and cleared by
+    /// `comparisonOriginal()` (a "before" view must show no retouching). `Reset Adjustments` leaves them alone,
+    /// as it does red-eye points.
+    var retouchSpots: [RetouchSpot] = []
+    static let maxRetouchSpots = 50
+
     /// Correction radius, 0...1, default 0.5 — shared by every placed point
     /// (not per-point), same non-zero-identity pattern as `vignetteRadius`:
     /// guarded off by `redEyePoints`/`redEyeStrength`, not by this field.
@@ -1383,7 +1393,8 @@ struct EditState: Equatable, Codable {
     /// pixel-for-pixel, while every color/tone adjustment is reset to its
     /// identity value. Same field list as `ContentView`'s
     /// `resetAdjustmentsButton`/`isAdjustTabAtIdentity`, PLUS clearing
-    /// `redEyePoints` — a real difference, not an oversight:
+    /// `redEyePoints` AND `retouchSpots` (pixel repair is retouching: the "before" side shows none) — a real
+    /// difference, not an oversight, in red-eye's case:
     /// `EditPipeline`'s red-eye stage is active whenever `redEyePoints`
     /// is non-empty AND `redEyeStrength != 0`, and the identity/default
     /// `redEyeStrength` (0.7) is non-zero, so merely resetting the
@@ -1453,6 +1464,7 @@ struct EditState: Equatable, Codable {
         s.redEyeSize = 0.5
         s.redEyeStrength = 0.7
         s.redEyePoints.removeAll()
+        s.retouchSpots.removeAll() // pixel repair is retouching: the "before" side shows none
         // masks: retouching/stylization, same reasoning as redEyePoints
         // just above — a non-identity mask is unconditionally active (no
         // non-zero-default subtlety to argue, unlike red-eye), so leaving
@@ -1558,7 +1570,7 @@ struct EditState: Equatable, Codable {
         result.redEyeStrength = redEyeStrength
         // geometry (cropInset*, straightenAngle, verticalPerspective,
         // horizontalPerspective, transformScale, transformAspect,
-        // flipHorizontal, flipVertical), redEyePoints, AND masks are NOT
+        // flipHorizontal, flipVertical), redEyePoints, retouchSpots, AND masks are NOT
         // copied — they stay `target`'s own via `var result = target`
         // above. `masks` joins `redEyePoints`
         // here for the identical reason: an ellipse placed on THIS photo's
@@ -1635,6 +1647,7 @@ extension EditState {
         case flipHorizontal, flipVertical
         case cropInsetTop, cropInsetBottom, cropInsetLeft, cropInsetRight
         case redEyePoints, redEyeSize, redEyeStrength
+        case retouchSpots
         case masks
         case pointColors
         case vignetteStrength, vignetteRadius
@@ -1759,6 +1772,12 @@ extension EditState {
         cropInsetLeft = try container.decodeIfPresent(Double.self, forKey: .cropInsetLeft) ?? 0
         cropInsetRight = try container.decodeIfPresent(Double.self, forKey: .cropInsetRight) ?? 0
         redEyePoints = try container.decodeIfPresent([RedEyePoint].self, forKey: .redEyePoints) ?? []
+        // Element-by-element: one corrupt spot is dropped, never the sidecar. Non-finite spots are dropped too
+        // (a NaN in EditState would make every later sidecar write throw) and the cap is enforced.
+        retouchSpots = Array(
+            ((try? container.decodeIfPresent([LossyRetouchSpot].self, forKey: .retouchSpots)) ?? nil ?? [])
+                .compactMap(\.spot).filter(\.isFinite).prefix(Self.maxRetouchSpots)
+        ).withUniqueIDs()
         redEyeSize = try container.decodeIfPresent(Double.self, forKey: .redEyeSize) ?? 0.5
         redEyeStrength = try container.decodeIfPresent(Double.self, forKey: .redEyeStrength) ?? 0.7
         masks = try container.decodeIfPresent([Mask].self, forKey: .masks) ?? []

@@ -1180,3 +1180,12 @@ the message and raise it from `sheetDidDisappear`.
 2. Performance items: measure before and after on a real large photo/library; record numbers in PROGRESS.md.
 3. Verify each item's claims against the code before acting.
 4. When an item ships: strike it, move its full text to `docs/IMPROVEMENTS_HISTORY.md`, leave a one-line index entry here, update PROGRESS.md.
+
+### D44. Subject mask refinement follow-ups (2026-10-01) — open, low
+- **All subjects unticked + Invert selects nothing** (the documented "zero rasters selects nothing" rule). A user may expect "whole frame". Decide whether Invert should treat zero enabled subjects as "everything" or the UI should disable Invert then.
+- **No click-on-image subject picking** (needs the `EditorInteractionMode`/crosshair machinery and a hit test against the per-instance rasters); the list + thumbnails are the only way to choose today.
+- **`kMaxSubjectFeatherFraction` (0.02) is untuned**: at Feather 100% the live halo looked fairly strong; retune like `kMaxTransformAspectStretch` (note the stored slider value is replay-affecting).
+- Feather is applied in raster space before the stretch: elliptical if a stored raster's aspect ever differs from the photo's (theoretical for Vision rasters).
+- Per-instance refinement costs n x ~20 ms and runs for every instance before the 8-cap.
+- Subject thumbnails: the NSCache is keyed by NSData (equality is byte-exact; hash buckets collide because PNG headers are near-identical — fine at <=32 entries).
+- Generator tests XCTSkip when Vision doesn't return exactly 2 instances for the synthetic two-figure fixture; they could silently stop running on another OS/Vision revision.

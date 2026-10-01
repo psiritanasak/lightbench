@@ -235,4 +235,126 @@ final class SubjectMaskPipelineTests: XCTestCase {
         XCTAssertEqual(red(out, atFractionX: 0.5, y: 0.5), boosted, accuracy: accuracy)
         XCTAssertEqual(red(out, atFractionX: 0.05, y: 0.05), unedited, accuracy: accuracy)
     }
+
+    // MARK: Per-person selection
+
+    private func rightHalfPNG() throws -> Data { try png { $0 >= 32 ? 255 : 0 } }
+
+    private func peopleMask(
+        enabled: [Bool] = [], invert: Bool = false, feather: Double = 0, legacy: Data? = nil
+    ) throws -> Mask {
+        Mask(
+            kind: .subject, exposureEV: 2, subjectMaskPNG: legacy, subjectMaskRevision: 1, invertSelection: invert,
+            subjectInstancePNGs: [try leftHalfPNG(), try rightHalfPNG()],
+            subjectInstanceEnabled: enabled, subjectFeather: feather)
+    }
+
+    private func sample(_ mask: Mask, fx: Double) -> Float {
+        red(EditPipeline.apply(EditState(masks: [mask]), to: gray()), atFractionX: fx, y: 0.5)
+    }
+
+    func testEnabledPeopleAreUnionedAndSubsetsSelectOnlyThemselves() throws {
+        let cases: [([Bool], Float, Float)] = [
+            ([], boosted, boosted), ([true, true], boosted, boosted),
+            ([true, false], boosted, unedited), ([false, true], unedited, boosted),
+            ([false], unedited, boosted) // short array: the missing entry means enabled
+        ]
+        for (enabled, left, right) in cases {
+            let mask = try peopleMask(enabled: enabled)
+            XCTAssertEqual(sample(mask, fx: 0.1), left, accuracy: accuracy, "left, enabled \(enabled)")
+            XCTAssertEqual(sample(mask, fx: 0.9), right, accuracy: accuracy, "right, enabled \(enabled)")
+        }
+    }
+
+    func testNoEnabledPersonSelectsNothingEvenWhenInverted() throws {
+        for invert in [false, true] {
+            let mask = try peopleMask(enabled: [false, false], invert: invert)
+            XCTAssertEqual(sample(mask, fx: 0.1), unedited, accuracy: accuracy, "invert \(invert)")
+            XCTAssertEqual(sample(mask, fx: 0.9), unedited, accuracy: accuracy, "invert \(invert)")
+        }
+    }
+
+    func testInstanceRastersTakePrecedenceOverALegacyUnionPNG() throws {
+        let everything = try png { _ in 255 }
+        let mask = try peopleMask(enabled: [true, false], legacy: everything)
+        XCTAssertEqual(sample(mask, fx: 0.9), unedited, accuracy: accuracy, "the legacy full-white PNG must be ignored")
+    }
+
+    func testInvertWithASubsetSelectsEveryoneElseAndTheBackground() throws {
+        let mask = try peopleMask(enabled: [true, false], invert: true)
+        XCTAssertEqual(sample(mask, fx: 0.1), unedited, accuracy: accuracy)
+        XCTAssertEqual(sample(mask, fx: 0.9), boosted, accuracy: accuracy)
+    }
+
+    // MARK: Feather
+
+    func testFeatherSoftensTheEdgeAndLeavesFarPixelsAlone() throws {
+        let hard = try peopleMask(enabled: [true, false])
+        let soft = try peopleMask(enabled: [true, false], feather: 1)
+        // Selected half is x < 200. 8px outside the edge a hard mask is unselected; feathered it bleeds in.
+        XCTAssertEqual(sample(hard, fx: 0.52), unedited, accuracy: accuracy)
+        XCTAssertGreaterThan(sample(soft, fx: 0.52), sample(hard, fx: 0.52) + 0.05)
+        // 10px inside, a hard mask is fully selected; feathered it has started to fall off.
+        XCTAssertEqual(sample(hard, fx: 0.475), boosted, accuracy: accuracy)
+        XCTAssertLessThan(sample(soft, fx: 0.475), boosted - 0.05)
+        // Far from the edge nothing changes.
+        XCTAssertEqual(sample(soft, fx: 0.05), boosted, accuracy: accuracy)
+        XCTAssertEqual(sample(soft, fx: 0.95), unedited, accuracy: accuracy)
+    }
+
+    /// Feather 0 must be EXACTLY the pre-feather path: compare an instance mask at feather 0 against a
+    /// legacy single-PNG mask (which never went through a feather branch), sampled across the edge.
+    func testFeatherZeroMatchesTheLegacyPathExactlyAndAnyFeatherDiffers() throws {
+        let legacy = subjectMask(try leftHalfPNG())
+        let viaInstances = try peopleMask(enabled: [true, false], feather: 0)
+        let slightlySoft = try peopleMask(enabled: [true, false], feather: 1)
+        for fx in [0.47, 0.495, 0.5, 0.505, 0.53] {
+            XCTAssertEqual(sample(viaInstances, fx: fx), sample(legacy, fx: fx), "fx \(fx)")
+        }
+        XCTAssertNotEqual(sample(slightlySoft, fx: 0.52), sample(legacy, fx: 0.52), accuracy: 0.03)
+    }
+
+    /// Differently-sized instance rasters in one mask are stretched onto the first's rect, not left in a corner.
+    func testDifferentlySizedInstanceRastersStayAligned() throws {
+        let left64 = try leftHalfPNG()                                        // 64x64
+        let right128 = try png(width: 128, height: 128) { $0 >= 64 ? 255 : 0 }   // 128x128, right half
+        let mask = Mask(kind: .subject, exposureEV: 2, subjectInstancePNGs: [left64, right128])
+        XCTAssertEqual(sample(mask, fx: 0.1), boosted, accuracy: accuracy)
+        XCTAssertEqual(sample(mask, fx: 0.9), boosted, accuracy: accuracy)
+        let onlyRight = Mask(kind: .subject, exposureEV: 2, subjectInstancePNGs: [left64, right128], subjectInstanceEnabled: [false, true])
+        XCTAssertEqual(sample(onlyRight, fx: 0.1), unedited, accuracy: accuracy)
+        XCTAssertEqual(sample(onlyRight, fx: 0.9), boosted, accuracy: accuracy)
+    }
+
+    func testFeatherIsProxyScaleInvariant() throws {
+        let mask = try peopleMask(enabled: [true, false], feather: 1)
+        let state = EditState(masks: [mask])
+        let big = EditPipeline.apply(state, to: gray(size: 401, height: 299))
+        let small = EditPipeline.apply(state, to: gray(size: 100, height: 75))
+        // (Not exactly fx 0.5: the two sizes sample pixel CENTERS 0.005 vs 0.00125 apart there, and the feathered
+        // edge is steepest at that point — a measured sampling artifact (0.058 apart), not a scaling difference.)
+        for fx in [0.4, 0.45, 0.55, 0.6] {
+            XCTAssertEqual(red(big, atFractionX: fx, y: 0.5), red(small, atFractionX: fx, y: 0.5), accuracy: 0.03, "fx \(fx)")
+        }
+    }
+
+    func testFeatherAndInvertAreComplementary() throws {
+        let normal = try peopleMask(enabled: [true, false], feather: 0.7)
+        let inverted = try peopleMask(enabled: [true, false], invert: true, feather: 0.7)
+        for fx in [0.44, 0.5, 0.56] {
+            // value = 0.2 + 0.6 * coverage, so a mask and its complement sum to 0.2 + 0.8 = 1.0
+            XCTAssertEqual(sample(normal, fx: fx) + sample(inverted, fx: fx), 1.0, accuracy: 0.03, "fx \(fx)")
+        }
+    }
+
+    /// A raster that touches the frame edge must stay fully selected at the border when feathered
+    /// (the blur input is clamped to its extent). Behavior guard — see the v1 border note.
+    func testFeatherKeepsAFullRasterFullyAtTheFrameBorder() throws {
+        var mask = subjectMask(try png { _ in 255 })
+        mask.subjectFeather = 1
+        let out = EditPipeline.apply(EditState(masks: [mask]), to: gray())
+        for (fx, fy) in [(0.0, 0.5), (0.9999, 0.5), (0.5, 0.0), (0.5, 0.9999)] {
+            XCTAssertEqual(red(out, atFractionX: fx, y: fy), boosted, accuracy: 0.01, "edge (\(fx), \(fy))")
+        }
+    }
 }

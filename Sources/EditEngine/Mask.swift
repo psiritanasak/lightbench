@@ -393,6 +393,39 @@ struct Mask: Identifiable, Equatable, Codable {
     /// "no subject known" must not light up the whole photo.
     var invertSelection: Bool = false
 
+    /// `.subject` only. One 8-bit gray PNG PER detected person/object (Vision "instance"), all the same
+    /// size, ordered left-to-right by mass centroid so "Person 1…N" in the UI matches the picture. Kept
+    /// as separate soft rasters (not a label map) because Vision's per-instance masks are refined against
+    /// the full-resolution image while its native label map is a blocky 512x512. Empty for masks made
+    /// before per-person selection existed — those render from `subjectMaskPNG` alone.
+    var subjectInstancePNGs: [Data] = []
+
+    /// `.subject` only. Which entries of `subjectInstancePNGs` are included. A missing entry (shorter
+    /// array, or `[]`) means ENABLED, so a fresh mask selects everyone and a stale/short array never hides
+    /// a person by accident.
+    var subjectInstanceEnabled: [Bool] = []
+
+    /// `.subject` only, 0...1, identity 0 (so every earlier subject mask renders byte-identically).
+    /// Softens the selection's edge: a Gaussian blur of the combined raster whose radius is
+    /// `subjectFeather * EditPipeline.kMaxSubjectFeatherFraction` of the raster's long side — a fraction,
+    /// so it scales with the photo exactly like every other extent-relative parameter.
+    var subjectFeather: Double = 0
+
+    /// The raster PNGs that make up the selection: the ENABLED per-person rasters when any exist, else
+    /// the single legacy `subjectMaskPNG` if present, else none. ZERO rasters selects nothing, even
+    /// when `invertSelection` is set (inverting "nothing known" must not light up the whole photo).
+    var subjectRasters: [Data] {
+        if !subjectInstancePNGs.isEmpty {
+            return subjectInstancePNGs.enumerated().compactMap { index, png in
+                index < subjectInstanceEnabled.count && !subjectInstanceEnabled[index] ? nil : png
+            }
+        }
+        return subjectMaskPNG.map { [$0] } ?? []
+    }
+
+    /// Whether any raster was ever stored (enabled or not) — drives "No subject stored" UI text.
+    var hasStoredSubject: Bool { !subjectInstancePNGs.isEmpty || subjectMaskPNG != nil }
+
     // MARK: - Combining
 
     /// `.none` by default — every pre-slice-6 mask/sidecar decodes to
@@ -495,6 +528,7 @@ extension Mask {
         case clarity, saturation, temperature, tint
         case combineMode, combineWithMaskID
         case subjectMaskPNG, subjectMaskRevision, invertSelection
+        case subjectInstancePNGs, subjectInstanceEnabled, subjectFeather
     }
 
     init(from decoder: Decoder) throws {
@@ -592,6 +626,10 @@ extension Mask {
         subjectMaskPNG = (try? container.decodeIfPresent(Data.self, forKey: .subjectMaskPNG)) ?? nil
         subjectMaskRevision = (try? container.decodeIfPresent(Int.self, forKey: .subjectMaskRevision)) ?? nil
         invertSelection = (try? container.decodeIfPresent(Bool.self, forKey: .invertSelection)) ?? false
+        // Same `try?` reasoning: one corrupt element must lose only this array, never the sidecar.
+        subjectInstancePNGs = (try? container.decodeIfPresent([Data].self, forKey: .subjectInstancePNGs)) ?? nil ?? []
+        subjectInstanceEnabled = (try? container.decodeIfPresent([Bool].self, forKey: .subjectInstanceEnabled)) ?? nil ?? []
+        subjectFeather = (try? container.decodeIfPresent(Double.self, forKey: .subjectFeather)) ?? nil ?? 0
         // Reviewer-corrected (Phase 7 slice 2): falls back to a DETERMINISTIC
         // id derived from every other decoded field, not a fresh random
         // UUID — unreachable via this app's own round-trip (every mask it
@@ -615,7 +653,9 @@ extension Mask {
                 clarity: clarity, saturation: saturation, temperature: temperature, tint: tint,
                 combineMode: combineMode, combineWithMaskID: combineWithMaskID,
                 subjectMaskPNG: subjectMaskPNG, subjectMaskRevision: subjectMaskRevision,
-                invertSelection: invertSelection
+                invertSelection: invertSelection,
+                subjectInstancePNGs: subjectInstancePNGs, subjectInstanceEnabled: subjectInstanceEnabled,
+                subjectFeather: subjectFeather
             )
         }
     }
@@ -669,6 +709,9 @@ extension Mask {
     /// (one is inert, the other isn't) and must not collide. A fifth
     /// `kindSeed` arm covers `.colorRange`.
     ///
+    /// Subject refinement note: `subjectFeather`, the instance count, each instance PNG (length then
+    /// bytes) and the enabled flags are mixed in after the Subject pass below (variable length: count first).
+    ///
     /// Subject note (AI Subject mask): `invertSelection`, the revision (presence flag + value) and the
     /// PNG (presence flag, length, bytes) are mixed in as a final pass after `combineWithMaskID`'s.
     ///
@@ -699,7 +742,8 @@ extension Mask {
         exposureEV: Double, contrast: Double, highlights: Double, shadows: Double,
         clarity: Double, saturation: Double, temperature: Double, tint: Double,
         combineMode: MaskCombineMode, combineWithMaskID: UUID?,
-        subjectMaskPNG: Data?, subjectMaskRevision: Int?, invertSelection: Bool
+        subjectMaskPNG: Data?, subjectMaskRevision: Int?, invertSelection: Bool,
+        subjectInstancePNGs: [Data], subjectInstanceEnabled: [Bool], subjectFeather: Double
     ) -> UUID {
         let combineModeSeed: Double
         switch combineMode {
@@ -764,6 +808,19 @@ extension Mask {
         for byte in subjectBytes {
             laneA = (laneA ^ UInt64(byte)) &* prime
             laneB = (laneB ^ UInt64(byte).byteSwapped) &* prime
+        }
+        // Subject refinement pass: feather bits, then instance count, each instance (length, bytes), then
+        // the enabled flags (count, then 0/1 each) — counts before data so shapes can't collide.
+        var refinement: [UInt64] = [subjectFeather.bitPattern, UInt64(subjectInstancePNGs.count)]
+        for png in subjectInstancePNGs {
+            refinement.append(UInt64(png.count))
+            refinement.append(contentsOf: png.map { UInt64($0) })
+        }
+        refinement.append(UInt64(subjectInstanceEnabled.count))
+        refinement.append(contentsOf: subjectInstanceEnabled.map { $0 ? 1 : 0 })
+        for scalar in refinement {
+            laneA = (laneA ^ scalar) &* prime
+            laneB = (laneB ^ scalar.byteSwapped) &* prime
         }
         var bytes = [UInt8]()
         bytes.reserveCapacity(16)

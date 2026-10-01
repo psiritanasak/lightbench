@@ -2240,7 +2240,16 @@ enum EditPipeline {
     private final class SubjectRasterCache: @unchecked Sendable {
         private let lock = NSLock()
         private var entries: [(key: Data, image: CIImage?)] = []
-        private let capacity = 4
+        // Grows to the working set of the render in progress (`reserve`): sequential LRU access over a set
+        // larger than the capacity misses EVERY time, i.e. a full PNG decode per raster per frame.
+        private var capacity = 12
+        private static let maximumCapacity = 64
+
+        func reserve(_ count: Int) {
+            lock.lock()
+            capacity = min(max(capacity, count), Self.maximumCapacity)
+            lock.unlock()
+        }
 
         func image(for key: Data, compute: () -> CIImage?) -> CIImage? {
             lock.lock()
@@ -2261,6 +2270,12 @@ enum EditPipeline {
         }
     }
     private static let subjectRasterCache = SubjectRasterCache()
+
+    /// Gaussian sigma at `Mask.subjectFeather == 1`, as a fraction of the subject raster's long side
+    /// (0.02 of a 1024px raster = ~20px). A starting value, to be live-tuned like
+    /// `kMaxTransformAspectStretch`; stored per photo as the 0...1 slider value, so retuning changes how
+    /// existing edits look (same note as that constant).
+    static let kMaxSubjectFeatherFraction: Double = 0.02
 
     /// A grayscale PNG as an unmanaged `RGB == alpha == gray` image at its own pixel size, origin
     /// (0,0). `[.colorSpace: NSNull()]` = NO color management, so 128 stays 128/255 (a managed
@@ -2300,9 +2315,43 @@ enum EditPipeline {
         guard !sourceExtent.isEmpty, !sourceExtent.isInfinite else { return result }
         // Identity-adjustment masks are included on purpose: a zero-adjustment subject mask is exactly how
         // a "shape-only" combine operand is made (see `Mask.isIdentity`).
+        subjectRasterCache.reserve(state.masks.reduce(0) { $0 + ($1.kind == .subject ? $1.subjectRasters.count : 0) })
         for mask in state.masks where mask.kind == .subject {
-            guard let png = mask.subjectMaskPNG, let raster = decodedSubjectRaster(png) else { continue }
+            // Union of the enabled rasters (RGB == alpha images, so a per-pixel max IS the union). An
+            // undecodable one is skipped; none usable selects nothing (see `Mask.subjectRasters`).
+            let decoded = mask.subjectRasters.compactMap { decodedSubjectRaster($0) }
+            guard var raster = decoded.first else { continue }
             let rect = raster.extent
+            for var other in decoded.dropFirst() {
+                // Rasters of a stored mask are meant to share one size, but a hand-edited/odd sidecar can
+                // hold anything: stretch a differing one onto the first's rect instead of leaving it
+                // misaligned in a corner (same tolerance spirit as the tolerant decode).
+                let o = other.extent
+                if o.width != rect.width || o.height != rect.height, o.width > 0, o.height > 0 {
+                    other = other
+                        .transformed(by: CGAffineTransform(translationX: -o.minX, y: -o.minY))
+                        .transformed(by: CGAffineTransform(scaleX: rect.width / o.width, y: rect.height / o.height))
+                        .transformed(by: CGAffineTransform(translationX: rect.minX, y: rect.minY))
+                        .samplingLinear()
+                }
+                let union = CIFilter.maximumCompositing()
+                union.inputImage = other
+                union.backgroundImage = raster
+                raster = (union.outputImage ?? raster).cropped(to: rect)
+            }
+            // Feather in RASTER space, before the stretch/geometry: the clamp means no border fade, and
+            // the radius is a fraction of the raster so it scales with the photo (proxy/export invariant).
+            // Identity (0) skips the blur: purely an optimization (a radius-0 CIGaussianBlur renders
+            // identically here — measured by forcing it always on). The blur runs before the stretch, so if a
+            // stored raster's aspect ever differed from the photo's the feather would be elliptical; Vision
+            // rasters keep the photo's aspect, so that is theoretical.
+            let feather = mask.subjectFeather.isFinite ? min(max(mask.subjectFeather, 0), 1) : 0
+            if feather > 0 {
+                let blur = CIFilter.gaussianBlur()
+                blur.inputImage = raster.clampedToExtent()
+                blur.radius = Float(feather * kMaxSubjectFeatherFraction * Double(max(rect.width, rect.height)))
+                raster = (blur.outputImage ?? raster).cropped(to: rect)
+            }
             // Clamp BEFORE resampling, so the stretch sees a constant edge instead of blending the
             // raster's border with the transparent area beyond it. A reviewer's standalone render of the
             // mask image measured a ~0.54 border column with the clamp AFTER the transforms; the same

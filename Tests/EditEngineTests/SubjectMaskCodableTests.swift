@@ -68,4 +68,67 @@ final class SubjectMaskCodableTests: XCTestCase {
         let radial = try decode(#"{ "masks": [{}] }"#).masks[0].id
         XCTAssertNotEqual(radial, try fallbackID(""))
     }
+
+    // MARK: Per-person selection + feather
+
+    private let pngA = Data([0x89, 0x50, 1, 1, 1])
+    private let pngB = Data([0x89, 0x50, 2, 2, 2])
+
+    func testInstancesEnabledAndFeatherRoundTrip() throws {
+        let original = Mask(
+            kind: .subject, exposureEV: 1, subjectInstancePNGs: [pngA, pngB],
+            subjectInstanceEnabled: [true, false], subjectFeather: 0.4)
+        let data = try JSONEncoder().encode(EditState(masks: [original]))
+        let decoded = try JSONDecoder().decode(EditState.self, from: data).masks[0]
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded.subjectInstancePNGs, [pngA, pngB])
+        XCTAssertEqual(decoded.subjectInstanceEnabled, [true, false])
+        XCTAssertEqual(decoded.subjectFeather, 0.4)
+    }
+
+    func testPreRefinementSubjectMaskDecodesWithRefinementDefaults() throws {
+        let state = try decode(#"{ "masks": [{ "kind": "subject", "subjectMaskPNG": "AQIDBA==" }] }"#)
+        XCTAssertEqual(state.masks[0].subjectInstancePNGs, [])
+        XCTAssertEqual(state.masks[0].subjectInstanceEnabled, [])
+        XCTAssertEqual(state.masks[0].subjectFeather, 0)
+        XCTAssertEqual(state.masks[0].subjectRasters, [Data([1, 2, 3, 4])], "legacy single PNG still the selection")
+    }
+
+    func testCorruptRefinementFieldsDoNotDiscardTheSidecar() throws {
+        let state = try decode(#"{ "exposureEV": 1.5, "masks": [{ "kind": "subject", "subjectInstancePNGs": ["%%%"], "subjectInstanceEnabled": "x", "subjectFeather": "soft" }] }"#)
+        XCTAssertEqual(state.exposureEV, 1.5)
+        XCTAssertEqual(state.masks.count, 1)
+        XCTAssertEqual(state.masks[0].subjectInstancePNGs, [])
+        XCTAssertEqual(state.masks[0].subjectInstanceEnabled, [])
+        XCTAssertEqual(state.masks[0].subjectFeather, 0)
+    }
+
+    func testSubjectRastersRules() {
+        var m = Mask(kind: .subject, subjectMaskPNG: pngA, subjectInstancePNGs: [pngA, pngB])
+        XCTAssertEqual(m.subjectRasters, [pngA, pngB], "no flags: everyone")
+        m.subjectInstanceEnabled = [false]
+        XCTAssertEqual(m.subjectRasters, [pngB], "short array: missing entries are enabled")
+        m.subjectInstanceEnabled = [false, false]
+        XCTAssertEqual(m.subjectRasters, [], "all off selects nothing")
+        XCTAssertTrue(m.hasStoredSubject, "disabled rasters are still stored")
+        XCTAssertFalse(Mask(kind: .subject).hasStoredSubject)
+        XCTAssertEqual(Mask(kind: .subject, subjectMaskPNG: pngB).subjectRasters, [pngB])
+    }
+
+    func testFallbackIDDiffersByInstancesEnabledFlagsAndFeather() throws {
+        func id(_ fields: String) throws -> UUID {
+            try decode(#"{ "masks": [{ "kind": "subject"\#(fields) }] }"#).masks[0].id
+        }
+        let ids = [
+            try id(""),
+            try id(#", "subjectInstancePNGs": ["AQEB"]"#),
+            try id(#", "subjectInstancePNGs": ["AgIC"]"#),
+            try id(#", "subjectInstancePNGs": ["AQEB", "AgIC"]"#),
+            try id(#", "subjectInstancePNGs": ["AQEBAgIC"]"#),
+            try id(#", "subjectInstancePNGs": ["AQEB"], "subjectInstanceEnabled": [false]"#),
+            try id(#", "subjectInstancePNGs": ["AQEB"], "subjectInstanceEnabled": [true]"#),
+            try id(#", "subjectFeather": 0.5"#)
+        ]
+        XCTAssertEqual(Set(ids).count, ids.count)
+    }
 }

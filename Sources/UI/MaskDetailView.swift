@@ -211,7 +211,7 @@ struct MaskDetailView: View {
             .buttonStyle(.bordered)
             .frame(maxWidth: .infinity)
             .disabled(isRecomputingSubject)
-            if mask.subjectMaskPNG == nil {
+            if !mask.hasStoredSubject {
                 Text("No subject stored for this mask.").font(.caption).foregroundStyle(.secondary)
             }
         }

@@ -955,6 +955,20 @@ struct EditState: Equatable, Codable {
     /// Noise Reduction are all single-slider v1s).
     var grain: Double = 0
 
+    // MARK: - Look (LUT profile)
+
+    /// The creative look applied before the user's own adjustments, `""` = none. Built-in ids are
+    /// `builtin:<slug>` (`BuiltInLooks`), imported `.cube` files `user:<sha256-12>-<name>` (content-addressed,
+    /// so an id always means the same pixels). An id this machine cannot resolve renders as NO look (fail-open:
+    /// a sidecar from a machine that had a look this one lacks must still open) — the UI shows it as missing.
+    /// Purely additive: absent key decodes to `""`.
+    var lookID: String = ""
+
+    /// 0...1, how strongly the look is blended in; only meaningful when `lookID` is non-empty. NON-ZERO
+    /// identity default (1.0): decodes with `?? 1.0`, not `?? 0` — the same hazard class as
+    /// `transformScale`/`levelsWhitePoint`.
+    var lookIntensity: Double = 1.0
+
     // MARK: - RAW (CIRAWFilter-native)
 
     /// Core Image's own RAW tone-curve strength — configures `CIRAWFilter`
@@ -1433,6 +1447,8 @@ struct EditState: Equatable, Codable {
         s.defringePurple = 0
         s.defringeGreen = 0
         s.grain = 0
+        s.lookID = ""
+        s.lookIntensity = 1
         // red-eye: reset sliders AND clear points (see doc comment above)
         s.redEyeSize = 0.5
         s.redEyeStrength = 0.7
@@ -1533,6 +1549,9 @@ struct EditState: Equatable, Codable {
         result.defringePurple = defringePurple
         result.defringeGreen = defringeGreen
         result.grain = grain
+        // A look is the archetypal reusable look (unlike placement fields such as masks/red-eye points).
+        result.lookID = lookID
+        result.lookIntensity = lookIntensity
         // red-eye correction INTENSITY only — `redEyePoints` (where the
         // corrections sit) stays `target`'s own, untouched.
         result.redEyeSize = redEyeSize
@@ -1624,6 +1643,7 @@ extension EditState {
         case sharpness
         case defringePurple, defringeGreen
         case grain
+        case lookID, lookIntensity
         case boostAmount
         case rawExposureEV, shadowBoostScale, rawWhiteBalanceNeutralPoints
         case rawLuminanceNoiseReductionAdjust, rawColorNoiseReductionScale, rawSharpnessScale
@@ -1759,6 +1779,8 @@ extension EditState {
         defringePurple = try container.decodeIfPresent(Double.self, forKey: .defringePurple) ?? 0
         defringeGreen = try container.decodeIfPresent(Double.self, forKey: .defringeGreen) ?? 0
         grain = try container.decodeIfPresent(Double.self, forKey: .grain) ?? 0
+        lookID = (try? container.decodeIfPresent(String.self, forKey: .lookID)) ?? ""
+        lookIntensity = try container.decodeIfPresent(Double.self, forKey: .lookIntensity) ?? 1.0
         boostAmount = try container.decodeIfPresent(Double.self, forKey: .boostAmount) ?? 1.0
         rawExposureEV = try container.decodeIfPresent(Double.self, forKey: .rawExposureEV) ?? 0
         shadowBoostScale = try container.decodeIfPresent(Double.self, forKey: .shadowBoostScale) ?? 1.0

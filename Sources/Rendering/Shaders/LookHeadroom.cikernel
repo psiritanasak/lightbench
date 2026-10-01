@@ -1,0 +1,16 @@
+// Look headroom — re-adds the part of a pixel a 3D LUT cannot see.
+//
+// A LUT is defined on 0...1 only, but this pipeline carries values outside it (highlights above 1 that later
+// sliders can still recover, small negatives from earlier stages). `EditPipeline.applyLook` therefore feeds the
+// LUT a CLAMPED copy and this kernel puts the excess back:
+//
+//     out = lut(clamp(x)) + (x - clamp(x))
+//
+// For in-gamut pixels the second term is exactly 0, so the look is the LUT; above 1 the output continues with
+// slope 1 from lut(1) instead of going flat. All three inputs are premultiplied and share one alpha (the LUT
+// and the clamp both preserve it), so the same arithmetic on premultiplied values equals the arithmetic on
+// straight values scaled by alpha — no unpremultiply is needed. Built-in blend modes cannot express this:
+// MEASURED, `CISubtractBlendMode` clamps its result to >= 0 and `CIAdditionCompositing` also sums the alphas.
+kernel vec4 lookHeadroom(__sample mapped, __sample original, __sample clamped) {
+    return vec4(mapped.rgb + (original.rgb - clamped.rgb), mapped.a);
+}

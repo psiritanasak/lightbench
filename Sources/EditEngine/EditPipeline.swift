@@ -134,6 +134,59 @@ enum EditPipeline {
         return image
     }
 
+    // MARK: - Look (LUT profile)
+
+    /// A look that resolves AND is blended in. An id nobody can resolve is inactive (fail-open), so a sidecar
+    /// naming a missing user look still renders. Non-finite/zero intensity is inactive too.
+    private static func lookActive(_ state: EditState) -> Bool {
+        !state.lookID.isEmpty
+            && state.lookIntensity.isFinite && state.lookIntensity > 0
+            && LookLibrary.shared.cube(for: state.lookID) != nil
+    }
+
+    /// Applies the look's 3D LUT to PERCEPTUAL (sRGB-gamma) values. `CIColorCube` — NOT
+    /// `CIColorCubeWithColorSpace` — because that variant converts from the (linear) working space into a color
+    /// space first, and this image is ALREADY gamma-encoded (`encodeToPerceptual`): it would encode twice.
+    /// The cube is domain-limited to 0...1 while this pipeline carries values outside it, so the in-gamut part
+    /// goes through the LUT and the excess (`x - clamp(x)`) is added back: highlights above 1 and shadows
+    /// below 0 survive for the user's later sliders instead of being clipped by the look.
+    private static func applyLook(_ state: EditState, to image: CIImage) -> CIImage {
+        guard let cube = LookLibrary.shared.cube(for: state.lookID) else { return image }
+        let extent = image.extent
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = image
+        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+        clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+        guard let inGamut = clamp.outputImage else { return image }
+
+        let lut = CIFilter.colorCube()
+        lut.inputImage = inGamut
+        lut.cubeDimension = Float(cube.size)
+        lut.cubeData = cube.data
+        guard let mapped = lut.outputImage else { return image }
+
+        var looked = mapped
+        if let kernel = lookHeadroomKernel,
+           let withHeadroom = kernel.apply(extent: extent, arguments: [mapped, image, inGamut]) {
+            looked = withHeadroom
+        }
+        let amount = min(max(state.lookIntensity, 0), 1)
+        guard amount < 1 else { return looked.cropped(to: extent) }
+        let mix = CIFilter.mix()
+        mix.inputImage = looked
+        mix.backgroundImage = image
+        mix.amount = Float(amount)
+        return (mix.outputImage ?? looked).cropped(to: extent)
+    }
+
+    /// `LookHeadroom.cikernel`: `mapped + (original - clamped)`. `nil` degrades to the clamped LUT result.
+    private static let lookHeadroomKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "LookHeadroom", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
     // MARK: - White Balance
 
     /// Chromatic-adaptation white points, in Kelvin, for Core Image's
@@ -245,8 +298,14 @@ enum EditPipeline {
     /// as 1.25392. Don't assume one adjustment's clamp behavior carries to
     /// another; each was verified independently.
     ///
-    /// Order inside the sandwich matters and is NOT arbitrary: brightness
-    /// runs FIRST (right after encode) — measured non-commuting with contrast
+    /// The look (a 3D LUT profile, `applyLook`) is the very first thing in the sandwich: a profile is the base
+    /// rendering the sliders then act on (Lightroom's profile-before-sliders convention). MEASURED non-commuting
+    /// with Contrast — look-then-contrast vs contrast-then-look differ by 0.017 on (0.4, 0.25, 0.15) with Warm Film
+    /// and contrast 0.5, ~8.5x this suite's 0.002 tolerance — so the order is observable, but it is a PRODUCT
+    /// convention (matching Lightroom), not something the math forces.
+    ///
+    /// Order inside the REMAINING sandwich (Levels, then brightness, …) matters and is NOT arbitrary: brightness
+    /// runs right after Levels — measured non-commuting with contrast
     /// (brightness→contrast = 0.56524 vs contrast→brightness = 0.41565 for
     /// the same inputs) — placing it adjacent to Exposure in "overall
     /// lightness" role, before contrast/curves/HSL shape tones further.
@@ -292,10 +351,14 @@ enum EditPipeline {
             || effective.saturation != 0
             || state.blackAndWhite
             || colorGradingActive(state)
+            || lookActive(state)
         else { return image }
 
         var img = encodeToPerceptual(image)
-        // Levels runs FIRST — MEASURED non-commuting with Brightness (a
+        // The look runs FIRST in the perceptual stage, before Levels: a profile is the base rendering the
+        // user's own sliders then act on (Lightroom's Profile-before-sliders order).
+        if lookActive(state) { img = applyLook(state, to: img) }
+        // Levels runs first among the slider stages (right after the look) — MEASURED non-commuting with Brightness (a
         // 0.0119 gap between levels-then-brightness and the reverse — real
         // and well above this file's 0.002 test tolerance, though smaller
         // than brightness/contrast's own 0.15 gap), so this order is a real

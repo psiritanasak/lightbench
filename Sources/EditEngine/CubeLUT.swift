@@ -8,6 +8,9 @@ struct CubeLUT: Equatable, Sendable {
     /// `size * size * size * 4` floats (R, G, B, A=1 per entry).
     let table: [Float]
     var title: String?
+    /// The table as raw Float32 bytes for `CIColorCube.cubeData`, built ONCE (a render builds a filter per
+    /// frame; re-copying ~575 KB each time would be wasteful).
+    let data: Data
 
     static let sizeRange = 2...65
 
@@ -16,6 +19,7 @@ struct CubeLUT: Equatable, Sendable {
         self.size = size
         self.table = table
         self.title = title
+        self.data = table.withUnsafeBufferPointer { Data(buffer: $0) }
     }
 
     /// The identity cube: every entry maps to its own coordinate.
@@ -43,9 +47,6 @@ struct CubeLUT: Equatable, Sendable {
         }
         return CubeLUT(size: size, table: table, title: title)
     }
-
-    /// The cube as raw Float32 bytes for `CIColorCubeWithColorSpace.cubeData`.
-    var data: Data { table.withUnsafeBufferPointer { Data(buffer: $0) } }
 
     /// CPU trilinear lookup (inputs clamped to 0...1) — the reference the render tests compare against.
     func sample(_ rgb: SIMD3<Float>) -> SIMD3<Float> {

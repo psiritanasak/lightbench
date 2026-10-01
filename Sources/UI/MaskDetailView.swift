@@ -198,11 +198,24 @@ struct MaskDetailView: View {
         }
     }
 
-    /// Everything the subject kind has: Invert (select the background instead) and Recompute. The
-    /// selection itself is a persisted Vision raster, so there is no geometry to adjust (v1: no feather,
-    /// no per-person choice — see IMPROVEMENTS.md).
+    /// Everything the subject kind has: Feather, a Subjects list (2+ detected), Invert and Recompute. The
+    /// selection itself is persisted Vision rasters, so there is no geometry to adjust.
     private var subjectShapeRows: some View {
         Group {
+            EditSliderRow(
+                label: "Feather", value: subjectFeatherBinding,
+                range: 0...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%.0f%%", $0 * 100) }
+            if mask.subjectInstancePNGs.count > 1 {
+                Text("Subjects").font(.caption).foregroundStyle(.secondary)
+                ForEach(Array(mask.subjectInstancePNGs.enumerated()), id: \.offset) { index, png in
+                    HStack {
+                        SubjectSilhouetteThumbnail(png: png)
+                        Toggle("Subject \(index + 1)", isOn: personBinding(index))
+                            .accessibilityLabel("Include Subject \(index + 1)")
+                    }
+                }
+            }
             Toggle("Invert (select background)", isOn: $mask.invertSelection)
                 .accessibilityLabel("Invert Subject Selection")
             Button(isRecomputingSubject ? "Finding…" : "Recompute Subject") {
@@ -215,6 +228,29 @@ struct MaskDetailView: View {
                 Text("No subject stored for this mask.").font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// Guarded at the call site: a NaN/infinite value stored in `EditState` would make every sidecar
+    /// write throw (the Point Color non-finite hazard); the pipeline clamps too, but encoding would fail first.
+    private var subjectFeatherBinding: Binding<Double> {
+        Binding(
+            get: { mask.subjectFeather },
+            set: { mask.subjectFeather = $0.isFinite ? min(max($0, 0), 1) : 0 }
+        )
+    }
+
+    /// Missing entries mean enabled (`Mask.subjectInstanceEnabled`); writing pads the array first.
+    private func personBinding(_ index: Int) -> Binding<Bool> {
+        Binding(
+            get: { index >= mask.subjectInstanceEnabled.count || mask.subjectInstanceEnabled[index] },
+            set: { newValue in
+                var flags = mask.subjectInstanceEnabled
+                while flags.count < mask.subjectInstancePNGs.count { flags.append(true) }
+                guard index < flags.count else { return }
+                flags[index] = newValue
+                mask.subjectInstanceEnabled = flags
+            }
+        )
     }
 
     private var radialShapeRows: some View {
@@ -520,5 +556,37 @@ struct MaskDetailView: View {
                 range: 0...1, identity: 0.5, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
         }
+    }
+}
+
+/// A small silhouette of one detected person (the gray mask on black), decoded once per PNG.
+private struct SubjectSilhouetteThumbnail: View {
+    let png: Data
+    private static let cache: NSCache<NSData, NSImage> = {
+        let cache = NSCache<NSData, NSImage>()
+        cache.countLimit = 32 // a decoded 1024px image is ~1 MB
+        return cache
+    }()
+
+    private var image: NSImage? {
+        let key = png as NSData
+        if let hit = Self.cache.object(forKey: key) { return hit }
+        guard let decoded = NSImage(data: png) else { return nil }
+        Self.cache.setObject(decoded, forKey: key)
+        return decoded
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().interpolation(.medium).aspectRatio(contentMode: .fit)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: 40, height: 40)
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .accessibilityHidden(true)
     }
 }

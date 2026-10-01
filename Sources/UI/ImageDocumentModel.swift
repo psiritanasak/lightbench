@@ -1102,18 +1102,23 @@ final class ImageDocumentModel: ObservableObject {
                 case .failed(let reason):
                     self.subjectMaskMessage = reason
                     completion?(nil)
-                case .mask(let png, let revision):
+                case .mask(let instances, let revision):
                     self.finalizePendingCommit()
                     var next = self.editState
                     var affected: UUID?
                     if let maskID, let index = next.masks.firstIndex(where: { $0.id == maskID && $0.kind == .subject }) {
-                        next.masks[index].subjectMaskPNG = png
+                        // Replace the whole selection set: the instance count/order can change, so the old
+                        // enabled flags (and any legacy union PNG, which instances would not override
+                        // the other way round) must not survive. Feather/invert are kept.
+                        next.masks[index].subjectInstancePNGs = instances
+                        next.masks[index].subjectMaskPNG = nil
+                        next.masks[index].subjectInstanceEnabled = []
                         next.masks[index].subjectMaskRevision = revision
                         affected = maskID
                     } else if maskID == nil {
                         var mask = Mask()
                         mask.kind = .subject
-                        mask.subjectMaskPNG = png
+                        mask.subjectInstancePNGs = instances
                         mask.subjectMaskRevision = revision
                         next.masks.append(mask)
                         affected = mask.id

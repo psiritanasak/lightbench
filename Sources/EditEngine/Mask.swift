@@ -31,7 +31,8 @@ enum MaskKind: String, Codable {
     case luminanceRange
     case colorRange
     /// AI subject selection (Vision `VNGenerateForegroundInstanceMaskRequest`): the selection is a
-    /// persisted raster (`Mask.subjectMaskPNG`), not parameters. See `docs/ROADMAP_HISTORY.md`'s
+    /// persisted rasters (`Mask.subjectInstancePNGs`; `subjectMaskPNG` is the legacy single-union field,
+    /// read for old masks but no longer written), not parameters. See `docs/ROADMAP_HISTORY.md`'s
     /// Vision spike entry.
     case subject
 }

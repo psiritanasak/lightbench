@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 import Vision
 
 /// Runs Apple's on-device foreground-instance segmentation (`VNGenerateForegroundInstanceMaskRequest`)
-/// and packages the result for `Mask.subjectMaskPNG`. The ONLY file in the project that imports Vision.
+/// and packages the result for `Mask.subjectInstancePNGs`. The ONLY file in the project that imports Vision.
 /// Feasibility numbers (latency, native 512x512 mask, determinism, empty-result behavior) are in
 /// `docs/ROADMAP_HISTORY.md`'s Vision spike entry and pinned by `VisionSubjectMaskProbeTests`.
 ///
@@ -14,7 +14,8 @@ import Vision
 /// expects), in the frame of the image that was passed in — which must be the UNEDITED, oriented source.
 enum SubjectMaskGenerator {
     enum Result: Equatable {
-        case mask(png: Data, revision: Int)
+        /// One PNG per person/object, ordered left-to-right (see `Mask.subjectInstancePNGs`).
+        case mask(instances: [Data], revision: Int)
         /// Vision ran and found no foreground subject (nil observation) or an all-empty mask.
         case noSubject
         case failed(String)
@@ -23,6 +24,9 @@ enum SubjectMaskGenerator {
     /// Long-side cap for the image handed to Vision AND for the stored raster. The raster is
     /// stretched over the photo at render time, so more pixels only add sidecar bytes.
     static let maxLongSide: CGFloat = 1024
+
+    /// Most people/objects kept per mask (largest by area); bounds the sidecar size.
+    static let maxInstances = 8
 
     private static let context = CIContext(options: [.cacheIntermediates: false])
 
@@ -55,16 +59,49 @@ enum SubjectMaskGenerator {
         }
         guard let observation = request.results?.first, !observation.allInstances.isEmpty else { return .noSubject }
 
-        let buffer: CVPixelBuffer
-        do {
-            buffer = try observation.generateScaledMaskForImage(forInstances: observation.allInstances, from: handler)
-        } catch {
-            return .failed("Couldn't build the subject mask: \(error.localizedDescription)")
+        // One soft mask PER instance (Vision refines each against the full-resolution image, unlike its
+        // blocky native label map), so the user can include/exclude people later.
+        struct Candidate { var gray: Gray; var mass: Double; var centroidX: Double }
+        var candidates: [Candidate] = []
+        for index in observation.allInstances {
+            // One instance failing to refine must not throw away the ones that worked.
+            guard let buffer = try? observation.generateScaledMaskForImage(forInstances: IndexSet(integer: index), from: handler),
+                  let gray = quantizedGray(buffer) else { continue }
+            var mass = 0.0, weightedX = 0.0
+            for y in 0..<gray.height {
+                for x in 0..<gray.width {
+                    let v = Double(gray.bytes[y * gray.width + x])
+                    mass += v
+                    weightedX += v * Double(x)
+                }
+            }
+            candidates.append(Candidate(
+                gray: gray, mass: mass, centroidX: mass > 0 ? weightedX / mass / Double(gray.width) : 0))
         }
-        guard let gray = quantizedGray(buffer) else { return .failed("Unexpected subject mask format.") }
-        guard gray.bytes.contains(where: { $0 > 0 }) else { return .noSubject }
-        guard let png = encodePNG(gray) else { return .failed("Couldn't encode the subject mask.") }
-        return .mask(png: png, revision: request.revision) // the revision that actually produced the pixels
+        let pixelCount = candidates.first.map { $0.gray.width * $0.gray.height } ?? 0
+        let kept = selectInstances(
+            candidates.map { (mass: $0.mass, centroidX: $0.centroidX) }, pixelCount: pixelCount, limit: maxInstances
+        ).map { candidates[$0] }
+        guard !kept.isEmpty else { return candidates.isEmpty ? .failed("Couldn't build the subject mask.") : .noSubject }
+        var pngs: [Data] = []
+        for instance in kept {
+            guard let png = encodePNG(instance.gray) else { return .failed("Couldn't encode the subject mask.") }
+            pngs.append(png)
+        }
+        return .mask(instances: pngs, revision: request.revision) // the revision that actually produced the pixels
+    }
+
+    /// Which candidate instances to keep, as indices into `candidates`, in final (left-to-right) order:
+    /// drops empty instances and specks (under 0.05% of the frame fully selected), keeps the `limit`
+    /// largest by mass, then orders those by `centroidX` so "Subject 1…N" matches the picture. Pure, so
+    /// the cap — which bounds the sidecar size — is unit-testable without Vision.
+    static func selectInstances(
+        _ candidates: [(mass: Double, centroidX: Double)], pixelCount: Int, limit: Int
+    ) -> [Int] {
+        let minimumMass = 0.0005 * 255 * Double(pixelCount)
+        let survivors = candidates.indices.filter { candidates[$0].mass > 0 && candidates[$0].mass >= minimumMass }
+        let largest = survivors.sorted { candidates[$0].mass > candidates[$1].mass }.prefix(max(0, limit))
+        return largest.sorted { candidates[$0].centroidX < candidates[$1].centroidX }
     }
 
     private struct Gray { var width: Int; var height: Int; var bytes: [UInt8] }

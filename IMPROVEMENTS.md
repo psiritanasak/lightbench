@@ -1189,3 +1189,13 @@ the message and raise it from `sheetDidDisappear`.
 - Per-instance refinement costs n x ~20 ms and runs for every instance before the 8-cap.
 - Subject thumbnails: the NSCache is keyed by NSData (equality is byte-exact; hash buckets collide because PNG headers are near-identical — fine at <=32 entries).
 - Generator tests XCTSkip when Vision doesn't return exactly 2 instances for the synthetic two-figure fixture; they could silently stop running on another OS/Vision revision.
+
+
+### D45. Looks (LUT profiles) v1 follow-ups (2026-10-02) — open, low/medium
+- **A user look this Mac doesn't have renders as NO look everywhere** (fail-open by design so sidecars from other machines still open). The Editor shows "Look not found", but Export, Enhance and Library thumbnails silently produce output without it. Consider warning/refusing in Export/Enhance when `lookID` is non-empty but unresolved. User ids are content-addressed (`user:<hash>`), so importing the same `.cube` bytes on any Mac restores it.
+- **Removing an imported look leaves stale Library thumbnails** for photos that used it (cache not invalidated); the open photo is switched to None explicitly.
+- **Auto Tone / Fix Color Cast sample via `geometryOnlySamplingState`, which drops the look**, so Auto solves against the image BEFORE the look (Lightroom's Auto takes the profile into account).
+- **No live thumbnails per look** in the picker (text rows only).
+- `.cube` limits: only 0-1 domain (DOMAIN_MIN/MAX/LUT_3D_INPUT_RANGE other than 0 1 rejected), out-of-range entries clamp, 1D LUTs rejected, sizes 2-65.
+- Look math is not pinned per photo: retuning a built-in look changes existing edits (same as `kMaxTransformAspectStretch`).
+- `loadAll()` runs synchronously on the main thread at launch (needed for ordering); many large LUTs would slow launch.

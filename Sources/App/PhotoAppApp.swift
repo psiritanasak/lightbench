@@ -34,6 +34,12 @@ struct PhotoAppApp: App {
     /// Scene-level command can't read a view's private state.
     @State private var showLibrary = false
 
+    init() {
+        // User looks must be registered BEFORE any render (Editor, thumbnails, export): an unresolved look renders
+        // as no look, which would silently disagree with the Editor. Synchronous on purpose.
+        LookStore.shared.loadAll()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView(

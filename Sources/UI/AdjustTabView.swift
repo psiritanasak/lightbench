@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The Adjust panel's presentation-only state, grouped so `ContentView` can
 /// own it as ONE `@State` and pass it down.
@@ -49,6 +50,9 @@ struct AdjustPanelState {
     /// reasoning as the six section bools above — must survive a Crop tab
     /// round-trip.
     var isPresetsSectionExpanded = false
+
+    /// Whether the Looks (LUT profile) section is expanded. Same reasoning as every other section bool.
+    var isLooksSectionExpanded = false
 
     /// History panel: whether the "History" section is expanded. Same
     /// reasoning as every other section bool above — also means the row
@@ -145,6 +149,10 @@ struct AdjustTabView: View {
     /// the persistent section-expansion bools, there's no round-trip to
     /// preserve here.
     @State private var isPresentingSaveAlert = false
+    /// Bumped after a look is imported/removed: `LookLibrary` is not observable, so the Looks list re-reads it
+    /// when this changes.
+    @State private var looksRevision = 0
+    @State private var lookImportMessage: String?
     @State private var newPresetName = ""
 
     /// Routes to the currently-selected Selective Color band's Hue field —
@@ -270,6 +278,7 @@ struct AdjustTabView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
+            looksSectionContainer
             AdjustSectionContainer(icon: "sun.max", title: "Light", isExpanded: $panel.isLightSectionExpanded) {
                 lightSection
             }
@@ -1463,6 +1472,138 @@ struct AdjustTabView: View {
     /// type-checker failure from packing too much into one `@ViewBuilder`
     /// closure (the toolbar's `.toolbar {}`), so this stays a flat list of
     /// plain rows.
+    // MARK: - Looks
+
+    /// First section in the sidebar: a look is the base rendering the sliders below it act on (the pipeline
+    /// applies it before them). One computed property so `body`'s already-long `VStack` gains a single child.
+    private var looksSectionContainer: some View {
+        Group {
+            AdjustSectionContainer(icon: "camera.filters", title: "Looks", isExpanded: $panel.isLooksSectionExpanded) {
+                looksSection
+            }
+            Divider()
+        }
+    }
+
+    private func selectLook(_ id: String) {
+        document.editState.lookID = id
+        // "None" also restores the non-default intensity to its identity (1), so a cleared look never leaves a
+        // phantom edit behind (`lookIntensity != 1` with no look renders as identity but counts as edited).
+        if id.isEmpty { document.editState.lookIntensity = 1 }
+    }
+
+    private func lookRow(id: String, name: String, onDelete: (() -> Void)? = nil) -> some View {
+        let isSelected = document.editState.lookID == id
+        return HStack {
+            Button {
+                selectLook(id)
+            } label: {
+                HStack {
+                    Image(systemName: "checkmark").opacity(isSelected ? 1 : 0).frame(width: 14)
+                    Text(name)
+                }
+            }
+            .buttonStyle(.plain)
+            .fontWeight(isSelected ? .semibold : .regular)
+            .accessibilityLabel(id.isEmpty ? "No look" : "Look \(name)")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+            Spacer()
+            if let onDelete {
+                Button(action: onDelete) { Image(systemName: "trash") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                    .accessibilityLabel("Remove look \(name)")
+            }
+        }
+    }
+
+    private var looksSection: some View {
+        let _ = looksRevision // re-read `LookLibrary` after an import/remove
+        let current = document.editState.lookID
+        let userLooks = LookLibrary.shared.userLooks
+        return Group {
+            lookRow(id: "", name: "None")
+            ForEach(BuiltInLooks.all, id: \.id) { look in
+                lookRow(id: look.id, name: look.name)
+            }
+            if !userLooks.isEmpty {
+                Text("Imported").font(.caption).foregroundStyle(.secondary)
+                ForEach(userLooks, id: \.id) { look in
+                    lookRow(id: look.id, name: look.name) { removeUserLook(look) }
+                }
+            }
+            if !current.isEmpty, LookLibrary.shared.cube(for: current) == nil {
+                // A sidecar can name a look this Mac doesn't have (another machine, a removed file): it renders
+                // as no look and must be visible as such, not silently ignored.
+                Text("Look not found — this photo uses a look that isn't installed. It is shown without it.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if !current.isEmpty {
+                EditSliderRow(
+                    label: "Intensity", value: lookIntensityBinding,
+                    range: 0...1, identity: 1, displayMultiplier: 100
+                ) { String(format: "%.0f%%", $0 * 100) }
+            }
+            Button("Import .cube…") { importLookFile() }
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel("Import Look")
+                .alert(
+                    "Import Look",
+                    isPresented: Binding(get: { lookImportMessage != nil }, set: { if !$0 { lookImportMessage = nil } })
+                ) {
+                    Button("OK") {}
+                } message: {
+                    Text(lookImportMessage ?? "")
+                }
+        }
+    }
+
+    /// Guarded at the call site against non-finite values (a NaN stored in `EditState` would make every
+    /// sidecar write throw — the Point Color hazard).
+    private var lookIntensityBinding: Binding<Double> {
+        Binding(
+            get: { document.editState.lookIntensity },
+            set: { document.editState.lookIntensity = $0.isFinite ? min(max($0, 0), 1) : 1 }
+        )
+    }
+
+    private func importLookFile() {
+        let panel = NSOpenPanel()
+        panel.title = "Import a .cube LUT"
+        panel.prompt = "Import"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        if let cube = UTType(filenameExtension: "cube") { panel.allowedContentTypes = [cube] }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let look = try LookStore.shared.importCube(from: url)
+            looksRevision += 1
+            lookImportMessage = "Imported \"\(look.name)\"."
+            selectLook(look.id)
+        } catch {
+            lookImportMessage = error.localizedDescription
+        }
+    }
+
+    private func removeUserLook(_ look: LookLibrary.UserLook) {
+        let alert = NSAlert()
+        alert.messageText = "Remove \"\(look.name)\"?"
+        alert.informativeText = "Photos that use this look will render without it (also in Export) until it is imported again."
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try LookStore.shared.remove(id: look.id)
+            // The open photo's canvas would keep showing the removed look (nothing in `editState` changed), so
+            // switch it to None explicitly — one visible, undoable history step.
+            if document.editState.lookID == look.id { selectLook("") }
+            looksRevision += 1
+        } catch {
+            lookImportMessage = error.localizedDescription
+        }
+    }
+
     private var presetsSection: some View {
         Group {
             Button("Save Preset…") {
@@ -1675,6 +1816,8 @@ struct AdjustTabView: View {
             && state.defringePurple == 0
             && state.defringeGreen == 0
             && state.grain == 0
+            && state.lookID.isEmpty
+            && state.lookIntensity == 1
             && state.redEyeSize == 0.5
             && state.redEyeStrength == 0.7
     }
@@ -1726,6 +1869,8 @@ struct AdjustTabView: View {
             document.editState.defringePurple = 0
             document.editState.defringeGreen = 0
             document.editState.grain = 0
+            document.editState.lookID = ""
+            document.editState.lookIntensity = 1
             document.editState.redEyeSize = 0.5
             document.editState.redEyeStrength = 0.7
         } label: {

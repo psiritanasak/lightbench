@@ -958,7 +958,7 @@ struct EditState: Equatable, Codable {
     // MARK: - Look (LUT profile)
 
     /// The creative look applied before the user's own adjustments, `""` = none. Built-in ids are
-    /// `builtin:<slug>` (`BuiltInLooks`), imported `.cube` files `user:<sha256-12>-<name>` (content-addressed,
+    /// `builtin:<slug>` (`BuiltInLooks`), imported `.cube` files `user:<sha256-12>` (purely content-addressed,
     /// so an id always means the same pixels). An id this machine cannot resolve renders as NO look (fail-open:
     /// a sidecar from a machine that had a look this one lacks must still open) — the UI shows it as missing.
     /// Purely additive: absent key decodes to `""`.

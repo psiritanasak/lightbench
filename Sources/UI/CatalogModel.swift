@@ -51,6 +51,10 @@ final class CatalogModel: ObservableObject {
     /// each cell's collection-membership checkmarks a synchronous
     /// dictionary lookup.
     @Published private(set) var membershipsByPhotoID: [Int64: Set<Int64>] = [:]
+    /// All keywords, sorted case-insensitively by name (refreshed with everything else).
+    @Published private(set) var keywords: [Keyword] = []
+    /// photoID → the keyword ids on it; same role/discipline as `membershipsByPhotoID`.
+    @Published private(set) var keywordIDsByPhotoID: [Int64: Set<Int64>] = [:]
     /// Which photos are checked in the Library grid, for batch export —
     /// pure in-memory UI state (unlike every other `@Published` mutation
     /// in this class, this never touches the database, so it needs no
@@ -100,6 +104,8 @@ final class CatalogModel: ObservableObject {
     @Published var minimumRating: Int = 0
     @Published var flagFilter: LibraryFlagFilter = .all
     @Published var labelFilter: LibraryLabelFilter = .all
+    /// The keyword the grid is filtered to; `nil` = no keyword filter.
+    @Published var keywordFilterID: Int64?
     @Published var searchText: String = ""
 
     /// What the Library grid actually renders — `photos` (the
@@ -115,8 +121,18 @@ final class CatalogModel: ObservableObject {
         LibraryFilterSort.apply(
             to: photos, sort: sortOption, minimumRating: minimumRating,
             flagFilter: flagFilter, searchText: searchText,
-            labelFilter: labelFilter
+            labelFilter: labelFilter,
+            keywordFilter: keywordFilterID.map { [$0] },
+            keywordIDsByPhotoID: keywordIDsByPhotoID,
+            keywordNamesByPhotoID: keywordNamesForSearch
         )
+    }
+
+    /// photoID → keyword names, built only while a search is active (the only reader).
+    private var keywordNamesForSearch: [Int64: [String]] {
+        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
+        let namesByID = Dictionary(uniqueKeysWithValues: keywords.compactMap { keyword in keyword.id.map { ($0, keyword.name) } })
+        return keywordIDsByPhotoID.mapValues { $0.compactMap { namesByID[$0] } }
     }
 
     /// Resets all five sort/filter/search fields to their defaults — the
@@ -127,6 +143,7 @@ final class CatalogModel: ObservableObject {
         minimumRating = 0
         flagFilter = .all
         labelFilter = .all
+        keywordFilterID = nil
         searchText = ""
     }
 
@@ -372,6 +389,11 @@ final class CatalogModel: ObservableObject {
             let memberships = try await database.allMemberships()
             membershipsByPhotoID = Dictionary(grouping: memberships, by: \.photoId)
                 .mapValues { Set($0.map(\.collectionId)) }
+            let loadedKeywords = try await database.allKeywords()
+            let keywordLinks = try await database.allKeywordLinks()
+            keywords = Self.sortedKeywords(loadedKeywords)
+            keywordIDsByPhotoID = Dictionary(grouping: keywordLinks, by: \.photoId)
+                .mapValues { Set($0.map(\.keywordId)) }
             switch selectedFilter {
             case .allPhotos:
                 photos = try await database.allPhotos()
@@ -937,9 +959,64 @@ final class CatalogModel: ObservableObject {
         photos.removeAll { $0.id == id }
         selectedPhotoIDs.remove(id)
         membershipsByPhotoID.removeValue(forKey: id)
+        keywordIDsByPhotoID.removeValue(forKey: id)
         invalidateThumbnail(for: URL(fileURLWithPath: photo.path))
         Task.detached { [weak self] in
             do { try await database.deletePhoto(id: id) } catch { await self?.refresh() }
+        }
+    }
+
+    // MARK: - Keywords
+
+    static func sortedKeywords(_ list: [Keyword]) -> [Keyword] {
+        list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// How many photos carry `keywordID` (the filter picker's count) — across the whole catalog.
+    func photoCount(forKeyword keywordID: Int64) -> Int {
+        keywordIDsByPhotoID.values.reduce(0) { $0 + ($1.contains(keywordID) ? 1 : 0) }
+    }
+
+    /// Adds the keywords parsed from `input` (see `KeywordName.parse`) to `photoIDs`. The write
+    /// finds-or-creates keywords, so ids are only known afterwards: this one updates state from
+    /// the database result instead of guessing locally. Returns the parsed names (empty = nothing typed).
+    @discardableResult
+    func addKeywords(_ input: String, to photoIDs: [Int64]) -> [String] {
+        let names = KeywordName.parse(input)
+        guard let database, !names.isEmpty else { return names }
+        Task { [weak self] in
+            // No local guess: find-or-create gives ids only now, and refresh() replaces the maps wholesale.
+            _ = try? await database.addKeywords(names, to: photoIDs)
+            await self?.refresh()
+        }
+        return names
+    }
+
+    /// Detaches `keywordID` from `photoIDs` — local-first like `setRating`.
+    func removeKeyword(id keywordID: Int64, from photoIDs: [Int64]) {
+        guard let database else { return }
+        for photoID in photoIDs {
+            keywordIDsByPhotoID[photoID]?.remove(keywordID)
+            if keywordIDsByPhotoID[photoID]?.isEmpty == true { keywordIDsByPhotoID.removeValue(forKey: photoID) }
+        }
+        Task.detached { [weak self] in
+            do { try await database.removeKeyword(id: keywordID, from: photoIDs) } catch { await self?.refresh() }
+        }
+    }
+
+    /// Deletes the keyword everywhere (its links cascade). Clears the filter if it pointed at it. `refresh()`
+    /// deliberately does NOT clear a dangling `keywordFilterID` (a stale in-flight read could wrongly drop a
+    /// just-chosen filter); this is the only place a keyword disappears.
+    func deleteKeyword(id keywordID: Int64) {
+        guard let database else { return }
+        keywords.removeAll { $0.id == keywordID }
+        for photoID in Array(keywordIDsByPhotoID.keys) {
+            keywordIDsByPhotoID[photoID]?.remove(keywordID)
+            if keywordIDsByPhotoID[photoID]?.isEmpty == true { keywordIDsByPhotoID.removeValue(forKey: photoID) }
+        }
+        if keywordFilterID == keywordID { keywordFilterID = nil }
+        Task.detached { [weak self] in
+            do { try await database.deleteKeyword(id: keywordID) } catch { await self?.refresh() }
         }
     }
 

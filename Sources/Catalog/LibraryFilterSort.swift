@@ -94,16 +94,31 @@ enum LibraryFilterSort {
     ///     match — matches the Photos/Lightroom convention. `0` means no
     ///     rating filter at all (includes unrated photos).
     ///   - searchText: case-insensitive substring match against
-    ///     `filename`, trimmed of leading/trailing whitespace first; an
+    ///     `filename` or any keyword name (see `keywordNamesByPhotoID`), trimmed of leading/trailing whitespace first; an
     ///     empty (or whitespace-only) string means no search filter.
     ///   - labelFilter: which color label(s) to keep; `.all` (the default)
     ///     means no label filter.
+    ///   - keywordFilter: the keyword ids a photo must carry (ANY of them
+    ///     matches); `nil` (the default) means no keyword filter. A photo
+    ///     with no entry in `keywordIDsByPhotoID` carries none.
+    ///   - keywordNamesByPhotoID: each photo's keyword display names, so
+    ///     the search box also matches keywords (substring, case-insensitive,
+    ///     like filenames). Only consulted when `searchText` is non-empty.
     static func apply(
         to photos: [Photo], sort: LibrarySortOption,
         minimumRating: Int, flagFilter: LibraryFlagFilter, searchText: String,
-        labelFilter: LibraryLabelFilter = .all
+        labelFilter: LibraryLabelFilter = .all,
+        keywordFilter: Set<Int64>? = nil,
+        keywordIDsByPhotoID: [Int64: Set<Int64>] = [:],
+        keywordNamesByPhotoID: [Int64: [String]] = [:]
     ) -> [Photo] {
         var result = photos
+        if let keywordFilter {
+            result = result.filter { photo in
+                guard let id = photo.id, let own = keywordIDsByPhotoID[id] else { return false }
+                return !own.isDisjoint(with: keywordFilter)
+            }
+        }
         if labelFilter != .all {
             result = result.filter { labelFilter.matches($0.colorLabel) }
         }
@@ -115,7 +130,11 @@ enum LibraryFilterSort {
         }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
-            result = result.filter { $0.filename.localizedCaseInsensitiveContains(query) }
+            result = result.filter { photo in
+                if photo.filename.localizedCaseInsensitiveContains(query) { return true }
+                guard let id = photo.id else { return false }
+                return keywordNamesByPhotoID[id, default: []].contains { $0.localizedCaseInsensitiveContains(query) }
+            }
         }
         switch sort {
         case .dateOldest:

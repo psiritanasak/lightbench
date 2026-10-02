@@ -220,6 +220,78 @@ final class CatalogModelTests: XCTestCase {
         }
     }
 
+    // MARK: - Keywords
+
+    func testAddKeywordsReachesStateAndDatabaseAndReturnsParsedNames() async throws {
+        let model = await makeModel()
+        let ids = model.photos.compactMap(\.id)
+        let names = model.addKeywords("Sky, Test Trip; sky", to: Array(ids.prefix(2)))
+        XCTAssertEqual(names, ["Sky", "Test Trip"])
+        try await waitUntil("keywords in model state") {
+            model.keywords.count == 2 && model.keywordIDsByPhotoID.count == 2
+        }
+        let links = try await database.allKeywordLinks().count
+        XCTAssertEqual(links, 4)
+    }
+
+    func testKeywordFilterKeepsOnlyTaggedPhotosAndClearFiltersResetsIt() async throws {
+        let model = await makeModel()
+        let ids = model.photos.compactMap(\.id)
+        model.addKeywords("Sky", to: [ids[0]])
+        try await waitUntil("keyword loaded") { model.keywords.count == 1 }
+        model.keywordFilterID = model.keywords[0].id
+        XCTAssertEqual(model.displayedPhotos.compactMap(\.id), [ids[0]])
+        model.clearLibraryFilters()
+        XCTAssertNil(model.keywordFilterID)
+        XCTAssertEqual(model.displayedPhotos.count, ids.count)
+    }
+
+    func testSearchMatchesKeywordNames() async throws {
+        let model = await makeModel()
+        let ids = model.photos.compactMap(\.id)
+        model.addKeywords("Sunset", to: [ids[1]])
+        try await waitUntil("keyword loaded") { model.keywords.count == 1 }
+        model.searchText = "sunse"
+        XCTAssertEqual(model.displayedPhotos.compactMap(\.id), [ids[1]])
+    }
+
+    func testRemoveKeywordIsLocalFirstAndPersists() async throws {
+        let model = await makeModel()
+        let ids = model.photos.compactMap(\.id)
+        model.addKeywords("Sky", to: ids)
+        try await waitUntil("linked") { model.keywordIDsByPhotoID.count == ids.count }
+        let keywordID = try XCTUnwrap(model.keywords.first?.id)
+        model.removeKeyword(id: keywordID, from: [ids[0]])
+        XCTAssertNil(model.keywordIDsByPhotoID[ids[0]], "no await: local state updates synchronously")
+        try await waitUntil("removal in database") {
+            try await self.database.allKeywordLinks().count == ids.count - 1
+        }
+    }
+
+    func testDeleteKeywordClearsStateAndFilter() async throws {
+        let model = await makeModel()
+        let ids = model.photos.compactMap(\.id)
+        model.addKeywords("Sky", to: ids)
+        try await waitUntil("linked") { model.keywordIDsByPhotoID.count == ids.count }
+        let keywordID = try XCTUnwrap(model.keywords.first?.id)
+        model.keywordFilterID = keywordID
+        model.deleteKeyword(id: keywordID)
+        XCTAssertTrue(model.keywords.isEmpty)
+        XCTAssertTrue(model.keywordIDsByPhotoID.isEmpty)
+        XCTAssertNil(model.keywordFilterID)
+        try await waitUntil("delete in database") { try await self.database.allKeywords().isEmpty }
+    }
+
+    func testRemovePhotoPrunesItsKeywordLinks() async throws {
+        let model = await makeModel()
+        let photo = try XCTUnwrap(model.photos.first)
+        let id = try XCTUnwrap(photo.id)
+        model.addKeywords("Sky", to: [id])
+        try await waitUntil("linked") { model.keywordIDsByPhotoID[id] != nil }
+        model.removePhoto(photo)
+        XCTAssertNil(model.keywordIDsByPhotoID[id])
+    }
+
     // MARK: - Presets (Phase 5 slice 2)
 
     func testCreatePresetPersistsAndAppearsInThePublishedList() async throws {

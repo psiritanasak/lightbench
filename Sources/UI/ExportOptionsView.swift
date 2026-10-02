@@ -43,6 +43,12 @@ struct ExportOptionsView: View {
                 }
             }
 
+            Picker("Sharpening", selection: $exportModel.settings.sharpening) {
+                ForEach(ExportSharpening.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+
             VStack(alignment: .leading, spacing: 4) {
                 Picker("Metadata", selection: $exportModel.settings.metadata) {
                     ForEach(ExportMetadataPolicy.allCases) { policy in

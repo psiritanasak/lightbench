@@ -112,6 +112,7 @@ final class CatalogDatabase: Sendable {
         Migration008ColorLabels.register(in: &migrator)
         Migration009RenameLog.register(in: &migrator)
         Migration010Keywords.register(in: &migrator)
+        Migration011SmartCollections.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 
@@ -468,6 +469,57 @@ final class CatalogDatabase: Sendable {
     func deletePreset(id: Int64) async throws {
         try await dbQueue.write { db in
             _ = try Preset.filter(Preset.Columns.id == id).deleteAll(db)
+        }
+    }
+
+    // MARK: - Smart collections
+
+    func allSmartCollections() async throws -> [SmartCollection] {
+        try await dbQueue.read { db in try SmartCollection.order(SmartCollection.Columns.name).fetchAll(db) }
+    }
+
+    /// Names follow the keyword rules (`KeywordName.normalize`: trimmed, whitespace collapsed, no control characters)
+    /// and are unique under `KeywordName.key(for:)` — checked here, inside the write transaction, because SQLite's
+    /// NOCASE folds only ASCII. Throws `SmartCollectionError.emptyName` / `.duplicateName`.
+    func createSmartCollection(name: String, criteria: SmartCollectionCriteria) async throws -> SmartCollection {
+        guard let clean = KeywordName.normalize(name) else { throw SmartCollectionError.emptyName }
+        return try await dbQueue.write { db in
+            try Self.requireUniqueSmartName(clean, excluding: nil, in: db)
+            var smart = SmartCollection(id: nil, name: clean, criteria: criteria, createdAt: Date())
+            try smart.insert(db)
+            return smart
+        }
+    }
+
+    func renameSmartCollection(id: Int64, to name: String) async throws {
+        guard let clean = KeywordName.normalize(name) else { throw SmartCollectionError.emptyName }
+        try await dbQueue.write { db in
+            guard var smart = try SmartCollection.fetchOne(db, key: id) else { throw SmartCollectionError.notFound }
+            try Self.requireUniqueSmartName(clean, excluding: id, in: db)
+            smart.name = clean
+            // Only the name column: a full-row update would re-serialise `criteria` through the tolerant decode and
+            // could permanently replace values this build does not understand.
+            try smart.update(db, columns: [SmartCollection.Columns.name])
+        }
+    }
+
+    func updateSmartCollectionCriteria(id: Int64, to criteria: SmartCollectionCriteria) async throws {
+        try await dbQueue.write { db in
+            guard var smart = try SmartCollection.fetchOne(db, key: id) else { throw SmartCollectionError.notFound }
+            smart.criteria = criteria
+            try smart.update(db)
+        }
+    }
+
+    /// Deleting a nonexistent id is a silent no-op, like `deletePreset`.
+    func deleteSmartCollection(id: Int64) async throws {
+        try await dbQueue.write { db in _ = try SmartCollection.deleteOne(db, key: id) }
+    }
+
+    private static func requireUniqueSmartName(_ name: String, excluding id: Int64?, in db: Database) throws {
+        let key = KeywordName.key(for: name)
+        for other in try SmartCollection.fetchAll(db) where other.id != id && KeywordName.key(for: other.name) == key {
+            throw SmartCollectionError.duplicateName(other.name)
         }
     }
 

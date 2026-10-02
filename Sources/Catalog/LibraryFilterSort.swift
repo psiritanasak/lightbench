@@ -22,7 +22,7 @@ enum LibrarySortOption: String, CaseIterable, Identifiable, Sendable {
 
 /// Which pick/reject states the Library grid shows. `.all` is the default:
 /// hiding rejects by default would silently hide photos the user has.
-enum LibraryFlagFilter: CaseIterable, Identifiable, Sendable {
+enum LibraryFlagFilter: String, CaseIterable, Identifiable, Sendable, Codable {
     case all, picked, unflagged, rejected, notRejected
 
     var id: Self { self }
@@ -49,7 +49,7 @@ enum LibraryFlagFilter: CaseIterable, Identifiable, Sendable {
 }
 
 /// Which color labels the Library grid shows. `.all` is the default.
-enum LibraryLabelFilter: CaseIterable, Identifiable, Sendable {
+enum LibraryLabelFilter: String, CaseIterable, Identifiable, Sendable, Codable {
     case all, unlabeled, red, yellow, green, blue, purple
 
     var id: Self { self }

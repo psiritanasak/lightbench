@@ -108,17 +108,28 @@ struct PhotoAppApp: App {
                 // independently, not just the toolbar button's copy of it.
                 .disabled(
                     pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight
-                        || renameModel.isWorking || renameModel.isPresentingSheet
+                        || renameModel.isWorking || renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil
                 )
                 Divider()
                 // Batch rename: no default shortcut (matches Enhance). These only REQUEST — `ContentView`
                 // performs the request with its own selection and busy-state providers.
+                // Library-only: it edits the Library SELECTION, which in the Editor may not include the open photo.
+                // Only REQUESTS — `KeywordSheetModifier` drops it while another sheet/dialog is up.
+                Button("Edit Keywords…") { catalog.keywordSheetRequested = true }
+                    .keyboardShortcut("k", modifiers: [.command])
+                    .disabled(
+                        !showLibrary || catalog.selectedPhotos.isEmpty || catalog.keywordSheetPhotoIDs != nil
+                            || renameModel.isWorking || renameModel.isPresentingSheet
+                    )
                 Button("Rename Files…") { renameModel.request = .rename }
-                    .disabled(catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight)
+                    .disabled(
+                        catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight
+                            || catalog.keywordSheetPhotoIDs != nil
+                    )
                 Button("Undo Rename") { renameModel.request = .undo }
                     .disabled(
                         !renameModel.canUndo || renameModel.isWorking || renameModel.isPresentingSheet
-                            || document.isLoadInFlight
+                            || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil
                     )
             }
         }

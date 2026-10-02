@@ -495,9 +495,18 @@ struct LibraryGridView: View {
             }
             .frame(maxWidth: 150)
 
+            Picker("Keyword", selection: $catalog.keywordFilterID) {
+                Text("All Keywords").tag(Int64?.none)
+                let counts = catalog.keywordPhotoCounts
+                ForEach(catalog.keywords) { keyword in
+                    Text("\(keyword.name) (\(counts[keyword.id ?? -1, default: 0]))").tag(keyword.id)
+                }
+            }
+            .frame(maxWidth: 170)
+
             Spacer(minLength: 12)
 
-            TextField("Search filename…", text: $catalog.searchText)
+            TextField("Search filename or keyword…", text: $catalog.searchText)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 220)
         }
@@ -571,7 +580,7 @@ struct LibraryGridView: View {
                 .foregroundStyle(.secondary)
             Text("No photos match")
                 .font(.headline)
-            Text("Try a different search or adjust the rating/flag/label filters.")
+            Text("Try a different search or adjust the rating/flag/label/keyword filters.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

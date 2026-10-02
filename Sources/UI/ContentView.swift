@@ -1009,6 +1009,7 @@ struct ContentView: View {
         // compiler could type-check in reasonable time (measured: this
         // split is what fixed it).
         mainContent
+            .modifier(KeywordSheetModifier(catalog: catalog, blocked: otherSheetIsPresented))
             .alert(
                 "Couldn't Open Image",
                 isPresented: Binding(
@@ -1132,6 +1133,7 @@ struct ContentView: View {
             .onChange(of: renameModel.request) { _, request in
                 guard let request else { return }
                 renameModel.request = nil
+                guard catalog.keywordSheetPhotoIDs == nil else { return }
                 switch request {
                 case .rename:
                     renameModel.begin(photos: selectedPhotosVisibleInGrid, catalog: catalog, providers: renameProviders)
@@ -1151,6 +1153,12 @@ struct ContentView: View {
                     EnhancingHUD()
                 }
             }
+    }
+
+    /// True while any other sheet/dialog a keyword sheet could collide with is up (or a long operation runs).
+    private var otherSheetIsPresented: Bool {
+        renameModel.isPresentingSheet || renameModel.isWorking || exportModel.isPresentingOptions
+            || exportModel.isExporting || pasteModel.pendingTargets != nil
     }
 
     private var mainContent: some View {
@@ -1460,6 +1468,11 @@ struct ContentView: View {
                             Task { await catalog.relocateSelectedPhotos() }
                         }
                         .disabled(selectedPhotosVisibleInGrid.isEmpty || catalog.isRenameInProgress)
+
+                        Button("Edit Keywords (\(selectedPhotosVisibleInGrid.count))…") {
+                            catalog.keywordSheetRequested = true
+                        }
+                        .disabled(selectedPhotosVisibleInGrid.isEmpty || otherSheetIsPresented)
 
                         Button("Rename Files (\(selectedPhotosVisibleInGrid.count))…") {
                             renameModel.begin(photos: selectedPhotosVisibleInGrid, catalog: catalog, providers: renameProviders)

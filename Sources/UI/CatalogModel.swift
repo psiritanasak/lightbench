@@ -104,6 +104,12 @@ final class CatalogModel: ObservableObject {
     @Published var minimumRating: Int = 0
     @Published var flagFilter: LibraryFlagFilter = .all
     @Published var labelFilter: LibraryLabelFilter = .all
+    /// The keyword sheet's snapshot of the photo ids it edits; `nil` = sheet closed. Lives here so the Photo-menu
+    /// item (Scene level) and the Library toolbar reach the same sheet.
+    @Published var keywordSheetPhotoIDs: [Int64]?
+    /// Set by the Photo menu's "Edit Keywords…" (a Scene-level command that can't see the other sheets'
+    /// state); `KeywordSheetModifier` performs it — or drops it while another sheet/dialog is up — then clears it.
+    @Published var keywordSheetRequested = false
     /// The keyword the grid is filtered to; `nil` = no keyword filter.
     @Published var keywordFilterID: Int64?
     @Published var searchText: String = ""
@@ -968,13 +974,24 @@ final class CatalogModel: ObservableObject {
 
     // MARK: - Keywords
 
+    /// Opens the keyword sheet over the selected photos that belong to the current source set (`selectedPhotos`).
+    /// NOT filtered by the search/rating/keyword filters: photos the filters hide stay selected and are edited
+    /// too (same as Rename/Paste), which the sheet title discloses. No-op for an empty selection.
+    func beginEditingKeywords() {
+        let ids = selectedPhotos.compactMap(\.id)
+        guard !ids.isEmpty else { return }
+        keywordSheetPhotoIDs = ids
+    }
+
     static func sortedKeywords(_ list: [Keyword]) -> [Keyword] {
         list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    /// How many photos carry `keywordID` (the filter picker's count) — across the whole catalog.
-    func photoCount(forKeyword keywordID: Int64) -> Int {
-        keywordIDsByPhotoID.values.reduce(0) { $0 + ($1.contains(keywordID) ? 1 : 0) }
+    /// keywordID → how many photos carry it, across the whole catalog. One pass; callers build it once per render.
+    var keywordPhotoCounts: [Int64: Int] {
+        var counts: [Int64: Int] = [:]
+        for set in keywordIDsByPhotoID.values { for id in set { counts[id, default: 0] += 1 } }
+        return counts
     }
 
     /// Adds the keywords parsed from `input` (see `KeywordName.parse`) to `photoIDs`. The write
@@ -986,7 +1003,11 @@ final class CatalogModel: ObservableObject {
         guard let database, !names.isEmpty else { return names }
         Task { [weak self] in
             // No local guess: find-or-create gives ids only now, and refresh() replaces the maps wholesale.
-            _ = try? await database.addKeywords(names, to: photoIDs)
+            do {
+                _ = try await database.addKeywords(names, to: photoIDs)
+            } catch {
+                self?.importStatusMessage = "Couldn't add keywords: \(error.localizedDescription)"
+            }
             await self?.refresh()
         }
         return names

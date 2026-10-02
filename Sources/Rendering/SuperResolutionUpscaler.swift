@@ -258,8 +258,8 @@ enum SuperResolutionUpscaler {
         // Perceptual mode expects clamped [0,1] gamma-encoded values —
         // see `metalFXColorSpace`'s own doc comment. `.linear`/`.hdr`
         // would need unclamped scene-linear data instead, which this
-        // app's output pipeline (always sRGB SDR at write time, per
-        // `PhotoExporter.outputColorSpace`) never needs.
+        // app's Enhance output (always sRGB SDR at write time: Enhance uses
+        // `PhotoExporter.write`'s default `.sRGB`) never needs.
         descriptor.colorProcessingMode = .perceptual
 
         guard let scaler = descriptor.makeSpatialScaler(device: device) else {

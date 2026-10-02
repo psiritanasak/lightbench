@@ -37,6 +37,12 @@ struct ExportOptionsView: View {
                 }
             }
 
+            Picker("Color space", selection: $exportModel.settings.colorSpace) {
+                ForEach(ExportColorSpace.allCases) { space in
+                    Text(space.label).tag(space)
+                }
+            }
+
             if exportModel.settings.format == .jpeg {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Quality: \(Int(exportModel.settings.quality * 100))%")

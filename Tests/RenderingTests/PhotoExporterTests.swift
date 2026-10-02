@@ -375,6 +375,94 @@ final class PhotoExporterTests: XCTestCase {
 }
 
 
+// MARK: - Output color space
+
+final class ExportColorSpaceTests: XCTestCase {
+    private var dir: URL!
+
+    override func setUpWithError() throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("ExportColorSpaceTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: dir) }
+
+    /// A patch whose colour is defined IN Display P3 — saturated enough to lie outside sRGB.
+    private func p3Patch() throws -> CIImage {
+        let p3 = try XCTUnwrap(CGColorSpace(name: CGColorSpace.displayP3))
+        let color = try XCTUnwrap(CIColor(red: 0.1, green: 0.95, blue: 0.2, colorSpace: p3))
+        return CIImage(color: color).cropped(to: CGRect(x: 0, y: 0, width: 8, height: 8))
+    }
+
+    private func profileName(of url: URL) throws -> String {
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let props = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any])
+        return try XCTUnwrap(props[kCGImagePropertyProfileName as String] as? String)
+    }
+
+    /// The file's first pixel as extended-linear-sRGB floats (no clamping), i.e. its true colour.
+    private func linearColor(of url: URL) throws -> [Float] {
+        let working = try XCTUnwrap(CGColorSpace(name: CGColorSpace.extendedLinearSRGB))
+        let context = CIContext(options: [.workingColorSpace: working, .workingFormat: CIFormat.RGBAf])
+        let image = try XCTUnwrap(CIImage(contentsOf: url))
+        var pixel = [Float](repeating: 0, count: 4)
+        context.render(image, toBitmap: &pixel, rowBytes: 16, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       format: .RGBAf, colorSpace: working)
+        return pixel
+    }
+
+    func testEachProfileIsEmbeddedForEveryFormat() throws {
+        let expected: [(ExportColorSpace, String)] = [(.sRGB, "sRGB"), (.displayP3, "Display P3"), (.adobeRGB, "Adobe RGB")]
+        for format in ExportFormat.allCases {
+            for (space, fragment) in expected {
+                let url = dir.appendingPathComponent("\(space.rawValue).\(format.fileExtension)")
+                try PhotoExporter.write(try p3Patch(), format: format, quality: 0.9, colorSpace: space, to: url)
+                XCTAssertTrue(try profileName(of: url).contains(fragment), "\(format) \(space)")
+            }
+        }
+    }
+
+    func testDefaultWriteStaysSRGBSoEnhanceIsUnchanged() throws {
+        let url = dir.appendingPathComponent("default.jpg")
+        try PhotoExporter.write(try p3Patch(), format: .jpeg, quality: 0.9, to: url)
+        XCTAssertTrue(try profileName(of: url).contains("sRGB"))
+    }
+
+    /// The behavioural difference, not just the tag: a P3-only colour keeps its out-of-sRGB value (a negative
+    /// extended-linear component) in P3 output, but is clamped into the sRGB gamut in sRGB output.
+    func testWideGamutColorSurvivesInP3ButClipsInSRGB() throws {
+        let p3URL = dir.appendingPathComponent("p3.png"), srgbURL = dir.appendingPathComponent("srgb.png")
+        try PhotoExporter.write(try p3Patch(), format: .png, quality: 1, colorSpace: .displayP3, to: p3URL)
+        try PhotoExporter.write(try p3Patch(), format: .png, quality: 1, colorSpace: .sRGB, to: srgbURL)
+        let wide = try linearColor(of: p3URL), clipped = try linearColor(of: srgbURL)
+        XCTAssertLessThan(wide.min() ?? 0, -0.02, "P3 output must keep the out-of-sRGB colour")
+        XCTAssertGreaterThanOrEqual(clipped.prefix(3).min() ?? -1, -0.002, "sRGB output is gamut-clamped")
+    }
+
+    func testExportUsesTheSettingsColorSpace() async throws {
+        let src = dir.appendingPathComponent("src.jpg")
+        try PhotoExporter.write(try p3Patch(), format: .jpeg, quality: 0.9, to: src)
+        let photo = Photo(id: 1, path: src.path, filename: "src.jpg", fileSize: nil, importedAt: Date())
+        let out = dir.appendingPathComponent("out", isDirectory: true)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try await PhotoExporter.export(photo, editState: .identity, to: out,
+                                                 settings: ExportSettings(format: .jpeg, colorSpace: .displayP3))
+        XCTAssertTrue(try profileName(of: url).contains("Display P3"))
+    }
+
+    func testColorSpaceIsRememberedAndTolerant() throws {
+        let suite = "ExportColorSpaceTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ExportSettingsStore(defaults: defaults)
+        store.save(ExportSettings(colorSpace: .adobeRGB))
+        XCTAssertEqual(store.load().colorSpace, .adobeRGB)
+        defaults.set(Data(#"{"colorSpace":"rec2020","format":"png"}"#.utf8), forKey: ExportSettingsStore.key)
+        XCTAssertEqual(store.load().colorSpace, .sRGB, "unknown profile falls back")
+        XCTAssertEqual(store.load().format, .png)
+    }
+}
+
 // MARK: - Remembered settings
 
 final class ExportSettingsStoreTests: XCTestCase {

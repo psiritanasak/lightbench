@@ -17,6 +17,33 @@ enum ExportFormat: String, CaseIterable, Identifiable, Sendable, Codable {
     }
 }
 
+/// The color profile an exported file is converted to and tagged with. The image math stays in the extended-linear
+/// working space; this only chooses the output encoding at the very end (CLAUDE.md: convert at output only).
+enum ExportColorSpace: String, CaseIterable, Identifiable, Sendable, Codable {
+    case sRGB, displayP3, adobeRGB
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .sRGB: return "sRGB"
+        case .displayP3: return "Display P3"
+        case .adobeRGB: return "Adobe RGB (1998)"
+        }
+    }
+
+    /// Falls back to device RGB only if the system lacks the named space (never observed on macOS 14).
+    var cgColorSpace: CGColorSpace {
+        let name: CFString
+        switch self {
+        case .sRGB: name = CGColorSpace.sRGB
+        case .displayP3: name = CGColorSpace.displayP3
+        case .adobeRGB: name = CGColorSpace.adobeRGB1998
+        }
+        return CGColorSpace(name: name) ?? CGColorSpaceCreateDeviceRGB()
+    }
+}
+
 /// Whether an exported photo keeps its original pixel dimensions or is
 /// scaled down to fit a maximum long-edge size.
 enum ExportResize: Equatable, Sendable, Codable {
@@ -47,13 +74,15 @@ struct ExportSettings: Sendable, Equatable {
     /// (001, 003…) rather than renumbering, so a re-export of only the failures
     /// can't collide with an earlier number.
     var namingTemplate: String = NamingTemplate.defaultTemplate
+    /// Output profile. Default sRGB = today's behaviour.
+    var colorSpace: ExportColorSpace = .sRGB
 }
 
 /// Schema-tolerant persistence (the pattern `EditState` uses): a missing key decodes to that field's default, so
 /// adding a field in a later release never invalidates settings an older build stored. In an extension, not the
 /// struct body, so the memberwise initializer (used by tests and call sites) is kept.
 extension ExportSettings: Codable {
-    private enum CodingKeys: String, CodingKey { case format, quality, resize, namingTemplate }
+    private enum CodingKeys: String, CodingKey { case format, quality, resize, namingTemplate, colorSpace }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -65,6 +94,7 @@ extension ExportSettings: Codable {
         quality = storedQuality.isFinite ? min(max(storedQuality, 0.1), 1) : defaults.quality
         resize = ((try? container.decodeIfPresent(ExportResize.self, forKey: .resize)) ?? defaults.resize).sanitized
         namingTemplate = (try? container.decodeIfPresent(String.self, forKey: .namingTemplate)) ?? defaults.namingTemplate
+        colorSpace = (try? container.decodeIfPresent(ExportColorSpace.self, forKey: .colorSpace)) ?? defaults.colorSpace
     }
 
     func encode(to encoder: Encoder) throws {
@@ -75,6 +105,7 @@ extension ExportSettings: Codable {
         // treats a non-finite/non-positive long edge as "original", so persist exactly that.
         try container.encode(resize.sanitized, forKey: .resize)
         try container.encode(namingTemplate, forKey: .namingTemplate)
+        try container.encode(colorSpace, forKey: .colorSpace)
     }
 }
 
@@ -142,14 +173,14 @@ enum PhotoExportError: LocalizedError {
 /// above — using Metal as the `CIContext`'s internal GPU backend doesn't
 /// reintroduce manual texture/drawable handling.
 enum PhotoExporter {
-    /// Same working/output color-space definition as `ImageRenderer.swift`
-    /// (`CLAUDE.md`: "linear light in a defined working color space...
-    /// convert to display/sRGB only at output"), keeping export's color
-    /// pipeline visually consistent with the live preview.
+    /// Same WORKING color space as `ImageRenderer.swift` (`CLAUDE.md`:
+    /// "linear light in a defined working color space... convert only at
+    /// output"). The OUTPUT profile is the user's `ExportColorSpace` choice
+    /// (default sRGB, matching the preview); the editor preview itself is
+    /// still sRGB, so a wide-gamut export can look more saturated than it.
     private static let workingColorSpace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)
         ?? CGColorSpace(name: CGColorSpace.linearSRGB)
         ?? CGColorSpaceCreateDeviceRGB()
-    private static let outputColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
     /// The Metal device backing `context`, when one is available — a
     /// single shared instance rather than each caller making its own
@@ -247,10 +278,10 @@ enum PhotoExporter {
         // would only cost batch-export throughput for no benefit.
         if RawDecoder.isRaw(sourceURL) {
             try await RawDecoder.RenderGate.shared.run {
-                try Self.write(resized, format: settings.format, quality: settings.quality, to: tempURL)
+                try Self.write(resized, format: settings.format, quality: settings.quality, colorSpace: settings.colorSpace, to: tempURL)
             }
         } else {
-            try Self.write(resized, format: settings.format, quality: settings.quality, to: tempURL)
+            try Self.write(resized, format: settings.format, quality: settings.quality, colorSpace: settings.colorSpace, to: tempURL)
         }
 
         let data = try Data(contentsOf: tempURL)
@@ -261,7 +292,10 @@ enum PhotoExporter {
     /// Not `private`: `PhotoEnhancer` reuses this exact writer for its own
     /// output (always JPEG in v1, but this stays format-general rather
     /// than duplicating the three `write*Representation` calls).
-    static func write(_ image: CIImage, format: ExportFormat, quality: CGFloat, to url: URL) throws {
+    static func write(
+        _ image: CIImage, format: ExportFormat, quality: CGFloat, colorSpace: ExportColorSpace = .sRGB, to url: URL
+    ) throws {
+        let outputColorSpace = colorSpace.cgColorSpace
         switch format {
         case .jpeg:
             try context.writeJPEGRepresentation(

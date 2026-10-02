@@ -1415,7 +1415,13 @@ final class ImageDocumentModel: ObservableObject {
     /// key `"PhotoApp.sidecarFolderBookmarks"`, unchanged) for photos it
     /// writes that were never opened here. This is a behavior-preserving
     /// lift, not a rewrite — see that type's own doc comment.
-    private let folderAccess = SidecarFolderAccess()
+    private let folderAccess: SidecarFolderAccessing
+
+    /// `folderAccess` is injectable only so tests can model the modal folder-access panel (see
+    /// `SidecarFolderAccessing`); the app always uses the real `SidecarFolderAccess`.
+    init(folderAccess: SidecarFolderAccessing = SidecarFolderAccess()) {
+        self.folderAccess = folderAccess
+    }
 
     /// The exact panel message `SidecarFolderAccess.resolveOrRequest`
     /// shows on behalf of a save triggered from THIS type — unchanged
@@ -1524,13 +1530,21 @@ final class ImageDocumentModel: ObservableObject {
     /// produce an error/prompt" invariant. Skips re-prompting entirely for
     /// a folder already declined this session (see `declinedFolders`).
     private func saveSidecarNow(suppressErrorMessage: Bool = false) {
-        guard let currentURL else { return }
-        let folder = currentURL.deletingLastPathComponent()
+        // Snapshot the (photo, edits) PAIR together, FIRST, before anything below can yield to the run loop.
+        // `resolveOrRequest` may show a modal `NSOpenPanel`, which pumps the run loop, so `currentURL`/`editState`
+        // could change while it is up (IMPROVEMENTS.md D28: a photo load finishing there). The old code read
+        // `editState` AFTER that step and would have written the NEW state into the OLD photo's sidecar. The
+        // snapshot writes the old photo's own state to the old photo's own sidecar — what the user meant to save.
+        // Whether a real `load(from:)` can finish inside the panel is UNDETERMINED (see `SaveSidecarRaceTests`'
+        // header for what was and was not reproduced), so this is hardening, not a fix for an observed corruption.
+        guard let url = currentURL else { return }
+        let snapshot = editState
+        let folder = url.deletingLastPathComponent()
         guard !declinedFolders.contains(folder.path) else { return }
         let folderURL: URL
         switch folderAccess.resolveOrRequest(for: folder, message: Self.sidecarFolderAccessMessage) {
-        case .granted(let url):
-            folderURL = url
+        case .granted(let granted):
+            folderURL = granted
         case .declined:
             declinedFolders.insert(folder.path)
             return
@@ -1552,8 +1566,8 @@ final class ImageDocumentModel: ObservableObject {
         }
         defer { folderURL.stopAccessingSecurityScopedResource() }
         do {
-            try SidecarStore.write(editState, forPhotoAt: currentURL)
-            onSidecarSaved?(currentURL)
+            try SidecarStore.write(snapshot, forPhotoAt: url)
+            onSidecarSaved?(url)
         } catch {
             if !suppressErrorMessage {
                 sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"

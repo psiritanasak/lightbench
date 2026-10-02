@@ -1,6 +1,15 @@
 import AppKit
 import Foundation
 
+/// The two calls `ImageDocumentModel` makes on its folder-access helper, as a protocol so a test double can stand in
+/// for the real one: `resolveOrRequest` shows a MODAL `NSOpenPanel` that pumps the run loop, and a stub lets a test
+/// model what happens while that panel is up (IMPROVEMENTS.md D28).
+@MainActor
+protocol SidecarFolderAccessing {
+    func resolvedURL(for folder: URL) -> URL?
+    func resolveOrRequest(for folder: URL, message: String) -> SidecarFolderAccess.Outcome
+}
+
 /// Resolves (or lazily requests via `NSOpenPanel`) per-folder security-
 /// scoped bookmark access for reading/writing a photo's sidecar file —
 /// extracted from `ImageDocumentModel`'s own originally-private bookmark
@@ -23,7 +32,7 @@ import Foundation
 /// per explicit user click, where re-prompting on the NEXT click is
 /// correct, not annoying).
 @MainActor
-final class SidecarFolderAccess {
+final class SidecarFolderAccess: SidecarFolderAccessing {
     enum Outcome {
         case granted(URL)
         case declined

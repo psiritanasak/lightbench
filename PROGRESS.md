@@ -8,6 +8,8 @@ improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
 ## Current phase
+**LIBRARY KEYWORDS v1 — SHIPPED (2026-10-02), 3 code commits (ff73792 data layer, 76fc3f4 filter/search/model, d92a0ef sheet + picker + menus), all reviewer-approved (data layer 2 rounds, model 2, UI 2).** Tag photos with free-text keywords, filter the grid by keyword, search matches keywords. 1759 tests, 0 failures. **LIVE-VERIFIED** on a Release build with 4 scratch PNGs imported into the real app (catalog backed up first; scratch rows removed afterward, counts back to baseline 1094/15/29/1, rating sum 11): add via Return, partial chips, add-existing, remove, picker with counts, keyword search, delete-everywhere confirmation, relaunch persistence, and (after the review fixes) the menu-request path. Follow-ups and the unverified VoiceOver labels: IMPROVEMENTS.md D47. Details: docs/ROADMAP_HISTORY.md "Library keywords".
+
 **BATCH RENAME — SHIPPED (2026-09-30), 5 commits, all reviewer-approved (the engine took 2 review rounds, the UI 5).** A shared naming-template
 engine (`NamingTemplate`: `{name} {seq} {seq:N} {date} {datetime} {rating} {label} {flag}`; `CaptureDate` reads EXIF)
 drives (1) **Export file naming** (`ExportSettings.namingTemplate`, default `{name}` = unchanged behavior, live example +
@@ -93,7 +95,7 @@ brush mask on photo switch), D22/D24/D26 (design gaps), D20 keyboard half.
 2. **Profiles / LUTs** + small Develop gaps (Vignette Softness, B&W panel, Color Grading Blending, Point Color Variance).
 3. **Spot removal**: manual heal/clone, then automatic dust detection (no ML).
 4. **AI masks** (Subject/Sky/Background/People, mask Feather/Edge refine) after the spike.
-5. **Library metadata**: keywords, IPTC/EXIF, Smart Collections, stacks, duplicate detection, whole-folder relocate.
+5. **Library metadata**: ~~keywords~~ ✅ v1 shipped 2026-10-02 (see D47), IPTC/EXIF, Smart Collections, stacks, duplicate detection, whole-folder relocate.
 6. **Export upgrades** (metadata, watermark, color space, sharpening, naming templates).
 7. **HDR/EDR display path**, HDR/Panorama merge, Enhance Denoise, persisted edit history.
 Side track when a small session is wanted: D28 (sidecar save race).

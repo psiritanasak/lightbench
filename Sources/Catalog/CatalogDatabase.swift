@@ -111,6 +111,7 @@ final class CatalogDatabase: Sendable {
         Migration007PickRejectFlags.register(in: &migrator)
         Migration008ColorLabels.register(in: &migrator)
         Migration009RenameLog.register(in: &migrator)
+        Migration010Keywords.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 
@@ -618,6 +619,77 @@ final class CatalogDatabase: Sendable {
                 try CollectionPhoto(collectionId: collectionID, photoId: photoID)
                     .insert(db, onConflict: .ignore)
             }
+        }
+    }
+
+    // MARK: - Keywords
+
+    func allKeywords() async throws -> [Keyword] {
+        try await dbQueue.read { db in try Keyword.fetchAll(db) }
+    }
+
+    func allKeywordLinks() async throws -> [PhotoKeyword] {
+        try await dbQueue.read { db in try PhotoKeyword.fetchAll(db) }
+    }
+
+    /// Attaches `names` to every photo in `photoIDs` in ONE transaction, creating keywords that do not exist yet.
+    /// Names are normalized (`KeywordName.normalize`) and de-duplicated by `KeywordName.key(for:)`; a keyword that
+    /// already exists under any spelling is reused (its stored spelling is kept). Idempotent: attaching again is
+    /// a no-op (`onConflict: .ignore`). Photo ids that no longer exist are skipped instead of tripping the foreign
+    /// key and aborting the whole batch (a stale selection after a removal). Keywords are created even when
+    /// `photoIDs` is empty or entirely stale (no photo attached) — "add to my keyword list". Returns the keywords
+    /// involved, in the order of `names`.
+    @discardableResult
+    func addKeywords(_ names: [String], to photoIDs: [Int64]) async throws -> [Keyword] {
+        try await dbQueue.write { db in
+            var seen = Set<String>()
+            var wanted: [String] = []
+            for raw in names {
+                guard let name = KeywordName.normalize(raw), seen.insert(KeywordName.key(for: name)).inserted else { continue }
+                wanted.append(name)
+            }
+            // Chunked: each id binds one SQL variable (SQLite's default limit is 32766).
+            var existingPhotoIDs = Set<Int64>()
+            for chunk in stride(from: 0, to: photoIDs.count, by: 500).map({ Array(photoIDs[$0..<min($0 + 500, photoIDs.count)]) }) {
+                existingPhotoIDs.formUnion(try Int64.fetchAll(db, Photo.filter(chunk.contains(Photo.Columns.id)).select(Photo.Columns.id)))
+            }
+            var result: [Keyword] = []
+            for name in wanted {
+                let key = KeywordName.key(for: name)
+                var keyword: Keyword
+                if let found = try Keyword.filter(Keyword.Columns.nameKey == key).fetchOne(db) {
+                    keyword = found
+                } else {
+                    keyword = Keyword(id: nil, name: name, nameKey: key, createdAt: Date())
+                    try keyword.insert(db)
+                }
+                if let keywordID = keyword.id {
+                    for photoID in photoIDs where existingPhotoIDs.contains(photoID) {
+                        try PhotoKeyword(keywordId: keywordID, photoId: photoID).insert(db, onConflict: .ignore)
+                    }
+                }
+                result.append(keyword)
+            }
+            return result
+        }
+    }
+
+    /// Detaches keyword `id` from `photoIDs` (the keyword itself stays, even if no photo uses it any more).
+    func removeKeyword(id: Int64, from photoIDs: [Int64]) async throws {
+        try await dbQueue.write { db in
+            for chunk in stride(from: 0, to: photoIDs.count, by: 500).map({ Array(photoIDs[$0..<min($0 + 500, photoIDs.count)]) }) {
+                _ = try PhotoKeyword
+                    .filter(PhotoKeyword.Columns.keywordId == id)
+                    .filter(chunk.contains(PhotoKeyword.Columns.photoId))
+                    .deleteAll(db)
+            }
+        }
+    }
+
+    /// Deletes the keyword everywhere (its links cascade).
+    func deleteKeyword(id: Int64) async throws {
+        try await dbQueue.write { db in
+            _ = try Keyword.filter(Keyword.Columns.id == id).deleteAll(db)
         }
     }
 

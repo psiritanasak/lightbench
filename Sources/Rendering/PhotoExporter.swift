@@ -3,7 +3,7 @@ import Foundation
 import Metal
 
 /// The output format for an exported photo.
-enum ExportFormat: String, CaseIterable, Identifiable, Sendable {
+enum ExportFormat: String, CaseIterable, Identifiable, Sendable, Codable {
     case jpeg, png, tiff
 
     var id: String { rawValue }
@@ -19,12 +19,24 @@ enum ExportFormat: String, CaseIterable, Identifiable, Sendable {
 
 /// Whether an exported photo keeps its original pixel dimensions or is
 /// scaled down to fit a maximum long-edge size.
-enum ExportResize: Equatable, Sendable {
+enum ExportResize: Equatable, Sendable, Codable {
     case original
     case maxLongEdge(CGFloat)
+
+    /// Largest long edge the UI accepts or a stored value may carry. No real export exceeds it, and bounding it
+    /// keeps every stored value displayable (a finite-but-huge one once crashed `Int(edge)` in the options sheet).
+    static let maximumLongEdge: CGFloat = 65_536
+
+    /// `self` with a long edge bounded above by `maximumLongEdge`; a non-finite or non-positive one becomes
+    /// `.original` (`resized(_:option:)` already treats it as a no-op, so this matches what it would render).
+    var sanitized: ExportResize {
+        guard case .maxLongEdge(let edge) = self else { return self }
+        guard edge.isFinite, edge > 0 else { return .original }
+        return .maxLongEdge(min(edge, Self.maximumLongEdge))
+    }
 }
 
-struct ExportSettings: Sendable {
+struct ExportSettings: Sendable, Equatable {
     var format: ExportFormat = .jpeg
     var quality: CGFloat = 0.9 // JPEG only, 0...1
     var resize: ExportResize = .original
@@ -35,6 +47,57 @@ struct ExportSettings: Sendable {
     /// (001, 003…) rather than renumbering, so a re-export of only the failures
     /// can't collide with an earlier number.
     var namingTemplate: String = NamingTemplate.defaultTemplate
+}
+
+/// Schema-tolerant persistence (the pattern `EditState` uses): a missing key decodes to that field's default, so
+/// adding a field in a later release never invalidates settings an older build stored. In an extension, not the
+/// struct body, so the memberwise initializer (used by tests and call sites) is kept.
+extension ExportSettings: Codable {
+    private enum CodingKeys: String, CodingKey { case format, quality, resize, namingTemplate }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = ExportSettings()
+        // Per-field `try?`: `decodeIfPresent` only covers a MISSING key, while an unknown enum value (a newer build's
+        // format after a downgrade) or a malformed field throws — which must reset that field only, not every setting.
+        format = (try? container.decodeIfPresent(ExportFormat.self, forKey: .format)) ?? defaults.format
+        let storedQuality = (try? container.decodeIfPresent(CGFloat.self, forKey: .quality)) ?? defaults.quality
+        quality = storedQuality.isFinite ? min(max(storedQuality, 0.1), 1) : defaults.quality
+        resize = ((try? container.decodeIfPresent(ExportResize.self, forKey: .resize)) ?? defaults.resize).sanitized
+        namingTemplate = (try? container.decodeIfPresent(String.self, forKey: .namingTemplate)) ?? defaults.namingTemplate
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(format, forKey: .format)
+        try container.encode(quality, forKey: .quality)
+        // JSONEncoder throws on a non-finite number, which would silently stop ALL saving; `resized(_:option:)` already
+        // treats a non-finite/non-positive long edge as "original", so persist exactly that.
+        try container.encode(resize.sanitized, forKey: .resize)
+        try container.encode(namingTemplate, forKey: .namingTemplate)
+    }
+}
+
+/// Remembers the last-used `ExportSettings` across launches in `UserDefaults` (JSON under one key). The
+/// destination folder is deliberately not part of the settings. Tests must pass an isolated suite: the test host is
+/// the real app, so `.standard` there is the real app's preferences.
+struct ExportSettingsStore {
+    static let key = "exportSettings.v1"
+    let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+
+    /// The stored settings, or the defaults when nothing is stored or the data is unreadable.
+    func load() -> ExportSettings {
+        guard let data = defaults.data(forKey: Self.key),
+              let settings = try? JSONDecoder().decode(ExportSettings.self, from: data) else { return ExportSettings() }
+        return settings
+    }
+
+    func save(_ settings: ExportSettings) {
+        guard let data = try? JSONEncoder().encode(settings) else { return }
+        defaults.set(data, forKey: Self.key)
+    }
 }
 
 enum PhotoExportError: LocalizedError {

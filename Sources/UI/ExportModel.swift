@@ -13,10 +13,19 @@ struct ExportProgress: Equatable {
 @MainActor
 final class ExportModel: ObservableObject {
     @Published var isPresentingOptions = false
-    @Published var settings = ExportSettings()
+    @Published var settings: ExportSettings {
+        didSet { if settings != oldValue { store.save(settings) } }
+    }
     @Published var statusMessage: String?
     @Published private(set) var isExporting = false
     @Published private(set) var progress: ExportProgress?
+
+    private let store: ExportSettingsStore
+
+    init(store: ExportSettingsStore = ExportSettingsStore()) {
+        self.store = store
+        self.settings = store.load()
+    }
 
     /// Opens the format/quality/resize options sheet. The destination
     /// folder is picked AFTER the user confirms those options, in

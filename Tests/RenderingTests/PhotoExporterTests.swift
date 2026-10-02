@@ -374,3 +374,100 @@ final class PhotoExporterTests: XCTestCase {
     }
 }
 
+
+// MARK: - Remembered settings
+
+final class ExportSettingsStoreTests: XCTestCase {
+    private var suiteName: String!
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        suiteName = "ExportSettingsStoreTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    func testNothingStoredLoadsDefaults() {
+        XCTAssertEqual(ExportSettingsStore(defaults: defaults).load(), ExportSettings())
+    }
+
+    func testRoundTripKeepsEveryField() {
+        let store = ExportSettingsStore(defaults: defaults)
+        let settings = ExportSettings(format: .tiff, quality: 0.5, resize: .maxLongEdge(1600), namingTemplate: "{name}-{seq}")
+        store.save(settings)
+        XCTAssertEqual(store.load(), settings)
+    }
+
+    func testMissingKeysFallBackToPerFieldDefaults() throws {
+        defaults.set(Data(#"{"format":"png"}"#.utf8), forKey: ExportSettingsStore.key)
+        let loaded = ExportSettingsStore(defaults: defaults).load()
+        XCTAssertEqual(loaded.format, .png)
+        XCTAssertEqual(loaded.quality, ExportSettings().quality)
+        XCTAssertEqual(loaded.resize, .original)
+        XCTAssertEqual(loaded.namingTemplate, "{name}")
+    }
+
+    func testUnknownEnumValueResetsOnlyThatField() {
+        defaults.set(Data(#"{"format":"heic","quality":0.5,"namingTemplate":"{seq}"}"#.utf8), forKey: ExportSettingsStore.key)
+        let loaded = ExportSettingsStore(defaults: defaults).load()
+        XCTAssertEqual(loaded.format, .jpeg)
+        XCTAssertEqual(loaded.quality, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(loaded.namingTemplate, "{seq}")
+    }
+
+    func testMalformedResizeResetsOnlyThatField() {
+        defaults.set(Data(#"{"format":"png","resize":{"bogus":1}}"#.utf8), forKey: ExportSettingsStore.key)
+        let loaded = ExportSettingsStore(defaults: defaults).load()
+        XCTAssertEqual(loaded.format, .png)
+        XCTAssertEqual(loaded.resize, .original)
+    }
+
+    func testNonFiniteResizeStillSavesTheOtherFields() {
+        let store = ExportSettingsStore(defaults: defaults)
+        store.save(ExportSettings(format: .tiff, resize: .maxLongEdge(.infinity)))
+        let loaded = store.load()
+        XCTAssertEqual(loaded.format, .tiff, "a non-finite long edge must not stop the save")
+        XCTAssertEqual(loaded.resize, .original)
+    }
+
+    func testOversizedStoredLongEdgeDecodesToADisplayableValue() {
+        defaults.set(Data(#"{"resize":{"maxLongEdge":{"_0":1e20}}}"#.utf8), forKey: ExportSettingsStore.key)
+        guard case .maxLongEdge(let edge) = ExportSettingsStore(defaults: defaults).load().resize else { return XCTFail("expected a long edge") }
+        XCTAssertEqual(edge, ExportResize.maximumLongEdge)
+        XCTAssertNotNil(Int(exactly: edge.rounded()), "the options sheet converts this to Int")
+    }
+
+    func testSanitizedBoundsAndDropsNonFinite() {
+        XCTAssertEqual(ExportResize.maxLongEdge(0).sanitized, .original)
+        XCTAssertEqual(ExportResize.maxLongEdge(-5).sanitized, .original)
+        XCTAssertEqual(ExportResize.maxLongEdge(0.5).sanitized, .maxLongEdge(0.5))
+        XCTAssertEqual(ExportResize.maxLongEdge(.nan).sanitized, .original)
+        XCTAssertEqual(ExportResize.maxLongEdge(2048).sanitized, .maxLongEdge(2048))
+        XCTAssertEqual(ExportResize.original.sanitized, .original)
+    }
+
+    func testCorruptDataLoadsDefaults() {
+        defaults.set(Data("not json".utf8), forKey: ExportSettingsStore.key)
+        XCTAssertEqual(ExportSettingsStore(defaults: defaults).load(), ExportSettings())
+    }
+
+    func testOutOfRangeQualityIsClamped() {
+        defaults.set(Data(#"{"quality":7}"#.utf8), forKey: ExportSettingsStore.key)
+        XCTAssertEqual(ExportSettingsStore(defaults: defaults).load().quality, 1)
+        defaults.set(Data(#"{"quality":-3}"#.utf8), forKey: ExportSettingsStore.key)
+        XCTAssertEqual(ExportSettingsStore(defaults: defaults).load().quality, 0.1, accuracy: 0.0001)
+    }
+
+    @MainActor
+    func testModelLoadsStoredSettingsAndSavesChanges() {
+        let store = ExportSettingsStore(defaults: defaults)
+        store.save(ExportSettings(format: .png))
+        let model = ExportModel(store: store)
+        XCTAssertEqual(model.settings.format, .png)
+        model.settings.namingTemplate = "{date}"
+        XCTAssertEqual(store.load().namingTemplate, "{date}")
+    }
+}

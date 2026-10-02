@@ -88,9 +88,9 @@ struct ExportOptionsView: View {
                     // non-positive value, but clamping here too means an
                     // invalid/empty field falls back to a sane default
                     // rather than a silent no-op-sized export.
-                    let parsedLongEdge: CGFloat = Double(maxLongEdgeText).map { CGFloat($0) } ?? 2048
+                    let parsedLongEdge: CGFloat = Double(maxLongEdgeText).flatMap { $0.isFinite ? CGFloat($0) : nil } ?? 2048
                     exportModel.settings.resize = useCustomResize
-                        ? .maxLongEdge(max(parsedLongEdge, 1))
+                        ? ExportResize.maxLongEdge(parsedLongEdge).sanitized
                         : .original
                     dismiss()
                     // Deferred to the next run loop turn, AFTER the sheet
@@ -110,6 +110,14 @@ struct ExportOptionsView: View {
         }
         .padding()
         .frame(width: 360)
+        .onAppear {
+            // Seed the resize controls from the remembered setting — otherwise the Export button would overwrite a
+            // stored long edge with "original" from this sheet's own unseeded defaults.
+            if case .maxLongEdge(let edge) = exportModel.settings.resize.sanitized {
+                useCustomResize = true
+                maxLongEdgeText = String(Int(edge.rounded()))
+            }
+        }
         .task {
             guard let photo = previewPhoto else { return }
             let url = URL(fileURLWithPath: photo.path)

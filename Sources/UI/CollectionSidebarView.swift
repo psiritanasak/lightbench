@@ -36,6 +36,14 @@ struct CollectionSidebarView: View {
     @State private var renameText = ""
     @State private var collectionPendingDeletion: PhotoCollection?
 
+    /// Smart collections (saved filter sets): the name alert for saving the current filters, plus per-row rename and
+    /// delete — the same `presenting:`-driven shape as the plain collections above.
+    @State private var isPresentingNewSmart = false
+    @State private var newSmartName = ""
+    @State private var smartPendingRename: SmartCollection?
+    @State private var smartRenameText = ""
+    @State private var smartPendingDeletion: SmartCollection?
+
     /// `List(selection:)` only accepts an Optional-wrapped selection
     /// binding (it needs to represent "nothing selected"), even though
     /// `catalog.selectedFilter` itself is deliberately non-optional (see
@@ -93,6 +101,42 @@ struct CollectionSidebarView: View {
                 .foregroundStyle(.secondary)
             }
 
+            Section("Smart Collections") {
+                ForEach(catalog.smartCollections) { smart in
+                    if let id = smart.id {
+                        Text(smart.name)
+                            .tag(LibraryFilter.smartCollection(id))
+                            .contextMenu {
+                                Button("Rename…") {
+                                    smartRenameText = smart.name
+                                    smartPendingRename = smart
+                                }
+                                Button("Update from Current Filters") {
+                                    Task { await catalog.updateSmartCollectionFromFilters(smart) }
+                                }
+                                .disabled(!catalog.hasSaveableFilterCriteria)
+                                Button(role: .destructive) {
+                                    smartPendingDeletion = smart
+                                } label: {
+                                    Label {
+                                        Text("Delete").foregroundStyle(.red)
+                                    } icon: {
+                                        Image(systemName: "trash").foregroundStyle(.red)
+                                    }
+                                }
+                            }
+                    }
+                }
+                Button("Save Current Filters…") {
+                    newSmartName = ""
+                    isPresentingNewSmart = true
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(!catalog.hasSaveableFilterCriteria)
+                .help("Save the rating, flag, label and keyword filters as a smart collection over the whole catalog (search text is not saved)")
+            }
+
             let folderRoots = Self.buildFolderTree(from: catalog.collections)
             if !folderRoots.isEmpty {
                 Section("Folders") {
@@ -114,6 +158,49 @@ struct CollectionSidebarView: View {
             Button("Cancel", role: .cancel) {
                 newCollectionName = ""
             }
+        }
+        .alert("New Smart Collection", isPresented: $isPresentingNewSmart) {
+            TextField("Name", text: $newSmartName)
+            Button("Save") {
+                let name = newSmartName
+                newSmartName = ""
+                Task { await catalog.saveFiltersAsSmartCollection(name: name) }
+            }
+            Button("Cancel", role: .cancel) { newSmartName = "" }
+        } message: {
+            Text("Saves the current rating, flag, label and keyword filters. It covers the whole catalog, whichever collection is open. Search text is not saved.")
+        }
+        .alert(
+            "Rename Smart Collection",
+            isPresented: Binding(
+                get: { smartPendingRename != nil },
+                set: { isPresented in if !isPresented { smartPendingRename = nil } }
+            ),
+            presenting: smartPendingRename
+        ) { smart in
+            TextField("Name", text: $smartRenameText)
+            Button("Rename") {
+                let name = smartRenameText
+                smartPendingRename = nil
+                Task { await catalog.renameSmartCollection(smart, to: name) }
+            }
+            Button("Cancel", role: .cancel) { smartPendingRename = nil }
+        }
+        .alert(
+            "Delete Smart Collection?",
+            isPresented: Binding(
+                get: { smartPendingDeletion != nil },
+                set: { isPresented in if !isPresented { smartPendingDeletion = nil } }
+            ),
+            presenting: smartPendingDeletion
+        ) { smart in
+            Button("Delete", role: .destructive) {
+                smartPendingDeletion = nil
+                Task { await catalog.deleteSmartCollection(smart) }
+            }
+            Button("Cancel", role: .cancel) { smartPendingDeletion = nil }
+        } message: { smart in
+            Text("\"\(smart.name)\" will be deleted. The photos in it, and their files on disk, are not affected.")
         }
         .alert(
             "Rename Collection",

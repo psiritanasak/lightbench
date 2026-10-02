@@ -62,7 +62,9 @@ struct ContentView: View {
     /// active in the sidebar); with nothing checked, behaves exactly as
     /// before this feature existed — the current filtered set.
     private var photosToExport: [Photo] {
-        guard !catalog.selectedPhotoIDs.isEmpty else { return catalog.photos }
+        // `smartCollectionSourcePhotos`, not `photos`: while a smart collection is selected `photos` is the WHOLE
+        // catalog and exporting "the current set" would export every photo.
+        guard !catalog.selectedPhotoIDs.isEmpty else { return catalog.smartCollectionSourcePhotos }
         return catalog.photos.filter { catalog.isSelected($0) }
     }
 

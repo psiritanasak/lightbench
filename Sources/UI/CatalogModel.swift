@@ -12,6 +12,8 @@ import Foundation
 enum LibraryFilter: Hashable, Sendable {
     case allPhotos
     case collection(Int64)
+    /// A saved set of filter criteria (`SmartCollection`), evaluated live over ALL photos.
+    case smartCollection(Int64)
 }
 
 /// The UI-facing wrapper around `CatalogDatabase` — deliberately kept in
@@ -33,6 +35,9 @@ final class CatalogModel: ObservableObject {
     /// photo. Loaded in `refresh()` alongside `collections` — same shape,
     /// same reasoning.
     @Published private(set) var presets: [Preset] = []
+    /// Saved filter sets shown in the sidebar, sorted by name; loaded in `refresh()`.
+    @Published private(set) var smartCollections: [SmartCollection] = []
+    private var smartCollectionLoadError: String?
     /// Which photos `photos` reflects. Setting this re-filters `photos` —
     /// see `didSet` below and `refresh()`. Also clears `selectedPhotoIDs`
     /// — switching what the grid shows always starts from a clean
@@ -125,13 +130,26 @@ final class CatalogModel: ObservableObject {
     /// expensive; this one isn't.
     var displayedPhotos: [Photo] {
         LibraryFilterSort.apply(
-            to: photos, sort: sortOption, minimumRating: minimumRating,
+            to: smartCollectionSourcePhotos, sort: sortOption, minimumRating: minimumRating,
             flagFilter: flagFilter, searchText: searchText,
             labelFilter: labelFilter,
             keywordFilter: keywordFilterID.map { [$0] },
             keywordIDsByPhotoID: keywordIDsByPhotoID,
             keywordNamesByPhotoID: keywordNamesForSearch
         )
+    }
+
+    /// The photos the sidebar selection means — what Export falls back to when nothing is checked (the filter bar
+    /// deliberately does not narrow Export). Equals `photos` except for a smart collection, where it is `photos`
+    /// reduced by the collection's criteria (the filter bar then refines that, exactly as for a normal collection).
+    ///
+    /// While a smart collection is selected `photos` holds ALL photos and the criteria are applied HERE, so every local-first mutator (`updatePhotoInPlace`, `removePhoto`, …) keeps working on the one
+    /// real list and a rating/keyword change moves a photo in or out immediately. A smart id that is not (yet) in
+    /// `smartCollections` shows NOTHING — never everything (it can only be transient, right after a create).
+    var smartCollectionSourcePhotos: [Photo] {
+        guard case .smartCollection(let id) = selectedFilter else { return photos }
+        guard let smart = smartCollections.first(where: { $0.id == id }) else { return [] }
+        return smart.criteria.apply(to: photos, keywords: keywords, keywordIDsByPhotoID: keywordIDsByPhotoID)
     }
 
     /// photoID → keyword names, built only while a search is active (the only reader).
@@ -400,8 +418,18 @@ final class CatalogModel: ObservableObject {
             keywords = Self.sortedKeywords(loadedKeywords)
             keywordIDsByPhotoID = Dictionary(grouping: keywordLinks, by: \.photoId)
                 .mapValues { Set($0.map(\.keywordId)) }
+            do {
+                smartCollections = try await database.allSmartCollections()
+                smartCollectionLoadError = nil
+            } catch {
+                // Report a given failure once, not on every refresh (refresh follows nearly every mutation, so the alert
+                // would keep returning and could overwrite an import summary).
+                let message = "Couldn't load smart collections: \(error.localizedDescription)"
+                if smartCollectionLoadError != message { importStatusMessage = message }
+                smartCollectionLoadError = message
+            }
             switch selectedFilter {
-            case .allPhotos:
+            case .allPhotos, .smartCollection:
                 photos = try await database.allPhotos()
             case .collection(let collectionID):
                 photos = try await database.photos(inCollection: collectionID)
@@ -970,6 +998,98 @@ final class CatalogModel: ObservableObject {
         Task.detached { [weak self] in
             do { try await database.deletePhoto(id: id) } catch { await self?.refresh() }
         }
+    }
+
+    // MARK: - Smart collections
+
+    /// The filter bar's current criteria in saveable form. Search text is deliberately not part of a smart collection
+    /// (v1); the sort order is not either.
+    var currentFilterCriteria: SmartCollectionCriteria {
+        SmartCollectionCriteria(
+            minimumRating: minimumRating, flag: flagFilter, label: labelFilter,
+            keywordKey: keywordFilterID.flatMap { id in keywords.first { $0.id == id }?.nameKey }
+        )
+    }
+
+    /// Resets ONLY the four fields a smart collection saves; the sort order and search text are not part of one and are
+    /// left as the user set them.
+    private func clearSavedFilterCriteria() {
+        minimumRating = 0
+        flagFilter = .all
+        labelFilter = .all
+        keywordFilterID = nil
+    }
+
+    /// Whether there is anything in the filter bar worth saving.
+    var hasSaveableFilterCriteria: Bool { !currentFilterCriteria.isEmpty }
+
+    /// Saves the filter bar as a new smart collection, then resets the bar and selects the new row so the grid shows
+    /// exactly what was saved. Failures (empty/duplicate name) are reported via `importStatusMessage`.
+    @discardableResult
+    func saveFiltersAsSmartCollection(name: String) async -> Bool {
+        guard let database else { return false }
+        let criteria = currentFilterCriteria
+        guard !criteria.isEmpty else {
+            importStatusMessage = "Set a rating, flag, label or keyword filter first, then save it."
+            return false
+        }
+        do {
+            let created = try await database.createSmartCollection(name: name, criteria: criteria)
+            await refresh()
+            guard let id = created.id else { return true }
+            clearSavedFilterCriteria()
+            selectedFilter = .smartCollection(id)
+            return true
+        } catch {
+            importStatusMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func renameSmartCollection(_ smart: SmartCollection, to name: String) async {
+        guard let database, let id = smart.id else { return }
+        do {
+            try await database.renameSmartCollection(id: id, to: name)
+        } catch {
+            importStatusMessage = error.localizedDescription
+        }
+        await refresh()
+    }
+
+    /// Replaces the collection's criteria with the filter bar's current ones. The collection being viewed keeps
+    /// being viewed; the bar is reset so the grid shows exactly what was saved.
+    func updateSmartCollectionFromFilters(_ smart: SmartCollection) async {
+        guard let database, let id = smart.id else { return }
+        let criteria = currentFilterCriteria
+        guard !criteria.isEmpty else {
+            importStatusMessage = "Set a rating, flag, label or keyword filter first, then update the smart collection from it."
+            return
+        }
+        do {
+            try await database.updateSmartCollectionCriteria(id: id, to: criteria)
+            await refresh()
+            if selectedFilter == .smartCollection(id) { clearSavedFilterCriteria() }
+        } catch {
+            importStatusMessage = error.localizedDescription
+            await refresh()
+        }
+    }
+
+    /// Deletes the smart collection (no photo is affected). The sidebar selection falls back to All Photos only
+    /// AFTER the write lands — flipping it first would let a refresh triggered by the flip re-fetch the row and
+    /// restore it (the same race `deleteCollection` documents).
+    func deleteSmartCollection(_ smart: SmartCollection) async {
+        guard let database, let id = smart.id else { return }
+        do {
+            try await database.deleteSmartCollection(id: id)
+        } catch {
+            importStatusMessage = error.localizedDescription
+            await refresh()
+            return
+        }
+        smartCollections.removeAll { $0.id == id }
+        if selectedFilter == .smartCollection(id) { selectedFilter = .allPhotos }
+        await refresh()
     }
 
     // MARK: - Keywords

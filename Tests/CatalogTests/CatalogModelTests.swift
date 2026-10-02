@@ -292,6 +292,142 @@ final class CatalogModelTests: XCTestCase {
         XCTAssertNil(model.keywordIDsByPhotoID[id])
     }
 
+    // MARK: - Smart collections
+
+    private func makeSmartModel(_ criteria: SmartCollectionCriteria, name: String = "Smart") async throws -> (CatalogModel, SmartCollection) {
+        let smart = try await database.createSmartCollection(name: name, criteria: criteria)
+        let model = await makeModel()
+        model.selectedFilter = .smartCollection(try XCTUnwrap(smart.id))
+        await model.refresh()
+        return (model, smart)
+    }
+
+    func testSmartCollectionShowsOnlyMatchesAndFollowsRatingChangesImmediately() async throws {
+        let (model, _) = try await makeSmartModel(SmartCollectionCriteria(minimumRating: 4))
+        XCTAssertTrue(model.displayedPhotos.isEmpty)
+        let photo = try XCTUnwrap(model.photos.first)
+        model.setRating(5, for: photo)
+        XCTAssertEqual(model.displayedPhotos.compactMap(\.id), [photo.id], "no await: a local rating change moves it in at once")
+        model.setRating(2, for: photo)
+        XCTAssertTrue(model.displayedPhotos.isEmpty, "and out again")
+        XCTAssertEqual(model.photos.count, Self.paths.count, "while a smart collection is selected `photos` is the full list")
+    }
+
+    func testFilterBarRefinesASmartCollectionByAND() async throws {
+        let (model, _) = try await makeSmartModel(SmartCollectionCriteria(minimumRating: 3))
+        let a = model.photos[0], b = model.photos[1]
+        model.setRating(4, for: a)
+        model.setRating(4, for: b)
+        model.setFlagStatus(.picked, for: a)
+        XCTAssertEqual(Set(model.displayedPhotos.compactMap(\.id)), Set([a.id, b.id].compactMap { $0 }))
+        model.flagFilter = .picked
+        XCTAssertEqual(model.displayedPhotos.compactMap(\.id), [a.id])
+    }
+
+    func testSavingFiltersCreatesSelectsAndResetsTheBar() async throws {
+        let model = await makeModel()
+        model.minimumRating = 3
+        model.flagFilter = .picked
+        let saved = await model.saveFiltersAsSmartCollection(name: "Keepers")
+        XCTAssertTrue(saved)
+        let smart = try XCTUnwrap(model.smartCollections.first)
+        XCTAssertEqual(smart.name, "Keepers")
+        XCTAssertEqual(smart.criteria.minimumRating, 3)
+        XCTAssertEqual(smart.criteria.flag, .picked)
+        XCTAssertEqual(model.selectedFilter, .smartCollection(try XCTUnwrap(smart.id)))
+        XCTAssertEqual(model.minimumRating, 0, "the bar is reset so the grid shows exactly what was saved")
+        XCTAssertEqual(model.flagFilter, .all)
+    }
+
+    func testSavingWithNothingToSaveOrADuplicateNameReportsAndSavesNothing() async throws {
+        let model = await makeModel()
+        let nothing = await model.saveFiltersAsSmartCollection(name: "Empty")
+        XCTAssertFalse(nothing)
+        XCTAssertNotNil(model.importStatusMessage)
+        XCTAssertTrue(model.smartCollections.isEmpty)
+
+        model.minimumRating = 2
+        let first = await model.saveFiltersAsSmartCollection(name: "Twice")
+        XCTAssertTrue(first)
+        model.importStatusMessage = nil
+        model.selectedFilter = .allPhotos
+        model.minimumRating = 2
+        let duplicate = await model.saveFiltersAsSmartCollection(name: "twice")
+        XCTAssertFalse(duplicate)
+        XCTAssertTrue(model.importStatusMessage?.contains("already exists") == true)
+        XCTAssertEqual(model.smartCollections.count, 1)
+    }
+
+    func testKeywordFilterIsSavedByKeyAndADeletedKeywordEmptiesTheCollection() async throws {
+        let model = await makeModel()
+        let photo = try XCTUnwrap(model.photos.first)
+        model.addKeywords("Sky", to: [try XCTUnwrap(photo.id)])
+        try await waitUntil("keyword loaded") { model.keywords.count == 1 }
+        let keywordID = try XCTUnwrap(model.keywords.first?.id)
+        model.keywordFilterID = keywordID
+        XCTAssertEqual(model.currentFilterCriteria.keywordKey, KeywordName.key(for: "Sky"))
+        let saved = await model.saveFiltersAsSmartCollection(name: "Skies")
+        XCTAssertTrue(saved)
+        XCTAssertEqual(model.displayedPhotos.compactMap(\.id), [photo.id])
+        model.deleteKeyword(id: keywordID)
+        XCTAssertTrue(model.displayedPhotos.isEmpty, "a criterion on a deleted keyword matches nothing, not everything")
+        XCTAssertEqual(model.smartCollections.count, 1)
+    }
+
+    /// Export with nothing checked uses the sidebar selection's set; for a smart collection that must be its matches,
+    /// not the whole catalog (`photos` holds everything while one is selected).
+    func testExportFallbackSetIsTheSmartMatchesNotTheWholeCatalog() async throws {
+        let (model, _) = try await makeSmartModel(SmartCollectionCriteria(minimumRating: 4))
+        XCTAssertTrue(model.smartCollectionSourcePhotos.isEmpty, "empty smart collection: nothing to export")
+        let photo = try XCTUnwrap(model.photos.first)
+        model.setRating(5, for: photo)
+        XCTAssertEqual(model.smartCollectionSourcePhotos.compactMap(\.id), [photo.id])
+        XCTAssertEqual(model.photos.count, Self.paths.count)
+    }
+
+    func testSavingKeepsTheUsersSortOrderAndSearchText() async throws {
+        let model = await makeModel()
+        model.sortOption = .nameAZ
+        model.searchText = "zzz"
+        model.minimumRating = 2
+        let saved = await model.saveFiltersAsSmartCollection(name: "KeepsSort")
+        XCTAssertTrue(saved)
+        XCTAssertEqual(model.sortOption, .nameAZ)
+        XCTAssertEqual(model.searchText, "zzz")
+        XCTAssertEqual(model.minimumRating, 0)
+    }
+
+    func testDeletingTheSelectedSmartCollectionFallsBackToAllPhotos() async throws {
+        let (model, smart) = try await makeSmartModel(SmartCollectionCriteria(minimumRating: 1))
+        await model.deleteSmartCollection(smart)
+        XCTAssertEqual(model.selectedFilter, .allPhotos)
+        XCTAssertTrue(model.smartCollections.isEmpty)
+        let remaining = try await database.allSmartCollections()
+        XCTAssertTrue(remaining.isEmpty)
+        XCTAssertEqual(model.displayedPhotos.count, Self.paths.count)
+    }
+
+    func testAnUnknownSmartCollectionIdShowsNothing() async throws {
+        let model = await makeModel()
+        model.selectedFilter = .smartCollection(9999)
+        await model.refresh()
+        XCTAssertTrue(model.displayedPhotos.isEmpty)
+    }
+
+    func testRenameAndUpdateFromFilters() async throws {
+        let (model, smart) = try await makeSmartModel(SmartCollectionCriteria(minimumRating: 1))
+        await model.renameSmartCollection(smart, to: "Renamed")
+        XCTAssertEqual(model.smartCollections.first?.name, "Renamed")
+        model.minimumRating = 0
+        await model.updateSmartCollectionFromFilters(smart)
+        XCTAssertNotNil(model.importStatusMessage, "nothing to update from")
+        XCTAssertEqual(model.smartCollections.first?.criteria.minimumRating, 1, "unchanged")
+        model.minimumRating = 5
+        await model.updateSmartCollectionFromFilters(smart)
+        XCTAssertEqual(model.smartCollections.first?.criteria.minimumRating, 5)
+        XCTAssertEqual(model.minimumRating, 0, "bar reset because the viewed collection was updated")
+    }
+
     // MARK: - Presets (Phase 5 slice 2)
 
     func testCreatePresetPersistsAndAppearsInThePublishedList() async throws {

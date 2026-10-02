@@ -43,6 +43,19 @@ struct ExportOptionsView: View {
                 }
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Metadata", selection: $exportModel.settings.metadata) {
+                    ForEach(ExportMetadataPolicy.allCases) { policy in
+                        Text(policy.label).tag(policy)
+                    }
+                }
+                if exportModel.settings.metadata == .all {
+                    Text("Includes the location (GPS) if the photo has one.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             if exportModel.settings.format == .jpeg {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Quality: \(Int(exportModel.settings.quality * 100))%")

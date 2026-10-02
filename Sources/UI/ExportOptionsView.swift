@@ -26,7 +26,7 @@ struct ExportOptionsView: View {
         )
     }
 
-    var body: some View {
+    private var form: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Export \(photoCount) Photo\(photoCount == 1 ? "" : "s")")
                 .font(.headline)
@@ -95,6 +95,35 @@ struct ExportOptionsView: View {
                     .foregroundStyle(.tertiary)
             }
 
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Watermark", isOn: $exportModel.settings.watermark.isEnabled)
+                if exportModel.settings.watermark.isEnabled {
+                    TextField("Text (e.g. © Your Name)", text: $exportModel.settings.watermark.text)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Watermark text")
+                    Picker("Position", selection: $exportModel.settings.watermark.position) {
+                        ForEach(WatermarkPosition.allCases) { position in
+                            Text(position.label).tag(position)
+                        }
+                    }
+                    HStack {
+                        Text("Size")
+                        Slider(value: $exportModel.settings.watermark.sizeFraction, in: ExportWatermark.sizeRange)
+                            .accessibilityLabel("Watermark size")
+                    }
+                    HStack {
+                        Text("Opacity")
+                        Slider(value: $exportModel.settings.watermark.opacity, in: ExportWatermark.opacityRange)
+                            .accessibilityLabel("Watermark opacity")
+                    }
+                    if !exportModel.settings.watermark.isActive {
+                        Text("Type some text to add the mark.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Toggle("Resize", isOn: $useCustomResize)
             if useCustomResize {
                 HStack {
@@ -134,7 +163,16 @@ struct ExportOptionsView: View {
             }
         }
         .padding()
-        .frame(width: 360)
+    }
+
+    /// The form as-is when it fits; otherwise the same form in a scroll view, so the Export button can never end up
+    /// below the bottom of a small screen (the watermark section made the sheet taller).
+    var body: some View {
+        ViewThatFits(in: .vertical) {
+            form
+            ScrollView { form }.frame(height: 560)
+        }
+        .frame(width: 380)
         .onAppear {
             // Seed the resize controls from the remembered setting — otherwise the Export button would overwrite a
             // stored long edge with "original" from this sheet's own unseeded defaults.

@@ -80,13 +80,15 @@ struct ExportSettings: Sendable, Equatable {
     var metadata: ExportMetadataPolicy = .all
     /// Output sharpening applied after the resize. Default `.none` = no change to today's pixels.
     var sharpening: ExportSharpening = .none
+    /// Optional text mark composited after sharpening (so the mark itself is never sharpened). Default off.
+    var watermark = ExportWatermark()
 }
 
 /// Schema-tolerant persistence (the pattern `EditState` uses): a missing key decodes to that field's default, so
 /// adding a field in a later release never invalidates settings an older build stored. In an extension, not the
 /// struct body, so the memberwise initializer (used by tests and call sites) is kept.
 extension ExportSettings: Codable {
-    private enum CodingKeys: String, CodingKey { case format, quality, resize, namingTemplate, colorSpace, metadata, sharpening }
+    private enum CodingKeys: String, CodingKey { case format, quality, resize, namingTemplate, colorSpace, metadata, sharpening, watermark }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -101,6 +103,7 @@ extension ExportSettings: Codable {
         colorSpace = (try? container.decodeIfPresent(ExportColorSpace.self, forKey: .colorSpace)) ?? defaults.colorSpace
         metadata = (try? container.decodeIfPresent(ExportMetadataPolicy.self, forKey: .metadata)) ?? defaults.metadata
         sharpening = (try? container.decodeIfPresent(ExportSharpening.self, forKey: .sharpening)) ?? defaults.sharpening
+        watermark = (try? container.decodeIfPresent(ExportWatermark.self, forKey: .watermark)) ?? defaults.watermark
     }
 
     func encode(to encoder: Encoder) throws {
@@ -114,6 +117,7 @@ extension ExportSettings: Codable {
         try container.encode(colorSpace, forKey: .colorSpace)
         try container.encode(metadata, forKey: .metadata)
         try container.encode(sharpening, forKey: .sharpening)
+        try container.encode(watermark, forKey: .watermark)
     }
 }
 
@@ -259,7 +263,8 @@ enum PhotoExporter {
         // Sharpen the image AT OUTPUT SIZE (after the resize). A CONVENTION, not a measured requirement: the radius is
         // a fraction of the extent, so before/after landed within 0.0043 of each other on a step edge (see
         // OutputSharpenTests); after-resize is simply the exact-pixel, unambiguous definition.
-        let resizedPixels = OutputSharpen.apply(settings.sharpening, to: Self.resized(edited, option: settings.resize))
+        let sharpened = OutputSharpen.apply(settings.sharpening, to: Self.resized(edited, option: settings.resize))
+        let resizedPixels = WatermarkRenderer.apply(settings.watermark, to: sharpened)
         // The writer emits the image's own `properties`, so setting them IS applying the metadata policy.
         let resized = resizedPixels.settingProperties(
             ExportMetadata.properties(from: oriented.properties, policy: settings.metadata)

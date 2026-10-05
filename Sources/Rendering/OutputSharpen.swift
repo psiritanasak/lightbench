@@ -36,7 +36,7 @@ enum OutputSharpen {
     /// haloed — so the values were scaled down roughly linearly. Print is stronger than screen because print softens
     /// (dot gain, paper). The halo's PIXEL size follows the radius fraction, so apparent size is consistent across
     /// output sizes, but a sub-pixel radius (400px output: 0.48px) gives a much weaker effect than at 1600px.
-    /// Pending a live eyeball check on a real photo (PROGRESS.md records the result once done); not yet tuned beyond the numbers above.
+    /// Eyeballed 2026-10-05 on two real photos at 2048px (3x zoom of matching crops, none/screen/print): screen gives modestly crisper edges and fur texture with no visible halo; print is clearly crisper with a faint dark rim along the strongest bright/blue and fur/sky boundaries, still natural. Judged by one reviewer (me), not a panel: kept as is.
     static let screenSharpness: Float = 0.2
     static let printSharpness: Float = 0.4
 

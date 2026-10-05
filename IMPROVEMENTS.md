@@ -1224,16 +1224,21 @@ the message and raise it from `sheetDidDisappear`.
 - A failed add reports via `importStatusMessage`, but the typed text is already cleared by then.
 - Not tested: >500-id chunking at the UI level (DB level is tested with 1203 photos).
 
-### D48. Export upgrades v1 follow-ups (2026-10-02) — open, low/medium
-- **Output sharpening sharpens Grain** (and NR leftovers / JPEG blocking), because it runs after the whole edit pipeline, which itself puts Grain AFTER Sharpen on purpose. Measured on a flat 0.5 field with Grain 0.5: perceptual noise std 0.0837 -> 0.0954 (+14%, screen) / 0.1128 (+35%, print), same at 1000px and 2000px. An export of a grained photo looks grainier than the Editor. A fix would sharpen before Grain, i.e. inside the pipeline.
+### D48. Export upgrades v1 follow-ups (2026-10-02, updated 2026-10-05) — mostly closed
+**Closed 2026-10-05:** (a) the default metadata policy is now `.withoutLocation` (stored settings moved to `exportSettings.v2` with a one-time v1 migration; a deliberate v1 "All metadata" is reset because it was indistinguishable from the old default; a downgrade then re-upgrade keeps the v2 value and ignores changes made by the older build); (b) output sharpening no longer amplifies Grain (grain is added after the sharpen when both are on — measured before the fix: noise std x1.13 screen / x1.34 print through the export path, after: within the 6% test tolerance of the unsharpened export); (c) the strengths were eyeballed on two real photos and kept (see `OutputSharpen`).
+**Still open:**
+- A resized export WITHOUT sharpening adds grain at full size and then minifies it: exact when the downsize ratio aligns grain cells (3000 -> 1000px: identical std 0.0837) but 0.0742 (-11%) for a non-integer ratio (3000 -> 1100px), vs 0.0838 when grain is added at the output size (what the Editor shows). Sharpened exports use the output-size path; unsharpened ones keep the old one to stay byte-identical.
+- Below ~500px output short side the grain cell clamps to 1px (`max(1.0, ...)` in `applyGrain`), so the deferred path's grain is coarser/stronger than the old minified one.
+- Enhance runs the MetalFX spatial upscaler AFTER the whole pipeline (grain included); it may amplify grain like export sharpening did. Not measured.
+- Noise left by Noise Reduction and source JPEG blocking are still sharpened with everything else.
+- Sharpening strengths were judged by one reviewer on two photos only; no settings UI to adjust them.
 - **Bright rim next to a transparent margin inside the frame** (e.g. `transformScale` < 1 without a crop): +44% linear at print settings fading over ~8px (reviewer measurement, not reproduced by me); only visible in PNG/TIFF. `EditPipeline.applySharpen` has the same unmeasured gap.
-- Sharpening strengths (0.2/0.4) and radius fractions (0.0012/0.002, capped at 3px) are PRINCIPLED STARTING VALUES from a step-edge measurement, only eyeballed once on a synthetic image — tune on real photos. The after-resize ORDER is a convention (before/after differed by 0.0043 on a step edge); textured content was not measured.
+- The after-resize ORDER of sharpening is a convention (before/after differed by 0.0043 on a step edge); textured content was not measured.
 - Watermark: text only (no image/logo); one line; the mark is silently skipped when the font would be < 1px or the text can't fit after 5 shrink attempts (export still succeeds); opacity blends in linear light (a given % looks stronger than in a gamma editor); the vertical gap follows glyph bounds, so descenders shift the baseline; emoji rely on the system font cascade.
 - Metadata: `.withoutLocation` is a BLOCKLIST (GPS dictionary + IPTC place fields incl. IPTC-Ext location structs) — location hidden in maker notes or XMP-only fields is not covered; `.none` is an allowlist. RAW sources: the decoded image's `properties` (CIRAWFilter output) is UNVERIFIED (no RAW fixture), so a RAW export may carry less than "All metadata" implies. Enhance writes no metadata at all (measured: no GPS, no Orientation tag, upright).
-- Default `All metadata` still includes GPS (what export always did); the sheet says so. Consider a default of "without location".
 - The editor preview is sRGB, so a Display P3 / Adobe RGB export of a wide-gamut source looks more saturated than the preview. 8-bit Adobe RGB bands a little more than sRGB.
-- The new `{PNG}` source colour chunks (gAMA/cHRM/sRGB) are dropped under every policy and the writer synthesizes its own; the P3/Adobe PNG chunk output was not byte-inspected.
-- ExportSettings persists ExportResize in Swift's synthesized Codable shape (`{"maxLongEdge":{"_0":N}}`) under `exportSettings.v1`; renaming that case later needs a migration (per-field fallback just resets resize).
+- The source's PNG colour chunks (gAMA/cHRM/sRGB) are dropped under every policy and the writer synthesizes its own; the P3/Adobe PNG chunk output was not byte-inspected.
+- ExportSettings persists ExportResize in Swift's synthesized Codable shape (`{"maxLongEdge":{"_0":N}}`) under `exportSettings.v2`; renaming that case later needs a migration like the v1 -> v2 one (the per-field fallback would just reset resize).
 - Not covered by tests: the RAW branch's pass-through of colorSpace (same expression as the non-RAW branch, which a mutation does catch), and the options sheet's ViewThatFits/ScrollView fallback (UI).
 
 ### D49. Smart collections v1 follow-ups (2026-10-02) — open, low

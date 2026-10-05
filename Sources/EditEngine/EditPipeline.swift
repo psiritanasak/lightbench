@@ -2565,6 +2565,12 @@ enum EditPipeline {
         return result
     }
 
+    /// The geometry-carried image the pipeline builds for one `.subject` mask (union of its ENABLED instances, feathered),
+    /// or nil when it selects nothing. Used by the on-image subject overlay so it shows exactly what the pipeline uses.
+    static func subjectMaskPreviewImage(_ state: EditState, maskID: UUID, source: CIImage) -> CIImage? {
+        subjectMaskImages(state, source: source)[maskID]
+    }
+
     /// One geometry-carried mask image PER STORED INSTANCE of the `.subject` mask `maskID`, index-aligned with
     /// `Mask.subjectInstancePNGs` (nil for an undecodable one). Each is the SAME image the pipeline would build for a
     /// mask holding only that instance — forward raster stretch plus the photo's own `applyGeometry` — so the

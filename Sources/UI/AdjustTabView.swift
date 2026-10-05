@@ -1118,6 +1118,8 @@ struct AdjustTabView: View {
                 onBeginBrushStroke: binding.wrappedValue.kind == .brush ? { beginBrushStroke(for: id) } : nil,
                 onBeginColorPick: binding.wrappedValue.kind == .colorRange ? { beginColorPick(for: id) } : nil,
                 onRecomputeSubject: binding.wrappedValue.kind == .subject ? { document.selectSubject(replacing: id) } : nil,
+                onTogglePickSubjects: binding.wrappedValue.kind == .subject ? { togglePickSubjects(for: id) } : nil,
+                isPickingSubjects: interactionMode.subjectPickingMaskID == id,
                 isRecomputingSubject: document.isSelectingSubject,
                 // Recomputed on every body evaluation from the live
                 // masks array (Phase 7 slice 6, Session B) — adding or
@@ -1193,6 +1195,14 @@ struct AdjustTabView: View {
         }
         interactionMode.disarm(.paintingBrush(maskID: mask.id))
         interactionMode.disarm(.pickingColorRange(maskID: mask.id))
+        interactionMode.disarm(.pickingSubject(maskID: mask.id))
+    }
+
+    /// Arms/disarms click-on-image subject picking for `id`. Arming resets zoom/pan (`onEnterPointPickingMode`): the
+    /// tap layer and the red overlay are positioned against an un-zoomed `currentFitRect`, like every other picker.
+    private func togglePickSubjects(for id: UUID) {
+        interactionMode.toggle(.pickingSubject(maskID: id))
+        if interactionMode.subjectPickingMaskID == id { onEnterPointPickingMode() }
     }
 
     /// Arms live brush-paint mode for `id` — called both by `addMask` (a

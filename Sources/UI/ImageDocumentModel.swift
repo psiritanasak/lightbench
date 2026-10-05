@@ -1132,7 +1132,9 @@ final class ImageDocumentModel: ObservableObject {
     /// Toggles the subject under a click (`normalizedX/Y`: fractions of the displayed photo, top-left origin) in or
     /// out of the `.subject` mask `maskID` — click-on-image picking. One history step ("Toggle Subject N"). A click that
     /// lands on no subject changes nothing and says so; a legacy union-only mask has no instances to pick.
-    func toggleSubjectInstance(maskID: UUID, normalizedX: Double, normalizedY: Double) {
+    /// `reportMiss: false` for the persistent on-image picker: a miss there is a harmless stray click, and an alert per
+    /// miss would interrupt a click-click-click workflow (the red overlay already shows what is selected).
+    func toggleSubjectInstance(maskID: UUID, normalizedX: Double, normalizedY: Double, reportMiss: Bool = true) {
         guard let currentImage, !isLoadInFlight else { return }
         // A Recompute on this mask would replace its instances and reset `subjectInstanceEnabled`, silently wiping a
         // toggle made while it runs.
@@ -1148,7 +1150,7 @@ final class ImageDocumentModel: ObservableObject {
         guard let index = SubjectInstancePicker.hit(
             state: editState, maskID: maskID, source: currentImage, normalizedX: normalizedX, normalizedY: normalizedY
         ) else {
-            subjectMaskMessage = "No subject at that point."
+            if reportMiss { subjectMaskMessage = "No subject at that point." }
             return
         }
         finalizePendingCommit()

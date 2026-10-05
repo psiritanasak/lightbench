@@ -198,7 +198,7 @@ struct ContentView: View {
         // reasoning, same un-zoomed assumption in its own tap-capture layer.
         document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance
             && !isPlacingRedEyeCorrections && !isEditingOverlayMask && !isPaintingBrush && !isPickingColorRange
-            && !isPickingPointColor && !isEditingRetouchSpot
+            && !isPickingPointColor && !isEditingRetouchSpot && !isPickingSubject
     }
 
     /// Spot removal: whether a spot is selected in the (expanded) Remove section at identity geometry — the only
@@ -318,6 +318,12 @@ struct ContentView: View {
     /// `isPickingColorRange` term, not to draw anything.
     private var colorPickingMaskID: UUID? { interactionMode.colorPickingMaskID }
     private var isPickingColorRange: Bool { colorPickingMaskID != nil }
+
+    /// Click-on-image subject picking: which `.subject` mask is armed. Persistent (stays armed across clicks, like
+    /// Red-Eye placement); draws a red tint of the included subjects and gates `canZoom` (its tap/overlay math
+    /// assumes an un-zoomed `currentFitRect`).
+    private var subjectPickingMaskID: UUID? { interactionMode.subjectPickingMaskID }
+    private var isPickingSubject: Bool { subjectPickingMaskID != nil }
 
     /// Point Color Slice B: which point color instance (if any) currently
     /// has its eyedropper armed — `UUID?`, same F4/`colorPickingMaskID`
@@ -492,7 +498,8 @@ struct ContentView: View {
         // instead of committing a point against a crop-mode `fitRect`
         // with no crosshair even drawn.
         if !isCroppingActive,
-           isPickingWhiteBalance || isPlacingRedEyeCorrections || isPickingPointColor || isPickingColorRange {
+           isPickingWhiteBalance || isPlacingRedEyeCorrections || isPickingPointColor || isPickingColorRange
+            || isPickingSubject {
             return handlePointPlacementKeyPress(keyPress)
         }
         // Phase 7 slice 2: same defensive re-check discipline as the
@@ -748,6 +755,9 @@ struct ContentView: View {
             // handler in `pointAndZoomOverlays` makes.
             document.pickColorRangeTarget(maskID: maskID, normalizedX: crosshairPosition.x, normalizedY: crosshairPosition.y)
             interactionMode.disarm(.pickingColorRange(maskID: maskID))
+        } else if let maskID = subjectPickingMaskID {
+            // Stays armed (several subjects can be toggled), like Red-Eye's toggle above; Escape/Done disarms.
+            document.toggleSubjectInstance(maskID: maskID, normalizedX: crosshairPosition.x, normalizedY: crosshairPosition.y, reportMiss: false)
         }
     }
 
@@ -1311,6 +1321,12 @@ struct ContentView: View {
         // grabs focus on the rising edge, matching `pointColorPickingID`'s
         // own `.onChange` below — added once this mode gained a keyboard
         // path; previously had nothing to reset for (mouse-only).
+        .onChange(of: subjectPickingMaskID) { _, newID in
+            if newID != nil {
+                crosshairPosition = CGPoint(x: 0.5, y: 0.5)
+                isImagePaneFocused = true
+            }
+        }
         .onChange(of: colorPickingMaskID) { oldID, newID in
             if oldID != newID {
                 discardUnpickedColorRangeMask(oldID)
@@ -1378,7 +1394,7 @@ struct ContentView: View {
         .onChange(of: showLibrary) { _, isShowingLibrary in
             if !isShowingLibrary,
                isPickingWhiteBalance || isPlacingRedEyeCorrections || isEditingOverlayMask
-                || isPaintingBrush || isPickingColorRange || isPickingPointColor {
+                || isPaintingBrush || isPickingColorRange || isPickingPointColor || isPickingSubject {
                 isImagePaneFocused = true
             }
         }
@@ -1647,7 +1663,7 @@ struct ContentView: View {
             .disabled(
                 document.currentImage == nil || isCroppingActive
                     || isPickingWhiteBalance || isPlacingRedEyeCorrections || isPickingColorRange
-                    || isPickingPointColor
+                    || isPickingPointColor || isPickingSubject
             )
             .tint(compareMode != .off ? .yellow : nil)
             .accessibilityAddTraits(compareMode != .off ? [.isSelected] : [])
@@ -1838,6 +1854,7 @@ struct ContentView: View {
                             : isPlacingRedEyeCorrections ? "Red-eye placement"
                             : isPaintingBrush ? "Brush painting"
                             : isPickingColorRange ? "Color range picker"
+                            : isPickingSubject ? "Subject picker"
                             : isPickingPointColor ? "Point color picker"
                             // Phase 7 slice 5: narrowed to overlay-owning
                             // kinds — with no overlay, nothing about the
@@ -2079,6 +2096,30 @@ struct ContentView: View {
                 )
                 .accessibilityHidden(true)
         }
+        // Click-on-image subject picking: a red tint of the INCLUDED subjects plus a PERSISTENT tap-capture layer (it
+        // stays armed so several subjects can be toggled; Escape or the panel's Done button disarms). Adjust-tab only —
+        // `currentFitRect` uses the display state, which zeroes crop while cropping, so a click in crop mode would map
+        // against the uncropped frame (`!isCroppingActive`, like every other picker).
+        if isPickingSubject, !isCroppingActive, let maskID = subjectPickingMaskID, let fitRect = currentFitRect {
+            SubjectMaskTintOverlay(document: document, maskID: maskID, fitRect: fitRect)
+                .id(maskID) // a different armed mask is a different overlay, whatever else is unchanged
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(width: fitRect.width, height: fitRect.height)
+                .position(x: fitRect.midX, y: fitRect.midY)
+                .onHover { inside in
+                    if inside { NSCursor.crosshair.push() } else { NSCursor.pop() }
+                }
+                .gesture(
+                    SpatialTapGesture(coordinateSpace: .local).onEnded { tap in
+                        let normalizedX = tap.location.x / fitRect.width
+                        let normalizedY = tap.location.y / fitRect.height
+                        document.toggleSubjectInstance(maskID: maskID, normalizedX: normalizedX, normalizedY: normalizedY, reportMiss: false)
+                        crosshairPosition = CGPoint(x: normalizedX, y: normalizedY)
+                    }
+                )
+                .accessibilityHidden(true)
+        }
         // Point Color Slice B: this eyedropper's tap-capture layer —
         // mirrors the WB eyedropper's own capture layer above almost
         // exactly (same `Color.clear`/crosshair-cursor/`SpatialTapGesture`
@@ -2125,6 +2166,8 @@ struct ContentView: View {
                 EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .yellow)
             } else if isPickingPointColor, !isCroppingActive {
                 EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .cyan)
+            } else if isPickingSubject, !isCroppingActive {
+                EditorCrosshairOverlay(fitRect: fitRect, normalizedPosition: crosshairPosition, tint: .orange)
             } else if isPickingColorRange, !isCroppingActive {
                 // D14 (IMPROVEMENTS.md): a distinct tint from every other
                 // picker (white/yellow/cyan already taken) so it's visually

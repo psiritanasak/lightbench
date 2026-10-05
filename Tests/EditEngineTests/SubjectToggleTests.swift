@@ -91,6 +91,13 @@ final class SubjectToggleTests: XCTestCase {
         XCTAssertEqual(model.subjectMaskMessage, "No subject at that point.")
     }
 
+    func testAQuietMissReportsNothing() async throws {
+        let (model, id) = try await makeModel()
+        model.toggleSubjectInstance(maskID: id, normalizedX: 0.75, normalizedY: 0.75, reportMiss: false)
+        XCTAssertNil(model.subjectMaskMessage, "the persistent on-image picker must not raise an alert per stray click")
+        XCTAssertEqual(enabled(model), [])
+    }
+
     func testALegacyUnionOnlyMaskHasNothingToPick() async throws {
         let (model, id) = try await makeModel(legacyOnly: true)
         let steps = model.historyEntries.count

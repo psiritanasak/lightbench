@@ -34,6 +34,8 @@ enum EditorInteractionMode: Equatable {
     case paintingBrush(maskID: UUID)
     case pickingColorRange(maskID: UUID)
     case pickingPointColor(pointColorID: UUID)
+    /// Click-on-image subject picking: stays armed so several subjects can be toggled (like Red-Eye placement).
+    case pickingSubject(maskID: UUID)
 
     /// Read-only projections matching the 5 stored properties this type
     /// replaces, by name and type — every existing read site (`canZoom`,
@@ -54,6 +56,11 @@ enum EditorInteractionMode: Equatable {
 
     var colorPickingMaskID: UUID? {
         if case .pickingColorRange(let maskID) = self { return maskID }
+        return nil
+    }
+
+    var subjectPickingMaskID: UUID? {
+        if case .pickingSubject(let maskID) = self { return maskID }
         return nil
     }
 
@@ -91,7 +98,7 @@ enum EditorInteractionMode: Equatable {
     /// armed, only that mask-editing itself has ended.
     mutating func disarmMaskModes() {
         switch self {
-        case .paintingBrush, .pickingColorRange:
+        case .paintingBrush, .pickingColorRange, .pickingSubject:
             self = .none
         case .none, .pickingWhiteBalance, .placingRedEye, .pickingPointColor:
             break

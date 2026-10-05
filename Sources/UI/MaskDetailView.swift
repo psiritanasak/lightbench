@@ -96,6 +96,9 @@ struct MaskDetailView: View {
     var onBeginColorPick: (() -> Void)?
     /// `.subject` only — re-runs Vision and replaces this mask's raster. `nil` for every other kind.
     var onRecomputeSubject: (() -> Void)?
+    /// Click-on-image subject picking: the button toggles the armed mode in `AdjustTabView`/`ContentView`.
+    var onTogglePickSubjects: (() -> Void)?
+    var isPickingSubjects = false
     /// A Vision pass is in flight (any mask): the recompute button waits.
     var isRecomputingSubject = false
     /// Phase 7 slice 6, Session B — every OTHER mask on this photo,
@@ -214,6 +217,17 @@ struct MaskDetailView: View {
                         Toggle("Subject \(index + 1)", isOn: personBinding(index))
                             .accessibilityLabel("Include Subject \(index + 1)")
                     }
+                }
+            }
+            if mask.subjectInstancePNGs.count > 1, let onTogglePickSubjects {
+                Button(isPickingSubjects ? "Done Picking" : "Pick on Image") { onTogglePickSubjects() }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                    .tint(isPickingSubjects ? .orange : nil)
+                    .accessibilityLabel(isPickingSubjects ? "Finish Picking Subjects" : "Pick Subjects on the Photo")
+                if isPickingSubjects {
+                    Text("Click a subject in the photo to include or exclude it. Red marks the subjects you have chosen. Esc or Done to finish.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             Toggle("Invert (select background)", isOn: $mask.invertSelection)

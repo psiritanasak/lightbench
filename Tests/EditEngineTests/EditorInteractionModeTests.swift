@@ -65,6 +65,18 @@ final class EditorInteractionModeTests: XCTestCase {
         XCTAssertNil(mode.pointColorPickingID)
     }
 
+    func testPickingSubjectProjectsItsMaskIDOnly() {
+        let mode = EditorInteractionMode.pickingSubject(maskID: maskID)
+
+        XCTAssertFalse(mode.isPickingWhiteBalance)
+        XCTAssertFalse(mode.isPlacingRedEyeCorrections)
+        XCTAssertNil(mode.brushPaintingMaskID)
+        XCTAssertNil(mode.colorPickingMaskID)
+        XCTAssertNil(mode.pointColorPickingID)
+        XCTAssertEqual(mode.subjectPickingMaskID, maskID)
+        XCTAssertNil(EditorInteractionMode.pickingColorRange(maskID: maskID).subjectPickingMaskID, "same id under another case is not subject picking")
+    }
+
     func testPickingPointColorProjectsItsInstanceIDOnly() {
         let mode = EditorInteractionMode.pickingPointColor(pointColorID: pointColorID)
 
@@ -161,6 +173,26 @@ final class EditorInteractionModeTests: XCTestCase {
         var mode = EditorInteractionMode.pickingColorRange(maskID: otherMaskID)
         mode.disarmMaskModes()
         XCTAssertEqual(mode, .none)
+    }
+
+    func testDisarmMaskModesClearsSubjectPickingForAnyID() {
+        var mode = EditorInteractionMode.pickingSubject(maskID: otherMaskID)
+        mode.disarmMaskModes()
+        XCTAssertEqual(mode, .none)
+    }
+
+    func testSubjectPickingTogglesAndSwitchesLikeTheOtherPayloadModes() {
+        var mode = EditorInteractionMode.none
+        mode.toggle(.pickingSubject(maskID: maskID))
+        XCTAssertEqual(mode.subjectPickingMaskID, maskID)
+        mode.toggle(.pickingSubject(maskID: maskID))
+        XCTAssertEqual(mode, .none)
+        mode.toggle(.pickingSubject(maskID: maskID))
+        mode.toggle(.pickingWhiteBalance)
+        XCTAssertEqual(mode, .pickingWhiteBalance, "arming another mode replaces subject picking")
+        mode = .pickingSubject(maskID: maskID)
+        mode.disarm(.pickingSubject(maskID: otherMaskID))
+        XCTAssertEqual(mode.subjectPickingMaskID, maskID, "a disarm for a different mask is a no-op")
     }
 
     func testDisarmMaskModesLeavesWhiteBalanceArmed() {

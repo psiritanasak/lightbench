@@ -82,6 +82,13 @@ struct EditHistory {
         self.limit = limit
     }
 
+    /// Storage-level initializer for `init?(restoring:...)` (validated by the caller).
+    init(restoredEntries: [HistoryEntry], currentIndex: Int, limit: Int) {
+        self.entries = restoredEntries
+        self.currentIndex = currentIndex
+        self.limit = limit
+    }
+
     /// Records `newValue` as a new checkpoint, making `current` undoable
     /// back to its prior value. No-op if `newValue == current` (via
     /// `EditState`'s `Equatable`) — prevents a gesture that netted no

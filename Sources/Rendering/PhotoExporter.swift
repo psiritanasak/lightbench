@@ -271,11 +271,18 @@ enum PhotoExporter {
         guard let oriented = await RawDecoder.decode(contentsOf: sourceURL, editState: editState) else {
             throw PhotoExportError.unreadableSource(photo.path)
         }
-        let edited = EditPipeline.apply(editState, to: oriented)
+        // Grain is the pipeline's last stage because sharpening grain amplifies it (measured: +14%/+35% noise std with
+        // output sharpening). Output sharpening runs after the pipeline, so when both are on, hold the grain back and
+        // add it after the sharpen, at the output size — the same order the Editor uses. Every other export is unchanged.
+        let deferGrain = settings.sharpening != .none && editState.grain != 0
+        var pipelineState = editState
+        if deferGrain { pipelineState.grain = 0 }
+        let edited = EditPipeline.apply(pipelineState, to: oriented)
         // Sharpen the image AT OUTPUT SIZE (after the resize). A CONVENTION, not a measured requirement: the radius is
         // a fraction of the extent, so before/after landed within 0.0043 of each other on a step edge (see
         // OutputSharpenTests); after-resize is simply the exact-pixel, unambiguous definition.
-        let sharpened = OutputSharpen.apply(settings.sharpening, to: Self.resized(edited, option: settings.resize))
+        var sharpened = OutputSharpen.apply(settings.sharpening, to: Self.resized(edited, option: settings.resize))
+        if deferGrain { sharpened = EditPipeline.applyFinalGrain(editState, to: sharpened) }
         let resizedPixels = WatermarkRenderer.apply(settings.watermark, to: sharpened)
         // The writer emits the image's own `properties`, so setting them IS applying the metadata policy.
         let resized = resizedPixels.settingProperties(

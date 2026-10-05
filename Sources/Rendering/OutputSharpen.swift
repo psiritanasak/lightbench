@@ -7,11 +7,9 @@ import Foundation
 /// Enhance — it only shapes the pixels written by Export.
 ///
 /// KNOWN LIMITATIONS (measured 2026-10-02; logged in IMPROVEMENTS.md D48):
-/// - It runs AFTER the whole edit pipeline, so it also sharpens Grain, which `EditPipeline` deliberately places after
-///   its own Sharpen because sharpening grain amplifies it. On a flat 0.5 field with Grain 0.5 the noise's standard
-///   deviation (perceptual) went 0.0837 -> 0.0954 (+14%) with "For screen" and -> 0.1128 (+35%) with "For print", so
-///   an exported photo with Grain looks grainier than the Editor. The same applies to noise left by Noise Reduction
-///   and to source JPEG blocking.
+/// - FIXED (2026-10-05): it used to sharpen Grain too (noise std 0.0837 -> 0.0954 / 0.1128 on a flat field with Grain 0.5).
+///   `PhotoExporter.export` now renders the pipeline without grain and adds it after this sharpen when both are on. Noise
+///   left by Noise Reduction and source JPEG blocking are still sharpened with everything else.
 /// - Next to a transparent margin INSIDE the frame (e.g. `transformScale` < 1 without a crop) the opaque edge gets a
 ///   bright rim (measured +44% linear at print settings, fading over ~8px; alpha itself stays exactly 0/1). It is a
 ///   normal edge in JPEG (the margin is black) but shows as a halo against transparency in PNG/TIFF. The image's

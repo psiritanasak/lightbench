@@ -3776,6 +3776,13 @@ enum EditPipeline {
     /// resample's own distortion.
     private static let kGrainCellFraction: Double = 0.002
 
+    /// The Grain stage on its own, for the one caller that must run it OUTSIDE `apply`: Export with output sharpening
+    /// renders the pipeline with `grain = 0`, resizes and sharpens, and only then adds grain here — grain is the
+    /// pipeline's last stage precisely because sharpening it amplifies it, and export sharpening runs after `apply`.
+    static func applyFinalGrain(_ state: EditState, to image: CIImage) -> CIImage {
+        applyGrain(state, to: image)
+    }
+
     private static func grainActive(_ state: EditState) -> Bool {
         state.grain != 0
     }

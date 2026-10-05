@@ -3099,3 +3099,66 @@ Spot removal v1 — SECOND live pass (2026-10-02, same scratch/backup routine, c
 **Grain vs export sharpening.** Grain is `EditPipeline`'s last stage because sharpening grain amplifies it, but export sharpening runs after `EditPipeline.apply`. Fix: when sharpening != none and the edit has grain, export runs `apply` with grain zeroed, resizes, `OutputSharpen`, then `EditPipeline.applyFinalGrain` (a wrapper over the private `applyGrain`), then the watermark. Measured through the export path (flat 800px field, Grain 0.5, mutation with the deferral off): std ratio 1.134 screen / 1.340 print — the same numbers the earlier harness found. A reviewer asked for a resized case; measuring it showed something worth recording: a 3x downsize aligns the 0.002*min-extent grain cells exactly (identical std 0.0837 either way) but a non-integer downsize (3000 -> 1100px) smooths the OLD path's grain to 0.0742 while the deferred path gives 0.0838, the same as a native-size export — so the test contract became "a resized sharpened export's grain equals the grain of a native-size export", not "equals the unsharpened resized export". Unsharpened exports keep the old path (byte-identical by design) and therefore keep the slightly weaker minified grain (D48).
 
 **Tuning by eye.** Two real library photos (copies in the container's tmp, originals untouched) exported at 2048px long edge with none/screen/print; matching 1:1 crops composed side by side at 3x nearest zoom and looked at. Screen: modestly crisper edges and fur texture, no halo. Print: clearly crisper, a faint dark rim along the strongest bright/blue and fur/sky boundaries, still natural. Constants unchanged. Honest limits: judged by one viewer (me) on two photos, no printed output, no RAW.
+
+## Sky / Object mask feasibility spike (2026-10-05) — decision: NEEDS-MODEL for a cloud-capable Sky mask; clear-sky-only classical v1 is possible
+
+Spike only: no `MaskKind`, no `EditState` field, no UI, nothing in `Sources/`. Permanent probe: `Tests/RenderingTests/SkyMaskProbeTests.swift`
+(3 tests: the classifier vocabulary contains `sky`/`blue_sky`/`cloudy`/`sunset_sunrise`/`night_sky`; a synthetic blue-gradient-over-green
+fixture classifies as sky >= 0.3 (skip-only: it can never fail); attention saliency is a coarse fixed-size float map). Everything else below came from a temporary harness
+(deleted) on this Apple M1 / macOS 27.0 (build 26A428); the user's real photos were COPIED to the container tmp (originals untouched, copies
+deleted afterwards) and looked at only as <= 300px-high side-by-side overlays.
+
+**1. OS facilities (measured).**
+- `VNClassifyImageRequest` (revision 2 = the current and default revision on this machine; revisions 1 and 2 supported; 1303-label
+  vocabulary) works as a SCENE gate, not a mask: 7-23ms per photo after a ~160ms first call (read from the harness log); labels `sky`/`blue_sky`/`cloudy`/
+  `night_sky`/`sunset_sunrise` with confidences. Over 96 random library JPEGs, 44 had `max(sky, blue_sky) >= 0.5`; of those, every one
+  produced a non-empty classical mask (no "gated but empty"; mask QUALITY on those 44 was not judged except for the photos viewed in the two batches). Without the
+  gate the classical detector put a coverage > 15% "sky" mask on AT LEAST 14 of the 52 ungated photos — the printout I made was truncated at 14 and the
+  photos were identified by their classifier labels (people / document / water), not all inspected by eye (white walls, ID photos, documents, underwater
+  blue water among them); the three no-sky photos of the first batch (underwater, portrait against a white
+  wall, a lab bench) all had no sky label.
+- Attention saliency: a coarse fixed-size heat map (far smaller than the image; pinned by a test). Population: the 11 first-batch photos on which
+  the version-1 detector produced a non-empty mask (that includes two non-sky photos, the underwater shot and the white-wall portrait). Mean saliency
+  inside the mask was lower than outside in 9 of the 11 (clearly, e.g. 0.033 vs 0.197; but only marginally — under 15% — in three: IMG_6414 0.072 vs 0.084,
+  viscuna 0.048 vs 0.053, 4K2A0048 0.063 vs 0.073) and HIGHER inside in 2 (IMG_6394 0.094 vs 0.040, IMG_8525 0.048 vs 0.038). (An earlier draft of this
+  entry said "7 of 11"; recounting from the logged values gives 9 of 11. The conclusion is unchanged.) Too coarse and inconsistent to be a mask or a seed.
+  NOT used.
+- Foreground-instance mask: overlap with the classical sky was 0.1-0.6% in every photo that had instances — consistent (sky is never foreground)
+  but the INVERSE of the foreground mask is "everything but the subject" (ground included), so it cannot identify sky; it could only subtract
+  subjects from a sky mask.
+- No per-pixel sky/semantic request exists in Vision (only person segmentation, foreground instances, saliency). No system segmentation
+  `MLModel` was found by this spike (not exhaustively searched).
+
+**2. Classical detector prototype (throwaway).** Per-pixel colour likelihood (blue-dominant bright pixels; bright near-neutral pixels for
+overcast; dusk blue allowed once the first batch showed a miss), a smoothness test (luma gradient), 4-connected components that touch the top of
+the frame, closing, a light blur; working size 480px. First batch (13 photos, mostly clear high-altitude Atacama/Bolivia skies):
+- Version 1 (10 sky photos): 7 good, 1 partial, 2 wrong (a dark twilight sky not detected at all; snow leaking into the mask).
+- Version 2 (dusk-blue relaxation + a column-contiguity rule for neutral pixels): 9 good, 1 wrong — the dark twilight sky and the partial case
+  were fixed; the snow leak was NOT (snow is blue-tinted white, so it counts as blue sky).
+- A second, harder batch: from the 96-photo pass I VIEWED six photos picked by their classifier labels (cloudy / sunset / night / salt-flat
+  reflection), with the version-2 detector. Verdicts, photo by photo: IMG_6385 (blue sky with clouds) PARTIAL — blue patches selected, clouds as
+  blocky gaps; DSC_0549 (cumulus) WRONG — the clouds, the sky's main content, are mostly excluded as blocky holes; IMG_6406 (sunset) PARTIAL — blue
+  upper sky selected, glow band partly missed, and it leaks into the lake reflection at the lower left; 20240302_001207 (Milky Way night sky) WRONG —
+  a large dark region selected with a ragged boundary against the sky/mountain edge. The two Uyuni mirror-world photos (IMG_6561, IMG_6564) are LEFT OUT of
+  the tally: they select the sky reflected in the salt flat below the people (arguably right, arguably wrong).
+- Honest tally (version 2): clear/dusk sky photos: 9 good of 10; cloud-rich/sunset/night photos: 0 good of 4 (2 partial, 2 wrong). The sample is one
+  person's library (blue high-altitude skies dominate), small (13 + 6 photos viewed, 96 classified), and judged by me from small overlays.
+- Latency: 1.8-3.0 s per photo at 480px — in a DEBUG build with unoptimised nested loops. A Release number was NOT obtained: the test target does
+  not build in Release on this project (an unrelated `Float16` error in `ProxyBuilderTests`).
+
+**3. Core ML route (assessment only; NOTHING downloaded or measured).** Recalled, not verified in this spike: DeepLabV3-class models (Apple hosts
+converted ones; tens of MB) and SegFormer-B0/ADE20K (~15MB; recalled that NVIDIA's released weights are reportedly non-commercial — verify the licence
+before deciding) would give a real sky class and handle clouds. Integration shape would mirror the Subject mask: `VNCoreMLRequest` at ~512px, the result stored as a
+persisted raster (`Mask.subjectInstancePNGs`-style) so a render never re-runs the model (determinism), carried through `subjectMaskImages`/
+`applyGeometry`. Costs: a bundled model file (size), a licence decision, and drift risk if the model is ever swapped. This is the same shape of
+decision as CIRAWFilter vs LibRaw in CLAUDE.md and needs the user's call.
+
+**4. Object select.** Foreground instances (done, plus click-on-image picking) cover "the thing in front". Selecting an arbitrary clicked object
+(a building, a tree) needs a promptable segmenter (Segment-Anything-class) — a Core ML model, same decision as Sky. Attention/objectness saliency
+is a coarse heat map, not a segmenter.
+
+**5. Decision.** (a) A Lightroom-grade Sky mask (clouds, sunsets, snow-adjacent horizons) NEEDS A MODEL. (b) A "clear sky" v1 is feasible with NO new
+dependency: gate on `VNClassifyImageRequest`, run the colour/smoothness detector, persist the raster (the Subject mask's machinery: Feather/Invert
+already exist), and say in the UI that clouds, sunsets and bright blue-white ground (snow leaked into the mask on IMG_6553 and was not fixed) may be
+mis-selected. It would be good on blue-sky photos and visibly wrong with prominent clouds — a product call whether that half-feature is worth shipping. (c) Object select: NEEDS A MODEL. Open question for the user: model route (size/licence) vs
+clear-sky-only v1 vs neither.

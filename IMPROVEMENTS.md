@@ -1245,3 +1245,12 @@ the message and raise it from `sheetDidDisappear`.
 - `refresh()` reads `selectedFilter` after several awaits: an older refresh landing after a sidebar switch can briefly show the wrong source set (pre-existing for All Photos <-> collection; now also smart). A generation token would fix all of them.
 - A selected photo that drops out of the smart set (rating changed) stays selected, like the filter bar. A keyword delete that empties a smart collection is silent.
 - Not mutation-tested: the `.smartCollection` arm of `refresh()` (removing it is a compile error, not a failing test); the ContentView Export wiring is covered only by the live check.
+
+### D50. Click-on-image subject picking v1 follow-ups (2026-10-05) — open, low
+- NOT live-verified: the keyboard crosshair path (arrow keys + Return), picking while zoomed (zoom is reset on arm), picking with a crop/flip/straighten applied in the REAL UI (the engine's geometry cases are unit-tested through the forward path, whole-frame), and picking in Compare/Crop modes. Perspective has no dedicated hit-test case (same shared `applyGeometry` path).
+- The red overlay shows the CHOSEN subjects only (not the final effect): Invert and the mask's combine mode are applied later in the pipeline and are not reflected; it appears only while the mode is armed. Rendered <= 512px through `.task(id: editState)` with a 30ms debounce.
+- A click on no subject is silent in the picker (the engine reports it via `subjectMaskMessage` only when `reportMiss` is true); Vision instance masks are disjoint, so the hit rule is simply highest coverage (>= 0.5), lowest index on a tie — the planned 'smaller subject wins' tie-break was dropped as unnecessary.
+- Picking needs stored instances: a legacy union-only mask says to Recompute; a mask with a single instance has no button.
+- Hit test cost: N (<= 8) lazy mask builds + N 1x1 renders on the main actor per click (measured only by reading, not timed).
+- Accessibility: the on-image layer is hidden from VoiceOver; the per-subject checkboxes are the equivalent path. Keyboard users have crosshair + Return (unverified live).
+- Live-check technique: a two-circle fixture photo + sidecar with hand-made instance PNGs (the Vision pass is not needed); the app only reads a sidecar once the folder has a bookmark, so the first save prompts for access and OVERWRITES the crafted sidecar — grant first, restore the sidecar, reopen. Focus kept jumping to Chrome during the pass: every keystroke went through a guard that verifies PhotoApp is frontmost first.

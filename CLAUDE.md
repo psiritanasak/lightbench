@@ -58,6 +58,7 @@ measured-but-counterintuitive behavior that isn't repeated here.
 2. Edit engine: exposure, contrast, white balance, curves, HSL, crop, transform/distort — see Phase 2 backlog below
 3. Non-destructive pipeline: param serialization, edit history, undo — ✅ COMPLETE
    - In-memory Undo/Redo, time-coalesced ~350ms bursts — `Sources/EditEngine/EditHistory.swift`
+   - Persisted edit history (2026-10-05): the History panel survives photo switches and relaunches. The timeline is stored in the photo's own sidecar under a reserved top-level `"_history"` key (`HistoryArchive`: key-level deltas + content-addressed blob dedupe; `SidecarStore.readHistory`/`write(_:historyObject:)`; `EditState`'s tolerant decode makes every other reader ignore it). Restored ONLY when its current entry equals the sidecar's own state object, written ONLY when it belongs to the open photo and equals the saved state; a writer that re-encodes just an `EditState` (batch Paste, pin backfill) drops it — absent, never stale. Read `docs/ROADMAP_HISTORY.md`'s Persisted edit history entry before touching it
    - Revert to Original (always resets to true identity)
    - Sidecar-file persistence (`MyPhoto.jpg.photoapp.json`, per-folder security-scoped bookmark)
    - `EditState.Codable` is schema-tolerant (missing key → per-field default)

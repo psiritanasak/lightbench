@@ -44,7 +44,7 @@ Sources: Lightroom Classic releases 14.4 (Jun 2025) through 15.6 (Sep 2026) as s
 5. **Export / import upgrades**: metadata + watermark, color space/bit depth, output sharpening, ~~naming templates~~ (done 2026-09-30, with batch rename), export presets, HEIC/AVIF/DNG; import rename/copy/apply-preset, tethering, watched folders.
 6. **Multi-photo**: HDR merge, Panorama merge, focus stacking, granular Sync Settings dialog, Survey/Reference view.
 7. **Culling / faces**: Assisted Culling, duplicate detection, face detection + People view (R: Faces panel with Eye Focus / Eyes Open scores, June 2026).
-8. **Persist edit history** across sessions (ours is in-memory), Smart Previews (offline editing), folder move/rename inside the app, Soft Proofing, Print/Slideshow/Map (low value for this app).
+8. ~~**Persist edit history** across sessions~~ ✅ shipped 2026-10-05 (see D51), Smart Previews (offline editing), folder move/rename inside the app, Soft Proofing, Print/Slideshow/Map (low value for this app).
 9. ~~Phase 8 polish (tiled rendering, perf)~~ — DONE 2026-09-30 by measured audit (see D36/D38); start with the open items below (D28).
 
 **Additions from the release-note pass (14.4 → 15.6), not covered in the list above:**
@@ -1259,3 +1259,11 @@ the message and raise it from `sheetDidDisappear`.
 - Hit test cost: N (<= 8) lazy mask builds + N 1x1 renders on the main actor per click (measured only by reading, not timed).
 - Accessibility: the on-image layer is hidden from VoiceOver; the per-subject checkboxes are the equivalent path. Keyboard users have crosshair + Return (unverified live).
 - Live-check technique: a two-circle fixture photo + sidecar with hand-made instance PNGs (the Vision pass is not needed); the app only reads a sidecar once the folder has a bookmark, so the first save prompts for access and OVERWRITES the crafted sidecar — grant first, restore the sidecar, reopen. Focus kept jumping to Chrome during the pass: every keystroke went through a guard that verifies PhotoApp is frontmost first.
+
+### D51. Persisted edit history v1 follow-ups (2026-10-05)
+Shipped: `_history` in the sidecar (commits 8805d76 format, c544ddf wiring). Open, none blocking:
+- No "Clear History" control — a photo's trail (up to 101 rows, incl. abandoned redo rows) persists until the sidecar is rewritten without it (batch Paste does that) or Revert/new edits trim it by the 100-step limit.
+- The history read in `load(from:)` runs serially BEFORE the image decode; it has no dependency on the decode, so `async let` would overlap them. Costs up to the archive decode time (documented in `HistoryArchive` tests) on photos with big mask histories.
+- Two guards are untested defense in depth (mutation-checked: removing either leaves the suite green): `historyURL == url` in `saveSidecarNow` (guards the `load(from:)` window between `currentURL = url` and the history reset — same hard-to-reproduce class as D28) and the restore-time `restored.current == editState` check (the RAW pin-backfill case; the sidecar-vs-archive consistency check upstream already covers the PNG-testable cases).
+- No test observes that the off-main WARMED encoder is the one adopted (only timing differs).
+- Anything that rewrites a sidecar with only an `EditState` (batch Paste, Enhance-adjacent writers) silently drops the history — by design, but a user pasting onto a photo loses its trail.

@@ -158,6 +158,11 @@ final class ImageDocumentModel: ObservableObject {
     // MARK: - Undo/Redo state
 
     private var history = EditHistory()
+    /// Whose history `history` is (the photo it was reset/restored for) — so a save can never embed one photo's history in
+    /// ANOTHER photo's sidecar (the one window where they differ: `load(from:)` between `currentURL = url` and the reset).
+    private var historyURL: URL?
+    /// Caches each history entry's encoded form across saves (see `HistoryArchive.Encoder`).
+    private var historyEncoder = HistoryArchive.Encoder()
 
     /// Set while `applyHistoryState` is assigning `editState` as the result
     /// of an undo/redo — makes the resulting `didSet` skip re-recording
@@ -295,6 +300,9 @@ final class ImageDocumentModel: ObservableObject {
         // mutates this in place before it's committed to `editState` at
         // the bottom of this function.
         let existingSidecarState = loadSidecarIfReachable(for: url)
+        // The photo's persisted edit history (sidecar `_history`), if any and still consistent with its edits. Read OFF the
+        // main thread (decoding re-serialises every entry — hundreds of ms with a big mask).
+        let persistedHistory = existingSidecarState == nil ? nil : await loadPersistedHistory(for: url)
         var restoredState = existingSidecarState ?? EditState()
         // Set below only when this load backfills a decoder-version pin
         // into a photo that ALREADY had a sidecar on disk — see the
@@ -428,15 +436,18 @@ final class ImageDocumentModel: ObservableObject {
         // `scheduleSidecarSave()`'s debounce — nothing else is pending
         // for this freshly-opened photo, so there's no coalescing benefit
         // to waiting.
-        if shouldPersistBackfilledDecoderPin {
-            saveSidecarNow(suppressErrorMessage: true)
-        }
         // A RAW-native re-decode debounced during either await above is
         // now stale — `editState` was just overwritten with the INCOMING
         // photo's own already-correct `restoredState`, so firing it would
         // be a guaranteed-no-op full re-decode of the photo just opened.
         rawRedecodeWorkItem?.cancel()
-        resetHistory() // undo history is per-photo too — can't undo into the previous photo
+        // Undo history is per-photo: the incoming photo's own persisted history when it is still consistent with its edits
+        // (the decoder-pin backfill CHANGES the state, which makes the persisted history stale — dropped), else a fresh one.
+        resetHistory(restoring: restoredState == existingSidecarState ? persistedHistory : nil)
+        // Must come AFTER the history reset: a save embeds `history`, which until now was the OUTGOING photo's.
+        if shouldPersistBackfilledDecoderPin {
+            saveSidecarNow(suppressErrorMessage: true)
+        }
     }
 
     // MARK: - RAW-native re-decode (Phase 6 slices 2-3)
@@ -1300,11 +1311,19 @@ final class ImageDocumentModel: ObservableObject {
     /// here is frequently RESTORED from a photo's own sidecar, not literal
     /// identity — labeling that first History row "Original" would
     /// misdescribe an already-edited photo's own starting point.
-    private func resetHistory() {
+    private func resetHistory(restoring persisted: (archive: HistoryArchive, encoder: HistoryArchive.Encoder)? = nil) {
         historyCommitWorkItem?.cancel()
         historyCommitWorkItem = nil
         isBurstPending = false
-        history = EditHistory(editState, initialSummary: "Opened")
+        if let persisted, let restored = EditHistory(restoring: persisted.archive.entries, currentIndex: persisted.archive.currentIndex),
+           restored.current == editState {
+            history = restored
+            historyEncoder = persisted.encoder // already warmed off-main, so the first save re-encodes nothing
+        } else {
+            history = EditHistory(editState, initialSummary: "Opened")
+            historyEncoder = HistoryArchive.Encoder()
+        }
+        historyURL = currentURL
         refreshHistoryState()
         analysisGeneration += 1
         subjectMaskMessage = nil // a late "no subject" must not pop up about the NEXT photo
@@ -1523,6 +1542,22 @@ final class ImageDocumentModel: ObservableObject {
         return state
     }
 
+    /// `SidecarStore.readHistory` for `url`, run off the main thread inside the folder's security scope. nil when the folder
+    /// is not reachable (load must stay silent) or the photo has no usable persisted history.
+    private func loadPersistedHistory(for url: URL) async -> (archive: HistoryArchive, encoder: HistoryArchive.Encoder)? {
+        guard let folderURL = folderAccess.resolvedURL(for: url.deletingLastPathComponent()),
+              folderURL.startAccessingSecurityScopedResource() else { return nil }
+        defer { folderURL.stopAccessingSecurityScopedResource() }
+        return await Task.detached(priority: .userInitiated) {
+            guard let archive = SidecarStore.readHistory(forPhotoAt: url) else { return nil }
+            // Warm the encoder's per-entry cache HERE: a fresh one would re-encode (base64 + SHA-256 of every mask blob) the
+            // whole restored timeline on the MAIN thread at the first save after the user's next edit.
+            let encoder = HistoryArchive.Encoder()
+            _ = encoder.jsonObject(for: archive)
+            return (archive, encoder)
+        }.value
+    }
+
     private func scheduleSidecarSave() {
         sidecarSaveWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
@@ -1551,6 +1586,9 @@ final class ImageDocumentModel: ObservableObject {
         guard sidecarSaveWorkItem != nil else { return }
         sidecarSaveWorkItem?.cancel()
         sidecarSaveWorkItem = nil
+        // End a burst still inside its ~350ms coalescing window FIRST, so the history this save embeds is not one step behind
+        // the edits it saves (a save whose history lags the state is written without history — the trail would be lost).
+        finalizePendingCommit()
         saveSidecarNow()
     }
 
@@ -1576,6 +1614,10 @@ final class ImageDocumentModel: ObservableObject {
         // header for what was and was not reproduced), so this is hardening, not a fix for an observed corruption.
         guard let url = currentURL else { return }
         let snapshot = editState
+        // The history rides in the same snapshot (a value type): written only when it belongs to THIS photo and is exactly
+        // in step with the saved state — otherwise the sidecar is written without `_history` (never a stale one).
+        let historySnapshot = history
+        let historyBelongsHere = historyURL == url && historySnapshot.entries.count > 1 && historySnapshot.current == snapshot
         let folder = url.deletingLastPathComponent()
         guard !declinedFolders.contains(folder.path) else { return }
         let folderURL: URL
@@ -1603,7 +1645,11 @@ final class ImageDocumentModel: ObservableObject {
         }
         defer { folderURL.stopAccessingSecurityScopedResource() }
         do {
-            try SidecarStore.write(snapshot, forPhotoAt: url)
+            if historyBelongsHere, let historyObject = historyEncoder.jsonObject(for: HistoryArchive(historySnapshot)) {
+                try SidecarStore.write(snapshot, historyObject: historyObject, forPhotoAt: url)
+            } else {
+                try SidecarStore.write(snapshot, forPhotoAt: url)
+            }
             onSidecarSaved?(url)
         } catch {
             if !suppressErrorMessage {

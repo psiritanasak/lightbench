@@ -47,7 +47,8 @@ struct HistoryArchive {
 
     /// Encodes archives while caching each entry's blob-extracted JSON object by its (immutable) `id`: only entries it
     /// has not seen are encoded. Thread-safe (a lock guards the cache).
-    final class Encoder {
+    // @unchecked Sendable: all mutable state is guarded by the lock.
+    final class Encoder: @unchecked Sendable {
         /// Per entry: its blob-extracted object and the HASHES of the blobs it references. The blob BYTES live once, in
         /// `blobStore`, so N entries sharing a mask hold one string, not N (a per-entry copy cost ~100 MB at 1 MB x 101).
         private struct Cached { var object: [String: Any]; var hashes: Set<String> }

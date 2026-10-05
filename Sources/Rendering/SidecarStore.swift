@@ -65,6 +65,30 @@ enum SidecarStore {
         return .decoded(state)
     }
 
+    /// The persisted edit history inside `url`'s sidecar (under `HistoryArchive.sidecarKey`), or nil when there is none, it is
+    /// malformed, or it is STALE: the archive's current entry must equal the sidecar's own state object exactly (a sidecar
+    /// rewritten by batch Paste or an older build, or any edit made since, fails this and the history is dropped).
+    /// COSTLY (re-serialises every entry): call it off the main thread, inside an active security-scope window.
+    static func readHistory(forPhotoAt url: URL) -> HistoryArchive? {
+        guard let data = try? Data(contentsOf: sidecarURL(for: url)),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let history = object.removeValue(forKey: HistoryArchive.sidecarKey) else { return nil }
+        return HistoryArchive.decode(history, requiringCurrentState: object)
+    }
+
+    /// Like `write(_:forPhotoAt:)`, plus the edit history (`HistoryArchive.Encoder.jsonObject`) under the reserved
+    /// `"_history"` key of the same JSON object. `EditState`'s tolerant decode ignores unknown keys, so every other reader
+    /// (thumbnails, Export, Paste, Enhance, older builds) still reads the state unchanged.
+    static func write(_ state: EditState, historyObject: [String: Any], forPhotoAt url: URL) throws {
+        let stateData = try JSONEncoder().encode(state)
+        guard var object = try JSONSerialization.jsonObject(with: stateData) as? [String: Any] else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        object[HistoryArchive.sidecarKey] = historyObject
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        try data.write(to: sidecarURL(for: url), options: .atomic)
+    }
+
     /// Encodes and atomically writes `state` as `url`'s sidecar. Byte-
     /// identical to `ImageDocumentModel.saveSidecarNow`'s own original
     /// write (`JSONEncoder()` defaults, `.atomic`) — a lift, not a

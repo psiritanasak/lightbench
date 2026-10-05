@@ -19,6 +19,24 @@ enum PixelSampler {
         .workingFormat: CIFormat.RGBAf
     ])
 
+    /// The ALPHA at the pixel containing `point` (image coordinates), 0 outside the extent. For mask images, whose
+    /// RGB equals alpha, this is the mask's coverage there.
+    static func coverage(of image: CIImage, at point: CGPoint) -> Double {
+        let extent = image.extent
+        guard !extent.isInfinite, extent.width > 0, extent.height > 0 else { return 0 }
+        // `CGRect.contains` excludes maxX/maxY, so a click on the very last row/column (normalized 1.0 / 0.0 after the
+        // y-flip) would miss; clamp a point on the extent's far edge onto its last pixel.
+        guard point.x >= extent.minX, point.y >= extent.minY, point.x <= extent.maxX, point.y <= extent.maxY else { return 0 }
+        let point = CGPoint(x: min(point.x, extent.maxX - 0.5), y: min(point.y, extent.maxY - 0.5))
+        var pixel = [Float](repeating: 0, count: 4)
+        context.render(
+            image, toBitmap: &pixel, rowBytes: 16,
+            bounds: CGRect(x: point.x.rounded(.down), y: point.y.rounded(.down), width: 1, height: 1),
+            format: .RGBAf, colorSpace: linearSpace
+        )
+        return Double(pixel[3])
+    }
+
     /// Averages a `(2*radius+1)`-pixel-per-side box centered at `point` in
     /// `image`'s own coordinate space, clamped to `image.extent`. Only
     /// pixels with alpha at/above `minAlpha` are included, so a sample box

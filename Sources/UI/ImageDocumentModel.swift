@@ -1129,6 +1129,41 @@ final class ImageDocumentModel: ObservableObject {
 
     // MARK: - Subject mask (AI)
 
+    /// Toggles the subject under a click (`normalizedX/Y`: fractions of the displayed photo, top-left origin) in or
+    /// out of the `.subject` mask `maskID` — click-on-image picking. One history step ("Toggle Subject N"). A click that
+    /// lands on no subject changes nothing and says so; a legacy union-only mask has no instances to pick.
+    func toggleSubjectInstance(maskID: UUID, normalizedX: Double, normalizedY: Double) {
+        guard let currentImage, !isLoadInFlight else { return }
+        // A Recompute on this mask would replace its instances and reset `subjectInstanceEnabled`, silently wiping a
+        // toggle made while it runs.
+        guard !isSelectingSubject else {
+            subjectMaskMessage = "Wait for subject detection to finish, then click again."
+            return
+        }
+        guard let mask = editState.masks.first(where: { $0.id == maskID && $0.kind == .subject }) else { return }
+        guard !mask.subjectInstancePNGs.isEmpty else {
+            subjectMaskMessage = "This mask has no separate subjects to pick — use Recompute to detect them."
+            return
+        }
+        guard let index = SubjectInstancePicker.hit(
+            state: editState, maskID: maskID, source: currentImage, normalizedX: normalizedX, normalizedY: normalizedY
+        ) else {
+            subjectMaskMessage = "No subject at that point."
+            return
+        }
+        finalizePendingCommit()
+        var next = editState
+        guard let maskIndex = next.masks.firstIndex(where: { $0.id == maskID }) else { return }
+        var enabled = next.masks[maskIndex].subjectInstanceEnabled
+        // A missing entry means "enabled" (see `Mask.subjectInstanceEnabled`): materialize to the instance count first
+        // so flipping ONE entry cannot disable the others.
+        while enabled.count < next.masks[maskIndex].subjectInstancePNGs.count { enabled.append(true) }
+        enabled[index].toggle()
+        next.masks[maskIndex].subjectInstanceEnabled = enabled
+        history.commit(next, summary: "Toggle Subject \(index + 1)")
+        applyHistoryState(history.current)
+    }
+
     /// Runs Vision on the UNEDITED current image and commits ONE undo step: appends a new `.subject`
     /// mask (all adjustments 0 — the user then dials them in), or, when `maskID` names an existing
     /// subject mask, replaces that mask's raster ("Recompute Subject"). Same shape as `autoTone()`:

@@ -2565,6 +2565,26 @@ enum EditPipeline {
         return result
     }
 
+    /// One geometry-carried mask image PER STORED INSTANCE of the `.subject` mask `maskID`, index-aligned with
+    /// `Mask.subjectInstancePNGs` (nil for an undecodable one). Each is the SAME image the pipeline would build for a
+    /// mask holding only that instance — forward raster stretch plus the photo's own `applyGeometry` — so the
+    /// displayed-frame position of every pixel is exactly what the pipeline uses, with no hand-written inverse
+    /// geometry to go stale. Feather is forced to 0 so a hit test sees the instance's own shape. Used by
+    /// click-on-image subject picking (`SubjectInstancePicker`).
+    static func subjectInstanceMaskImages(_ state: EditState, maskID: UUID, source: CIImage) -> [CIImage?] {
+        guard let mask = state.masks.first(where: { $0.id == maskID && $0.kind == .subject }) else { return [] }
+        return mask.subjectInstancePNGs.map { png in
+            var single = mask
+            single.subjectInstancePNGs = [png]
+            single.subjectInstanceEnabled = [true]
+            single.subjectMaskPNG = nil
+            single.subjectFeather = 0
+            var isolated = state
+            isolated.masks = [single]
+            return subjectMaskImages(isolated, source: source)[single.id]
+        }
+    }
+
     /// Rasterizes one Brush mask's stroke into a soft-edged `CIImage` mask
     /// — the `.brush` counterpart of the `.radial`/`.linear` branches'
     /// `CIFilter.radialGradient()`/`linearGradient()` calls above, but built

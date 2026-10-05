@@ -202,8 +202,8 @@ final class ExportMetadataTests: XCTestCase {
 
     // MARK: - Settings
 
-    func testDefaultKeepsAllAndPolicyIsRememberedTolerantly() throws {
-        XCTAssertEqual(ExportSettings().metadata, .all)
+    func testDefaultDropsLocationAndPolicyIsRememberedTolerantly() throws {
+        XCTAssertEqual(ExportSettings().metadata, .withoutLocation, "an untouched export must not reveal where the photo was taken")
         let suite = "ExportMetadataTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -211,7 +211,56 @@ final class ExportMetadataTests: XCTestCase {
         store.save(ExportSettings(metadata: .none))
         XCTAssertEqual(store.load().metadata, ExportMetadataPolicy.none)
         defaults.set(Data(#"{"metadata":"everything","format":"tiff"}"#.utf8), forKey: ExportSettingsStore.key)
-        XCTAssertEqual(store.load().metadata, .all, "unknown policy falls back")
+        XCTAssertEqual(store.load().metadata, .withoutLocation, "unknown policy falls back to the default")
         XCTAssertEqual(store.load().format, .tiff)
+    }
+}
+
+/// The stored-settings migration that goes with the new privacy default.
+final class ExportSettingsMigrationTests: XCTestCase {
+    private var suite: String!
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        suite = "ExportSettingsMigrationTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suite)
+    }
+
+    override func tearDown() { defaults.removePersistentDomain(forName: suite) }
+
+    private func store() -> ExportSettingsStore { ExportSettingsStore(defaults: defaults) }
+
+    func testAV1ValueMigratesKeepingEveryFieldExceptTheMetadataPolicy() {
+        defaults.set(Data(#"{"format":"png","quality":0.5,"namingTemplate":"{seq}","colorSpace":"displayP3","metadata":"all","sharpening":"print"}"#.utf8),
+                     forKey: ExportSettingsStore.legacyKey)
+        let loaded = store().load()
+        XCTAssertEqual(loaded.metadata, .withoutLocation, "a stored `all` was just the old default")
+        XCTAssertEqual(loaded.format, .png)
+        XCTAssertEqual(loaded.quality, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(loaded.namingTemplate, "{seq}")
+        XCTAssertEqual(loaded.colorSpace, .displayP3)
+        XCTAssertEqual(loaded.sharpening, .print)
+        XCTAssertNotNil(defaults.data(forKey: ExportSettingsStore.key), "the migrated value is saved under v2")
+        XCTAssertNotNil(defaults.data(forKey: ExportSettingsStore.legacyKey), "v1 is left untouched")
+    }
+
+    func testAnExplicitChoiceAfterMigrationSticksAndNeverReMigrates() {
+        defaults.set(Data(#"{"metadata":"all"}"#.utf8), forKey: ExportSettingsStore.legacyKey)
+        XCTAssertEqual(store().load().metadata, .withoutLocation)
+        var chosen = store().load()
+        chosen.metadata = .all // the user deliberately picks All metadata
+        store().save(chosen)
+        XCTAssertEqual(store().load().metadata, .all, "v2 wins over the (still present) v1")
+    }
+
+    func testV2WinsOverV1AndCorruptLegacyFallsBackToDefaults() {
+        defaults.set(Data(#"{"format":"tiff"}"#.utf8), forKey: ExportSettingsStore.legacyKey)
+        defaults.set(Data(#"{"format":"png"}"#.utf8), forKey: ExportSettingsStore.key)
+        XCTAssertEqual(store().load().format, .png)
+
+        defaults.removeObject(forKey: ExportSettingsStore.key)
+        defaults.set(Data("not json".utf8), forKey: ExportSettingsStore.legacyKey)
+        XCTAssertEqual(store().load(), ExportSettings())
+        XCTAssertNil(defaults.data(forKey: ExportSettingsStore.key), "nothing is saved from a corrupt legacy value")
     }
 }

@@ -7,7 +7,8 @@ import UniformTypeIdentifiers
 /// on pixels the renderer had already rotated upright (measured 2026-10-02: a source tagged Orientation 6 exported
 /// with rotated pixels AND Orientation 6, so a viewer honouring the tag would rotate it a second time).
 enum ExportMetadataPolicy: String, CaseIterable, Identifiable, Sendable, Codable {
-    /// Keep everything the source had (default — what export always did, minus the stale Orientation).
+    /// Keep everything the source had, GPS location included (what export did before the policy existed, minus the stale
+    /// Orientation). No longer the default.
     case all
     /// Keep everything except location (GPS and the IPTC place fields).
     case withoutLocation

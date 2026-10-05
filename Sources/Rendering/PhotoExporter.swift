@@ -76,8 +76,9 @@ struct ExportSettings: Sendable, Equatable {
     var namingTemplate: String = NamingTemplate.defaultTemplate
     /// Output profile. Default sRGB = today's behaviour.
     var colorSpace: ExportColorSpace = .sRGB
-    /// What to keep of the source's metadata. Default `.all` = what export always kept (plus a neutral Orientation).
-    var metadata: ExportMetadataPolicy = .all
+    /// What to keep of the source's metadata. Default `.withoutLocation`: an export made without touching the options must
+    /// not reveal where the photo was taken (`.all` — everything the source had, GPS included — is one click away).
+    var metadata: ExportMetadataPolicy = .withoutLocation
     /// Output sharpening applied after the resize. Default `.none` = no change to today's pixels.
     var sharpening: ExportSharpening = .none
     /// Optional text mark composited after sharpening (so the mark itself is never sharpened). Default off.
@@ -125,16 +126,27 @@ extension ExportSettings: Codable {
 /// destination folder is deliberately not part of the settings. Tests must pass an isolated suite: the test host is
 /// the real app, so `.standard` there is the real app's preferences.
 struct ExportSettingsStore {
-    static let key = "exportSettings.v1"
+    static let key = "exportSettings.v2"
+    /// The first release's key. Every save under it wrote `"metadata":"all"` (then the default, which keeps the GPS
+    /// location), so a v1 value cannot be told apart from an unexamined default.
+    static let legacyKey = "exportSettings.v1"
     let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
 
-    /// The stored settings, or the defaults when nothing is stored or the data is unreadable.
+    /// The stored settings, or the defaults when nothing is stored or the data is unreadable. When only a v1 value
+    /// exists it is migrated ONCE: every field is kept EXCEPT the metadata policy, which takes the new (privacy-
+    /// preserving) default, because a stored `all` is just the old default; whoever really wants all metadata chooses
+    /// it again (the sheet shows the policy and warns that `All metadata` includes the location). v1 is left untouched.
     func load() -> ExportSettings {
-        guard let data = defaults.data(forKey: Self.key),
-              let settings = try? JSONDecoder().decode(ExportSettings.self, from: data) else { return ExportSettings() }
-        return settings
+        if let data = defaults.data(forKey: Self.key) {
+            return (try? JSONDecoder().decode(ExportSettings.self, from: data)) ?? ExportSettings()
+        }
+        guard let legacy = defaults.data(forKey: Self.legacyKey),
+              var migrated = try? JSONDecoder().decode(ExportSettings.self, from: legacy) else { return ExportSettings() }
+        migrated.metadata = ExportSettings().metadata
+        save(migrated)
+        return migrated
     }
 
     func save(_ settings: ExportSettings) {

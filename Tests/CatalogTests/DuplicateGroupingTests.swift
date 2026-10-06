@@ -198,3 +198,18 @@ private struct SeededGenerator: RandomNumberGenerator {
         return z ^ (z >> 31)
     }
 }
+
+final class DuplicateRejectSelectionTests: XCTestCase {
+    private func group(_ ids: [Int64]) -> DuplicateGroup { DuplicateGroup(kind: .exact, photoIDs: ids, maxDistance: nil) }
+
+    func testIdsToRejectAreEveryNonBestMemberInGroupOrderWithoutRepeats() {
+        XCTAssertEqual([group([1, 2, 3]), group([10, 11])].idsToReject, [2, 3, 11])
+        XCTAssertEqual([DuplicateGroup]().idsToReject, [])
+        XCTAssertEqual([group([5])].idsToReject, [])
+    }
+
+    func testABestPhotoOfOneGroupIsNeverRejectedEvenIfAnotherGroupListedIt() {
+        XCTAssertEqual([group([1, 2]), group([3, 1])].idsToReject, [2], "1 is group A's best, so group B cannot reject it")
+        XCTAssertEqual([group([1, 2]), group([3, 2])].idsToReject, [2], "no repeats")
+    }
+}

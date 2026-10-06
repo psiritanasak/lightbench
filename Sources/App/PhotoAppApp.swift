@@ -109,6 +109,7 @@ struct PhotoAppApp: App {
                 .disabled(
                     pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight
                         || renameModel.isWorking || renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil
+                        || catalog.duplicatesSheetPresented
                 )
                 Divider()
                 // Batch rename: no default shortcut (matches Enhance). These only REQUEST — `ContentView`
@@ -121,15 +122,21 @@ struct PhotoAppApp: App {
                         !showLibrary || catalog.selectedPhotos.isEmpty || catalog.keywordSheetPhotoIDs != nil
                             || renameModel.isWorking || renameModel.isPresentingSheet
                     )
+                // Library-only; only REQUESTS (`DuplicatesSheetModifier` drops it while another sheet is up).
+                Button("Find Duplicates…") { catalog.duplicatesSheetRequested = true }
+                    .disabled(
+                        !showLibrary || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil
+                            || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
+                    )
                 Button("Rename Files…") { renameModel.request = .rename }
                     .disabled(
                         catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight
-                            || catalog.keywordSheetPhotoIDs != nil
+                            || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented
                     )
                 Button("Undo Rename") { renameModel.request = .undo }
                     .disabled(
                         !renameModel.canUndo || renameModel.isWorking || renameModel.isPresentingSheet
-                            || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil
+                            || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented
                     )
             }
         }

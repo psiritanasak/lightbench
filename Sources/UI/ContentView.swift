@@ -1021,7 +1021,7 @@ struct ContentView: View {
         // compiler could type-check in reasonable time (measured: this
         // split is what fixed it).
         mainContent
-            .modifier(KeywordSheetModifier(catalog: catalog, blocked: otherSheetIsPresented))
+            .modifier(LibraryToolSheetsModifier(catalog: catalog, blocked: otherSheetIsPresented))
             .alert(
                 "Couldn't Open Image",
                 isPresented: Binding(
@@ -1145,7 +1145,7 @@ struct ContentView: View {
             .onChange(of: renameModel.request) { _, request in
                 guard let request else { return }
                 renameModel.request = nil
-                guard catalog.keywordSheetPhotoIDs == nil else { return }
+                guard catalog.keywordSheetPhotoIDs == nil, !catalog.duplicatesSheetPresented, !catalog.duplicates.isScanning else { return }
                 switch request {
                 case .rename:
                     renameModel.begin(photos: selectedPhotosVisibleInGrid, catalog: catalog, providers: renameProviders)

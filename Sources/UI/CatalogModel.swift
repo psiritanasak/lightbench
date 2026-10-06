@@ -109,6 +109,11 @@ final class CatalogModel: ObservableObject {
     @Published var minimumRating: Int = 0
     @Published var flagFilter: LibraryFlagFilter = .all
     @Published var labelFilter: LibraryLabelFilter = .all
+    /// Duplicate review (Photo ▸ Find Duplicates…): the menu only REQUESTS; `DuplicatesSheetModifier` presents unless
+    /// another sheet is up (same shape as the keyword sheet's flags).
+    @Published var duplicatesSheetRequested = false
+    @Published var duplicatesSheetPresented = false
+    let duplicates = DuplicatesModel()
     /// The keyword sheet's snapshot of the photo ids it edits; `nil` = sheet closed. Lives here so the Photo-menu
     /// item (Scene level) and the Library toolbar reach the same sheet.
     @Published var keywordSheetPhotoIDs: [Int64]?
@@ -963,6 +968,30 @@ final class CatalogModel: ObservableObject {
         Task.detached { [weak self] in
             do { try await database.setFlagStatus(status, for: id) } catch { await self?.refresh() }
         }
+    }
+
+    /// Sets the flag of every photo in `photoIDs` (duplicate review). Local-first like the single-photo setter; the
+    /// database write is ONE transaction and its returned ids (photos that still existed) are what the caller reports.
+    /// Returns nil when the write FAILED (local state is then re-read from the database), so the caller never reports a
+    /// failure as "rejected 0".
+    func setFlagStatus(_ status: FlagStatus, forPhotoIDs photoIDs: [Int64]) async -> Set<Int64>? {
+        guard let database else { return nil }
+        guard !photoIDs.isEmpty else { return [] }
+        for id in photoIDs { updatePhotoInPlace(id: id) { $0.flagStatus = status } }
+        do {
+            return try await database.setFlagStatus(status, forPhotoIDs: photoIDs)
+        } catch {
+            await refresh()
+            return nil
+        }
+    }
+
+    /// Begins a duplicate scan of the photos the Library is currently drawing from (all photos, a collection, or a smart
+    /// collection's source). Refuses while a rename is in progress (it moves files under the scan).
+    func beginDuplicateScan() {
+        guard !isRenameInProgress else { duplicates.statusMessage = Self.renameInProgressMessage; return }
+        guard let database else { duplicates.statusMessage = "The photo catalog isn't ready yet — try again in a moment."; return }
+        duplicates.scan(photos: smartCollectionSourcePhotos, database: database)
     }
 
     /// Sets `photo`'s color label — same local-first shape/reasoning as `setFlagStatus`.

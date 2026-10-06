@@ -174,3 +174,14 @@ enum DuplicateGrouping {
         return result.sorted { ($0.kind, $0.bestID) < ($1.kind, $1.bestID) }
     }
 }
+
+extension Array where Element == DuplicateGroup {
+    /// Every photo a "keep best, reject others" action over these groups would reject: each group's non-best members,
+    /// in group order, without repeats. The best photo of any group is never included (even if another group lists it,
+    /// which `DuplicateGrouping.groups` never produces).
+    var idsToReject: [Int64] {
+        let keep = Set(map(\.bestID))
+        var seen = Set<Int64>()
+        return flatMap(\.othersIDs).filter { !keep.contains($0) && seen.insert($0).inserted }
+    }
+}

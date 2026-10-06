@@ -1214,7 +1214,7 @@ the message and raise it from `sheetDidDisappear`.
 - Not verified live: circle dragging (the automation's synthetic mouse events do not reach the app; the drag math is unit-tested; the Source X/Y sliders are the AT path) and Redo. Verified live in a second pass: Clone mode, off-centre Heal, reopen persistence, flip-following, Undo of a flip with spots intact, the 50-spot cap (button disabled, 50 saved).
 
 ### D47. Library keywords v1 follow-ups (2026-10-02) — open, low
-- No keyword rename, hierarchy/synonyms, Smart Collections, or IPTC/XMP read/write (keywords live only in the catalog: a lost catalog loses them, same as ratings/flags/labels).
+- **Update 2026-10-06:** keywords are now EMBEDDED in exported files (IPTC + XMP `dc:subject`; see D52). Still no keyword rename, hierarchy/synonyms, or XMP/IPTC READ-in / sidecar write-out (keywords live only in the catalog: a lost catalog loses them, same as ratings/flags/labels).
 - Matching uses `lowercased()` + NFC, not full case folding (İstanbul/Istanbul, Straße/STRASSE stay separate); keys depend on the OS's Unicode tables.
 - `CatalogModel.keywordNamesForSearch` / `keywordPhotoCounts` rebuild dictionaries per access (O(links)); cache beside `keywordIDsByPhotoID` if catalogs grow. `refresh()` reads keywords and links in two separate reads (a deletion between them leaves a harmless transient dangling link).
 - `removeKeyword`/`deleteKeyword` are local-first; an in-flight refresh that read before the write commits can briefly resurrect the removed link (same accepted class as memberships). `refresh()` deliberately does not clear a dangling `keywordFilterID` (a stale read could drop a just-chosen filter); `deleteKeyword` is the only place a keyword disappears.
@@ -1267,3 +1267,13 @@ Shipped: `_history` in the sidecar (commits 8805d76 format, c544ddf wiring). Ope
 - Two guards are untested defense in depth (mutation-checked: removing either leaves the suite green): `historyURL == url` in `saveSidecarNow` (guards the `load(from:)` window between `currentURL = url` and the history reset — same hard-to-reproduce class as D28) and the restore-time `restored.current == editState` check (the RAW pin-backfill case; the sidecar-vs-archive consistency check upstream already covers the PNG-testable cases).
 - No test observes that the off-main WARMED encoder is the one adopted (only timing differs).
 - Anything that rewrites a sidecar with only an `EditState` (batch Paste, Enhance-adjacent writers) silently drops the history — by design, but a user pasting onto a photo loses its trail.
+
+### D52. Keywords embedded in exports v1 follow-ups (2026-10-06)
+Shipped (d7dda03 engine, 695b120 plumbing + UI): `ExportSettings.includeKeywords` (default on, "Add Library keywords"), `KeywordEmbedding`. Open, none blocking:
+- No `.xmp` sidecar write-out next to the originals (deliberately cut: shared-basename collisions CR2+JPG, foreign-file merge/clobber, RenameEngine/Undo would have to move `.xmp`, folder-grant pre-flight). A Photo-menu "Write XMP Sidecars" is the next step if wanted.
+- No keyword READ-in from files on import (a photo already tagged in Lightroom shows no keywords in the Library until retagged).
+- Flat `dc:subject` only: no `lr:hierarchicalSubject`/hierarchy (the catalog has none).
+- RAW sources: whether `CIRAWFilter`'s output carries the file's own IPTC/XMP keywords is UNVERIFIED (same caveat as `ExportMetadata`), so a RAW export may carry only the catalog's keywords.
+- Enhance (`PhotoEnhancer`) does not embed keywords or any metadata policy (pre-existing for metadata).
+- Default ON means a place-name keyword is exported under the default "All except location" policy (the caption says so); flip `includeKeywords`'s default if a privacy-first default is preferred.
+- Not live-tested: toggle off / "None" through the UI (covered end to end by `KeywordEmbeddingTests`).

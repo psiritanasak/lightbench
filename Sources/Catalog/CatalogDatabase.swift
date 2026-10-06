@@ -113,6 +113,7 @@ final class CatalogDatabase: Sendable {
         Migration009RenameLog.register(in: &migrator)
         Migration010Keywords.register(in: &migrator)
         Migration011SmartCollections.register(in: &migrator)
+        Migration012PhotoFingerprint.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 
@@ -249,6 +250,55 @@ final class CatalogDatabase: Sendable {
         try await dbQueue.write { db in
             try Photo.filter(Photo.Columns.id == photoID)
                 .updateAll(db, Photo.Columns.flagStatus.set(to: status))
+        }
+    }
+
+    /// Sets the pick/reject flag of every photo in `photoIDs` in ONE transaction (duplicate review's "reject all but
+    /// best"). Ids that no longer exist are skipped; returns the ids whose row now has `status` AND existed, so the
+    /// caller updates only those locally.
+    @discardableResult
+    func setFlagStatus(_ status: FlagStatus, forPhotoIDs photoIDs: [Int64]) async throws -> Set<Int64> {
+        try await dbQueue.write { db in
+            var changed = Set<Int64>()
+            // Chunked: each id binds one SQL variable (SQLite's default limit is 32766).
+            for start in stride(from: 0, to: photoIDs.count, by: 500) {
+                let chunk = Array(photoIDs[start..<min(start + 500, photoIDs.count)])
+                let existing = try Int64.fetchAll(db, Photo.filter(chunk.contains(Photo.Columns.id)).select(Photo.Columns.id))
+                try Photo.filter(chunk.contains(Photo.Columns.id)).updateAll(db, Photo.Columns.flagStatus.set(to: status))
+                changed.formUnion(existing)
+            }
+            return changed
+        }
+    }
+
+    // MARK: Fingerprints (duplicate detection cache)
+
+    /// The cached fingerprints for `photoIDs` (absent ids simply have no entry). Callers must still check
+    /// `PhotoFingerprint.isCurrent` against the file before trusting one.
+    func fingerprints(forPhotoIDs photoIDs: [Int64]) async throws -> [Int64: PhotoFingerprint] {
+        try await dbQueue.read { db in
+            var result: [Int64: PhotoFingerprint] = [:]
+            for start in stride(from: 0, to: photoIDs.count, by: 500) {
+                let chunk = Array(photoIDs[start..<min(start + 500, photoIDs.count)])
+                for row in try PhotoFingerprint.filter(chunk.contains(PhotoFingerprint.Columns.photoId)).fetchAll(db) {
+                    result[row.photoId] = row
+                }
+            }
+            return result
+        }
+    }
+
+    /// Inserts or REPLACES whole rows (the caller merges a newly computed hash with a cached print before saving).
+    /// Rows for photos that no longer exist are skipped instead of tripping the foreign key and aborting the batch.
+    func saveFingerprints(_ rows: [PhotoFingerprint]) async throws {
+        try await dbQueue.write { db in
+            var existing = Set<Int64>()
+            let ids = rows.map(\.photoId)
+            for start in stride(from: 0, to: ids.count, by: 500) {
+                let chunk = Array(ids[start..<min(start + 500, ids.count)])
+                existing.formUnion(try Int64.fetchAll(db, Photo.filter(chunk.contains(Photo.Columns.id)).select(Photo.Columns.id)))
+            }
+            for row in rows where existing.contains(row.photoId) { try row.save(db) }
         }
     }
 

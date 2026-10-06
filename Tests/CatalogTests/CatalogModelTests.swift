@@ -1036,4 +1036,29 @@ final class CatalogModelTests: XCTestCase {
 
         XCTAssertEqual(found?.path, newURL.path)
     }
+
+    /// What an export embeds: each tagged photo's keyword names, sorted case-insensitively; untagged photos are absent.
+    func testKeywordNamesForPhotosSortsAndOmitsUntagged() async throws {
+        _ = try await database.importPhotos(at: (0..<3).map { URL(fileURLWithPath: "/tmp/kn\($0).jpg") })
+        let model = await makeModel()
+        let mine = model.photos.filter { $0.path.hasPrefix("/tmp/kn") }.sorted { $0.path < $1.path }
+        let ids = mine.compactMap(\.id)
+        XCTAssertEqual(ids.count, 3)
+        try await database.addKeywords(["beta", "Alpha"], to: [ids[0]])
+        try await database.addKeywords(["Alpha"], to: [ids[1]])
+        await model.refresh()
+        let names = model.keywordNames(for: mine)
+        XCTAssertEqual(names[ids[0]], ["Alpha", "beta"])
+        XCTAssertEqual(names[ids[1]], ["Alpha"])
+        XCTAssertNil(names[ids[2]])
+        XCTAssertEqual(model.keywordNames(for: []).count, 0)
+        // A photo without an id is skipped, and a deleted keyword no longer appears (this exercises the DB cascade + refresh, not the in-memory compactMap drop).
+        let noID = Photo(id: nil, path: "/tmp/knx.jpg", filename: "knx.jpg", fileSize: nil, importedAt: Date())
+        XCTAssertEqual(model.keywordNames(for: [noID]).count, 0)
+        let alphaID = try XCTUnwrap(model.keywords.first { $0.name == "Alpha" }?.id)
+        try await database.deleteKeyword(id: alphaID)
+        await model.refresh()
+        XCTAssertEqual(model.keywordNames(for: mine)[ids[0]], ["beta"])
+        XCTAssertNil(model.keywordNames(for: mine)[ids[1]])
+    }
 }

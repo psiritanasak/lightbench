@@ -19,6 +19,19 @@ struct ExportOptionsView: View {
     /// Read once (off the main thread) when the sheet appears — never per keystroke.
     @State private var previewCaptureDate: Date?
 
+    /// What the keyword toggle does and does NOT control. The toggle only adds the keywords typed in the Library; keywords
+    /// the original file already carries (e.g. written by another app) follow the Metadata setting, not this toggle.
+    private var keywordCaption: String {
+        switch exportModel.settings.metadata {
+        case .none:
+            return "Not available with No metadata — no keywords are written."
+        case .all:
+            return "Adds the keywords you gave this photo in the Library. Keywords already inside the original file are kept either way."
+        case .withoutLocation:
+            return "Adds the keywords you gave this photo in the Library. Keywords already inside the original file are kept either way, and neither kind is filtered by \"All except location\" — a keyword that names a place is included."
+        }
+    }
+
     private var preview: ExportNamePreview? {
         ExportNamePreview.evaluate(
             template: exportModel.settings.namingTemplate, photo: previewPhoto,
@@ -60,6 +73,11 @@ struct ExportOptionsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                Toggle("Add Library keywords", isOn: $exportModel.settings.includeKeywords)
+                    .disabled(exportModel.settings.metadata == .none)
+                Text(keywordCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if exportModel.settings.format == .jpeg {

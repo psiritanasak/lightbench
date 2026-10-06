@@ -3,7 +3,7 @@ import SwiftUI
 /// The Library's "Edit Keywords…" sheet over a snapshot of the selected photo ids: type comma-separated
 /// keywords to add, remove a keyword from the selection, or delete one from the whole catalog. A keyword on
 /// only some of the selected photos is labelled "partial". Keywords live in the catalog only (never in the
-/// photo files), so nothing here touches originals.
+/// original photo files), so nothing here touches originals; an export can embed them in its copies.
 struct KeywordSheetView: View {
     @ObservedObject var catalog: CatalogModel
     /// The snapshot taken when the sheet opened; `liveIDs` drops photos that have since left the catalog.
@@ -46,7 +46,7 @@ struct KeywordSheetView: View {
                 Text("\(hiddenCount) of them \(hiddenCount == 1 ? "is" : "are") hidden by the current filters and will be changed too.")
                     .font(.caption).foregroundStyle(.orange)
             }
-            Text("Keywords are stored in the catalog only — the photo files are never changed.")
+            Text("Keywords are stored in the catalog only — your original files are never changed. Exports can embed them (see the export options).")
                 .font(.caption).foregroundStyle(.secondary)
 
             HStack {

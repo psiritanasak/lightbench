@@ -152,10 +152,15 @@ final class CatalogModel: ObservableObject {
         return smart.criteria.apply(to: photos, keywords: keywords, keywordIDsByPhotoID: keywordIDsByPhotoID)
     }
 
+    /// keyword id → display name (ids are primary keys, so unique).
+    private var keywordNamesByID: [Int64: String] {
+        Dictionary(uniqueKeysWithValues: keywords.compactMap { keyword in keyword.id.map { ($0, keyword.name) } })
+    }
+
     /// photoID → keyword names, built only while a search is active (the only reader).
     private var keywordNamesForSearch: [Int64: [String]] {
         guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
-        let namesByID = Dictionary(uniqueKeysWithValues: keywords.compactMap { keyword in keyword.id.map { ($0, keyword.name) } })
+        let namesByID = keywordNamesByID
         return keywordIDsByPhotoID.mapValues { $0.compactMap { namesByID[$0] } }
     }
 
@@ -1112,6 +1117,19 @@ final class CatalogModel: ObservableObject {
         var counts: [Int64: Int] = [:]
         for set in keywordIDsByPhotoID.values { for id in set { counts[id, default: 0] += 1 } }
         return counts
+    }
+
+    /// Keyword display names (sorted case-insensitively, like the sheet) for each of `photos` that has any — what an
+    /// export embeds. A value snapshot, safe to hand to a detached task.
+    func keywordNames(for photos: [Photo]) -> [Int64: [String]] {
+        let namesByID = keywordNamesByID
+        var result: [Int64: [String]] = [:]
+        for photo in photos {
+            guard let id = photo.id, let ids = keywordIDsByPhotoID[id] else { continue }
+            let names = ids.compactMap { namesByID[$0] }.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            if !names.isEmpty { result[id] = names }
+        }
+        return result
     }
 
     /// Adds the keywords parsed from `input` (see `KeywordName.parse`) to `photoIDs`. The write

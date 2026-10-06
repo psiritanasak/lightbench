@@ -82,7 +82,7 @@ final class DuplicatesModel: ObservableObject {
             var parts = ["Scanned \(result.candidates.count) photo\(result.candidates.count == 1 ? "" : "s")."]
             if result.wasCancelled { parts.append("Cancelled — results cover only the photos scanned so far.") }
             if result.skipped > 0 { parts.append("\(result.skipped) skipped (file missing or unreadable).") }
-            if result.withoutFeaturePrint > 0 { parts.append("\(result.withoutFeaturePrint) could not be compared by look (exact copies are still found).") }
+            if result.withoutFeaturePrint > 0 { parts.append("\(result.withoutFeaturePrint) could not be read for comparison — most often the app has no access to their folder (import it again) or the file is not an image — so duplicates among them are not found.") }
             summary = parts.joined(separator: " ")
         }
     }

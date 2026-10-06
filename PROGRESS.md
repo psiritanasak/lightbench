@@ -8,6 +8,8 @@ improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
 ## Current phase
+**DUPLICATE DETECTION — SHIPPED (2026-10-06), 5 commits (ac027f3 spike, 11017d1 data layer, 20fe153 engine, 17cf473 model + sheet, docs), reviewer-approved, 1956 tests, live-verified.** Photo ▸ Find Duplicates…: exact / near-identical / opt-in similar shots, BEST badge, reject-all-but-best (never deletes, never overwrites a Pick). Live finding: 981 of 1,089 photos were unreadable (no folder bookmark) — see D53. Follow-ups: IMPROVEMENTS.md D53. Detail: docs/ROADMAP_HISTORY.md.
+
 **KEYWORDS EMBEDDED IN EXPORTS — SHIPPED (2026-10-06), 2 code commits (d7dda03 engine, 695b120 plumbing + UI), reviewer-approved (engine 1 round, plumbing 2), 1900 tests, live-verified.** Exports can embed the catalog keywords (IPTC + XMP `dc:subject`); toggle "Add Library keywords" in the export options, ignored under Metadata = None. No `.xmp` sidecars written. Follow-ups: IMPROVEMENTS.md D52. Detail: docs/ROADMAP_HISTORY.md.
 
 **PERSISTED EDIT HISTORY — SHIPPED (2026-10-05), 2 code commits (8805d76 `HistoryArchive` format, c544ddf sidecar wiring), reviewer-approved (2 rounds on the wiring), 1890 tests, live-verified across a quit/relaunch.** The History panel's timeline is stored in each photo's sidecar under `"_history"` and restored on load only when consistent with the sidecar's own edits. Follow-ups: IMPROVEMENTS.md D51. Detail: docs/ROADMAP_HISTORY.md.

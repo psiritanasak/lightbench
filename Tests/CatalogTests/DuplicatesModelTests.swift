@@ -90,6 +90,20 @@ final class DuplicatesModelTests: XCTestCase {
         XCTAssertTrue(model.summary?.contains("1 skipped") ?? false, model.summary ?? "nil")
     }
 
+    /// Live finding 2026-10-06: photos in folders the sandboxed app has no bookmark for are unreadable, and the summary must
+    /// say so honestly (it first claimed exact copies were "still found", which is false for unreadable files).
+    func testUnreadableImagesAreReportedHonestly() async throws {
+        let junk = dir.appendingPathComponent("junk.png")
+        try Data("not an image".utf8).write(to: junk)
+        let photos = try await importAndFetch([junk])
+        let model = DuplicatesModel()
+        model.scan(photos: photos, database: database)
+        try await waitUntilIdle(model)
+        let summary = try XCTUnwrap(model.summary)
+        XCTAssertTrue(summary.contains("1 could not be read for comparison"), summary)
+        XCTAssertFalse(summary.contains("still found"), summary)
+    }
+
     /// Cancelling right after starting races the (fast) scan, so only the invariant that holds either way is asserted: the
     /// scan ends cleanly, the sheet can show a result, and the summary is honest (cancelled, or complete). The exact
     /// cancelled path is pinned in `DuplicateScannerTests`.

@@ -43,7 +43,7 @@ Sources: Lightroom Classic releases 14.4 (Jun 2025) through 15.6 (Sep 2026) as s
 4. **Library basics**: ~~keywords~~ ✅ v1 shipped 2026-10-02 (D47; filter + search + sheet), ~~Smart Collections~~ ✅ v1 shipped 2026-10-02 (D49) + IPTC/EXIF metadata read/write, color labels, Smart Collections, Collection Sets, Stacks, virtual copies/snapshots, metadata filter/search, standard XMP sidecar interop (ours is proprietary `.photoapp.json`).
 5. **Export / import upgrades**: metadata + watermark, color space/bit depth, output sharpening, ~~naming templates~~ (done 2026-09-30, with batch rename), export presets, HEIC/AVIF/DNG; import rename/copy/apply-preset, tethering, watched folders.
 6. **Multi-photo**: HDR merge, Panorama merge, focus stacking, granular Sync Settings dialog, Survey/Reference view.
-7. **Culling / faces**: Assisted Culling, duplicate detection, face detection + People view (R: Faces panel with Eye Focus / Eyes Open scores, June 2026).
+7. **Culling / faces** (duplicate detection ✅ v1 shipped 2026-10-06, see D53): Assisted Culling, duplicate detection, face detection + People view (R: Faces panel with Eye Focus / Eyes Open scores, June 2026).
 8. ~~**Persist edit history** across sessions~~ ✅ shipped 2026-10-05 (see D51), Smart Previews (offline editing), folder move/rename inside the app, Soft Proofing, Print/Slideshow/Map (low value for this app).
 9. ~~Phase 8 polish (tiled rendering, perf)~~ — DONE 2026-09-30 by measured audit (see D36/D38); start with the open items below (D28).
 
@@ -1277,3 +1277,14 @@ Shipped (d7dda03 engine, 695b120 plumbing + UI): `ExportSettings.includeKeywords
 - Enhance (`PhotoEnhancer`) does not embed keywords or any metadata policy (pre-existing for metadata).
 - Default ON means a place-name keyword is exported under the default "All except location" policy (the caption says so); flip `includeKeywords`'s default if a privacy-first default is preferred.
 - Not live-tested: toggle off / "None" through the UI (covered end to end by `KeywordEmbeddingTests`).
+
+### D53. Duplicate detection v1 follow-ups (2026-10-06)
+Shipped (ac027f3 spike, 11017d1 data layer, 20fe153 engine, 17cf473 model + sheet): Photo ▸ Find Duplicates… — exact copies (SHA-256, only for same-size files), near-identical (feature-print distance <= 0.12) and opt-in "similar shots" (<= 0.35), grouped by complete linkage, a BEST badge per group (rating, Picked, size, import order), per-group and global "reject all but best" (a Pick is never overwritten, nothing is ever deleted). Open, none blocking:
+- A file the app cannot READ (no folder bookmark in the sandbox, not an image) gets no print/hash, so duplicates among those are invisible; it is only reported in the summary. Live (2026-10-06): 981 of 1,089 photos were unreadable in this install because the real library's Pictures/Desktop folders have no bookmark (only Downloads does) — import the folder again to grant access (same root cause as D31).
+- Undecodable files are re-decoded every scan (no "failed at this size/mtime" marker in the cache).
+- Grouping is a plain Swift loop (768 multiplies per pair); fine at ~1k photos, would want vDSP (`vDSP_distancesq`) at ~10k.
+- Validity is size + mtime: a file rewritten with its mtime preserved keeps a stale hash (documented at `DuplicateGrouping.groups`).
+- `FeaturePrintGenerator` regenerates a JPEG's thumbnail when the embedded one is small; NOT measured against a real camera JPEG vs its own export (only the 5571x3719 JPEG's resize was measured in the spike).
+- The stale-regroup race (a regroup in flight when a new scan starts) is guarded by `groupingGeneration` but cannot be forced in a test; the cancelled-before-first-read catch likewise (both mutants survive).
+- No test of the regroup toggle itself (a real-file pair that groups only as "similar" needs injected prints); no virtual `.duplicates` sidebar filter; no delete/trash, auto-stack, or metadata merge; scope is the current Library source (not search/filter); Rating/Pick are respected by BEST but the Picked-photo case (left alone) is covered by unit tests only, not live.
+- The cancel button is unit-tested (scanner level) but was not exercised live (the scan finished in about 15 s, nothing to cancel).

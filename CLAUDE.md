@@ -179,6 +179,7 @@ Reviewer: FIX FIRST → APPROVE. Round 1 caught, by adversarial re-measurement (
   did before this change. Not a bug (this is exactly what "live-tune
   the constant" means), but worth knowing so a visual difference on an
   old edit doesn't get mistaken for a regression.
+- **Styles (planned, user-approved 2026-10-06, NOT started)** — inspired by iOS's Photographic Styles (research in `docs/ROADMAP_HISTORY.md`): a "Style" section = named presets + a 2D Tone/Color pad + one strength slider, saved as a small parameter set in the sidecar (non-destructive, deterministic), built on the existing Curves/HSL/Color Grading/Looks stages. Our OWN preset names (not Apple's). Three slices, one per session, Plan Mode first: **v1** presets + pad + strength; **v2** Texture (Soft/Glow/Film mapped to Texture/Clarity/Sharpen) + Grain toggle; **v3** skin-tone protection, gated behind a short spike (Vision person/face segmentation vs the colour-range mask on real portraits) and shipped "off"/cut if the spike fails. Details and open decisions: IMPROVEMENTS.md D54.
 - RAW-native AI Denoise — cross-reference only, overlaps the already-shipped RAW NR fields in Phase 6
 
 **Tier 2 (genuinely new architecture — don't underscope):**

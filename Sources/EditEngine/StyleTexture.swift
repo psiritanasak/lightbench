@@ -7,8 +7,8 @@ import Foundation
 enum StyleTexture: String, CaseIterable, Identifiable, Sendable {
     /// Smooths fine detail (negative Texture, a touch of negative Clarity). Not skin-aware: it softens everything alike.
     case soft
-    /// A highlight bloom: bright areas bleed a soft light into their surroundings. Its `glow` nudge is consumed by the Glow
-    /// stage (a separate commit; until that lands Glow renders only its small Clarity nudge, so the UI must not expose it first).
+    /// A highlight bloom: bright areas bleed a soft light into their surroundings (`EditPipeline.applyGlow`, consuming the
+    /// `glow` nudge).
     case glow
     /// Crisp, slightly gritty rendering (mild positive Texture and Sharpen). Grain is its own toggle, available on any texture.
     case film

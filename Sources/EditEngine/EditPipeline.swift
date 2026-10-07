@@ -112,6 +112,7 @@ enum EditPipeline {
         image = applyVignette(state, to: image)               // radial, scene-linear
         image = applyClarity(state, to: image)                // wide local contrast, perceptual, before detail pair
         image = applyTexture(state, to: image)                // fine local contrast, perceptual, coarse->fine after clarity
+        image = applyGlow(state, to: image)                   // the Style's highlight bloom, perceptual, after local contrast, before NR/sharpen
         image = applyNoiseReduction(state, to: image)         // detail, scene-linear, before sharpen
         image = applySharpen(state, to: image)                // detail, perceptual, before defringe
         image = applyDefringe(state, to: image)               // fringe cleanup, perceptual, after sharpen (convention, not a requirement) and before grain (real measured requirement) — see EditState.defringePurple
@@ -1160,6 +1161,99 @@ enum EditPipeline {
             img = kernel.apply(extent: img.extent, arguments: arguments) ?? img
         }
         return img
+    }
+
+    // MARK: - Glow (the Style's highlight bloom)
+
+    /// Perceptual value above which a channel starts to count as "highlight" for the bloom (0.75: a pale studio backdrop at or
+    /// below ~0.75 does not bloom — above it, it blooms a little, ramping to full at 1 — while lamps and speculars near 1 do).
+    private static let kGlowThreshold: Double = 0.75
+    /// The blur radius as a FRACTION of `min(extent)` (like Sharpen/Clarity, so the bloom looks the same at thumbnail, proxy
+    /// and export size). A convention chosen by eye.
+    private static let kGlowBlurFraction: Double = 0.03
+    /// The bloom is computed on a copy this much smaller: a wide Gaussian at full size has the region-of-interest dilation
+    /// that makes Clarity+Dehaze slow at huge sizes (IMPROVEMENTS.md D17/D36), and the result is blurred anyway.
+    private static let kGlowDownscale: Double = 0.25
+    /// Light added back at glow 1.0 (a convention chosen by eye on three library photos; the first tunes were tried while the
+    /// stage was still adding nothing — see `applyGlow` — and were redone after the fix).
+    private static let kGlowAmountSpan: Double = 0.6
+
+    private static func glowActive(_ state: EditState) -> Bool { effectiveDetail(state).glow > 0 }
+
+    /// A highlight bloom: highlights (per channel, ramped from `kGlowThreshold` to 1) are blurred wide and ADDED back, so
+    /// bright areas bleed soft light into their surroundings. Built from stock Core Image filters (no custom kernel).
+    ///
+    /// The math runs on OPAQUE straight-colour layers: Core Image's colour filters re-premultiply their output, so a
+    /// "pure added light, alpha 0" layer is multiplied to zero (the first draft of this stage did exactly that and added
+    /// nothing). The photo's own alpha is restored at the end with a Source-In composite (the bloom itself adds no opacity; a small alpha drift
+    /// seen in the full-pipeline test was not isolated to this stage — see `GlowStageTests`). The addition never clamps the image (scene values above 1 survive); only the
+    /// highlight mask is clamped.
+    private static func applyGlow(_ state: EditState, to image: CIImage) -> CIImage {
+        guard glowActive(state) else { return image }
+        let amount = effectiveDetail(state).glow
+        let extent = image.extent
+        guard !extent.isInfinite, !extent.isEmpty else { return image }
+        let side = Double(min(extent.width, extent.height))
+        guard side >= 8 else { return image }
+
+        // Work in a frame whose origin is (0, 0): a cropped photo keeps a non-zero extent origin, and the scale transforms
+        // below scale about the origin.
+        let toOrigin = CGAffineTransform(translationX: -extent.minX, y: -extent.minY)
+        let size = CGRect(x: 0, y: 0, width: extent.width, height: extent.height)
+        let local = encodeToPerceptual(image).transformed(by: toOrigin)
+        let base = local.unpremultiplyingAlpha().settingAlphaOne(in: size)
+
+        func matrix(_ input: CIImage, gain: CGFloat, bias: CGFloat) -> CIImage? {
+            let f = CIFilter.colorMatrix()
+            f.inputImage = input
+            f.rVector = CIVector(x: gain, y: 0, z: 0, w: 0)
+            f.gVector = CIVector(x: 0, y: gain, z: 0, w: 0)
+            f.bVector = CIVector(x: 0, y: 0, z: gain, w: 0)
+            f.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+            f.biasVector = CIVector(x: bias, y: bias, z: bias, w: 0)
+            return f.outputImage
+        }
+
+        let ramp = CGFloat(1 / (1 - kGlowThreshold))
+        guard let masked = matrix(base, gain: ramp, bias: -CGFloat(kGlowThreshold) * ramp) else { return image }
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = masked
+        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+        clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+        guard let highlights = clamp.outputImage else { return image }
+
+        // The downscaled extent of a side that is not a multiple of 4 ends in a FRACTIONAL pixel (401 * 0.25 = 100.25; Core Image
+        // rounds the extent outward to 101), which is only partly covered and so partly transparent; `clampedToExtent` would repeat that translucent edge pixel and
+        // the blur would drag the transparency inward, fading the bloom along the right/top edges (~4 blur radii wide —
+        // measured by the reviewer on a flat 0.95 field at 401x403: 2.632 inside, 1.560 at the last column). So the blur
+        // input is cropped to the integer rect rounded INWARD, and the upscaled result is edge-clamped back out to `size`.
+        let scaled = highlights.transformed(by: CGAffineTransform(scaleX: kGlowDownscale, y: kGlowDownscale))
+        // From the ORIGINAL size, not `scaled.extent`: Core Image rounds a scaled extent OUTWARD (401 -> 101, not 100.25),
+        // so flooring the already-rounded extent would keep the translucent partial pixel (measured with a standalone copy).
+        let downRect = CGRect(x: 0, y: 0, width: floor(extent.width * kGlowDownscale), height: floor(extent.height * kGlowDownscale))
+        guard downRect.width >= 1, downRect.height >= 1 else { return image }
+        let down = scaled.cropped(to: downRect)
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = down.clampedToExtent()
+        blur.radius = Float(kGlowBlurFraction * side * kGlowDownscale)
+        guard let blurred = blur.outputImage else { return image }
+        let up = blurred.cropped(to: downRect)
+            .transformed(by: CGAffineTransform(scaleX: 1 / kGlowDownscale, y: 1 / kGlowDownscale))
+            .clampedToExtent()
+            .cropped(to: size)
+
+        guard let light = matrix(up, gain: CGFloat(amount * kGlowAmountSpan), bias: 0) else { return image }
+        let add = CIFilter.additionCompositing()
+        add.inputImage = light
+        add.backgroundImage = base
+        guard let summed = add.outputImage?.settingAlphaOne(in: size) else { return image }
+
+        // Restore the photo's own alpha (Source-In keeps `summed` only where `local` is opaque, scaled by its alpha).
+        let sourceIn = CIFilter.sourceInCompositing()
+        sourceIn.inputImage = summed
+        sourceIn.backgroundImage = local
+        guard let restored = sourceIn.outputImage else { return image }
+        return decodeToLinear(restored.cropped(to: size)).transformed(by: toOrigin.inverted())
     }
 
     // MARK: - Style (preset + pad + strength): nudges and tint pass

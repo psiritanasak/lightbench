@@ -998,7 +998,7 @@ struct EditState: Equatable, Codable {
     var styleStrength: Double = 1.0
 
     /// The Style's texture (`StyleTexture` id: "soft", "glow", "film"), `""` = none. Adds render-time nudges to the detail
-    /// stages (Texture/Clarity/Sharpen, plus Glow's bloom once the Glow stage lands) — never the user's own sliders. An id this build does not know
+    /// stages (Texture/Clarity/Sharpen, plus Glow's bloom) — never the user's own sliders. An id this build does not know
     /// renders as none but is kept. INDEPENDENT of `styleStrength` (which scales the tone/colour preset and pad). Purely
     /// additive: absent decodes to `""`.
     var styleTexture: String = ""

@@ -2245,7 +2245,6 @@ struct ContentView: View {
                 case .adjust:
                     AdjustTabView(
                         document: document,
-                        catalog: catalog,
                         panel: $adjustPanel,
                         interactionMode: $interactionMode,
                         onEnterPointPickingMode: {
@@ -2276,7 +2275,8 @@ struct ContentView: View {
                         onSelectAspect: { selectAspect($0) },
                         onReset: { resetCropTab() }
                     )
-                case .looks: PlaceholderTab(message: "Looks are moving here.") // replaced by LooksTabView in the next commit
+                case .looks:
+                    LooksTabView(document: document, catalog: catalog, panel: $adjustPanel)
                 case .cleanUp: PlaceholderTab(message: "Clean Up isn't available yet.")
                 }
             }

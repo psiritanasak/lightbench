@@ -16,6 +16,21 @@ struct StyleNudges: Equatable, Sendable {
 
     var isZero: Bool { self == .zero }
     var hasTint: Bool { shadowTint.saturation != 0 || midTint.saturation != 0 || highlightTint.saturation != 0 }
+
+    /// True when the style changes COLOUR (saturation, vibrance or a tint) as opposed to tone only.
+    var hasColourEffect: Bool { saturation != 0 || vibrance != 0 || hasTint }
+
+    /// The same nudges with every colour change removed and the tone changes (contrast/shadows/highlights) kept: what
+    /// "Protect skin" renders on skin.
+    var colourless: StyleNudges {
+        var copy = self
+        copy.saturation = 0
+        copy.vibrance = 0
+        copy.shadowTint = .none
+        copy.midTint = .none
+        copy.highlightTint = .none
+        return copy
+    }
 }
 
 /// Strength is exactly linear: every output (tone nudges and tint saturations) is the clamped preset+pad sum times strength.

@@ -35,6 +35,10 @@ struct StylePreset: Equatable, Identifiable, Sendable {
     var shadowTint: StyleTint = .none
     var midTint: StyleTint = .none
     var highlightTint: StyleTint = .none
+
+    /// A deliberately monochrome look (Saturation -1: Silver, Ink). "Protect skin" exempts these — holding skin back from a
+    /// monochrome style would leave coloured skin in a black-and-white picture.
+    var isMonochrome: Bool { saturation <= -1 }
 }
 
 /// The built-in style presets (our own names). Ids are `builtin:<slug>`; the empty id means "no preset" (the pad can still

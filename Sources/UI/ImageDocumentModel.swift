@@ -1093,21 +1093,70 @@ final class ImageDocumentModel: ObservableObject {
     /// Shown by the Remove section's own alert (placement refusals, a failed auto-source).
     @Published var retouchMessage: String?
 
-    /// Appends a spot in the middle of the frame and finds its source in the background. Refused (with a message)
-    /// unless the geometry is at identity — spots live in the unedited source frame and the on-image editing math
-    /// only holds there (see `RetouchSpot`) — and at the 50-spot cap. Returns the new spot's id.
+    /// Appends a spot in the middle of the frame (the "Add Spot" button; later ones spiral outward) and finds its source in the
+    /// background. Refused (with a message) unless the geometry is at identity — spots live in the unedited source frame and the
+    /// on-image editing math only holds there (see `RetouchSpot`) — and at the 50-spot cap. Returns the new spot's id.
     @discardableResult
     func addRetouchSpot() -> UUID? {
         guard currentImage != nil else { return nil }
+        guard checkCanPlaceRetouchSpot() else { return nil }
+        guard let spot = RetouchOverlayGeometry.newSpot(existingCount: editState.retouchSpots.count) else { return nil }
+        return commitNewRetouchSpot(spot)
+    }
+
+    /// Adds a spot where the user clicked or dragged on the photo with the Place Spots tool: `point` is a normalized position
+    /// (x right, y UP) in the unedited frame, `radius` a fraction of the short side. Both are clamped to their legal ranges;
+    /// non-finite input is refused (a NaN in `EditState` would make every sidecar write throw). Same refusals as the button
+    /// (no image, geometry not at identity, the 50 cap). Returns the new spot's id.
+    @discardableResult
+    func addRetouchSpot(atNormalized point: (x: Double, y: Double), radius: Double) -> UUID? {
+        guard currentImage != nil, point.x.isFinite, point.y.isFinite, radius.isFinite else { return nil }
+        guard checkCanPlaceRetouchSpot() else { return nil }
+        var spot = RetouchSpot()
+        spot.x = min(max(point.x, 0), 1)
+        spot.y = min(max(point.y, 0), 1)
+        spot.radius = min(max(radius, RetouchSpot.radiusRange.lowerBound), RetouchSpot.radiusRange.upperBound)
+        return commitNewRetouchSpot(spot)
+    }
+
+    /// Removes the spot `id` as its own labelled undo step ("Delete Spot"). A no-op (no history step) if there is no such spot.
+    func deleteRetouchSpot(id: UUID) {
+        finalizePendingCommit()
+        guard editState.retouchSpots.contains(where: { $0.id == id }) else { return }
+        var next = editState
+        next.retouchSpots.removeAll { $0.id == id }
+        history.commit(next, summary: "Delete Spot")
+        applyHistoryState(history.current)
+    }
+
+    /// The placement refusals shared by every way of adding a spot; sets `retouchMessage` and returns false when refused.
+    private func checkCanPlaceRetouchSpot() -> Bool {
+        // A click during an async photo load would commit the spot onto the OUTGOING photo's history and sidecar.
+        guard !isLoadInFlight else {
+            retouchMessage = "Wait for the photo to finish loading, then try again."
+            return false
+        }
         guard editState.isGeometryAtIdentity else {
             retouchMessage = "Reset crop, straighten, perspective, scale and flip to add or move spots. Existing spots still apply."
-            return nil
+            return false
         }
-        guard let spot = RetouchOverlayGeometry.newSpot(existingCount: editState.retouchSpots.count) else {
+        guard editState.retouchSpots.count < EditState.maxRetouchSpots else {
             retouchMessage = "A photo can have at most \(EditState.maxRetouchSpots) spots."
-            return nil
+            return false
         }
-        editState.retouchSpots.append(spot)
+        return true
+    }
+
+    /// Appends `spot` as ONE labelled undo step ("Add Spot") — committed directly, not through the debounced `editState` path, so
+    /// two clicks within the 350 ms coalescing window stay two undo steps — then starts the background source search. The search
+    /// result lands later as its own "Find Source" step (`findRetouchSource`).
+    private func commitNewRetouchSpot(_ spot: RetouchSpot) -> UUID? {
+        guard spot.isFinite else { return nil }
+        finalizePendingCommit()
+        var next = editState
+        next.retouchSpots.append(spot)
+        history.commit(next, summary: "Add Spot")
+        applyHistoryState(history.current)
         findRetouchSource(for: spot.id, reportFailure: false)
         return spot.id
     }
@@ -1142,8 +1191,24 @@ final class ImageDocumentModel: ObservableObject {
                 }
                 return
             }
-            self.editState.retouchSpots[index].sourceDX = found.dx
-            self.editState.retouchSpots[index].sourceDY = found.dy
+            // Its own labelled undo step, committed directly like every other retouch action: written through `editState` it would be
+            // a debounced burst with a generic summary that a following coalesced edit (a spot drag, a slider) could MERGE into.
+            self.finalizePendingCommit()
+            // A commit drops everything after the cursor. If the user has undone or jumped back since the search began, the redo
+            // branch (e.g. the NEXT spot they clicked) must not be wiped by a background result: drop it instead. (A pending burst
+            // flushed just above already truncated redo the way any user edit does, so this only bites when the user stepped back.)
+            guard !self.history.canRedo else {
+                if reportFailure {
+                    self.retouchMessage = "Redo is available, so the source was not changed. Press Find Source again after redoing or editing."
+                }
+                return
+            }
+            var next = self.editState
+            guard let current = next.retouchSpots.firstIndex(where: { $0.id == id }) else { return }
+            next.retouchSpots[current].sourceDX = found.dx
+            next.retouchSpots[current].sourceDY = found.dy
+            self.history.commit(next, summary: "Find Source")
+            self.applyHistoryState(self.history.current)
         }
     }
 

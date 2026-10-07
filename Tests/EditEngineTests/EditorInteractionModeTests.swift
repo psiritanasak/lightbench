@@ -244,4 +244,37 @@ final class EditorInteractionModeTests: XCTestCase {
         mode.disarmPointColorPick()
         XCTAssertEqual(mode, .placingRedEye)
     }
+
+    // MARK: - Place Spots (retouch)
+
+    func testPlacingRetouchSpotProjectsOnlyItsOwnFlag() {
+        let mode = EditorInteractionMode.placingRetouchSpot
+        XCTAssertTrue(mode.isPlacingRetouchSpot)
+        XCTAssertFalse(mode.isPickingWhiteBalance); XCTAssertFalse(mode.isPlacingRedEyeCorrections)
+        XCTAssertNil(mode.brushPaintingMaskID); XCTAssertNil(mode.colorPickingMaskID)
+        XCTAssertNil(mode.subjectPickingMaskID); XCTAssertNil(mode.pointColorPickingID)
+        XCTAssertFalse(EditorInteractionMode.none.isPlacingRetouchSpot)
+        XCTAssertFalse(EditorInteractionMode.placingRedEye.isPlacingRetouchSpot)
+    }
+
+    func testArmingPlaceSpotsReplacesAnotherToolAndTogglesOff() {
+        var mode = EditorInteractionMode.pickingWhiteBalance
+        mode.toggle(.placingRetouchSpot)
+        XCTAssertEqual(mode, .placingRetouchSpot, "one tool at a time: arming Place Spots replaces the armed tool")
+        mode.toggle(.placingRedEye)
+        XCTAssertEqual(mode, .placingRedEye, "and another tool replaces it")
+        mode.toggle(.placingRetouchSpot); mode.toggle(.placingRetouchSpot)
+        XCTAssertEqual(mode, .none, "toggling it twice disarms")
+    }
+
+    func testMaskAndPointColorCleanupLeavePlaceSpotsArmed() {
+        var mode = EditorInteractionMode.placingRetouchSpot
+        mode.disarmMaskModes()
+        XCTAssertEqual(mode, .placingRetouchSpot, "collapsing Masks or an undone mask must not disarm the spot tool")
+        mode.disarmPointColorPick()
+        XCTAssertEqual(mode, .placingRetouchSpot)
+        mode.disarm(.placingRetouchSpot)
+        XCTAssertEqual(mode, .none)
+    }
 }
+

@@ -36,6 +36,9 @@ enum EditorInteractionMode: Equatable {
     case pickingPointColor(pointColorID: UUID)
     /// Click-on-image subject picking: stays armed so several subjects can be toggled (like Red-Eye placement).
     case pickingSubject(maskID: UUID)
+    /// The Remove section's "Place Spots" tool: stays armed so every click on the photo adds a spot (Lightroom's spot-removal
+    /// tool). No payload — spot selection is `AdjustPanelState.selectedRetouchSpotID`, not part of the mode.
+    case placingRetouchSpot
 
     /// Read-only projections matching the 5 stored properties this type
     /// replaces, by name and type — every existing read site (`canZoom`,
@@ -62,6 +65,10 @@ enum EditorInteractionMode: Equatable {
     var subjectPickingMaskID: UUID? {
         if case .pickingSubject(let maskID) = self { return maskID }
         return nil
+    }
+
+    var isPlacingRetouchSpot: Bool {
+        self == .placingRetouchSpot
     }
 
     var pointColorPickingID: UUID? {
@@ -100,7 +107,7 @@ enum EditorInteractionMode: Equatable {
         switch self {
         case .paintingBrush, .pickingColorRange, .pickingSubject:
             self = .none
-        case .none, .pickingWhiteBalance, .placingRedEye, .pickingPointColor:
+        case .none, .pickingWhiteBalance, .placingRedEye, .pickingPointColor, .placingRetouchSpot:
             break
         }
     }

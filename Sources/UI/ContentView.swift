@@ -390,7 +390,7 @@ struct ContentView: View {
     /// reasoning as `compareMode` above: `EditState`/`EditPipeline` are
     /// untouched, this only controls the on-screen render via
     /// `MetalImageView`'s `zoomScale`/`panOffset`/`onScrollZoom`.
-    /// Available in the normal Adjust view AND Compare (both modes); NOT
+    /// Available in the normal Adjust/Looks view AND Compare (both modes); NOT
     /// available in Crop/WB-picking/red-eye-placement — see `canZoom` and
     /// the `.onChange`/arm-action resets below, mirroring `compareMode`'s
     /// own established mutual-exclusion pattern.
@@ -888,8 +888,9 @@ struct ContentView: View {
 
     /// `nil` when Compare is off (the default, unchanged single-image
     /// render path); otherwise bundles everything `ImageRenderer` needs.
-    /// Compare only ever runs on the Adjust tab (see the toolbar `Menu`'s
-    /// `.disabled(...)` and the tab-change reset below), so
+    /// Compare never runs on the Crop tab (see the toolbar `Menu`'s
+    /// `.disabled(...)` and the tab-change reset — it survives Adjust and Looks,
+    /// `EditorTab.keepsCompareAndZoom`), so
     /// `compareOriginalEditState`/`displayEditState` are never substituting
     /// for crop-editing mode at the same time.
     private var compareRenderConfig: CompareRenderConfig? {
@@ -1219,17 +1220,18 @@ struct ContentView: View {
             zoomScale = 1
             panOffset = .zero
         }
-        // Leaving the Adjust tab disarms both point-interaction modes —
-        // neither has meaning while cropping (their overlays are gated on
-        // `!isCroppingActive` anyway) or in the other, not-yet-built tabs —
-        // and Compare/zoom, which only ever run on the Adjust tab (see the
-        // toolbar Menu's `.disabled(...)` and `canZoom`).
+        // Leaving the Adjust tab disarms the point-interaction modes and clears the mask/Point Color/retouch selections — none has
+        // controls on another tab, and their overlays would otherwise stay live (`EditorTab.disarmsPointModes`). Compare and
+        // zoom survive a switch to Looks (before/after while browsing looks) but reset on Crop/Clean Up
+        // (`EditorTab.keepsCompareAndZoom`; the toolbar Menu's `.disabled(...)` and `canZoom` already gate Crop).
         .onChange(of: selectedTab) { _, newTab in
-            if newTab != .adjust {
+            if newTab.disarmsPointModes {
                 interactionMode = .none
                 adjustPanel.selectedMaskID = nil
                 adjustPanel.selectedPointColorID = nil
                 adjustPanel.selectedRetouchSpotID = nil
+            }
+            if !newTab.keepsCompareAndZoom {
                 compareMode = .off
                 zoomScale = 1
                 panOffset = .zero
@@ -1656,7 +1658,7 @@ struct ContentView: View {
             } label: {
                 Label("Compare", systemImage: "rectangle.split.2x1")
             }
-            // Only meaningful on the Adjust tab with no other
+            // Not on the Crop tab, and not with another
             // point-interaction mode armed — same one-at-a-time
             // invariant the WB/red-eye buttons already keep (see their
             // own `.disabled`/mutual-disarm below).
@@ -2274,7 +2276,7 @@ struct ContentView: View {
                         onSelectAspect: { selectAspect($0) },
                         onReset: { resetCropTab() }
                     )
-                case .filters: PlaceholderTab(message: "Filters aren't available yet.")
+                case .looks: PlaceholderTab(message: "Looks are moving here.") // replaced by LooksTabView in the next commit
                 case .cleanUp: PlaceholderTab(message: "Clean Up isn't available yet.")
                 }
             }

@@ -57,9 +57,8 @@ struct EnhancingHUD: View {
     }
 }
 
-/// Stand-in body for an `EditorTab` that has no implementation yet (Filters,
-/// Clean Up) — the tab bar mirrors Apple Photos' fixed tab set, so those tabs
-/// exist in the UI before their features do.
+/// Stand-in body for an `EditorTab` that has no implementation yet (Clean Up) — the tab
+/// bar started as a mirror of Apple Photos' tab set, so that tab exists in the UI before its feature does.
 struct PlaceholderTab: View {
     let message: String
 

@@ -2067,7 +2067,7 @@ struct AdjustTabView: View {
     /// Selective Color (HSL v2): a row of 8 tappable band swatches (the
     /// selected one ringed), one shared Range slider, then the 3 sliders
     /// for whichever band is currently selected — NOT a top-level
-    /// `EditorTab` (that's fixed to mirror Apple Photos' own tab bar, see
+    /// `EditorTab` (the tab bar started as a mirror of Apple Photos', see
     /// `EditorTab`'s doc comment; Photos itself doesn't give this a
     /// separate top-level tab either), and NOT 24 simultaneous rows, which
     /// wouldn't fit this panel's scale. Just the rows — see

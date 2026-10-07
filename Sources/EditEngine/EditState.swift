@@ -341,7 +341,7 @@ struct EditState: Equatable, Codable {
     /// section's own doc comment for why: trivial memberwise init,
     /// `Codable`/`Equatable` identity, per-slider key-path binding).
     /// Declared here, immediately after Black & White, to match pipeline
-    /// order: `EditPipeline.applyColorGrading` runs LAST inside
+    /// order: `EditPipeline.applyColorGrading` runs last of the user's own stages inside (the style's tint pass follows it, still inside
     /// `applyPerceptualAdjustments`'s sandwich — AFTER Selective Color,
     /// Vibrance, Saturation, and Black & White's forced desaturation, not
     /// adjacent to Selective Color. That placement is load-bearing, not
@@ -979,6 +979,24 @@ struct EditState: Equatable, Codable {
     /// `transformScale`/`levelsWhitePoint`.
     var lookIntensity: Double = 1.0
 
+    // MARK: - Style (preset + Tone/Color pad + strength)
+
+    /// The style preset (`StyleLibrary`), `""` = none (the pad can still be used on its own). `builtin:<slug>`. An id this
+    /// build does not know renders as NO preset but is kept, so a photo edited in a newer build keeps its style. A style
+    /// only ADDS render-time nudges (`StyleMath`) — it never writes the user's own sliders. Purely additive: absent = `""`.
+    var styleID: String = ""
+
+    /// The pad's vertical axis, -1...1: Tone (shadows lift/deepen with a small opposite contrast move). 0 = centre.
+    var styleTone: Double = 0
+
+    /// The pad's horizontal axis, -1...1: Color (Vibrance-led, so skin-protecting). 0 = centre.
+    var styleColor: Double = 0
+
+    /// 0...1, scales the WHOLE style (preset + pad + tints) exactly linearly. NON-ZERO identity default (1.0), decoded with
+    /// `?? 1.0` (the `lookIntensity`/`transformScale` hazard class). Meaningful only while a preset or pad offset is set; a
+    /// lone `styleStrength != 1` is an invisible edit, so the UI resets it when the style is cleared.
+    var styleStrength: Double = 1.0
+
     // MARK: - RAW (CIRAWFilter-native)
 
     /// Core Image's own RAW tone-curve strength — configures `CIRAWFilter`
@@ -1460,6 +1478,10 @@ struct EditState: Equatable, Codable {
         s.grain = 0
         s.lookID = ""
         s.lookIntensity = 1
+        s.styleID = ""
+        s.styleTone = 0
+        s.styleColor = 0
+        s.styleStrength = 1
         // red-eye: reset sliders AND clear points (see doc comment above)
         s.redEyeSize = 0.5
         s.redEyeStrength = 0.7
@@ -1564,6 +1586,11 @@ struct EditState: Equatable, Codable {
         // A look is the archetypal reusable look (unlike placement fields such as masks/red-eye points).
         result.lookID = lookID
         result.lookIntensity = lookIntensity
+        // A style is reusable like a look (nudges + tints, no placement data), so Presets and Paste carry it.
+        result.styleID = styleID
+        result.styleTone = styleTone
+        result.styleColor = styleColor
+        result.styleStrength = styleStrength
         // red-eye correction INTENSITY only — `redEyePoints` (where the
         // corrections sit) stays `target`'s own, untouched.
         result.redEyeSize = redEyeSize
@@ -1657,6 +1684,7 @@ extension EditState {
         case defringePurple, defringeGreen
         case grain
         case lookID, lookIntensity
+        case styleID, styleTone, styleColor, styleStrength
         case boostAmount
         case rawExposureEV, shadowBoostScale, rawWhiteBalanceNeutralPoints
         case rawLuminanceNoiseReductionAdjust, rawColorNoiseReductionScale, rawSharpnessScale
@@ -1800,6 +1828,10 @@ extension EditState {
         grain = try container.decodeIfPresent(Double.self, forKey: .grain) ?? 0
         lookID = (try? container.decodeIfPresent(String.self, forKey: .lookID)) ?? ""
         lookIntensity = try container.decodeIfPresent(Double.self, forKey: .lookIntensity) ?? 1.0
+        styleID = (try? container.decodeIfPresent(String.self, forKey: .styleID)) ?? ""
+        styleTone = try container.decodeIfPresent(Double.self, forKey: .styleTone) ?? 0
+        styleColor = try container.decodeIfPresent(Double.self, forKey: .styleColor) ?? 0
+        styleStrength = try container.decodeIfPresent(Double.self, forKey: .styleStrength) ?? 1.0
         boostAmount = try container.decodeIfPresent(Double.self, forKey: .boostAmount) ?? 1.0
         rawExposureEV = try container.decodeIfPresent(Double.self, forKey: .rawExposureEV) ?? 0
         shadowBoostScale = try container.decodeIfPresent(Double.self, forKey: .shadowBoostScale) ?? 1.0

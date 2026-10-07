@@ -478,10 +478,11 @@ enum EditPipeline {
             || state.hslHue != 0
             || selectiveColorActive(state)
             || pointColorsActive(state)
-            || state.vibrance != 0
+            || effective.vibrance != 0
             || effective.saturation != 0
             || state.blackAndWhite
             || colorGradingActive(state)
+            || styleTintActive(state)
             || lookActive(state)
         else { return image }
 
@@ -596,7 +597,7 @@ enum EditPipeline {
             return applyPointColors(Array(state.pointColors.prefix(max(0, index))), to: img)
         }
         if pointColorsActive(state) { img = applyPointColors(state.pointColors, to: img) }
-        if state.vibrance != 0 { img = applyVibrance(state.vibrance, to: img) }
+        if effective.vibrance != 0 { img = applyVibrance(effective.vibrance, to: img) }
         // `blackAndWhite` FORCES full desaturation (factor 0, i.e. the same
         // call `applySaturation` already makes at hslSaturation's own -1
         // extreme) regardless of what hslSaturation/vibrance/hslHue are
@@ -620,7 +621,7 @@ enum EditPipeline {
         if state.blackAndWhite || effective.saturation != 0 {
             img = applySaturation(saturationOverride, to: img)
         }
-        // Color Grading runs LAST in this sandwich — see
+        // Color Grading is the LAST OF THE USER'S OWN stages in this sandwich (the style's own tint pass follows it) — see
         // EditState.shadowHue's own doc comment and applyColorGrading's
         // below for why this placement is load-bearing, not incidental:
         // it must run AFTER Black & White's forced desaturation so a
@@ -629,6 +630,13 @@ enum EditPipeline {
         // Vibrance/Saturation on ordinary colored content — see
         // applyColorGrading's own doc comment for the real numbers.
         if colorGradingActive(state) { img = applyColorGrading(state, to: img) }
+        // The style's own tint pass (a second ColorGrading kernel invocation, never merged into the user's wheel values).
+        // Runs AFTER the user's wheels: a CONVENTION, not a correctness requirement. MEASURED (temporary swap, 2026-10-07, six
+        // solid colours, "Copper" plus strong user tints: shadow 210°/0.6, mid 200°/0.5, highlight 40°/0.6): the two orders do
+        // not commute — the widest per-channel gap was 0.0115 (linear red of the (0.8, 0.7, 0.6) sample, 1.3387 vs 1.3272),
+        // ~5.7x this suite's 0.002 tolerance; the other samples differed by 0.0002-0.006. The user's own look is
+        // applied first and the style rides on top of it; `testStyleTintRunsAfterTheUsersColorGrading` pins the shipped order.
+        if styleTintActive(state) { img = applyStyleTint(styleNudges(state), to: img) }
         img = decodeToLinear(img)
         return img
     }
@@ -759,7 +767,8 @@ enum EditPipeline {
     private static let kBrillianceSaturationWeight: Double = 0.10
 
     /// The tone values actually used for rendering, after blending in
-    /// Brilliance's contribution. This is the ONLY place Brilliance has any
+    /// Brilliance's contribution AND the Style's nudges (`StyleMath`; contrast, shadows, highlights, saturation and
+    /// vibrance — `vibrance` exists here only for the style). This is the ONLY place Brilliance or a style has any
     /// effect — it never mutates `state.contrast`/`curvesShadows`/
     /// `curvesHighlights`/`hslSaturation` themselves, so those sliders keep
     /// displaying exactly what the user set them to; Brilliance's influence
@@ -771,15 +780,20 @@ enum EditPipeline {
         let shadows: Double
         let highlights: Double
         let saturation: Double
+        let vibrance: Double
     }
 
     private static func effectiveTone(_ state: EditState) -> EffectiveTone {
         let b = state.brilliance
+        // The style's nudges ride the same render-time blend as Brilliance: they are ADDED here and never written back to
+        // the user's own sliders, so Reset Adjustments / Reset Shadows / Looks "None" never fight the Style section.
+        let style = styleNudges(state)
         return EffectiveTone(
-            contrast: clamped(state.contrast + b * kBrillianceContrastWeight),
-            shadows: clamped(state.curvesShadows + b * kBrillianceShadowWeight),
-            highlights: clamped(state.curvesHighlights - b * kBrillianceHighlightWeight),
-            saturation: clamped(state.hslSaturation + b * kBrillianceSaturationWeight)
+            contrast: clamped(state.contrast + b * kBrillianceContrastWeight + style.contrast),
+            shadows: clamped(state.curvesShadows + b * kBrillianceShadowWeight + style.shadows),
+            highlights: clamped(state.curvesHighlights - b * kBrillianceHighlightWeight + style.highlights),
+            saturation: clamped(state.hslSaturation + b * kBrillianceSaturationWeight + style.saturation),
+            vibrance: clamped(state.vibrance + style.vibrance)
         )
     }
 
@@ -1114,6 +1128,27 @@ enum EditPipeline {
             img = kernel.apply(extent: img.extent, arguments: arguments) ?? img
         }
         return img
+    }
+
+    // MARK: - Style (preset + pad + strength): nudges and tint pass
+
+    private static func styleNudges(_ state: EditState) -> StyleNudges {
+        StyleMath.nudges(id: state.styleID, tone: state.styleTone, color: state.styleColor, strength: state.styleStrength)
+    }
+
+    private static func styleTintActive(_ state: EditState) -> Bool { styleNudges(state).hasTint }
+
+    /// The style's colour casts: the shadow/mid/highlight tints from `StyleMath` through the SAME `ColorGrading.cikernel`
+    /// the user's wheels use (luminance weighting 0), as a separate invocation so the user's wheel values keep their own
+    /// clamping and Reset behaviour.
+    private static func applyStyleTint(_ nudges: StyleNudges, to image: CIImage) -> CIImage {
+        guard let kernel = colorGradingKernel else { return image }
+        func vector(_ tint: StyleTint) -> CIVector {
+            let d = ColorGradingTint.rgbDelta(hue: tint.hue, saturation: min(max(tint.saturation, 0), 1))
+            return CIVector(x: d.r, y: d.g, z: d.b, w: 0)
+        }
+        let arguments: [Any] = [image, vector(nudges.shadowTint), vector(nudges.midTint), vector(nudges.highlightTint)]
+        return kernel.apply(extent: image.extent, arguments: arguments) ?? image
     }
 
     // MARK: - Color Grading (3-way shadows/midtones/highlights)
@@ -2061,7 +2096,7 @@ enum EditPipeline {
                     perceptual = applyContrast(contrast, to: perceptual)
                 }
                 if shadows != 0 || highlights != 0 {
-                    let effective = EffectiveTone(contrast: 0, shadows: shadows, highlights: highlights, saturation: 0)
+                    let effective = EffectiveTone(contrast: 0, shadows: shadows, highlights: highlights, saturation: 0, vibrance: 0)
                     perceptual = applyCurves(effective, 0, to: perceptual)
                 }
                 if saturation != 0 {

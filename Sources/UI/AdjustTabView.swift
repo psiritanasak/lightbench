@@ -1961,6 +1961,10 @@ struct AdjustTabView: View {
             && state.grain == 0
             && state.lookID.isEmpty
             && state.lookIntensity == 1
+            && state.styleID.isEmpty
+            && state.styleTone == 0
+            && state.styleColor == 0
+            && state.styleStrength == 1
             && state.redEyeSize == 0.5
             && state.redEyeStrength == 0.7
     }
@@ -2014,6 +2018,10 @@ struct AdjustTabView: View {
             document.editState.grain = 0
             document.editState.lookID = ""
             document.editState.lookIntensity = 1
+            document.editState.styleID = ""
+            document.editState.styleTone = 0
+            document.editState.styleColor = 0
+            document.editState.styleStrength = 1
             document.editState.redEyeSize = 0.5
             document.editState.redEyeStrength = 0.7
         } label: {

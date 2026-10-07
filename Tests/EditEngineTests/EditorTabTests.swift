@@ -32,6 +32,5 @@ final class EditorTabTests: XCTestCase {
         XCTAssertTrue(panel.isStyleSectionExpanded)
         XCTAssertFalse(panel.isPresetsSectionExpanded)
         XCTAssertFalse(panel.isLightSectionExpanded)
-        XCTAssertFalse(panel.isHistorySectionExpanded)
     }
 }

@@ -67,12 +67,6 @@ struct AdjustPanelState {
     /// Whether the Style (preset grid + Tone/Color pad + strength) section is expanded. Open by default, same reasoning as Looks.
     var isStyleSectionExpanded = true
 
-    /// History panel: whether the "History" section is expanded. Same
-    /// reasoning as every other section bool above — also means the row
-    /// list only materializes (and its `ForEach` only does work) once the
-    /// user actually opens it.
-    var isHistorySectionExpanded = false
-
     /// Phase 6 slice 2: whether the RAW section is expanded. Same
     /// reasoning as every other section bool above.
     var isRawSectionExpanded = false
@@ -134,8 +128,8 @@ struct AdjustPanelState {
 }
 
 /// The Editor's Adjust tab: the collapsible Light/Curve/Color/Selective Color/Point Color/Black & White/Color Grading/
-/// Effects/Red-Eye/Remove/Masks/RAW sections, the History list and "Reset Adjustments" (sliders only — Look, Style and
-/// Presets live in `LooksTabView`, with their own "Reset Look & Style").
+/// Effects/Red-Eye/Remove/Masks/RAW sections and "Reset Adjustments" (sliders only — Look, Style and Presets live in
+/// `LooksTabView`, with their own "Reset Look & Style"; the edit History lives in the toolbar's History popover).
 struct AdjustTabView: View {
     @ObservedObject var document: ImageDocumentModel
     @Binding var panel: AdjustPanelState
@@ -327,12 +321,6 @@ struct AdjustTabView: View {
                 masksSection
             }
             rawSectionContainer
-            Divider()
-            AdjustSectionContainer(
-                icon: "clock.arrow.circlepath", title: "History", isExpanded: $panel.isHistorySectionExpanded
-            ) {
-                historySection
-            }
             Divider()
             resetAdjustmentsButton
         }
@@ -1586,66 +1574,6 @@ struct AdjustTabView: View {
             .buttonStyle(.bordered)
             .frame(maxWidth: .infinity)
             .accessibilityLabel("Find Source Automatically")
-    }
-
-    /// History panel: a flat, browsable/scrubbable list of every committed
-    /// `EditHistory` checkpoint for the current photo — the whole point,
-    /// per this feature's own roadmap line, being that it's "not just
-    /// linear undo": any row is directly tappable, not just one step at a
-    /// time like the toolbar's Undo/Redo buttons.
-    ///
-    /// Deliberately a plain `ForEach` appended straight into this section's
-    /// own `VStack` — matching `LooksTabView.presetsSection`/`masksSection` exactly, NOT
-    /// a nested `ScrollView`. The whole Adjust sidebar is already one big
-    /// `ScrollView`; nesting a second scrolling list inside it risks the
-    /// same class of gesture conflict Curves v2 slice 2B's own
-    /// vertical-drag-inside-a-vertically-scrolling-sidebar issue already
-    /// documents in this codebase (see `ToneCurveEditorView`). Deliberately
-    /// uncapped (up to `EditHistory`'s own `limit + 1` = 101 rows): a fixed
-    /// "last N" window was considered and rejected, since after N+ undos or
-    /// jumps the current row would scroll out of the visible window
-    /// entirely, with no highlighted row left to orient by. If row count
-    /// ever proves to be a real problem in practice, the fix is lowering
-    /// `EditHistory`'s own `limit`, not truncating what's displayed out of
-    /// it.
-    ///
-    /// Rows are shown NEWEST FIRST (`.enumerated().reversed()`), matching
-    /// Lightroom's own History panel convention — the opposite order from
-    /// `EditHistory.entries`' own oldest-first storage order.
-    private var historySection: some View {
-        Group {
-            if document.historyEntries.isEmpty {
-                Text("No history yet")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(Array(document.historyEntries.enumerated()).reversed(), id: \.element.id) { index, entry in
-                    let isCurrent = index == document.currentHistoryIndex
-                    // Rows AFTER the cursor are the "redo" branch the next
-                    // edit would abandon — secondary-styled so the list
-                    // visually communicates that before it happens, not
-                    // just after.
-                    let isAbandonedOnNextEdit = index > document.currentHistoryIndex
-
-                    Button {
-                        document.jumpToHistory(id: entry.id)
-                    } label: {
-                        HStack {
-                            Text(entry.summary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                                .fontWeight(isCurrent ? .semibold : .regular)
-                                .foregroundStyle(isAbandonedOnNextEdit ? .secondary : .primary)
-                            Spacer()
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(
-                        "\(entry.summary)\(isCurrent ? ", current" : isAbandonedOnNextEdit ? ", undone" : "")"
-                    )
-                }
-            }
-        }
     }
 
     /// Resets every Light/Color/Selective Color/B&W/Effects/Red-Eye field

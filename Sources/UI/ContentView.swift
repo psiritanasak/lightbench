@@ -138,6 +138,8 @@ struct ContentView: View {
     /// between photos without leaving the Editor) is shown. Presentation-
     /// only, defaults on to match Lightroom/Photos' own default.
     @State private var isFilmstripVisible = true
+    /// The toolbar's History popover (`HistoryPopoverView`). Dismissed on a photo switch, in Library mode and on the Crop tab.
+    @State private var isHistoryPresented = false
 
     /// Tracks the image pane's actual on-screen size (from the
     /// `GeometryReader` in `body`), so `fitRect` can be computed from
@@ -1209,6 +1211,7 @@ struct ContentView: View {
         // step straight between them — the Name (A–Z) sort puts identical
         // filenames adjacent.
         .onChange(of: document.currentURL) { _, _ in
+            isHistoryPresented = false
             selectedTab = .adjust
             selectedAspect = .freeform
             customAspectRatio = nil
@@ -1226,7 +1229,20 @@ struct ContentView: View {
         // controls on another tab, and their overlays would otherwise stay live (`EditorTab.disarmsPointModes`). Compare and
         // zoom survive a switch to Looks (before/after while browsing looks) but reset on Crop/Clean Up
         // (`EditorTab.keepsCompareAndZoom`; the toolbar Menu's `.disabled(...)` and `canZoom` already gate Crop).
+        // A closed popover leaves keyboard focus nowhere: hand it back to the image pane (Escape/arrows/Delete live there). Not in
+        // Library mode (the grid claims its own focus), and not when the click that dismissed the popover landed on a text field
+        // — checked one run-loop turn later, once that field has taken focus (a field being edited has an `NSTextView` first
+        // responder). Never carry an open popover into Library mode either (its button is gone there, so it would reopen).
+        .onChange(of: isHistoryPresented) { _, presented in
+            guard !presented, !showLibrary else { return }
+            DispatchQueue.main.async {
+                guard !showLibrary, !(NSApp.keyWindow?.firstResponder is NSTextView) else { return }
+                isImagePaneFocused = true
+            }
+        }
+        .onChange(of: showLibrary) { _, _ in isHistoryPresented = false }
         .onChange(of: selectedTab) { _, newTab in
+            if newTab == .crop { isHistoryPresented = false } // jumping history mid-crop would fight the crop edit
             if newTab.disarmsPointModes {
                 interactionMode = .none
                 adjustPanel.selectedMaskID = nil
@@ -1405,6 +1421,7 @@ struct ContentView: View {
         .toolbar {
             libraryToolbarItems
             editHistoryToolbarItems
+            historyToolbarItem
             compareToolbarItem
             filmstripToolbarItem
             cropDoneToolbarItem
@@ -1728,6 +1745,28 @@ struct ContentView: View {
                 Task {
                     await catalog.ensureAccessActive(forPhotoAt: photo.path)
                     await document.load(from: URL(fileURLWithPath: photo.path))
+                }
+            }
+        }
+    }
+
+    /// The History button: opens `HistoryPopoverView` (the edit timeline) as a popover, the app's first. Editor only, and in its own
+    /// `@ToolbarContentBuilder` property for the same type-checker reason as `filmstripToolbarItem`. Yellow tint + `.isSelected`
+    /// while open, like the filmstrip toggle.
+    @ToolbarContentBuilder
+    private var historyToolbarItem: some ToolbarContent {
+        if !showLibrary {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    isHistoryPresented.toggle()
+                } label: {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                }
+                .disabled(document.currentImage == nil)
+                .tint(isHistoryPresented ? .yellow : nil)
+                .accessibilityAddTraits(isHistoryPresented ? [.isSelected] : [])
+                .popover(isPresented: $isHistoryPresented, arrowEdge: .bottom) {
+                    HistoryPopoverView(document: document)
                 }
             }
         }

@@ -113,8 +113,8 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var canRedo = false
 
     /// Mirrors `EditHistory`'s own `entries`/`currentIndex` as `@Published`
-    /// properties, for the History panel (`AdjustTabView`'s "History"
-    /// section) — same reasoning as `canUndo`/`canRedo` just above: SwiftUI
+    /// properties, for the History panel (`HistoryPopoverView`, opened
+    /// from the toolbar) — same reasoning as `canUndo`/`canRedo` just above: SwiftUI
     /// can't observe mutation of a plain struct property, so every history
     /// operation republishes a fresh copy here too. Refreshed in the same
     /// place `canUndo`/`canRedo` are, `refreshHistoryState()`.

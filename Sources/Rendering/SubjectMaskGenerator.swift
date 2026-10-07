@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 import Vision
 
 /// Runs Apple's on-device foreground-instance segmentation (`VNGenerateForegroundInstanceMaskRequest`)
-/// and packages the result for `Mask.subjectInstancePNGs`. The ONLY file in the project that imports Vision.
+/// and packages the result for `Mask.subjectInstancePNGs`. One of two files that import Vision (the other is `SkinMaskGenerator`).
 /// Feasibility numbers (latency, native 512x512 mask, determinism, empty-result behavior) are in
 /// `docs/ROADMAP_HISTORY.md`'s Vision spike entry and pinned by `VisionSubjectMaskProbeTests`.
 ///
@@ -104,7 +104,7 @@ enum SubjectMaskGenerator {
         return largest.sorted { candidates[$0].centroidX < candidates[$1].centroidX }
     }
 
-    private struct Gray { var width: Int; var height: Int; var bytes: [UInt8] }
+    struct Gray { var width: Int; var height: Int; var bytes: [UInt8] }
 
     /// Vision's scaled mask is one 32-bit float per pixel in 0...1.
     private static func quantizedGray(_ buffer: CVPixelBuffer) -> Gray? {
@@ -125,7 +125,7 @@ enum SubjectMaskGenerator {
         return Gray(width: width, height: height, bytes: bytes)
     }
 
-    private static func encodePNG(_ gray: Gray) -> Data? {
+    static func encodePNG(_ gray: Gray) -> Data? {
         guard let provider = CGDataProvider(data: Data(gray.bytes) as CFData),
               let image = CGImage(
                   width: gray.width, height: gray.height, bitsPerComponent: 8, bitsPerPixel: 8,

@@ -18,17 +18,26 @@ enum SkinWindow {
 
 /// Combines a person-segmentation raster with the colour window into the skin raster that is persisted.
 enum SkinMaskBuilder {
-    /// `person`: 8-bit coverage, `width * height` values, row-major. `rgba`: 8-bit sRGB, 4 bytes per pixel, same size.
-    /// `rgba` must be straight (unpremultiplied) sRGB: premultiplied colours would shift across the window's bounds.
-    /// A pixel keeps its PERSON coverage where its colour is inside `SkinWindow`, and is 0 elsewhere (so the person mask's soft
-    /// edge survives). Returns nil when the sizes do not match, rather than guessing an alignment.
+    /// Person coverage at or below this counts as "no person". It is a CONVENTION chosen above a measured noise level, not a
+    /// measured optimum: Vision's raw 2016x1512 mask on the spike's person-free sand-gradient-plus-rock image (2026-10-07) had a
+    /// max of 6 and about 20-23 non-zero pixels (the count varies with input size; the floor applies to the resized mask, whose max is lower still), which without a floor would be persisted as skin wherever the colour window matches.
+    static let minimumPersonCoverage: UInt8 = 128
+
+    /// `person`: 8-bit coverage, `width * height` values, row-major. `rgba`: STRAIGHT (unpremultiplied) 8-bit sRGB, 4 bytes per
+    /// pixel, same size — premultiplied colours would shift across the window's bounds.
+    /// A pixel is 0 where its colour is outside `SkinWindow` or its person coverage is at most the floor; elsewhere the coverage is
+    /// rescaled so the floor maps to 0 and 255 stays 255 (`(p - floor) * 255 / (255 - floor)`), keeping the person mask's soft edge
+    /// continuous instead of stepping from 0 to 128 at the boundary. Returns nil when the sizes do not match, rather than guessing
+    /// an alignment.
     static func combine(person: [UInt8], rgba: [UInt8], width: Int, height: Int) -> [UInt8]? {
         let (pixels, overflow) = width.multipliedReportingOverflow(by: height)
         guard width > 0, height > 0, !overflow, person.count == pixels, rgba.count == pixels * 4 else { return nil }
         var out = [UInt8](repeating: 0, count: person.count)
-        for i in 0..<person.count where person[i] > 0 {
+        for i in 0..<person.count where person[i] > minimumPersonCoverage {
             let p = i * 4
-            if SkinWindow.contains(Double(rgba[p]), Double(rgba[p + 1]), Double(rgba[p + 2])) { out[i] = person[i] }
+            if SkinWindow.contains(Double(rgba[p]), Double(rgba[p + 1]), Double(rgba[p + 2])) {
+                out[i] = UInt8((Int(person[i]) - Int(minimumPersonCoverage)) * 255 / (255 - Int(minimumPersonCoverage)))
+            }
         }
         return out
     }

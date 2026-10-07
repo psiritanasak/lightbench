@@ -44,12 +44,24 @@ final class SkinMaskTests: XCTestCase {
 
     private func rgba(_ pixels: [(UInt8, UInt8, UInt8)]) -> [UInt8] { pixels.flatMap { [$0.0, $0.1, $0.2, 255] } }
 
-    func testCombineIsTheIntersectionAndKeepsPersonCoverage() throws {
+    func testCombineIsTheIntersection() throws {
         let skin: (UInt8, UInt8, UInt8) = (224, 172, 140), sky: (UInt8, UInt8, UInt8) = (25, 76, 230)
-        // person coverage:     255   128    0     255
-        // colour:              skin  skin  skin   sky
-        let out = try XCTUnwrap(SkinMaskBuilder.combine(person: [255, 128, 0, 255], rgba: rgba([skin, skin, skin, sky]), width: 4, height: 1))
-        XCTAssertEqual(out, [255, 128, 0, 0])
+        // person coverage:     255   0     255
+        // colour:              skin  skin  sky
+        let out = try XCTUnwrap(SkinMaskBuilder.combine(person: [255, 0, 255], rgba: rgba([skin, skin, sky]), width: 3, height: 1))
+        XCTAssertEqual(out, [255, 0, 0])
+    }
+
+    /// Coverage at or below the floor is "no person"; above it, values are rescaled so the floor maps to 0 and 255 stays 255
+    /// (continuous at the boundary, no 0 -> 128 step).
+    func testCombineFloorMapsToZeroAndRescalesTheSoftEdge() throws {
+        let skin: (UInt8, UInt8, UInt8) = (224, 172, 140)
+        let floor = SkinMaskBuilder.minimumPersonCoverage
+        XCTAssertEqual(floor, 128)
+        let person: [UInt8] = [6, floor - 1, floor, floor + 1, 192, 255]
+        let out = try XCTUnwrap(SkinMaskBuilder.combine(person: person, rgba: rgba(Array(repeating: skin, count: 6)), width: 6, height: 1))
+        // (p - 128) * 255 / 127 in integer arithmetic: 129 -> 2, 192 -> 128 (64 * 255 / 127 = 128.5 truncated)
+        XCTAssertEqual(out, [0, 0, 0, 2, 128, 255])
     }
 
     func testCombineEmptyPersonGivesEmptyMask() throws {

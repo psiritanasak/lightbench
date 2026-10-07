@@ -8,6 +8,8 @@ improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
 ## Current phase
+**STYLES v3 SKIN-PROTECTION SPIKE — DONE (2026-10-07), decision GO to a design plan, no feature code shipped.** Permanent synthetic probe `SkinProtectionProbeTests`; findings in docs/ROADMAP_HISTORY.md. Awaiting the user's call: design the "Protect skin" option (Plan Mode) or leave v3 cut. See CLAUDE.md Tier 1, IMPROVEMENTS.md D54.
+
 **STYLES v2 — SHIPPED (2026-10-07), 6 commits (0117f29, 55bf3a9, ad7ce76, 70bd5cc, 5f3aaf2, docs), reviewer-approved after fixes (a real Glow edge-fade bug, a premultiplied-alpha bug that made the first Glow add nothing, export/eyedropper grain leaks), 2039 tests, live-verified.** Texture (None/Soft/Glow/Film) + texture strength + Grain toggle under the Style section; new Glow highlight-bloom stage with a measured, pinned order. Next: v3 skin-protection spike (Plan Mode first). See CLAUDE.md Tier 1, IMPROVEMENTS.md D54.
 
 **STYLES v1 — SHIPPED (2026-10-07), 4 commits (47de199, ea6eb99, 316169a, docs), reviewer-approved after fixes (two real bugs caught: dead top-of-slider from clamp-before-scale; None resetting strength under an off-centre pad), 2003 tests, live-verified.** 14 own-named presets + Tone/Color pad + Strength, render-time nudges + a measured-order tint pass, no skin masking yet. Next: v2 Texture + Grain (Plan Mode first), then v3 skin-protection spike. See CLAUDE.md Tier 1, IMPROVEMENTS.md D54.

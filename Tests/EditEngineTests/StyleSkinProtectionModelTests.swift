@@ -191,4 +191,55 @@ final class StyleSkinProtectionModelTests: XCTestCase {
         XCTAssertEqual(model2.editState.styleProtectAmount, 1)
         XCTAssertEqual(model2.historyEntries.last?.summary, "Reset Style")
     }
+
+    // MARK: - Reset Look & Style (the Looks tab's reset)
+
+    func testResetLookAndStyleIsOneLabelledUndoableStepThatKeepsTheSliders() async throws {
+        let model = try await makeModel(.mask(png: png, revision: 1))
+        model.selectStyle("builtin:honey")
+        model.setProtectSkin(true)
+        await waitForDetection(model)
+        model.editState.lookID = BuiltInLooks.all[0].id
+        model.editState.lookIntensity = 0.5
+        model.editState.exposureEV = 0.3
+        let styled = model.editState // the reset flushes the pending slider burst first, then adds exactly ONE step on top
+        model.resetLookAndStyle()
+        XCTAssertTrue(model.editState.isLookAndStyleAtIdentity)
+        XCTAssertEqual(model.editState.exposureEV, 0.3, "sliders are not touched")
+        XCTAssertEqual(model.historyEntries.last?.summary, "Reset Look & Style")
+        XCTAssertEqual(model.historyEntries.dropLast().last?.state, styled, "one step: the entry before it is the styled state")
+        model.undo()
+        XCTAssertEqual(model.editState, styled)
+    }
+
+    func testResetLookAndStyleAtIdentityAddsNoStep() async throws {
+        let model = try await makeModel(.noPeople)
+        model.editState.exposureEV = 0.3
+        model.resetLookAndStyle() // flushes the exposure burst; the reset itself has nothing to do
+        XCTAssertNotEqual(model.historyEntries.last?.summary, "Reset Look & Style")
+        XCTAssertEqual(model.historyEntries.last?.state.exposureEV, 0.3)
+    }
+
+    func testResetLookAndStyleCancelsARunningDetection() async throws {
+        let model = try await makeModel(.mask(png: png, revision: 1), delay: 0.3)
+        model.setProtectSkin(true)
+        model.resetLookAndStyle()
+        await waitForDetection(model)
+        XCTAssertFalse(model.editState.styleProtectSkin)
+        XCTAssertNil(model.editState.styleSkinMaskPNG)
+    }
+
+    /// The Style section's own Reset must clear the style but leave the Look alone (it shares the field list with
+    /// `resetLookAndStyle`, minus the look fields).
+    func testResetStyleKeepsTheLook() async throws {
+        let model = try await makeModel(.noPeople)
+        model.selectStyle("builtin:honey")
+        model.editState.lookID = BuiltInLooks.all[0].id
+        model.editState.lookIntensity = 0.5
+        model.resetStyle()
+        XCTAssertEqual(model.editState.styleID, "")
+        XCTAssertEqual(model.editState.lookID, BuiltInLooks.all[0].id)
+        XCTAssertEqual(model.editState.lookIntensity, 0.5)
+        XCTAssertEqual(model.historyEntries.last?.summary, "Reset Style")
+    }
 }

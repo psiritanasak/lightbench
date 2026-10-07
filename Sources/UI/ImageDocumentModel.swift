@@ -1483,8 +1483,8 @@ final class ImageDocumentModel: ObservableObject {
     private var skinDetectionGeneration = 0
 
     /// Drops the result of a skin detection that is still running (its raster would otherwise land on top of a reset). Called by
-    /// every action that clears protection without going through `setProtectSkin`/`resetStyle`: Revert to Original and the Adjust
-    /// tab's Reset Adjustments.
+    /// every action that clears protection without going through `setProtectSkin`/`resetStyle`: Revert to Original and the
+    /// Looks tab's Reset Look & Style (`resetLookAndStyle`).
     func cancelPendingSkinDetection() { skinDetectionGeneration += 1 }
 
     /// Turns "Protect skin" on or off as its own labelled undo step.
@@ -1535,14 +1535,25 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    /// The Looks tab's reset: clears the Look and the whole Style (`EditState.resettingLookAndStyle()`) as ONE atomic, labelled
+    /// undo step, and cancels a skin detection that is still running so its raster cannot land on the reset photo. Does nothing
+    /// (no history step) when both are already at their defaults.
+    func resetLookAndStyle() {
+        cancelPendingSkinDetection()
+        finalizePendingCommit()
+        let next = editState.resettingLookAndStyle()
+        guard next != editState else { return }
+        history.commit(next, summary: "Reset Look & Style")
+        applyHistoryState(history.current)
+    }
+
     /// Clears the preset, the pad, the strength, the texture, the Grain toggle and skin protection in one step.
     func resetStyle() {
         skinDetectionGeneration += 1 // a detection still running must not switch protection back on
         finalizePendingCommit()
-        var next = editState
-        next.styleID = ""; next.styleTone = 0; next.styleColor = 0; next.styleStrength = 1
-        next.styleTexture = ""; next.styleTextureAmount = 1; next.styleGrain = false
-        next.styleProtectSkin = false; next.styleProtectAmount = 1; next.styleSkinMaskPNG = nil; next.styleSkinMaskRevision = nil
+        // The Style section's own reset: everything `resettingLookAndStyle()` clears EXCEPT the Look (one shared field list).
+        var next = editState.resettingLookAndStyle()
+        next.lookID = editState.lookID; next.lookIntensity = editState.lookIntensity
         guard next != editState else { return }
         history.commit(next, summary: "Reset Style")
         applyHistoryState(history.current)

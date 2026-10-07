@@ -131,8 +131,9 @@ struct AdjustPanelState {
     var selectedColorGradingRange: ColorGradingRange = .shadow
 }
 
-/// The Editor's Adjust tab: the six collapsible Light/Color/Selective Color/
-/// Black & White/Effects/Red-Eye sections plus "Reset Adjustments".
+/// The Editor's Adjust tab: the collapsible Light/Curve/Color/Selective Color/Point Color/Black & White/Color Grading/
+/// Effects/Red-Eye/Remove/Masks/RAW sections, the History list and "Reset Adjustments" (sliders only — Look, Style and
+/// Presets live in `LooksTabView`, with their own "Reset Look & Style").
 struct AdjustTabView: View {
     @ObservedObject var document: ImageDocumentModel
     @Binding var panel: AdjustPanelState
@@ -1662,7 +1663,7 @@ struct AdjustTabView: View {
     /// touches — the omission is deliberate, mirroring `redEyePoints`, not
     /// an oversight.
     /// Reviewer-flagged, deliberate, documented gap: this deliberately
-    /// mirrors `comparisonOriginal()`'s field list, which does NOT include
+    /// mirrors `comparisonOriginal()`'s field list (minus the Look/Style fields, which belong to the Looks tab's own reset), which does NOT include
     /// any of the ELEVEN RAW-native fields (`boostAmount`, `rawExposureEV`,
     /// `shadowBoostScale`, `rawWhiteBalanceNeutralPoints`,
     /// `rawLuminanceNoiseReductionAdjust`, `rawColorNoiseReductionScale`,
@@ -1765,26 +1766,12 @@ struct AdjustTabView: View {
             && state.defringePurple == 0
             && state.defringeGreen == 0
             && state.grain == 0
-            && state.lookID.isEmpty
-            && state.lookIntensity == 1
-            && state.styleID.isEmpty
-            && state.styleTone == 0
-            && state.styleColor == 0
-            && state.styleStrength == 1
-            && state.styleTexture.isEmpty
-            && state.styleTextureAmount == 1
-            && !state.styleGrain
-            && !state.styleProtectSkin
-            && state.styleProtectAmount == 1
-            && state.styleSkinMaskPNG == nil
-            && state.styleSkinMaskRevision == nil
             && state.redEyeSize == 0.5
             && state.redEyeStrength == 0.7
     }
 
     private var resetAdjustmentsButton: some View {
         Button {
-            document.cancelPendingSkinDetection()
             document.editState.exposureEV = 0
             document.editState.brightness = 0
             document.editState.brilliance = 0
@@ -1830,19 +1817,6 @@ struct AdjustTabView: View {
             document.editState.defringePurple = 0
             document.editState.defringeGreen = 0
             document.editState.grain = 0
-            document.editState.lookID = ""
-            document.editState.lookIntensity = 1
-            document.editState.styleID = ""
-            document.editState.styleTone = 0
-            document.editState.styleColor = 0
-            document.editState.styleStrength = 1
-            document.editState.styleTexture = ""
-            document.editState.styleTextureAmount = 1
-            document.editState.styleGrain = false
-            document.editState.styleProtectSkin = false
-            document.editState.styleProtectAmount = 1
-            document.editState.styleSkinMaskPNG = nil
-            document.editState.styleSkinMaskRevision = nil
             document.editState.redEyeSize = 0.5
             document.editState.redEyeStrength = 0.7
         } label: {

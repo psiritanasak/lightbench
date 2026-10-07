@@ -34,6 +34,8 @@ struct LooksTabView: View {
             AdjustSectionContainer(icon: "list.star", title: "Presets", isExpanded: $panel.isPresetsSectionExpanded) {
                 presetsSection
             }
+            Divider()
+            resetLookAndStyleButton
         }
         .alert("Save Preset", isPresented: $isPresentingSaveAlert) {
             TextField("Name", text: $newPresetName)
@@ -50,6 +52,19 @@ struct LooksTabView: View {
             }
             Button("Cancel", role: .cancel) { newPresetName = "" }
         }
+    }
+
+    /// Clears the Look and the whole Style in one undoable step (`ImageDocumentModel.resetLookAndStyle`). Presets have nothing
+    /// to reset, and the Adjust tab's own "Reset Adjustments" no longer touches either.
+    private var resetLookAndStyleButton: some View {
+        Button {
+            document.resetLookAndStyle()
+        } label: {
+            Text("Reset Look & Style")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .disabled(document.editState.isLookAndStyleAtIdentity)
     }
 
     // MARK: - Looks

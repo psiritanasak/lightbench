@@ -1436,13 +1436,35 @@ struct EditState: Equatable, Codable {
         return copy == .identity
     }
 
+    /// This state with its Look and Style put back to their defaults — `lookID`/`lookIntensity` and EVERY `style*` field
+    /// (preset, pad, strength, texture, grain, skin protection and its raster/revision) — and everything else untouched.
+    /// The ONE list of those fields for the Looks tab's reset: `isLookAndStyleAtIdentity` is defined through it, so the
+    /// reset and the "is there anything to reset" check cannot drift apart. Defaults come from `EditState()` itself, so a
+    /// non-zero identity default (`lookIntensity`, `styleStrength`, `styleTextureAmount`, `styleProtectAmount`) is never
+    /// hand-copied. A NEW look/style field must be added here: `EditStateLookStyleResetTests` compares the
+    /// `look*`/`style*` stored properties (via `Mirror`) with its table and fails for any new one, which forces both entries.
+    /// Its blind spot is a new field WITHOUT the `look`/`style` prefix.
+    func resettingLookAndStyle() -> EditState {
+        let d = EditState()
+        var s = self
+        s.lookID = d.lookID; s.lookIntensity = d.lookIntensity
+        s.styleID = d.styleID; s.styleTone = d.styleTone; s.styleColor = d.styleColor; s.styleStrength = d.styleStrength
+        s.styleTexture = d.styleTexture; s.styleTextureAmount = d.styleTextureAmount; s.styleGrain = d.styleGrain
+        s.styleProtectSkin = d.styleProtectSkin; s.styleProtectAmount = d.styleProtectAmount
+        s.styleSkinMaskPNG = d.styleSkinMaskPNG; s.styleSkinMaskRevision = d.styleSkinMaskRevision
+        return s
+    }
+
+    /// True when the Look and Style are at their defaults (nothing for the Looks tab's "Reset Look & Style" to do).
+    var isLookAndStyleAtIdentity: Bool { self == resettingLookAndStyle() }
+
     /// The "original" side for the Compare feature: the CURRENT geometry
     /// (crop/straighten/perspective/transformScale/transformAspect/flip) is
     /// KEPT — copied via `var s =
     /// self` below — so both compared images share one extent and align
     /// pixel-for-pixel, while every color/tone adjustment is reset to its
-    /// identity value. Same field list as `ContentView`'s
-    /// `resetAdjustmentsButton`/`isAdjustTabAtIdentity`, PLUS clearing
+    /// identity value. The Adjust tab's `resetAdjustmentsButton` field list plus the Looks tab's look/style fields
+    /// (`resettingLookAndStyle()`), PLUS clearing
     /// `redEyePoints` AND `retouchSpots` (pixel repair is retouching: the "before" side shows none) — a real
     /// difference, not an oversight, in red-eye's case:
     /// `EditPipeline`'s red-eye stage is active whenever `redEyePoints`
@@ -1508,19 +1530,7 @@ struct EditState: Equatable, Codable {
         s.defringePurple = 0
         s.defringeGreen = 0
         s.grain = 0
-        s.lookID = ""
-        s.lookIntensity = 1
-        s.styleID = ""
-        s.styleTone = 0
-        s.styleColor = 0
-        s.styleStrength = 1
-        s.styleTexture = ""
-        s.styleTextureAmount = 1
-        s.styleGrain = false
-        s.styleProtectSkin = false
-        s.styleProtectAmount = 1
-        s.styleSkinMaskPNG = nil
-        s.styleSkinMaskRevision = nil
+        s = s.resettingLookAndStyle() // look + every style field, one shared list
         // red-eye: reset sliders AND clear points (see doc comment above)
         s.redEyeSize = 0.5
         s.redEyeStrength = 0.7

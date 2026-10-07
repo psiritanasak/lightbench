@@ -131,4 +131,75 @@ final class StyleModelTests: XCTestCase {
         let styled = try sampledLuminance { $0.styleTexture = "film"; $0.styleTextureAmount = 1; $0.styleGrain = true }
         XCTAssertEqual(styled, plain, accuracy: 1e-9, "style texture/grain must not reach the eyedropper sample")
     }
+
+    // MARK: Texture and Grain
+
+    func testSelectingATextureIsOneLabelledUndoableStep() async throws {
+        let model = try await makeModel()
+        let before = model.historyEntries.count
+        model.selectStyleTexture("soft")
+        XCTAssertEqual(model.editState.styleTexture, "soft")
+        XCTAssertEqual(model.historyEntries.count, before + 1)
+        XCTAssertEqual(model.historyEntries.last?.summary, "Style Texture: Soft")
+        model.selectStyleTexture("soft")
+        XCTAssertEqual(model.historyEntries.count, before + 1, "the same texture again adds no history step (the guard and EditHistory both ensure this)")
+        model.undo()
+        XCTAssertEqual(model.editState.styleTexture, "")
+    }
+
+    func testChoosingNoTextureAlwaysRestoresItsStrengthButNeverTouchesGrainOrTheStyle() async throws {
+        let model = try await makeModel()
+        model.selectStyle("builtin:haze")
+        model.setStyleGrain(true)
+        model.selectStyleTexture("film")
+        model.editState.styleTextureAmount = 0.3
+        model.editState.styleStrength = 0.5
+        model.selectStyleTexture("")
+        XCTAssertEqual(model.editState.styleTexture, "")
+        XCTAssertEqual(model.editState.styleTextureAmount, 1, "a texture-less amount is an invisible edit, even with Grain on")
+        XCTAssertTrue(model.editState.styleGrain, "Grain is independent of the texture")
+        XCTAssertEqual(model.editState.styleStrength, 0.5, "the preset's own strength is not the texture's")
+        XCTAssertEqual(model.editState.styleID, "builtin:haze")
+        XCTAssertEqual(model.historyEntries.last?.summary, "Style Texture: None")
+    }
+
+    func testTheGrainToggleIsLabelledUndoableAndIdempotent() async throws {
+        let model = try await makeModel()
+        let before = model.historyEntries.count
+        model.setStyleGrain(true)
+        XCTAssertTrue(model.editState.styleGrain)
+        XCTAssertEqual(model.historyEntries.last?.summary, "Style Grain: On")
+        model.setStyleGrain(true)
+        XCTAssertEqual(model.historyEntries.count, before + 1)
+        model.setStyleGrain(false)
+        XCTAssertEqual(model.historyEntries.last?.summary, "Style Grain: Off")
+        model.undo()
+        XCTAssertTrue(model.editState.styleGrain)
+    }
+
+    func testResetStyleAlsoClearsTextureAmountAndGrainInOneStep() async throws {
+        let model = try await makeModel()
+        model.selectStyleTexture("glow")
+        model.editState.styleTextureAmount = 0.4
+        model.setStyleGrain(true)
+        model.resetStyle()
+        XCTAssertEqual(model.editState.styleTexture, "")
+        XCTAssertEqual(model.editState.styleTextureAmount, 1)
+        XCTAssertFalse(model.editState.styleGrain)
+        XCTAssertEqual(model.historyEntries.last?.summary, "Reset Style")
+        model.undo()
+        XCTAssertEqual(model.editState.styleTexture, "glow")
+        XCTAssertTrue(model.editState.styleGrain)
+    }
+
+    func testSelectingATextureMidBurstCommitsTheBurstFirst() async throws {
+        let model = try await makeModel()
+        let base = model.historyEntries.count
+        model.editState.styleTextureAmount = 0.6          // a slider drag still inside its coalescing window
+        model.selectStyleTexture("film")
+        XCTAssertEqual(model.historyEntries.count, base + 2, "the burst, then the texture")
+        model.undo()
+        XCTAssertEqual(model.editState.styleTexture, "")
+        XCTAssertEqual(model.editState.styleTextureAmount, 0.6)
+    }
 }

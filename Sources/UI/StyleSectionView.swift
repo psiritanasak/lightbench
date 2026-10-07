@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The Adjust tab's "Style" section: preset chips (our own two families), a square Tone/Color pad, a Strength slider, a
-/// text readout and Reset. Everything writes the four `EditState.style*` fields — never the user's own sliders — so it is
+/// text readout, a Texture row (None/Soft/Glow/Film + its own strength), a Grain toggle and Reset. Everything writes the
+/// `EditState.style*` fields — never the user's own sliders — so it is
 /// non-destructive and undoable; a preset click is its own labelled History step (`ImageDocumentModel.selectStyle`).
 struct StyleSectionView: View {
     @ObservedObject var document: ImageDocumentModel
@@ -18,8 +19,13 @@ struct StyleSectionView: View {
         Binding(get: { state.styleStrength }, set: { document.editState.styleStrength = $0.isFinite ? min(max($0, 0), 1) : 1 })
     }
 
+    private var textureAmountBinding: Binding<Double> {
+        Binding(get: { state.styleTextureAmount }, set: { document.editState.styleTextureAmount = $0.isFinite ? min(max($0, 0), 1) : 1 })
+    }
+
     private var isAtIdentity: Bool {
         state.styleID.isEmpty && state.styleTone == 0 && state.styleColor == 0 && state.styleStrength == 1
+            && state.styleTexture.isEmpty && state.styleTextureAmount == 1 && !state.styleGrain
     }
 
     var body: some View {
@@ -36,16 +42,42 @@ struct StyleSectionView: View {
             Text(readout).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .accessibilityHidden(true)
-            EditSliderRow(label: "Strength", value: strengthBinding, range: 0...1, identity: 1, displayMultiplier: 100) {
+            EditSliderRow(label: "Style strength", value: strengthBinding, range: 0...1, identity: 1, displayMultiplier: 100) {
                 String(format: "%.0f%%", $0 * 100)
             }
             // Nothing to scale (no preset, pad centred): the slider would only write an invisible edit.
             .disabled(StyleMath.isIdentity(id: state.styleID, tone: state.styleTone, color: state.styleColor))
             Text("Color is mostly Vibrance (designed to spare skin tones) plus some Saturation; there is no skin masking yet.")
                 .font(.caption2).foregroundStyle(.secondary)
+            textureControls
             Button("Reset Style") { document.resetStyle() }
                 .disabled(isAtIdentity)
                 .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Texture (None / Soft / Glow / Film), its own strength, and the Grain toggle. Independent of the Strength slider above,
+    /// which scales only the preset and the pad.
+    private var textureControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Texture").font(.caption).foregroundStyle(.secondary).textCase(.uppercase)
+            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 6) {
+                textureChip(id: "", name: "None")
+                ForEach(StyleTexture.allCases) { texture in textureChip(id: texture.id, name: texture.title) }
+            }
+            if !state.styleTexture.isEmpty, StyleTexture(rawValue: state.styleTexture) == nil {
+                Text("Texture not found — this photo uses a texture from a newer version. It is shown without it.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            EditSliderRow(label: "Texture strength", value: textureAmountBinding, range: 0...1, identity: 1, displayMultiplier: 100) {
+                String(format: "%.0f%%", $0 * 100)
+            }
+            // No (known) texture chosen: the slider would only write an invisible edit.
+            .disabled(StyleTexture(rawValue: state.styleTexture) == nil)
+            Toggle("Grain", isOn: Binding(get: { state.styleGrain }, set: { document.setStyleGrain($0) }))
+                .accessibilityLabel("Style grain")
+            Text("Soft smooths detail and is not skin-aware; Glow blooms bright areas; Film adds crisp texture. Grain adds film grain, with or without a texture. Style strength scales the preset and pad only.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 
@@ -65,15 +97,24 @@ struct StyleSectionView: View {
     }
 
     private func chip(id: String, name: String) -> some View {
-        let selected = state.styleID == id
-        return Button { document.selectStyle(id) } label: {
+        chipButton(name: name, selected: state.styleID == id, label: id.isEmpty ? "No style" : "Style \(name)") { document.selectStyle(id) }
+    }
+
+    private func textureChip(id: String, name: String) -> some View {
+        chipButton(name: name, selected: state.styleTexture == id, label: id.isEmpty ? "No texture" : "Texture \(name)") {
+            document.selectStyleTexture(id)
+        }
+    }
+
+    private func chipButton(name: String, selected: Bool, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             Text(name).font(.callout).lineLimit(1).frame(maxWidth: .infinity).padding(.vertical, 5)
         }
         .buttonStyle(.plain)
         .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08)))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Color.accentColor : Color.clear, lineWidth: 1))
         .fontWeight(selected ? .semibold : .regular)
-        .accessibilityLabel(id.isEmpty ? "No style" : "Style \(name)")
+        .accessibilityLabel(label)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

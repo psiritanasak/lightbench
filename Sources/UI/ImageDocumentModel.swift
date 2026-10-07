@@ -1441,6 +1441,30 @@ final class ImageDocumentModel: ObservableObject {
         applyHistoryState(history.current)
     }
 
+    /// Picks a Style texture (`""` = None; `StyleTexture` ids). Its own labelled undo step. Choosing None restores the texture
+    /// strength to its identity (1) — ALWAYS, unlike `selectStyle`'s strength: the texture strength scales only the texture
+    /// (the Grain toggle is independent of it), so once the texture is gone a leftover amount is an invisible edit.
+    func selectStyleTexture(_ id: String) {
+        finalizePendingCommit()
+        var next = editState
+        guard next.styleTexture != id else { return }
+        next.styleTexture = id
+        if id.isEmpty { next.styleTextureAmount = 1 }
+        let name = StyleTexture(rawValue: id)?.title ?? (id.isEmpty ? "None" : id)
+        history.commit(next, summary: "Style Texture: \(name)")
+        applyHistoryState(history.current)
+    }
+
+    /// Turns the Style's Grain toggle on or off as its own labelled undo step.
+    func setStyleGrain(_ on: Bool) {
+        finalizePendingCommit()
+        var next = editState
+        guard next.styleGrain != on else { return }
+        next.styleGrain = on
+        history.commit(next, summary: "Style Grain: \(on ? "On" : "Off")")
+        applyHistoryState(history.current)
+    }
+
     /// Clears the preset, the pad, the strength, the texture and the Grain toggle in one step.
     func resetStyle() {
         finalizePendingCommit()

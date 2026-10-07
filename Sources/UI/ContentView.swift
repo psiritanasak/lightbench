@@ -200,7 +200,7 @@ struct ContentView: View {
         // reasoning, same un-zoomed assumption in its own tap-capture layer.
         document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance
             && !isPlacingRedEyeCorrections && !isEditingOverlayMask && !isPaintingBrush && !isPickingColorRange
-            && !isPickingPointColor && !isEditingRetouchSpot && !isPickingSubject
+            && !isPickingPointColor && !isEditingRetouchSpot && !isPlacingRetouchSpot && !isPickingSubject
     }
 
     /// Spot removal: whether a spot is selected in the (expanded) Remove section at identity geometry — the only
@@ -212,6 +212,17 @@ struct ContentView: View {
               document.editState.isGeometryAtIdentity,
               let id = adjustPanel.selectedRetouchSpotID else { return false }
         return document.editState.retouchSpots.contains { $0.id == id }
+    }
+
+    /// Whether the Remove section's on-image spot layer (every spot as a thin circle, plus the armed capture layer) is up: the
+    /// section is expanded, no crop, identity geometry, single-image view and no other point tool armed. A pure function of state,
+    /// like `isEditingRetouchSpot`.
+    private var showsRetouchSpots: Bool {
+        adjustPanel.isRetouchSectionExpanded && !isCroppingActive && document.editState.isGeometryAtIdentity
+            // Zoomed in, the photo moves but these rings are positioned against the UN-zoomed fit rect (zoom is only blocked while a
+            // spot is selected or the tool is armed), so they would drift: hide them until the view is back at fit size.
+            && zoomScale <= 1 && compareMode == .off && !isPickingWhiteBalance && !isPlacingRedEyeCorrections && !isPickingColorRange
+            && !isPickingPointColor && !isPickingSubject && !isPaintingBrush
     }
 
     /// Phase 7 slice 2: the mask `adjustPanel.selectedMaskID` currently
@@ -348,6 +359,8 @@ struct ContentView: View {
     /// corrections (both eyes) in one sitting, so it stays armed until
     /// toggled off or the user leaves the Adjust tab.
     private var isPlacingRedEyeCorrections: Bool { interactionMode.isPlacingRedEyeCorrections }
+    /// The Remove section's Place Spots tool is armed (every click on the photo adds a spot).
+    private var isPlacingRetouchSpot: Bool { interactionMode.isPlacingRetouchSpot }
 
     /// D8 (IMPROVEMENTS.md): the keyboard-driven crosshair's current
     /// position — normalized 0...1, SwiftUI-local/y-DOWN, the SAME
@@ -521,6 +534,11 @@ struct ContentView: View {
         // only-intercept-on-`.handled` form is defensive practice against
         // that same class of regression recurring, independent of
         // whichever kind currently does or doesn't block zoom.
+        // Spot removal: Delete removes the selected spot, Escape deselects then stops the tool (`RetouchKeyAction`). Same
+        // only-intercept-on-`.handled` form as the branches below, so any other key still reaches pan handling.
+        if !isCroppingActive, adjustPanel.isRetouchSectionExpanded, isPlacingRetouchSpot || isEditingRetouchSpot {
+            if handleRetouchKeyPress(keyPress) == .handled { return .handled }
+        }
         if !isCroppingActive, isEditingMask {
             let maskResult = handleMaskKeyPress(keyPress)
             if maskResult == .handled { return maskResult }
@@ -541,6 +559,42 @@ struct ContentView: View {
             return handlePanKeyPress(keyPress)
         }
         return .ignored
+    }
+
+    /// Selects spot `id` from a click on the photo (the Place Spots tool stays armed; the other overlay-owning selections clear so two
+    /// sets of drag handles are never live at once).
+    private func selectRetouchSpotOnImage(_ id: UUID) {
+        adjustPanel.selectedMaskID = nil
+        adjustPanel.selectedPointColorID = nil
+        adjustPanel.selectedRetouchSpotID = id
+    }
+
+    /// A spot placed with the tool at a normalized `position`: one undo step (`ImageDocumentModel.addRetouchSpot`), then it becomes
+    /// the selection; a spot the user SIZED by dragging also sets the radius the next plain click uses.
+    private func placeRetouchSpot(at position: (x: Double, y: Double), radius: Double, sized: Bool) {
+        guard let id = document.addRetouchSpot(atNormalized: position, radius: radius) else { return }
+        selectRetouchSpotOnImage(id)
+        if sized { adjustPanel.retouchNewSpotRadius = radius }
+    }
+
+    private func handleRetouchKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        let isDelete = keyPress.key == .delete || keyPress.key == .deleteForward
+        let selected = isEditingRetouchSpot ? adjustPanel.selectedRetouchSpotID : nil
+        switch RetouchKeyAction.action(isEscape: keyPress.key == .escape, isDelete: isDelete,
+                                       hasSelection: selected != nil, isArmed: isPlacingRetouchSpot) {
+        case .deleteSelected:
+            if let id = selected { document.deleteRetouchSpot(id: id) }
+            adjustPanel.selectedRetouchSpotID = nil
+            return .handled
+        case .deselect:
+            adjustPanel.selectedRetouchSpotID = nil
+            return .handled
+        case .disarm:
+            interactionMode.disarm(.placingRetouchSpot)
+            return .handled
+        case .ignore:
+            return .ignored
+        }
     }
 
     /// Escape deselects the currently-selected Point Color instance — the
@@ -1275,6 +1329,10 @@ struct ContentView: View {
                 isImagePaneFocused = true
             }
         }
+        // Arming Place Spots grabs image-pane focus so Delete/Escape work with no extra click.
+        .onChange(of: isPlacingRetouchSpot) { _, isArmed in
+            if isArmed { isImagePaneFocused = true }
+        }
         .onChange(of: isPlacingRedEyeCorrections) { _, isArmed in
             if isArmed {
                 crosshairPosition = CGPoint(x: 0.5, y: 0.5)
@@ -1684,7 +1742,7 @@ struct ContentView: View {
             .disabled(
                 document.currentImage == nil || isCroppingActive
                     || isPickingWhiteBalance || isPlacingRedEyeCorrections || isPickingColorRange
-                    || isPickingPointColor || isPickingSubject
+                    || isPickingPointColor || isPickingSubject || isPlacingRetouchSpot
             )
             .tint(compareMode != .off ? .yellow : nil)
             .accessibilityAddTraits(compareMode != .off ? [.isSelected] : [])
@@ -1898,6 +1956,7 @@ struct ContentView: View {
                             : isPaintingBrush ? "Brush painting"
                             : isPickingColorRange ? "Color range picker"
                             : isPickingSubject ? "Subject picker"
+                            : isPlacingRetouchSpot ? "Spot placement"
                             : isPickingPointColor ? "Point color picker"
                             // Phase 7 slice 5: narrowed to overlay-owning
                             // kinds — with no overlay, nothing about the
@@ -2095,14 +2154,27 @@ struct ContentView: View {
                 EmptyView()
             }
         }
-        // Spot removal: the selected spot's on-image circles (spot + dashed source), identity geometry only. Gated
+        // The Place Spots layer: every spot as a thin circle, and — while the tool is armed — the pointer capture that adds or selects
+        // spots. BELOW the selected spot's handles (drawn after it), so a press on those wins.
+        if showsRetouchSpots, let fitRect = currentFitRect {
+            RetouchSpotsOverlay(
+                fitRect: fitRect,
+                spots: document.editState.retouchSpots,
+                selectedID: isEditingRetouchSpot ? adjustPanel.selectedRetouchSpotID : nil,
+                isArmed: isPlacingRetouchSpot,
+                defaultRadius: adjustPanel.retouchNewSpotRadius,
+                onSelect: { selectRetouchSpotOnImage($0) },
+                onPlace: { position, radius, sized in placeRetouchSpot(at: position, radius: radius, sized: sized) }
+            )
+        }
+        // Spot removal: the selected spot's on-image circles (spot + dashed source) and radius handle, identity geometry only. Gated
         // against every armed point-interaction mode like the mask overlay above.
         if isEditingRetouchSpot, !isPickingWhiteBalance, !isPlacingRedEyeCorrections, !isPickingColorRange,
            !isPickingPointColor, !isPaintingBrush,
            let id = adjustPanel.selectedRetouchSpotID,
            let spotBinding = $document.editState.retouchSpot(id: id),
            let fitRect = currentFitRect {
-            RetouchOverlayView(fitRect: fitRect, spot: spotBinding)
+            RetouchOverlayView(fitRect: fitRect, spot: spotBinding, onRadiusCommitted: { adjustPanel.retouchNewSpotRadius = $0 })
         }
         // Phase 7 slice 5 (second half): the Color Range eyedropper's
         // tap-capture layer — mirrors the WB eyedropper's own capture

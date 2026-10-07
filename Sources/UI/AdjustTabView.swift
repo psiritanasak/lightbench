@@ -42,6 +42,10 @@ struct AdjustPanelState {
     var isRetouchSectionExpanded = false
     var selectedRetouchSpotID: UUID?
 
+    /// The radius a plain click gives a spot placed with the Place Spots tool: the last size the user dragged out (or resized
+    /// with the handle). `RetouchOverlayGeometry.newSpotRadius` clamps it.
+    var retouchNewSpotRadius = RetouchOverlayGeometry.defaultNewRadius
+
     /// Whether the Levels histogram shows luminance only or luminance +
     /// per-channel RGB overlays. Presentation-only — `HistogramData` always
     /// carries all four; this just controls what `HistogramView` draws.
@@ -1458,7 +1462,10 @@ struct AdjustTabView: View {
             set: { newValue in
                 var next = panel
                 next.isRetouchSectionExpanded = newValue
-                if !newValue { next.selectedRetouchSpotID = nil }
+                if !newValue {
+                    next.selectedRetouchSpotID = nil
+                    interactionMode.disarm(.placingRetouchSpot) // the tool has no on-image layer once the section is closed
+                }
                 panel = next
             }
         )
@@ -1483,6 +1490,29 @@ struct AdjustTabView: View {
                     .font(.caption).foregroundStyle(.orange)
             }
             Button {
+                if interactionMode.isPlacingRetouchSpot {
+                    interactionMode = .none
+                } else {
+                    panel.selectedMaskID = nil
+                    panel.selectedPointColorID = nil
+                    interactionMode = .placingRetouchSpot
+                    onEnterPointPickingMode()
+                }
+            } label: {
+                Label(interactionMode.isPlacingRetouchSpot ? "Stop Placing Spots" : "Place Spots", systemImage: "scope")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(interactionMode.isPlacingRetouchSpot ? .yellow : nil)
+            // Never greyed out while ARMED: an Undo/Redo can bring back non-identity geometry (the layer hides but the mode stays armed),
+            // and this button is then the way to stop.
+            .disabled((document.currentImage == nil || !identity) && !interactionMode.isPlacingRetouchSpot)
+            .accessibilityAddTraits(interactionMode.isPlacingRetouchSpot ? [.isSelected] : [])
+            if interactionMode.isPlacingRetouchSpot {
+                Text("Click the photo to add a spot; drag to size it. Click a spot to select it. Delete removes the selected spot; Esc stops.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button {
                 if let id = document.addRetouchSpot() { selectRetouchSpot(id) }
             } label: {
                 Label("Add Spot", systemImage: "plus.circle").frame(maxWidth: .infinity)
@@ -1499,7 +1529,7 @@ struct AdjustTabView: View {
                 Text(document.retouchMessage ?? "")
             }
             if spots.isEmpty {
-                Text("No spots yet. Add one, drag it onto the blemish, and drag the dashed circle to the area to copy from.")
+                Text("No spots yet. Press Place Spots and click each blemish (drag to size it), or Add Spot and drag it into place. Drag the dashed circle to choose where to copy from.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(Array(spots.enumerated()), id: \.element.id) { index, spot in
@@ -1518,7 +1548,8 @@ struct AdjustTabView: View {
     private func selectRetouchSpot(_ id: UUID) {
         panel.selectedMaskID = nil
         panel.selectedPointColorID = nil
-        interactionMode = .none
+        // Selecting a spot must not switch off the Place Spots tool the user is working with; any OTHER armed tool is disarmed.
+        if !interactionMode.isPlacingRetouchSpot { interactionMode = .none }
         panel.selectedRetouchSpotID = id
         onEnterPointPickingMode()
     }
@@ -1537,7 +1568,7 @@ struct AdjustTabView: View {
             .accessibilityAddTraits(isSelected ? .isSelected : [])
             Spacer()
             Button {
-                document.editState.retouchSpots.removeAll { $0.id == spot.id }
+                document.deleteRetouchSpot(id: spot.id)   // its own labelled undo step
                 if panel.selectedRetouchSpotID == spot.id { panel.selectedRetouchSpotID = nil }
             } label: { Image(systemName: "trash") }
                 .buttonStyle(.plain)

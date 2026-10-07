@@ -1,7 +1,9 @@
 import SwiftUI
 
 /// On-image editing handles for the SELECTED retouch spot: the spot circle (drag to move it, the source circle
-/// travels along) and the dashed SOURCE circle (drag to choose where the repair is copied from), joined by a line.
+/// travels along), the dashed SOURCE circle (drag to choose where the repair is copied from), joined by a line, and a small
+/// RADIUS handle on the spot's right edge (drag to resize; `onRadiusCommitted` reports the final size so the Place Spots tool can
+/// remember it).
 /// Shown only at identity geometry (`RetouchSpot` explains why) and only while the Remove section has a spot
 /// selected. Modelled on `MaskOverlayView`: one narrow `Binding<RetouchSpot>`, a snapshot baseline per drag,
 /// everything drawn directly in the parent's space (no enclosing frame) so circles near the edge still hit-test.
@@ -10,15 +12,18 @@ import SwiftUI
 struct RetouchOverlayView: View {
     let fitRect: CGRect
     @Binding var spot: RetouchSpot
+    /// Called once when a radius-handle drag ends, with the spot's new radius.
+    var onRadiusCommitted: ((Double) -> Void)?
 
     @State private var centerBaseline: (x: Double, y: Double)?
     @State private var offsetBaseline: (dx: Double, dy: Double)?
+    @State private var radiusBaseline: Double?
 
     var body: some View {
         if spot.isFinite, fitRect.width > 0, fitRect.height > 0 {
             let center = RetouchOverlayGeometry.centerPoint(of: spot, in: fitRect)
             let source = RetouchOverlayGeometry.sourcePoint(of: spot, in: fitRect)
-            let radius = max(RetouchOverlayGeometry.radiusPoints(of: spot, in: fitRect), 6)
+            let radius = visibleRadius(of: spot)
             ZStack {
                 Path { path in
                     path.move(to: center)
@@ -30,6 +35,8 @@ struct RetouchOverlayView: View {
                     .gesture(sourceDrag)
                 circle(at: center, radius: radius, dashed: false)
                     .gesture(centerDrag)
+                radiusHandle(center: center, visibleRadius: radius)
+                    .gesture(radiusDrag)
             }
             .accessibilityHidden(true)
         }
@@ -43,6 +50,43 @@ struct RetouchOverlayView: View {
         .frame(width: radius * 2, height: radius * 2)
         .contentShape(Circle())
         .position(point)
+    }
+
+    /// The circle's DRAWN radius: its real radius, but never under 6 pt so a tiny spot's circle and handle stay visible/grabbable.
+    private func visibleRadius(of spot: RetouchSpot) -> CGFloat {
+        max(RetouchOverlayGeometry.radiusPoints(of: spot, in: fitRect), 6)
+    }
+
+    /// The resize handle: a small dot on the circle's right edge, drawn on top of the move-disc so it wins the hit test.
+    private func radiusHandle(center: CGPoint, visibleRadius: CGFloat) -> some View {
+        Circle()
+            .fill(Color.white)
+            .overlay(Circle().stroke(Color.black.opacity(0.7), lineWidth: 1))
+            .frame(width: 9, height: 9)
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle())
+            .position(CGPoint(x: center.x + visibleRadius, y: center.y))
+    }
+
+    private var radiusDrag: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if radiusBaseline == nil { radiusBaseline = spot.radius }
+                guard let baseRadius = radiusBaseline else { return }
+                // The handle's position at the START of the drag (where it was DRAWN) moved by the translation is the pointer; the
+                // radius is its distance from the unmoving centre. The baseline radius keeps this independent of resizes made
+                // mid-drag, and starting from the drawn position means the handle never lags the pointer on a tiny spot.
+                var base = spot
+                base.radius = baseRadius
+                let center = RetouchOverlayGeometry.centerPoint(of: base, in: fitRect)
+                let pointer = CGPoint(x: center.x + visibleRadius(of: base) + value.translation.width,
+                                      y: center.y + value.translation.height)
+                if let r = RetouchOverlayGeometry.radius(fromCenter: center, dragPoint: pointer, fitRect: fitRect) { spot.radius = r }
+            }
+            .onEnded { _ in
+                if radiusBaseline != nil, spot.radius.isFinite { onRadiusCommitted?(spot.radius) }
+                radiusBaseline = nil
+            }
     }
 
     private var centerDrag: some Gesture {

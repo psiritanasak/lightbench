@@ -997,6 +997,20 @@ struct EditState: Equatable, Codable {
     /// lone `styleStrength != 1` is an invisible edit, so the UI resets it when the style is cleared.
     var styleStrength: Double = 1.0
 
+    /// The Style's texture (`StyleTexture` id: "soft", "glow", "film"), `""` = none. Adds render-time nudges to the detail
+    /// stages (Texture/Clarity/Sharpen, plus Glow's bloom once the Glow stage lands) — never the user's own sliders. An id this build does not know
+    /// renders as none but is kept. INDEPENDENT of `styleStrength` (which scales the tone/colour preset and pad). Purely
+    /// additive: absent decodes to `""`.
+    var styleTexture: String = ""
+
+    /// 0...1, scales the texture's nudges exactly linearly. NON-ZERO identity default (1.0), decoded with `?? 1.0`.
+    /// Meaningful only while a texture is chosen; the UI resets it when the texture is cleared with Grain off.
+    var styleTextureAmount: Double = 1.0
+
+    /// The Style's Grain toggle: adds a fixed film-grain amount (`StyleMath.toggleGrainAmount`) on top of the user's own
+    /// Grain slider, through the same Grain stage (so it is deferred after output sharpening on export like any grain).
+    var styleGrain: Bool = false
+
     // MARK: - RAW (CIRAWFilter-native)
 
     /// Core Image's own RAW tone-curve strength — configures `CIRAWFilter`
@@ -1482,6 +1496,9 @@ struct EditState: Equatable, Codable {
         s.styleTone = 0
         s.styleColor = 0
         s.styleStrength = 1
+        s.styleTexture = ""
+        s.styleTextureAmount = 1
+        s.styleGrain = false
         // red-eye: reset sliders AND clear points (see doc comment above)
         s.redEyeSize = 0.5
         s.redEyeStrength = 0.7
@@ -1591,6 +1608,9 @@ struct EditState: Equatable, Codable {
         result.styleTone = styleTone
         result.styleColor = styleColor
         result.styleStrength = styleStrength
+        result.styleTexture = styleTexture
+        result.styleTextureAmount = styleTextureAmount
+        result.styleGrain = styleGrain
         // red-eye correction INTENSITY only — `redEyePoints` (where the
         // corrections sit) stays `target`'s own, untouched.
         result.redEyeSize = redEyeSize
@@ -1685,6 +1705,7 @@ extension EditState {
         case grain
         case lookID, lookIntensity
         case styleID, styleTone, styleColor, styleStrength
+        case styleTexture, styleTextureAmount, styleGrain
         case boostAmount
         case rawExposureEV, shadowBoostScale, rawWhiteBalanceNeutralPoints
         case rawLuminanceNoiseReductionAdjust, rawColorNoiseReductionScale, rawSharpnessScale
@@ -1832,6 +1853,9 @@ extension EditState {
         styleTone = try container.decodeIfPresent(Double.self, forKey: .styleTone) ?? 0
         styleColor = try container.decodeIfPresent(Double.self, forKey: .styleColor) ?? 0
         styleStrength = try container.decodeIfPresent(Double.self, forKey: .styleStrength) ?? 1.0
+        styleTexture = (try? container.decodeIfPresent(String.self, forKey: .styleTexture)) ?? ""
+        styleTextureAmount = try container.decodeIfPresent(Double.self, forKey: .styleTextureAmount) ?? 1.0
+        styleGrain = (try? container.decodeIfPresent(Bool.self, forKey: .styleGrain)) ?? false
         boostAmount = try container.decodeIfPresent(Double.self, forKey: .boostAmount) ?? 1.0
         rawExposureEV = try container.decodeIfPresent(Double.self, forKey: .rawExposureEV) ?? 0
         shadowBoostScale = try container.decodeIfPresent(Double.self, forKey: .shadowBoostScale) ?? 1.0

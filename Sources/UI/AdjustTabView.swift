@@ -1982,6 +1982,9 @@ struct AdjustTabView: View {
             && state.styleTone == 0
             && state.styleColor == 0
             && state.styleStrength == 1
+            && state.styleTexture.isEmpty
+            && state.styleTextureAmount == 1
+            && !state.styleGrain
             && state.redEyeSize == 0.5
             && state.redEyeStrength == 0.7
     }
@@ -2039,6 +2042,9 @@ struct AdjustTabView: View {
             document.editState.styleTone = 0
             document.editState.styleColor = 0
             document.editState.styleStrength = 1
+            document.editState.styleTexture = ""
+            document.editState.styleTextureAmount = 1
+            document.editState.styleGrain = false
             document.editState.redEyeSize = 0.5
             document.editState.redEyeStrength = 0.7
         } label: {

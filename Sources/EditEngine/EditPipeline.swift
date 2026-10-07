@@ -797,6 +797,38 @@ enum EditPipeline {
         )
     }
 
+    /// The detail-stage values actually used for rendering: the user's own Texture/Clarity/Sharpen/Grain plus the Style's
+    /// texture nudges (`StyleMath.detailNudges`); Sharpen, Grain and Glow are clamped to 0...1, Texture/Clarity are not. Like `effectiveTone`, the style is ADDED here and never written
+    /// back to the user's fields. Every detail stage and its active-guard reads THIS, and so must any caller that decides
+    /// "is there grain" outside `apply` (`effectiveGrain`, used by Export's deferred grain).
+    struct EffectiveDetail {
+        let texture: Double
+        let clarity: Double
+        let sharpness: Double
+        let grain: Double
+        let glow: Double
+    }
+
+    static func effectiveDetail(_ state: EditState) -> EffectiveDetail {
+        let n = StyleMath.detailNudges(texture: state.styleTexture, amount: state.styleTextureAmount, grain: state.styleGrain)
+        return EffectiveDetail(
+            // Texture and Clarity are deliberately NOT clamped (as before this helper existed): the negative side saturates at
+            // the fully blurred image by itself (`testOutOfRangeNegativeClaritySaturatesRatherThanExtrapolating`, about -1.25,
+            // so a style nudge on top of a user's -1 adds little), and the style's own nudge is bounded by construction. The
+            // positive side does NOT saturate: user +1 plus Film's +0.2 is a mildly stronger unsharp mask than the slider's
+            // maximum. Sharpen and Grain have a hard 0...1 meaning and are clamped — a REPLAY CHANGE for a hand-edited sidecar
+            // with Sharpen/Grain outside 0...1 (including a negative Grain, which no longer counts as active grain).
+            texture: state.texture + n.texture,
+            clarity: state.clarity + n.clarity,
+            sharpness: clamped(state.sharpness + n.sharpness, to: 0...1),
+            grain: clamped(state.grain + n.grain, to: 0...1),
+            glow: clamped(n.glow, to: 0...1)
+        )
+    }
+
+    /// The grain amount the renderer will use (user slider + the style's Grain toggle).
+    static func effectiveGrain(_ state: EditState) -> Double { effectiveDetail(state).grain }
+
     private static func clamped(_ value: Double, to range: ClosedRange<Double> = -1...1) -> Double {
         min(max(value, range.lowerBound), range.upperBound)
     }
@@ -3325,11 +3357,11 @@ enum EditPipeline {
     private static let kTextureRadiusFraction: Double = 0.01
 
     private static func clarityActive(_ state: EditState) -> Bool {
-        state.clarity != 0
+        effectiveDetail(state).clarity != 0
     }
 
     private static func textureActive(_ state: EditState) -> Bool {
-        state.texture != 0
+        effectiveDetail(state).texture != 0
     }
 
     /// Clarity: wide local contrast via a LARGE-radius, low-
@@ -3361,7 +3393,7 @@ enum EditPipeline {
     private static func applyClarity(_ state: EditState, to image: CIImage) -> CIImage {
         guard clarityActive(state) else { return image }
         return decodeToLinear(localContrast(
-            state.clarity,
+            effectiveDetail(state).clarity,
             radiusFraction: kClarityRadiusFraction,
             amountSpan: kClarityAmountSpan,
             to: encodeToPerceptual(image)
@@ -3394,7 +3426,7 @@ enum EditPipeline {
     private static func applyTexture(_ state: EditState, to image: CIImage) -> CIImage {
         guard textureActive(state) else { return image }
         return decodeToLinear(localContrast(
-            state.texture,
+            effectiveDetail(state).texture,
             radiusFraction: kTextureRadiusFraction,
             amountSpan: kTextureAmountSpan,
             to: encodeToPerceptual(image)
@@ -3531,7 +3563,7 @@ enum EditPipeline {
     private static let kSharpenRadiusFraction: Double = 0.0025
 
     private static func sharpenActive(_ state: EditState) -> Bool {
-        state.sharpness != 0
+        effectiveDetail(state).sharpness != 0
     }
 
     /// Detail/edge sharpening via `CISharpenLuminance` — after crop AND
@@ -3564,7 +3596,7 @@ enum EditPipeline {
         let encoded = encodeToPerceptual(image)
         let filter = CIFilter.sharpenLuminance()
         filter.inputImage = encoded
-        filter.sharpness = Float(state.sharpness * kSharpenAmountSpan)
+        filter.sharpness = Float(effectiveDetail(state).sharpness * kSharpenAmountSpan)
         filter.radius = Float(radius)
         let sharpened = filter.outputImage ?? encoded
         return decodeToLinear(sharpened)
@@ -3819,7 +3851,7 @@ enum EditPipeline {
     }
 
     private static func grainActive(_ state: EditState) -> Bool {
-        state.grain != 0
+        effectiveDetail(state).grain != 0
     }
 
     /// Film grain via a custom kernel (`FilmGrain.cikernel`) blending a
@@ -3926,7 +3958,7 @@ enum EditPipeline {
             .cropped(to: extent)
 
         let encoded = encodeToPerceptual(image)
-        let amount = Float(state.grain * kGrainAmountSpan)
+        let amount = Float(effectiveDetail(state).grain * kGrainAmountSpan)
         let zeroPoint = Float(kGrainZeroPoint)
         let grained = kernel.apply(extent: extent, arguments: [encoded, noise, amount, zeroPoint]) ?? encoded
         return decodeToLinear(grained)

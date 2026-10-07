@@ -849,6 +849,9 @@ final class ImageDocumentModel: ObservableObject {
         samplingState.defringePurple = 0
         samplingState.defringeGreen = 0
         samplingState.grain = 0
+        // The Style's texture/grain are detail stages too: left on they would put noise/blur into the eyedropper sample.
+        samplingState.styleTexture = ""
+        samplingState.styleGrain = false
         samplingState.masks = Array(editState.masks[..<maskIndex])
 
         let sampled = EditPipeline.apply(samplingState, to: currentImage)
@@ -1438,11 +1441,12 @@ final class ImageDocumentModel: ObservableObject {
         applyHistoryState(history.current)
     }
 
-    /// Clears the preset, the pad and the strength in one step.
+    /// Clears the preset, the pad, the strength, the texture and the Grain toggle in one step.
     func resetStyle() {
         finalizePendingCommit()
         var next = editState
         next.styleID = ""; next.styleTone = 0; next.styleColor = 0; next.styleStrength = 1
+        next.styleTexture = ""; next.styleTextureAmount = 1; next.styleGrain = false
         guard next != editState else { return }
         history.commit(next, summary: "Reset Style")
         applyHistoryState(history.current)

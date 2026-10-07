@@ -104,4 +104,31 @@ final class StyleModelTests: XCTestCase {
         model.selectStyle("builtin:from-a-newer-build")
         XCTAssertEqual(model.historyEntries.last?.summary, "Style: builtin:from-a-newer-build")
     }
+
+    /// The colour-range eyedropper samples BEFORE the detail stages by zeroing the user's Texture/Clarity/Sharpen/Grain; the
+    /// Style's texture and Grain are detail stages too and must not leak a halo/blur/noise into the sample.
+    func testTheColorRangeEyedropperIgnoresTheStylesTextureAndGrain() async throws {
+        let url = dir.appendingPathComponent("edge.png")
+        let left = CIImage(color: CIColor(red: 0.5, green: 0.12, blue: 0.1)).cropped(to: CGRect(x: 0, y: 0, width: 64, height: 128))
+        let right = CIImage(color: CIColor(red: 0.95, green: 0.4, blue: 0.3)).cropped(to: CGRect(x: 64, y: 0, width: 64, height: 128))
+        try CIContext().writePNGRepresentation(of: right.composited(over: left), to: url, format: .RGBA8,
+                                               colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+        let model = ImageDocumentModel(folderAccess: DeclineAccess())
+        await model.load(from: url)
+        var mask = Mask(); mask.kind = .colorRange
+        model.editState.masks = [mask]
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        func sampledLuminance(_ configure: (inout EditState) -> Void) throws -> Double {
+            var state = model.editState
+            state.masks[0].colorRangeHasTarget = false
+            configure(&state)
+            model.editState = state
+            model.pickColorRangeTarget(maskID: mask.id, normalizedX: 0.5, normalizedY: 0.5)
+            return try XCTUnwrap(model.editState.masks.first?.colorRangeTargetLuminance)
+        }
+        let plain = try sampledLuminance { _ in }
+        let styled = try sampledLuminance { $0.styleTexture = "film"; $0.styleTextureAmount = 1; $0.styleGrain = true }
+        XCTAssertEqual(styled, plain, accuracy: 1e-9, "style texture/grain must not reach the eyedropper sample")
+    }
 }

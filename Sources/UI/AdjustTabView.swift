@@ -1985,12 +1985,17 @@ struct AdjustTabView: View {
             && state.styleTexture.isEmpty
             && state.styleTextureAmount == 1
             && !state.styleGrain
+            && !state.styleProtectSkin
+            && state.styleProtectAmount == 1
+            && state.styleSkinMaskPNG == nil
+            && state.styleSkinMaskRevision == nil
             && state.redEyeSize == 0.5
             && state.redEyeStrength == 0.7
     }
 
     private var resetAdjustmentsButton: some View {
         Button {
+            document.cancelPendingSkinDetection()
             document.editState.exposureEV = 0
             document.editState.brightness = 0
             document.editState.brilliance = 0
@@ -2045,6 +2050,10 @@ struct AdjustTabView: View {
             document.editState.styleTexture = ""
             document.editState.styleTextureAmount = 1
             document.editState.styleGrain = false
+            document.editState.styleProtectSkin = false
+            document.editState.styleProtectAmount = 1
+            document.editState.styleSkinMaskPNG = nil
+            document.editState.styleSkinMaskRevision = nil
             document.editState.redEyeSize = 0.5
             document.editState.redEyeStrength = 0.7
         } label: {

@@ -1331,6 +1331,7 @@ final class ImageDocumentModel: ObservableObject {
         analysisGeneration += 1
         subjectMaskMessage = nil // a late "no subject" must not pop up about the NEXT photo
         retouchMessage = nil // likewise a late "no good source"
+        skinProtectionMessage = nil // and a late "no people found"
     }
 
     /// Undoes the most recent undo step. First flushes any in-progress burst
@@ -1391,6 +1392,7 @@ final class ImageDocumentModel: ObservableObject {
     /// commit as the revert, and where `canUndo`/`canRedo` would be stale
     /// relative to what the toolbar buttons show.
     func revertToOriginal() {
+        cancelPendingSkinDetection() // a still-running detection must not land its raster on the reverted photo
         finalizePendingCommit()
         // Every other RAW-native field is correctly cleared by the literal
         // `EditState()` below — revert legitimately means "discard this
@@ -1465,12 +1467,82 @@ final class ImageDocumentModel: ObservableObject {
         applyHistoryState(history.current)
     }
 
-    /// Clears the preset, the pad, the strength, the texture and the Grain toggle in one step.
+    // MARK: - Protect skin (Styles v3)
+
+    /// True while Vision is finding people for "Protect skin" (the toggle shows busy and refuses a second request).
+    @Published private(set) var isDetectingSkin = false
+
+    /// The last detection's outcome when it did NOT turn protection on ("No people found…", a failure reason, "wait for the
+    /// photo to load"); cleared on a photo switch, like `subjectMaskMessage`.
+    @Published private(set) var skinProtectionMessage: String?
+
+    /// The detector. A property so model tests can inject a deterministic one instead of running Vision.
+    var skinMaskGenerator: @Sendable (CIImage) -> SkinMaskGenerator.Result = { SkinMaskGenerator.generate(from: $0) }
+
+    /// Bumped whenever protection is switched off or reset, so a detection that was still running cannot switch it back on.
+    private var skinDetectionGeneration = 0
+
+    /// Drops the result of a skin detection that is still running (its raster would otherwise land on top of a reset). Called by
+    /// every action that clears protection without going through `setProtectSkin`/`resetStyle`: Revert to Original and the Adjust
+    /// tab's Reset Adjustments.
+    func cancelPendingSkinDetection() { skinDetectionGeneration += 1 }
+
+    /// Turns "Protect skin" on or off as its own labelled undo step.
+    /// ON runs the detector once on the UNEDITED current image (off the main thread, like `selectSubject`) and, only if it found
+    /// skin, commits the toggle together with the raster and its Vision revision in ONE step; "no people" / a failure leaves
+    /// protection off and says why in `skinProtectionMessage`. A result for a photo that was switched away from meanwhile
+    /// (`analysisGeneration`) is dropped.
+    /// OFF clears the raster, its revision and the amount (back to 1) in one step — a stranded raster would make the photo
+    /// look edited — and re-enabling re-detects.
+    func setProtectSkin(_ on: Bool) {
+        if !on {
+            skinDetectionGeneration += 1
+            finalizePendingCommit()
+            var next = editState
+            guard next.styleProtectSkin || next.styleSkinMaskPNG != nil || next.styleSkinMaskRevision != nil else { return }
+            next.styleProtectSkin = false; next.styleProtectAmount = 1; next.styleSkinMaskPNG = nil; next.styleSkinMaskRevision = nil
+            history.commit(next, summary: "Protect Skin: Off")
+            applyHistoryState(history.current)
+            return
+        }
+        guard !isDetectingSkin, !editState.styleProtectSkin else { return }
+        guard let currentImage, !isLoadInFlight else {
+            skinProtectionMessage = "Wait for the photo to finish loading, then try again."
+            return
+        }
+        skinProtectionMessage = nil
+        isDetectingSkin = true
+        let myGeneration = analysisGeneration
+        let myDetection = skinDetectionGeneration
+        let generate = skinMaskGenerator
+        Task { @MainActor [weak self] in
+            let result = await Task.detached(priority: .userInitiated) { generate(currentImage) }.value
+            guard let self else { return }
+            self.isDetectingSkin = false
+            guard self.analysisGeneration == myGeneration, self.skinDetectionGeneration == myDetection else { return }
+            switch result {
+            case .noPeople:
+                self.skinProtectionMessage = "No people found in this photo — nothing to protect."
+            case .failed(let reason):
+                self.skinProtectionMessage = reason
+            case .mask(let png, let revision):
+                self.finalizePendingCommit()
+                var next = self.editState
+                next.styleProtectSkin = true; next.styleSkinMaskPNG = png; next.styleSkinMaskRevision = revision
+                self.history.commit(next, summary: "Protect Skin: On")
+                self.applyHistoryState(self.history.current)
+            }
+        }
+    }
+
+    /// Clears the preset, the pad, the strength, the texture, the Grain toggle and skin protection in one step.
     func resetStyle() {
+        skinDetectionGeneration += 1 // a detection still running must not switch protection back on
         finalizePendingCommit()
         var next = editState
         next.styleID = ""; next.styleTone = 0; next.styleColor = 0; next.styleStrength = 1
         next.styleTexture = ""; next.styleTextureAmount = 1; next.styleGrain = false
+        next.styleProtectSkin = false; next.styleProtectAmount = 1; next.styleSkinMaskPNG = nil; next.styleSkinMaskRevision = nil
         guard next != editState else { return }
         history.commit(next, summary: "Reset Style")
         applyHistoryState(history.current)

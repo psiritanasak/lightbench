@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The Adjust tab's "Style" section: preset chips (our own two families), a square Tone/Color pad, a Strength slider, a
-/// text readout, a Texture row (None/Soft/Glow/Film + its own strength), a Grain toggle and Reset. Everything writes the
+/// text readout, a Protect skin toggle + amount, a Texture row (None/Soft/Glow/Film + its own strength), a Grain toggle and Reset. Everything writes the
 /// `EditState.style*` fields — never the user's own sliders — so it is
 /// non-destructive and undoable; a preset click is its own labelled History step (`ImageDocumentModel.selectStyle`).
 struct StyleSectionView: View {
@@ -26,6 +26,12 @@ struct StyleSectionView: View {
     private var isAtIdentity: Bool {
         state.styleID.isEmpty && state.styleTone == 0 && state.styleColor == 0 && state.styleStrength == 1
             && state.styleTexture.isEmpty && state.styleTextureAmount == 1 && !state.styleGrain
+            && !state.styleProtectSkin && state.styleProtectAmount == 1 && state.styleSkinMaskPNG == nil
+            && state.styleSkinMaskRevision == nil
+    }
+
+    private var protectAmountBinding: Binding<Double> {
+        Binding(get: { state.styleProtectAmount }, set: { document.editState.styleProtectAmount = $0.isFinite ? min(max($0, 0), 1) : 1 })
     }
 
     var body: some View {
@@ -47,12 +53,34 @@ struct StyleSectionView: View {
             }
             // Nothing to scale (no preset, pad centred): the slider would only write an invisible edit.
             .disabled(StyleMath.isIdentity(id: state.styleID, tone: state.styleTone, color: state.styleColor))
-            Text("Color is mostly Vibrance (designed to spare skin tones) plus some Saturation; there is no skin masking yet.")
+            Text("Color is mostly Vibrance (designed to spare skin tones) plus some Saturation. Protect skin below can hold the colour back on people.")
                 .font(.caption2).foregroundStyle(.secondary)
+            protectSkinControls
             textureControls
             Button("Reset Style") { document.resetStyle() }
                 .disabled(isAtIdentity)
                 .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// "Protect skin": keeps the style's colour changes off detected skin (its tone changes stay). Detection runs once, when the
+    /// toggle goes on; turning it off drops the stored skin map.
+    private var protectSkinControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Protect skin", isOn: Binding(get: { state.styleProtectSkin }, set: { document.setProtectSkin($0) }))
+                .disabled(document.isDetectingSkin)
+                .accessibilityLabel("Protect skin")
+            if document.isDetectingSkin {
+                Text("Finding people…").font(.caption).foregroundStyle(.secondary)
+            } else if let message = document.skinProtectionMessage {
+                Text(message).font(.caption).foregroundStyle(.orange)
+            }
+            EditSliderRow(label: "Protection", value: protectAmountBinding, range: 0...1, identity: 1, displayMultiplier: 100) {
+                String(format: "%.0f%%", $0 * 100)
+            }
+            .disabled(!state.styleProtectSkin)
+            Text("Looks for skin on people: printed faces and underwater skin are missed, skin-coloured clothing is treated as skin, and large flat skin-coloured areas may be marked. Monochrome styles (Silver, Ink) are not protected. Tested on a narrow range of skin tones.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 

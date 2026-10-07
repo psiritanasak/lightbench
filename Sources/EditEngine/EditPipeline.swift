@@ -83,7 +83,7 @@ enum EditPipeline {
         image = applyRetouch(state, to: image)                // pixel repair (spot removal), source frame, before everything
         image = applyWhiteBalance(state, to: image)           // scene-linear
         image = applyExposure(state.exposureEV, to: image)    // scene-linear
-        image = applyPerceptualAdjustments(state, to: image, truncatingColorAt: truncation)  // sRGB-gamma domain
+        image = applyStyledPerceptualAdjustments(state, to: image, truncatingColorAt: truncation)  // sRGB-gamma domain (twice, blended, while "Protect skin" is active)
         image = applyGeometry(state, to: image)               // straighten → perspective → scale/aspect → flip → crop
         // Truncated color sampling stops HERE, after geometry but before
         // any further color stage — so the returned extent still matches
@@ -461,9 +461,11 @@ enum EditPipeline {
     /// concept, not a reproduction of Apple's (undocumented, proprietary)
     /// Photos algorithm.
     private static func applyPerceptualAdjustments(
-        _ state: EditState, to image: CIImage, truncatingColorAt truncation: ColorSampleTruncation? = nil
+        _ state: EditState, to image: CIImage, truncatingColorAt truncation: ColorSampleTruncation? = nil,
+        styleOverride: StyleNudges? = nil
     ) -> CIImage {
-        let effective = effectiveTone(state)
+        let style = styleOverride ?? styleNudges(state)
+        let effective = effectiveTone(state, style: style)
         // `truncation != nil` is its own term, not folded into an existing
         // one: without it, an otherwise-fully-identity state would take the
         // early-return branch below and hand a truncated caller back the
@@ -483,7 +485,7 @@ enum EditPipeline {
             || effective.saturation != 0
             || state.blackAndWhite
             || colorGradingActive(state)
-            || styleTintActive(state)
+            || style.hasTint
             || lookActive(state)
         else { return image }
 
@@ -637,7 +639,7 @@ enum EditPipeline {
         // not commute — the widest per-channel gap was 0.0115 (linear red of the (0.8, 0.7, 0.6) sample, 1.3387 vs 1.3272),
         // ~5.7x this suite's 0.002 tolerance; the other samples differed by 0.0002-0.006. The user's own look is
         // applied first and the style rides on top of it; `testStyleTintRunsAfterTheUsersColorGrading` pins the shipped order.
-        if styleTintActive(state) { img = applyStyleTint(styleNudges(state), to: img) }
+        if style.hasTint { img = applyStyleTint(style, to: img) }
         img = decodeToLinear(img)
         return img
     }
@@ -784,11 +786,11 @@ enum EditPipeline {
         let vibrance: Double
     }
 
-    private static func effectiveTone(_ state: EditState) -> EffectiveTone {
+    private static func effectiveTone(_ state: EditState, style: StyleNudges? = nil) -> EffectiveTone {
         let b = state.brilliance
         // The style's nudges ride the same render-time blend as Brilliance: they are ADDED here and never written back to
         // the user's own sliders, so Reset Adjustments / Reset Shadows / Looks "None" never fight the Style section.
-        let style = styleNudges(state)
+        let style = style ?? styleNudges(state)
         return EffectiveTone(
             contrast: clamped(state.contrast + b * kBrillianceContrastWeight + style.contrast),
             shadows: clamped(state.curvesShadows + b * kBrillianceShadowWeight + style.shadows),
@@ -1262,7 +1264,80 @@ enum EditPipeline {
         StyleMath.nudges(id: state.styleID, tone: state.styleTone, color: state.styleColor, strength: state.styleStrength)
     }
 
-    private static func styleTintActive(_ state: EditState) -> Bool { styleNudges(state).hasTint }
+    // MARK: - Protect skin (Styles v3)
+
+    /// Gaussian sigma applied to the skin raster, as a fraction of the raster's long side (0.004 of a 1024 px raster is ~4 px).
+    /// A CONVENTION chosen to hide the raster's own pixel steps when it is stretched over a full-resolution photo — not
+    /// measured, tuned by eye in the live pass; the renderer owns it, so retuning changes how stored edits look.
+    static let kSkinMaskFeatherFraction: Double = 0.004
+
+    /// True when "Protect skin" changes the render: the toggle is on, a raster is stored, the amount is non-zero, the look is not
+    /// Black & White (no colour left to protect), the preset is not monochrome (Silver/Ink: holding colour back would leave
+    /// coloured skin in a monochrome look), and the style actually changes colour. A non-finite amount counts as 1, like
+    /// the decode's fallback. Every other state renders EXACTLY as it did before this feature existed.
+    /// NOTE the monochrome rule reads the PRESET only: a +1 Color pad on Silver still leaves its net saturation at -0.75, and is
+    /// exempt; a Hush look with a -1 pad reaches -0.55 and is not (a preset-level rule, by design).
+    static func skinProtectionActive(_ state: EditState) -> Bool {
+        guard state.styleProtectSkin, state.styleSkinMaskPNG != nil, !state.blackAndWhite else { return false }
+        if StyleLibrary.preset(for: state.styleID)?.isMonochrome == true { return false }
+        guard styleProtectionAmount(state) > 0 else { return false }
+        return styleNudges(state).hasColourEffect
+    }
+
+    private static func styleProtectionAmount(_ state: EditState) -> Double {
+        state.styleProtectAmount.isFinite ? min(max(state.styleProtectAmount, 0), 1) : 1
+    }
+
+    /// The perceptual stage, evaluated a second time with the style's colour changes removed (tone changes kept) and blended
+    /// back over the normal result by `amount * skin raster`: where the raster is 1 the pixel shows the "plain" pass. Both
+    /// passes return scene-linear, so the blend runs there (a convention: it matters wherever the weight is fractional — amount < 1, the raster's soft values and its feathered edge). The raster
+    /// is in the source frame and this stage runs BEFORE geometry, so it needs no geometry carry. Sampling for an eyedropper
+    /// (`truncation != nil`) is never protected: Point Color's own instance runs upstream of every style colour change.
+    private static func applyStyledPerceptualAdjustments(
+        _ state: EditState, to image: CIImage, truncatingColorAt truncation: ColorSampleTruncation?
+    ) -> CIImage {
+        guard truncation == nil, skinProtectionActive(state),
+              let png = state.styleSkinMaskPNG, let mask = skinProtectionMask(png, amount: styleProtectionAmount(state), over: image.extent)
+        else { return applyPerceptualAdjustments(state, to: image, truncatingColorAt: truncation) }
+        let styled = applyPerceptualAdjustments(state, to: image)
+        let plain = applyPerceptualAdjustments(state, to: image, styleOverride: styleNudges(state).colourless)
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = plain
+        blend.backgroundImage = styled
+        blend.maskImage = mask
+        return (blend.outputImage ?? styled).cropped(to: image.extent)
+    }
+
+    /// The stored skin raster as an RGB == alpha mask stretched over `extent`, feathered, scaled by `amount`. nil if undecodable.
+    private static func skinProtectionMask(_ png: Data, amount: Double, over extent: CGRect) -> CIImage? {
+        guard !extent.isEmpty, !extent.isInfinite, var raster = decodedSubjectRaster(png) else { return nil }
+        let rect = raster.extent
+        guard rect.width > 0, rect.height > 0 else { return nil }
+        let radius = kSkinMaskFeatherFraction * Double(max(rect.width, rect.height))
+        if radius > 0 {
+            let blur = CIFilter.gaussianBlur()
+            blur.inputImage = raster.clampedToExtent()
+            blur.radius = Float(radius)
+            raster = (blur.outputImage ?? raster).cropped(to: rect)
+        }
+        var fit = raster
+            .clampedToExtent()
+            .transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+            .transformed(by: CGAffineTransform(scaleX: extent.width / rect.width, y: extent.height / rect.height))
+            .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
+            .samplingLinear()
+            .cropped(to: extent)
+        if amount < 1 { // scales the coverage of an RGB == alpha image: (g, g, g, g) -> (g*a, g*a, g*a, g*a)
+            let matrix = CIFilter.colorMatrix()
+            matrix.inputImage = fit
+            matrix.rVector = CIVector(x: 1, y: 0, z: 0, w: 0)
+            matrix.gVector = CIVector(x: 0, y: 1, z: 0, w: 0)
+            matrix.bVector = CIVector(x: 0, y: 0, z: 1, w: 0)
+            matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: CGFloat(amount))
+            fit = (matrix.outputImage ?? fit).cropped(to: extent)
+        }
+        return fit
+    }
 
     /// The style's colour casts: the shadow/mid/highlight tints from `StyleMath` through the SAME `ColorGrading.cikernel`
     /// the user's wheels use (luminance weighting 0), as a separate invocation so the user's wheel values keep their own

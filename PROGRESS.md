@@ -8,7 +8,7 @@ improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
 ## Current phase
-**STYLES — PLANNED (2026-10-06), approved by the user, not started.** Three slices (v1 presets + Tone/Color pad + strength; v2 Texture + Grain; v3 skin protection after a spike), own preset names. Next: Plan Mode for v1. See CLAUDE.md Tier 1, IMPROVEMENTS.md D54.
+**STYLES v1 — SHIPPED (2026-10-07), 4 commits (47de199, ea6eb99, 316169a, docs), reviewer-approved after fixes (two real bugs caught: dead top-of-slider from clamp-before-scale; None resetting strength under an off-centre pad), 2003 tests, live-verified.** 14 own-named presets + Tone/Color pad + Strength, render-time nudges + a measured-order tint pass, no skin masking yet. Next: v2 Texture + Grain (Plan Mode first), then v3 skin-protection spike. See CLAUDE.md Tier 1, IMPROVEMENTS.md D54.
 
 **DUPLICATE DETECTION — SHIPPED (2026-10-06), 5 commits (ac027f3 spike, 11017d1 data layer, 20fe153 engine, 17cf473 model + sheet, docs), reviewer-approved, 1956 tests, live-verified.** Photo ▸ Find Duplicates…: exact / near-identical / opt-in similar shots, BEST badge, reject-all-but-best (never deletes, never overwrites a Pick). Live finding: 981 of 1,089 photos were unreadable (no folder bookmark) — see D53. Follow-ups: IMPROVEMENTS.md D53. Detail: docs/ROADMAP_HISTORY.md.
 

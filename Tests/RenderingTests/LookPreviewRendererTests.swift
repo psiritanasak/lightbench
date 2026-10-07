@@ -44,6 +44,12 @@ final class LookPreviewRendererTests: XCTestCase {
         XCTAssertEqual(small.extent.origin, .zero)
     }
 
+    /// A 1x4000 strip would scale to zero pixels wide: no base (and no crash); previews simply don't appear for it.
+    func testMakeBaseReturnsNilForAnExtremeAspectRatioInsteadOfCrashing() async {
+        let strip = await LookPreviewRenderer.makeBase(from: solid(0.5, 0.5, 0.5, width: 1, height: 4000))
+        XCTAssertNil(strip)
+    }
+
     func testMakeBaseRejectsDegenerateInput() async {
         let a = await LookPreviewRenderer.makeBase(from: CIImage.empty())
         let b = await LookPreviewRenderer.makeBase(from: CIImage(color: .red))   // infinite extent

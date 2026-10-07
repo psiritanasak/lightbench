@@ -6,7 +6,13 @@ import UniformTypeIdentifiers
 /// never writes to originals, preserving the app's non-destructive invariant.
 @MainActor
 final class ImageDocumentModel: ObservableObject {
-    @Published private(set) var currentImage: CIImage?
+    @Published private(set) var currentImage: CIImage? {
+        didSet { imageRevision += 1 }
+    }
+
+    /// Bumped every time `currentImage` is replaced (a photo load, a RAW re-decode). Consumers that cache something derived
+    /// from the pixels — the Looks tab's preview base — compare it to know their cache is stale.
+    @Published private(set) var imageRevision = 0
     /// True while `load(from:)` is awaiting a RAW photo's one-time
     /// `RawDecoder.materialize` (see that function's own doc comment) —
     /// distinct from the pre-existing, private `isLoadingPhoto` below,

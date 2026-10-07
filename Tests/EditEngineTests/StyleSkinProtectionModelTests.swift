@@ -242,4 +242,12 @@ final class StyleSkinProtectionModelTests: XCTestCase {
         XCTAssertEqual(model.editState.lookIntensity, 0.5)
         XCTAssertEqual(model.historyEntries.last?.summary, "Reset Style")
     }
+
+    func testImageRevisionIncreasesWhenTheImageIsReplaced() async throws {
+        let model = try await makeModel(.noPeople)
+        let first = model.imageRevision
+        XCTAssertGreaterThan(first, 0)
+        await model.load(from: try writePhoto("second.png"))
+        XCTAssertGreaterThan(model.imageRevision, first)
+    }
 }

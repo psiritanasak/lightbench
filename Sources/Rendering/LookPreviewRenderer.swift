@@ -16,7 +16,7 @@ enum LookPreviewRenderer {
     /// ONE small realized base for the photo: the lazy full-resolution source would be re-decoded by every preview render.
     /// Rebuild it whenever `currentImage` is replaced — a new photo, or a RAW re-decode, whose RAW-native fields are baked into
     /// pixels that `EditPipeline.apply` never touches. Built by `ProxyBuilder.build` (Lanczos into a realized extended-linear
-    /// half-float buffer); nil for a degenerate image.
+    /// half-float buffer); nil for a degenerate image — including an extreme aspect ratio whose short side would scale below one pixel (a 1x4000 strip gets no previews; callers retry cheaply and harmlessly).
     static func makeBase(from image: CIImage, longSide: CGFloat = baseLongSide) async -> CIImage? {
         let extent = image.extent
         guard !extent.isInfinite, !extent.isNull, extent.width > 0, extent.height > 0, longSide.isFinite, longSide > 0 else { return nil }

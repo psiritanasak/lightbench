@@ -1011,6 +1011,24 @@ struct EditState: Equatable, Codable {
     /// Grain slider, through the same Grain stage (so it is deferred after output sharpening on export like any grain).
     var styleGrain: Bool = false
 
+    /// "Protect skin": hold the style's COLOUR changes (saturation/vibrance/tints) back on detected skin, keeping its tone
+    /// changes. Off by default. While on, `styleSkinMaskPNG` holds the raster that says where skin is; turning it off clears
+    /// the raster and revision together (a stranded one would make a photo look edited and cost bytes for nothing), so re-enabling re-detects. That clearing is enforced by `ImageDocumentModel` (Styles v3 commit 5), not by this struct.
+    var styleProtectSkin: Bool = false
+
+    /// 0...1, how much of the protection applies (1 = the style's colour changes are fully held back on skin). NON-ZERO
+    /// identity default (1.0), decoded with `?? 1.0` (the `lookIntensity`/`transformScale` hazard class).
+    var styleProtectAmount: Double = 1.0
+
+    /// The skin raster (`SkinMaskGenerator`): 8-bit grayscale PNG, row 0 = the TOP of the oriented SOURCE frame, stretched over
+    /// the photo at render time. PERSISTED rather than recomputed per render: Vision's first call costs seconds and its output
+    /// is not guaranteed stable across OS versions (replay determinism). Photo-specific like `masks`, so Presets and Paste do
+    /// NOT carry it; `comparisonOriginal()` clears it.
+    var styleSkinMaskPNG: Data?
+
+    /// The Vision revision that produced `styleSkinMaskPNG` (recorded, never trusted at render time).
+    var styleSkinMaskRevision: Int?
+
     // MARK: - RAW (CIRAWFilter-native)
 
     /// Core Image's own RAW tone-curve strength — configures `CIRAWFilter`
@@ -1499,6 +1517,10 @@ struct EditState: Equatable, Codable {
         s.styleTexture = ""
         s.styleTextureAmount = 1
         s.styleGrain = false
+        s.styleProtectSkin = false
+        s.styleProtectAmount = 1
+        s.styleSkinMaskPNG = nil
+        s.styleSkinMaskRevision = nil
         // red-eye: reset sliders AND clear points (see doc comment above)
         s.redEyeSize = 0.5
         s.redEyeStrength = 0.7
@@ -1611,6 +1633,9 @@ struct EditState: Equatable, Codable {
         result.styleTexture = styleTexture
         result.styleTextureAmount = styleTextureAmount
         result.styleGrain = styleGrain
+        // Skin protection is NOT carried (`styleProtectSkin`/`styleProtectAmount`/`styleSkinMaskPNG`/`styleSkinMaskRevision`):
+        // the raster describes THIS photo's pixels, so the target keeps its own — a photo carrying a pasted style but never
+        // detected skin simply renders the style unprotected.
         // red-eye correction INTENSITY only — `redEyePoints` (where the
         // corrections sit) stays `target`'s own, untouched.
         result.redEyeSize = redEyeSize
@@ -1706,6 +1731,7 @@ extension EditState {
         case lookID, lookIntensity
         case styleID, styleTone, styleColor, styleStrength
         case styleTexture, styleTextureAmount, styleGrain
+        case styleProtectSkin, styleProtectAmount, styleSkinMaskPNG, styleSkinMaskRevision
         case boostAmount
         case rawExposureEV, shadowBoostScale, rawWhiteBalanceNeutralPoints
         case rawLuminanceNoiseReductionAdjust, rawColorNoiseReductionScale, rawSharpnessScale
@@ -1856,6 +1882,10 @@ extension EditState {
         styleTexture = (try? container.decodeIfPresent(String.self, forKey: .styleTexture)) ?? ""
         styleTextureAmount = try container.decodeIfPresent(Double.self, forKey: .styleTextureAmount) ?? 1.0
         styleGrain = (try? container.decodeIfPresent(Bool.self, forKey: .styleGrain)) ?? false
+        styleProtectSkin = (try? container.decodeIfPresent(Bool.self, forKey: .styleProtectSkin)) ?? false
+        styleProtectAmount = (try? container.decodeIfPresent(Double.self, forKey: .styleProtectAmount)) ?? 1.0
+        styleSkinMaskPNG = try? container.decodeIfPresent(Data.self, forKey: .styleSkinMaskPNG)
+        styleSkinMaskRevision = try? container.decodeIfPresent(Int.self, forKey: .styleSkinMaskRevision)
         boostAmount = try container.decodeIfPresent(Double.self, forKey: .boostAmount) ?? 1.0
         rawExposureEV = try container.decodeIfPresent(Double.self, forKey: .rawExposureEV) ?? 0
         shadowBoostScale = try container.decodeIfPresent(Double.self, forKey: .shadowBoostScale) ?? 1.0

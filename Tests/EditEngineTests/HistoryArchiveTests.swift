@@ -145,6 +145,23 @@ final class HistoryArchiveTests: XCTestCase {
         XCTAssertEqual(archive.entries.last?.state, h.entries.last?.state)
     }
 
+    /// The style's skin raster is a top-level `Data` field (not inside a `Mask`): `interned` lists it separately.
+    func testRestoredEntriesShareOneBufferForTheStyleSkinRaster() throws {
+        let png = Data((0..<50_000).map { UInt8(truncatingIfNeeded: $0 &* 2654435761 >> 7) })
+        var h = EditHistory(state { $0.styleProtectSkin = true; $0.styleSkinMaskPNG = png }, initialSummary: "Opened")
+        for i in 1...20 { var next = h.current; next.exposureEV = Double(i); h.commit(next, summary: "e\(i)") }
+        let archive = try XCTUnwrap(try roundTrip(h))
+        XCTAssertEqual(archive.entries.count, 21)
+        let addresses = archive.entries.map { entry in
+            entry.state.styleSkinMaskPNG?.withUnsafeBytes { UInt(bitPattern: $0.baseAddress) } ?? 0
+        }
+        XCTAssertEqual(Set(addresses).count, 1, "all entries should point at the same Data storage")
+        XCTAssertNotEqual(addresses.first, 0)
+        XCTAssertEqual(archive.entries.last?.state, h.entries.last?.state)
+        let object = try XCTUnwrap(HistoryArchive(h).jsonObject())
+        XCTAssertEqual((object["blobs"] as? [String: String])?.count, 1, "the encoder stores the raster's bytes once")
+    }
+
     // MARK: - Failure modes: all-or-nothing
 
     func testCorruptOrForeignInputDecodesToNil() throws {

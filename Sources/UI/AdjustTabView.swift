@@ -12,7 +12,8 @@ import UniformTypeIdentifiers
 /// previous (correct) behavior, where these lived on `ContentView` directly.
 ///
 /// It also carries the Looks tab's section flags (`isLooksSectionExpanded`, `isStyleSectionExpanded`,
-/// `isPresetsSectionExpanded`), read by `LooksTabView` — the struct keeps its Adjust-era name.
+/// `isPresetsSectionExpanded`), read by `LooksTabView` — the struct keeps its Adjust-era name. Every Adjust section defaults
+/// collapsed; the Looks tab's Looks and Style flags default OPEN (see below).
 struct AdjustPanelState {
     /// Which Adjust-tab sections are expanded — Apple-Photos-style
     /// collapsible sections. Defaults `false` (all collapsed) per user
@@ -59,11 +60,12 @@ struct AdjustPanelState {
     /// round-trip.
     var isPresetsSectionExpanded = false
 
-    /// Whether the Looks (LUT profile) section is expanded. Same reasoning as every other section bool.
-    var isLooksSectionExpanded = false
+    /// Whether the Looks (LUT profile) grid is expanded. OPEN by default, unlike the Adjust sections: the Looks tab exists to
+    /// browse these, and a collapsed grid would open to an empty-looking tab (the previews are only rendered while open).
+    var isLooksSectionExpanded = true
 
-    /// Whether the Style (preset + Tone/Color pad + strength) section is expanded. Same reasoning as every other section bool.
-    var isStyleSectionExpanded = false
+    /// Whether the Style (preset grid + Tone/Color pad + strength) section is expanded. Open by default, same reasoning as Looks.
+    var isStyleSectionExpanded = true
 
     /// History panel: whether the "History" section is expanded. Same
     /// reasoning as every other section bool above — also means the row

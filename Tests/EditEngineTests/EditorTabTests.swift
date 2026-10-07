@@ -24,4 +24,14 @@ final class EditorTabTests: XCTestCase {
         let both = EditorTab.allCases.filter { $0.keepsCompareAndZoom && $0.disarmsPointModes }
         XCTAssertEqual(both, [.looks])
     }
+
+    /// The Looks tab opens with its two grids visible; Presets (a plain list) and the Adjust sections stay collapsed.
+    func testLooksAndStyleOpenByDefaultWhileEverythingElseStaysCollapsed() {
+        let panel = AdjustPanelState()
+        XCTAssertTrue(panel.isLooksSectionExpanded)
+        XCTAssertTrue(panel.isStyleSectionExpanded)
+        XCTAssertFalse(panel.isPresetsSectionExpanded)
+        XCTAssertFalse(panel.isLightSectionExpanded)
+        XCTAssertFalse(panel.isHistorySectionExpanded)
+    }
 }

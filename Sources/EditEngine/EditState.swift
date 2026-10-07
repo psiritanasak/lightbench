@@ -989,7 +989,7 @@ struct EditState: Equatable, Codable {
     /// The pad's vertical axis, -1...1: Tone (shadows lift/deepen with a small opposite contrast move). 0 = centre.
     var styleTone: Double = 0
 
-    /// The pad's horizontal axis, -1...1: Color (Vibrance-led, so skin-protecting). 0 = centre.
+    /// The pad's horizontal axis, -1...1: Color (mostly Vibrance, plus some Saturation; no skin masking yet). 0 = centre.
     var styleColor: Double = 0
 
     /// 0...1, scales the WHOLE style (preset + pad + tints) exactly linearly. NON-ZERO identity default (1.0), decoded with

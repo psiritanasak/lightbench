@@ -59,6 +59,9 @@ struct AdjustPanelState {
     /// Whether the Looks (LUT profile) section is expanded. Same reasoning as every other section bool.
     var isLooksSectionExpanded = false
 
+    /// Whether the Style (preset + Tone/Color pad + strength) section is expanded. Same reasoning as every other section bool.
+    var isStyleSectionExpanded = false
+
     /// History panel: whether the "History" section is expanded. Same
     /// reasoning as every other section bool above — also means the row
     /// list only materializes (and its `ForEach` only does work) once the
@@ -284,6 +287,7 @@ struct AdjustTabView: View {
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
             looksSectionContainer
+            styleSectionContainer
             AdjustSectionContainer(icon: "sun.max", title: "Light", isExpanded: $panel.isLightSectionExpanded) {
                 lightSection
             }
@@ -1623,6 +1627,19 @@ struct AdjustTabView: View {
         Group {
             AdjustSectionContainer(icon: "camera.filters", title: "Looks", isExpanded: $panel.isLooksSectionExpanded) {
                 looksSection
+            }
+            Divider()
+        }
+    }
+
+    // MARK: - Style
+
+    /// Second section: a style is a light rendering on top of the user's sliders (render-time nudges + tint), so it sits
+    /// right under Looks. One computed property so `body`'s already-long `VStack` gains a single child.
+    private var styleSectionContainer: some View {
+        Group {
+            AdjustSectionContainer(icon: "slider.horizontal.below.square.and.square.filled", title: "Style", isExpanded: $panel.isStyleSectionExpanded) {
+                StyleSectionView(document: document)
             }
             Divider()
         }

@@ -1421,6 +1421,33 @@ final class ImageDocumentModel: ObservableObject {
         applyHistoryState(history.current)
     }
 
+    /// Picks a Style preset (`""` = None). Its own atomic, labelled undo step (`applyPreset`'s reasoning: the debounced
+    /// `editState` path could merge a follow-up pad drag into the same step). Choosing None restores the strength to its
+    /// identity (1) ONLY when that leaves the style contributing nothing (pad at the centre): then a leftover
+    /// `styleStrength != 1` would be an invisible edit. With the pad off-centre strength is kept, because it still scales the
+    /// pad — resetting it would silently change how the photo renders when the user only asked to drop the preset. The pad
+    /// itself is left where it is: it is usable without a preset.
+    func selectStyle(_ id: String) {
+        finalizePendingCommit()
+        var next = editState
+        guard next.styleID != id else { return }
+        next.styleID = id
+        if id.isEmpty, StyleMath.isIdentity(id: "", tone: next.styleTone, color: next.styleColor) { next.styleStrength = 1 }
+        let name = StyleLibrary.preset(for: id)?.name ?? (id.isEmpty ? "None" : id)
+        history.commit(next, summary: "Style: \(name)")
+        applyHistoryState(history.current)
+    }
+
+    /// Clears the preset, the pad and the strength in one step.
+    func resetStyle() {
+        finalizePendingCommit()
+        var next = editState
+        next.styleID = ""; next.styleTone = 0; next.styleColor = 0; next.styleStrength = 1
+        guard next != editState else { return }
+        history.commit(next, summary: "Reset Style")
+        applyHistoryState(history.current)
+    }
+
     /// Curves v2 slice 2B's "Reset Curve", extended in slice 3 to take
     /// WHICH curve — clears exactly `channel`'s own point array, leaving
     /// the other three (and the parametric Shadows/Highlights/Black Point

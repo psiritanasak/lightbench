@@ -24,8 +24,9 @@ struct StyleNudges: Equatable, Sendable {
 /// No Core Image, no UI: exact-number testable.
 ///
 /// The pad mapping is a CONVENTION (v1, tuned by eye, not measured): Tone (Y, -1...1) lifts/deepens the shadows with a
-/// small opposite contrast move; Color (X, -1...1) drives Vibrance more than Saturation, because `CIVibrance` already
-/// protects skin and already-saturated tones — the only skin handling v1 has (real masking is v3).
+/// small opposite contrast move; Color (X, -1...1) drives Vibrance more than Saturation, because `CIVibrance` is
+/// designed to spare skin and already-saturated tones (Apple's description; NOT measured here, and the Saturation share and
+/// negative amounts are not skin-aware) — the only skin handling v1 has (real masking is v3).
 enum StyleMath {
     static let toneShadowWeight = 0.5
     static let toneContrastWeight = -0.25

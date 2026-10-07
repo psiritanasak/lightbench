@@ -1,0 +1,107 @@
+import CoreImage
+import XCTest
+@testable import PhotoApp
+
+/// `ImageDocumentModel.selectStyle` / `resetStyle`: each is its own labelled, undoable History step.
+@MainActor
+final class StyleModelTests: XCTestCase {
+    private final class DeclineAccess: SidecarFolderAccessing {
+        func resolvedURL(for folder: URL) -> URL? { nil }
+        func resolveOrRequest(for folder: URL, message: String) -> SidecarFolderAccess.Outcome { .declined }
+    }
+
+    private var dir: URL!
+
+    override func setUpWithError() throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("StyleModelTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: dir) }
+
+    private func makeModel() async throws -> ImageDocumentModel {
+        let url = dir.appendingPathComponent("photo.png")
+        let base = CIImage(color: .gray).cropped(to: CGRect(x: 0, y: 0, width: 32, height: 32))
+        try CIContext().writePNGRepresentation(of: base, to: url, format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+        let model = ImageDocumentModel(folderAccess: DeclineAccess())
+        await model.load(from: url)
+        return model
+    }
+
+    func testSelectingAPresetIsOneLabelledUndoableStep() async throws {
+        let model = try await makeModel()
+        let before = model.historyEntries.count
+        model.selectStyle("builtin:cinema")
+        XCTAssertEqual(model.editState.styleID, "builtin:cinema")
+        XCTAssertEqual(model.historyEntries.count, before + 1)
+        XCTAssertEqual(model.historyEntries.last?.summary, "Style: Cinema")
+        model.undo()
+        XCTAssertEqual(model.editState.styleID, "")
+    }
+
+    func testPickingTheSamePresetAgainIsANoOpWithoutAHistoryStep() async throws {
+        let model = try await makeModel()
+        model.selectStyle("builtin:vivid")
+        let count = model.historyEntries.count
+        model.selectStyle("builtin:vivid")
+        XCTAssertEqual(model.historyEntries.count, count)
+    }
+
+    func testChoosingNoneKeepsStrengthWhileThePadIsOffCentreBecauseItStillScalesThePad() async throws {
+        let model = try await makeModel()
+        model.selectStyle("builtin:haze")
+        model.editState.styleStrength = 0.4
+        model.editState.styleTone = 0.3
+        model.selectStyle("")
+        XCTAssertEqual(model.editState.styleID, "")
+        XCTAssertEqual(model.editState.styleStrength, 0.4, "the pad's rendered effect must not jump when only the preset is dropped")
+        XCTAssertEqual(model.editState.styleTone, 0.3)
+        XCTAssertEqual(model.historyEntries.last?.summary, "Style: None")
+    }
+
+    func testChoosingNoneWithACentredPadRestoresStrengthSoNoInvisibleEditRemains() async throws {
+        let model = try await makeModel()
+        model.selectStyle("builtin:haze")
+        model.editState.styleStrength = 0.4
+        model.selectStyle("")
+        XCTAssertEqual(model.editState.styleStrength, 1)
+        XCTAssertTrue(model.editState.isEffectivelyIdentity)
+    }
+
+    func testSelectingAStyleMidBurstCommitsTheBurstAsItsOwnStepFirst() async throws {
+        let model = try await makeModel()
+        let base = model.historyEntries.count
+        model.editState.styleTone = 0.6          // a drag still inside its ~350ms coalescing window
+        model.editState.styleStrength = 0.5
+        model.selectStyle("builtin:haze")
+        XCTAssertEqual(model.historyEntries.count, base + 2, "the burst, then the style")
+        model.undo()
+        XCTAssertEqual(model.editState.styleID, "")
+        XCTAssertEqual(model.editState.styleTone, 0.6, "the burst step survives")
+        XCTAssertEqual(model.editState.styleStrength, 0.5)
+        model.undo()
+        XCTAssertEqual(model.editState.styleTone, 0)
+    }
+
+    func testResetStyleClearsEverythingInOneStepAndIsANoOpWhenAlreadyClear() async throws {
+        let model = try await makeModel()
+        let clean = model.historyEntries.count
+        model.resetStyle()
+        XCTAssertEqual(model.historyEntries.count, clean, "nothing to reset, no history step")
+        model.selectStyle("builtin:copper")
+        model.editState.styleTone = -0.5; model.editState.styleColor = 0.5; model.editState.styleStrength = 0.2
+        model.resetStyle()
+        XCTAssertEqual(model.editState.styleID, "")
+        XCTAssertEqual(model.editState.styleTone, 0); XCTAssertEqual(model.editState.styleColor, 0)
+        XCTAssertEqual(model.editState.styleStrength, 1)
+        XCTAssertEqual(model.historyEntries.last?.summary, "Reset Style")
+        model.undo()
+        XCTAssertEqual(model.editState.styleID, "builtin:copper", "Undo restores the style")
+    }
+
+    func testAnUnknownStyleIdKeepsItsNameInTheHistoryLabel() async throws {
+        let model = try await makeModel()
+        model.selectStyle("builtin:from-a-newer-build")
+        XCTAssertEqual(model.historyEntries.last?.summary, "Style: builtin:from-a-newer-build")
+    }
+}

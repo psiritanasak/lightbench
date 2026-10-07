@@ -96,4 +96,14 @@ final class LookPreviewItemTests: XCTestCase {
         XCTAssertEqual(LookPreviewItem.looksGridKey(for: s), LookPreviewItem.looksGridKey(for: local))
         XCTAssertEqual(LookPreviewItem.stylesGridKey(for: s), LookPreviewItem.stylesGridKey(for: local))
     }
+
+    func testImportedLooksAreExactlyTheNonBuiltInNonEmptyLookIDs() {
+        let user = LookLibrary.UserLook(id: "user:abc", name: "Mine", cube: BuiltInLooks.cube(id: BuiltInLooks.all[0].id)!)
+        let items = LookPreviewItem.looks(userLooks: [user])
+        XCTAssertEqual(items.filter(\.isImportedLook).map(\.id), ["user:abc"])
+        XCTAssertFalse(LookPreviewItem(kind: .look, id: "", name: "None").isImportedLook)
+        XCTAssertFalse(LookPreviewItem(kind: .look, id: BuiltInLooks.all[0].id, name: "x").isImportedLook)
+        XCTAssertFalse(LookPreviewItem(kind: .style, id: "builtin:honey", name: "Honey").isImportedLook)
+        XCTAssertFalse(LookPreviewItem(kind: .style, id: "user:oops", name: "x").isImportedLook, "styles are never imported looks")
+    }
 }

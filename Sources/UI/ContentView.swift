@@ -406,6 +406,8 @@ struct ContentView: View {
     /// `switch`, which would destroy child-owned `@State` on every switch to
     /// Crop and back — see `AdjustPanelState`'s own doc comment.
     @State private var adjustPanel = AdjustPanelState()
+    /// The Looks tab's thumbnail previews. Owned here, not by `LooksTabView`, which is torn down on every tab switch.
+    @StateObject private var lookPreviews = LookPreviewModel()
 
     /// The image pane's `EditorTabBar` row's actual rendered height,
     /// measured live (not guessed) — see `editControls`'s top padding,
@@ -2276,7 +2278,7 @@ struct ContentView: View {
                         onReset: { resetCropTab() }
                     )
                 case .looks:
-                    LooksTabView(document: document, catalog: catalog, panel: $adjustPanel)
+                    LooksTabView(document: document, catalog: catalog, previews: lookPreviews, panel: $adjustPanel)
                 case .cleanUp: PlaceholderTab(message: "Clean Up isn't available yet.")
                 }
             }

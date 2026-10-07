@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// The Adjust tab's "Style" section: preset chips (our own two families), a square Tone/Color pad, a Strength slider, a
+/// The Looks tab's "Style" section: preset preview cells (our own two families), a square Tone/Color pad, a Strength slider, a
 /// text readout, a Protect skin toggle + amount, a Texture row (None/Soft/Glow/Film + its own strength), a Grain toggle and Reset. Everything writes the
 /// `EditState.style*` fields — never the user's own sliders — so it is
 /// non-destructive and undoable; a preset click is its own labelled History step (`ImageDocumentModel.selectStyle`).
 struct StyleSectionView: View {
     @ObservedObject var document: ImageDocumentModel
+    /// The preset grid's preview images (`LooksTabView` keeps them fresh).
+    @ObservedObject var previews: LookPreviewModel
 
     private var state: EditState { document.editState }
 
@@ -36,7 +38,7 @@ struct StyleSectionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 6) { chip(id: "", name: "None") }
+            LazyVGrid(columns: Self.cellColumns, alignment: .leading, spacing: 10) { chip(id: "", name: "None") }
             ForEach(StylePreset.Family.allCases, id: \.self) { family in
                 presetGrid(title: family.title, presets: StyleLibrary.presets(in: family))
             }
@@ -113,19 +115,28 @@ struct StyleSectionView: View {
         String(format: "Tone %+.2f   Color %+.2f", state.styleTone, state.styleColor)
     }
 
+    /// Text chips (the texture row).
     private static let columns = [GridItem(.adaptive(minimum: 68), spacing: 6)]
+    /// Preview cells (the preset grids): exactly three columns, like the Looks grid.
+    private static let cellColumns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
 
     private func presetGrid(title: String, presets: [StylePreset]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption).foregroundStyle(.secondary).textCase(.uppercase)
-            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 6) {
+            LazyVGrid(columns: Self.cellColumns, alignment: .leading, spacing: 10) {
                 ForEach(presets) { preset in chip(id: preset.id, name: preset.name) }
             }
         }
     }
 
+    /// A style preset cell: the photo with that preset applied (see `LookPreviewItem`), or a placeholder until it is rendered.
     private func chip(id: String, name: String) -> some View {
-        chipButton(name: name, selected: state.styleID == id, label: id.isEmpty ? "No style" : "Style \(name)") { document.selectStyle(id) }
+        LookThumbnailCell(
+            name: name,
+            image: previews.styles(forRevision: document.imageRevision)[id],
+            isSelected: state.styleID == id,
+            accessibilityText: id.isEmpty ? "No style" : "Style \(name)",
+            action: { document.selectStyle(id) })
     }
 
     private func textureChip(id: String, name: String) -> some View {

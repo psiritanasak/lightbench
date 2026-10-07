@@ -47,6 +47,11 @@ final class LookPreviewModel: ObservableObject {
     func looks(forRevision imageRevision: Int) -> [String: CGImage] { revision == imageRevision ? looks : [:] }
     func styles(forRevision imageRevision: Int) -> [String: CGImage] { revision == imageRevision ? styles : [:] }
 
+    /// How long the view waits before asking for a refresh: none when this photo has no previews yet (the grid should fill as soon
+    /// as the tab opens), a short debounce when previews already exist and an edit changed their inputs (so dragging the
+    /// Intensity or Strength slider does not start a pass per tick). A UI policy value, not a measurement.
+    static func refreshDelayNanoseconds(hasPreviewsForThisPhoto: Bool) -> UInt64 { hasPreviewsForThisPhoto ? 250_000_000 : 0 }
+
     /// What the Looks grid was last (or is being) rendered from.
     private struct LooksInput: Equatable { let state: EditState; let userLookIDs: [String] }
     private struct StylesInput: Equatable { let state: EditState }

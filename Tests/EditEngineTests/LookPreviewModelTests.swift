@@ -232,4 +232,9 @@ final class LookPreviewModelTests: XCTestCase {
         await wait("user look cell") { m.looks["user:abc"] != nil }
         XCTAssertEqual(m.looks.count, looksCount + 1)
     }
+
+    func testTheGridFillsImmediatelyButAnUpdateIsDebounced() {
+        XCTAssertEqual(LookPreviewModel.refreshDelayNanoseconds(hasPreviewsForThisPhoto: false), 0)
+        XCTAssertGreaterThan(LookPreviewModel.refreshDelayNanoseconds(hasPreviewsForThisPhoto: true), 0)
+    }
 }

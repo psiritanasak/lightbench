@@ -14,6 +14,9 @@ struct LookPreviewItem: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
 
+    /// An imported (user `.cube`) look: a non-empty look id that is not `builtin:` — the same split `LookLibrary.cube(for:)` uses.
+    var isImportedLook: Bool { kind == .look && !id.isEmpty && !id.hasPrefix("builtin:") }
+
     /// `state` with this cell's look/style chosen.
     func applying(to state: EditState) -> EditState {
         var s = state

@@ -1,13 +1,15 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The Editor's Looks tab: the "pick a starting point" controls — Looks (LUT profiles), Style and Presets — moved here out of the
+/// The Editor's Looks tab: the "pick a starting point" controls — Looks (LUT profiles, as a thumbnail grid), Style and Presets — moved here out of the
 /// Adjust tab. They write the same `EditState` fields as before; only their home changed. The expanded flags stay in
 /// `AdjustPanelState` (owned by `ContentView`, hoisted because the tab `switch` tears this view down on every switch).
 struct LooksTabView: View {
     @ObservedObject var document: ImageDocumentModel
     /// Presets live in the catalog database.
     @ObservedObject var catalog: CatalogModel
+    /// The grids' preview images (owned by `ContentView`: this view is torn down on every tab switch).
+    @ObservedObject var previews: LookPreviewModel
     @Binding var panel: AdjustPanelState
 
     /// "Save Preset" alert state. Local `@State`, NOT lifted into
@@ -52,6 +54,39 @@ struct LooksTabView: View {
             }
             Button("Cancel", role: .cancel) { newPresetName = "" }
         }
+        // Refreshes are requested only while this tab is on screen (a pass already running when the user leaves finishes and
+        // stops), only for a grid whose section is open, and each grid only when ITS inputs change (picking a Look re-renders the
+        // Style grid, not the Looks grid). Nothing is requested while an image load/RAW re-decode is in flight: the new image
+        // would invalidate the pass anyway.
+        .task(id: LooksRefreshTrigger(key: LookPreviewItem.looksGridKey(for: document.editState), revision: document.imageRevision,
+                                      looksRevision: looksRevision, isOpen: panel.isLooksSectionExpanded,
+                                      isLoading: document.isLoadingImage)) {
+            guard panel.isLooksSectionExpanded, !document.isLoadingImage else { return }
+            let delay = LookPreviewModel.refreshDelayNanoseconds(
+                hasPreviewsForThisPhoto: !previews.looks(forRevision: document.imageRevision).isEmpty)
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+            guard !Task.isCancelled else { return }
+            previews.refreshLooks(state: document.editState, image: document.currentImage, imageRevision: document.imageRevision,
+                                  userLooks: LookLibrary.shared.userLooks)
+        }
+        .task(id: StylesRefreshTrigger(key: LookPreviewItem.stylesGridKey(for: document.editState), revision: document.imageRevision,
+                                       isOpen: panel.isStyleSectionExpanded,
+                                       isLoading: document.isLoadingImage)) {
+            guard panel.isStyleSectionExpanded, !document.isLoadingImage else { return }
+            let delay = LookPreviewModel.refreshDelayNanoseconds(
+                hasPreviewsForThisPhoto: !previews.styles(forRevision: document.imageRevision).isEmpty)
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+            guard !Task.isCancelled else { return }
+            previews.refreshStyles(state: document.editState, image: document.currentImage, imageRevision: document.imageRevision)
+        }
+    }
+
+    /// `.task(id:)` restarts (cancelling the debounce sleep) when this changes.
+    private struct LooksRefreshTrigger: Equatable {
+        let key: EditState; let revision: Int; let looksRevision: Int; let isOpen: Bool; let isLoading: Bool
+    }
+    private struct StylesRefreshTrigger: Equatable {
+        let key: EditState; let revision: Int; let isOpen: Bool; let isLoading: Bool
     }
 
     /// Clears the Look and the whole Style in one undoable step (`ImageDocumentModel.resetLookAndStyle`). Presets have nothing
@@ -87,7 +122,7 @@ struct LooksTabView: View {
     private var styleSectionContainer: some View {
         Group {
             AdjustSectionContainer(icon: "slider.horizontal.below.square.and.square.filled", title: "Style", isExpanded: $panel.isStyleSectionExpanded) {
-                StyleSectionView(document: document)
+                StyleSectionView(document: document, previews: previews)
             }
             Divider()
         }
@@ -100,44 +135,34 @@ struct LooksTabView: View {
         if id.isEmpty { document.editState.lookIntensity = 1 }
     }
 
-    private func lookRow(id: String, name: String, onDelete: (() -> Void)? = nil) -> some View {
-        let isSelected = document.editState.lookID == id
-        return HStack {
-            Button {
-                selectLook(id)
-            } label: {
-                HStack {
-                    Image(systemName: "checkmark").opacity(isSelected ? 1 : 0).frame(width: 14)
-                    Text(name)
-                }
-            }
-            .buttonStyle(.plain)
-            .fontWeight(isSelected ? .semibold : .regular)
-            .accessibilityLabel(id.isEmpty ? "No look" : "Look \(name)")
-            .accessibilityAddTraits(isSelected ? .isSelected : [])
-            Spacer()
-            if let onDelete {
-                Button(action: onDelete) { Image(systemName: "trash") }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.red)
-                    .accessibilityLabel("Remove look \(name)")
-            }
-        }
+    /// Exactly three columns: an adaptive grid is not guaranteed three at the sidebar's 360 pt minimum once the padding, the
+    /// disclosure indent and an always-visible scroll bar are taken off.
+    private static let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+
+    private func lookCell(_ item: LookPreviewItem, userLooks: [LookLibrary.UserLook]) -> some View {
+        let user = userLooks.first { $0.id == item.id }
+        return LookThumbnailCell(
+            name: item.name,
+            image: previews.looks(forRevision: document.imageRevision)[item.id],
+            isSelected: document.editState.lookID == item.id,
+            accessibilityText: item.id.isEmpty ? "No look" : "Look \(item.name)",
+            action: { selectLook(item.id) },
+            onRemove: user.map { look in { removeUserLook(look) } })
     }
 
     private var looksSection: some View {
         let _ = looksRevision // re-read `LookLibrary` after an import/remove
         let current = document.editState.lookID
         let userLooks = LookLibrary.shared.userLooks
+        let items = LookPreviewItem.looks(userLooks: userLooks)
         return Group {
-            lookRow(id: "", name: "None")
-            ForEach(BuiltInLooks.all, id: \.id) { look in
-                lookRow(id: look.id, name: look.name)
+            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 10) {
+                ForEach(items.filter { !$0.isImportedLook }) { item in lookCell(item, userLooks: userLooks) }
             }
             if !userLooks.isEmpty {
                 Text("Imported").font(.caption).foregroundStyle(.secondary)
-                ForEach(userLooks, id: \.id) { look in
-                    lookRow(id: look.id, name: look.name) { removeUserLook(look) }
+                LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 10) {
+                    ForEach(items.filter(\.isImportedLook)) { item in lookCell(item, userLooks: userLooks) }
                 }
             }
             if !current.isEmpty, LookLibrary.shared.cube(for: current) == nil {

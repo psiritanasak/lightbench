@@ -26,7 +26,7 @@ enum StyleTexture: String, CaseIterable, Identifiable, Sendable {
     /// The nudges at full amount.
     fileprivate var nudges: StyleDetailNudges {
         switch self {
-        case .soft: return StyleDetailNudges(texture: -0.5, clarity: -0.15)
+        case .soft: return StyleDetailNudges(texture: -0.4, clarity: -0.1)
         case .glow: return StyleDetailNudges(clarity: -0.05, glow: 1.0)
         case .film: return StyleDetailNudges(texture: 0.2, sharpness: 0.15)
         }
@@ -48,7 +48,7 @@ struct StyleDetailNudges: Equatable, Sendable {
 
 extension StyleMath {
     /// The Grain toggle's fixed amount (a convention, by eye), added to whatever the user's own Grain slider is set to.
-    static let toggleGrainAmount = 0.25
+    static let toggleGrainAmount = 0.12
 
     /// True when no texture is chosen and Grain is off: the texture group contributes nothing, whatever the texture-strength
     /// slider says (a lone strength is an invisible edit the UI resets). A non-empty UNKNOWN id is deliberately NOT identity:

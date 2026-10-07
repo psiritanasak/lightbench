@@ -59,7 +59,7 @@ final class StyleDetailPipelineTests: XCTestCase {
     // MARK: Equivalence with the manual sliders each texture adds
 
     func testSoftIsExactlyNegativeTextureAndClarity() {
-        var manual = EditState(); manual.texture = -0.5; manual.clarity = -0.15
+        var manual = EditState(); manual.texture = -0.4; manual.clarity = -0.1
         let styled = render(detail(texture: "soft"))
         assertEqual(styled, render(manual), "soft")
         XCTAssertNotEqual(styled[2], render(EditState())[2], "Soft really changes the edge")
@@ -73,7 +73,7 @@ final class StyleDetailPipelineTests: XCTestCase {
     }
 
     func testTextureAmountHalfIsHalfTheNudges() {
-        var manual = EditState(); manual.texture = -0.25; manual.clarity = -0.075
+        var manual = EditState(); manual.texture = -0.2; manual.clarity = -0.05
         assertEqual(render(detail(texture: "soft", amount: 0.5)), render(manual), "soft at half")
     }
 
@@ -96,12 +96,12 @@ final class StyleDetailPipelineTests: XCTestCase {
 
     func testStyleAddsToTheUsersTextureInsteadOfReplacingItAndSharpenGrainAreClamped() {
         var user = detail(texture: "soft"); user.texture = 0.4
-        var manual = EditState(); manual.texture = 0.4 - 0.5; manual.clarity = -0.15
-        assertEqual(render(user), render(manual), "user +0.4 and soft -0.5")
+        var manual = EditState(); manual.texture = 0.4 - 0.4; manual.clarity = -0.1
+        assertEqual(render(user), render(manual), "user +0.4 and soft -0.4")
         var s = detail(texture: "film"); s.sharpness = 0.95
         XCTAssertEqual(EditPipeline.effectiveDetail(s).sharpness, 1.0, "0.95 + 0.15 clamps to 1")
         var t = detail(texture: "soft"); t.texture = -0.8
-        XCTAssertEqual(EditPipeline.effectiveDetail(t).texture, -1.3, accuracy: 1e-12,
+        XCTAssertEqual(EditPipeline.effectiveDetail(t).texture, -1.2, accuracy: 1e-12,
                        "Texture/Clarity are not clamped (the negative side saturates in the blur itself)")
     }
 

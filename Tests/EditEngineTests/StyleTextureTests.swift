@@ -19,7 +19,7 @@ final class StyleTextureTests: XCTestCase {
 
     func testEachTextureMapsToItsOwnDocumentedNudges() {
         let soft = StyleMath.detailNudges(texture: "soft", amount: 1, grain: false)
-        XCTAssertEqual(soft, StyleDetailNudges(texture: -0.5, clarity: -0.15))
+        XCTAssertEqual(soft, StyleDetailNudges(texture: -0.4, clarity: -0.1))
         let glow = StyleMath.detailNudges(texture: "glow", amount: 1, grain: false)
         XCTAssertEqual(glow, StyleDetailNudges(clarity: -0.05, glow: 1.0))
         let film = StyleMath.detailNudges(texture: "film", amount: 1, grain: false)

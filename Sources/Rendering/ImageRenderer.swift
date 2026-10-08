@@ -238,18 +238,19 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     /// space is y-UP (visual bottom at low y — the same "no y-flip"
     /// finding `draw(in:)` documents), the OPPOSITE of SwiftUI's for the
     /// y axis specifically — exactly the asymmetry Compare's horizontal
-    /// split already had to get right — so `panY` is negated here and
-    /// ONLY here; every other zoom/pan call site (state storage, the
-    /// gesture, `ZoomPanGeometry`) stays uniformly y-DOWN and never has
-    /// to reason about this.
+    /// split already had to get right — so the pan's y is negated in ONE
+    /// place, `ZoomPanGeometry.zoomedOriginYUp` (which `fitted` calls and
+    /// the overlays' `displayedRect` derives from); every other zoom/pan
+    /// call site (state storage, the gesture) stays uniformly y-DOWN and
+    /// never has to reason about this.
     private func fitted(
         _ image: CIImage, into fitRect: CGRect, zoomScale: CGFloat = 1, panOffsetNorm: CGSize = .zero
     ) -> CIImage {
         let scale = (fitRect.width / image.extent.width) * zoomScale
-        let panX = panOffsetNorm.width * fitRect.width
-        let panY = -panOffsetNorm.height * fitRect.height
-        let zoomedMinX = fitRect.midX - fitRect.width * zoomScale / 2 + panX
-        let zoomedMinY = fitRect.midY - fitRect.height * zoomScale / 2 + panY
+        // The y-flip of the pan lives in `ZoomPanGeometry.zoomedOriginYUp`, which the overlays' `displayedRect` shares.
+        let origin = ZoomPanGeometry.zoomedOriginYUp(fitRect: fitRect, zoom: zoomScale, panNorm: panOffsetNorm)
+        let zoomedMinX = origin.x
+        let zoomedMinY = origin.y
         let transform = CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
             .concatenating(CGAffineTransform(scaleX: scale, y: scale))
             .concatenating(CGAffineTransform(translationX: zoomedMinX, y: zoomedMinY))

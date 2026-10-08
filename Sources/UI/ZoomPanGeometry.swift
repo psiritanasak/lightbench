@@ -76,4 +76,36 @@ enum ZoomPanGeometry {
             y: (cursor.y - fitRect.minY) / fitRect.height
         )
     }
+
+    // MARK: - Where the zoomed picture actually is
+
+    /// The origin (bottom-left) of the zoomed picture in the RENDERER's y-UP space, for a picture that fills `fitRect` at zoom 1:
+    /// centred on `fitRect`'s own centre (so zooming about the middle needs no pan), then shifted by `panNorm` — fit-rect-normalised
+    /// fractions in SwiftUI's y-DOWN convention, so the y component is negated here and nowhere else. `ImageRenderer.fitted` calls
+    /// this very function, so the renderer and `displayedRect` can never disagree.
+    static func zoomedOriginYUp(fitRect: CGRect, zoom: CGFloat, panNorm: CGSize) -> CGPoint {
+        CGPoint(
+            x: fitRect.midX - fitRect.width * zoom / 2 + panNorm.width * fitRect.width,
+            y: fitRect.midY - fitRect.height * zoom / 2 - panNorm.height * fitRect.height
+        )
+    }
+
+    /// The rectangle the zoomed, panned picture occupies in the on-screen pane's y-DOWN point space — what the on-image overlays must
+    /// be positioned against once the view is zoomed (at `zoom == 1`, `pan == .zero` it is `fitRect`). Derived from
+    /// `zoomedOriginYUp` by mirroring about `fitRect.midY`. Returns `fitRect` for non-finite input rather than propagating NaN.
+    static func displayedRect(fitRect: CGRect, zoom: CGFloat, pan: CGSize) -> CGRect {
+        guard zoom.isFinite, zoom > 0, pan.width.isFinite, pan.height.isFinite,
+              fitRect.width.isFinite, fitRect.height.isFinite, fitRect.minX.isFinite, fitRect.minY.isFinite else { return fitRect }
+        let height = fitRect.height * zoom
+        let origin = zoomedOriginYUp(fitRect: fitRect, zoom: zoom, panNorm: pan)
+        // y-up bottom edge -> y-down top edge: mirror about the fit rect's centre.
+        let topYDown = 2 * fitRect.midY - (origin.y + height)
+        return CGRect(x: origin.x, y: topYDown, width: fitRect.width * zoom, height: height)
+    }
+
+    /// The part of the picture that is actually visible: the displayed rectangle clipped to the pane. `CGRect.null` (infinite origin —
+    /// check `isNull`/`isEmpty` before using the origin) when they do not overlap; a zero-size, non-null rect when they only touch. In single-image mode a zoomed picture fills the letterbox as well, so this is NOT `fitRect`.
+    static func visiblePictureRect(displayedRect: CGRect, paneBounds: CGRect) -> CGRect {
+        displayedRect.intersection(paneBounds)
+    }
 }

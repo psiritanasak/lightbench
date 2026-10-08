@@ -151,3 +151,83 @@ final class ZoomPanGeometryTests: XCTestCase {
         XCTAssertEqual(clamped, .zero)
     }
 }
+
+// MARK: - Displayed rect (where the zoomed picture is)
+
+final class ZoomPanDisplayedRectTests: XCTestCase {
+    private let fit = CGRect(x: 40, y: 25, width: 600, height: 400)
+
+    func testAtFitSizeTheDisplayedRectIsTheFitRect() {
+        XCTAssertEqual(ZoomPanGeometry.displayedRect(fitRect: fit, zoom: 1, pan: .zero), fit)
+    }
+
+    func testZoomingAboutTheCentreScalesTheRectAroundItsCentre() {
+        let r = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: 2, pan: .zero)
+        XCTAssertEqual(r.width, 1200); XCTAssertEqual(r.height, 800)
+        XCTAssertEqual(r.midX, fit.midX, accuracy: 1e-9); XCTAssertEqual(r.midY, fit.midY, accuracy: 1e-9)
+    }
+
+    /// Pan is y-DOWN and fit-normalised: a positive pan moves the picture right and DOWN on screen.
+    func testPositivePanMovesThePictureRightAndDown() {
+        let base = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: 2, pan: .zero)
+        let moved = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: 2, pan: CGSize(width: 0.25, height: 0.1))
+        XCTAssertEqual(moved.minX - base.minX, 0.25 * fit.width, accuracy: 1e-9)
+        XCTAssertEqual(moved.minY - base.minY, 0.1 * fit.height, accuracy: 1e-9, "y down: positive pan = lower on screen")
+        XCTAssertEqual(moved.size, base.size)
+    }
+
+    /// `clampedPan`'s bound is exactly "the displayed picture still covers the fit rect": at pan = ±(z-1)/2 an edge sits on the fit edge.
+    func testAtTheClampBoundsAnEdgeOfThePictureSitsOnTheFitRectEdge() {
+        let z: CGFloat = 3, m = (z - 1) / 2
+        let right = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: z, pan: CGSize(width: m, height: 0))
+        XCTAssertEqual(right.minX, fit.minX, accuracy: 1e-9, "panned fully right: the picture's left edge is at the fit rect's left edge")
+        let left = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: z, pan: CGSize(width: -m, height: 0))
+        XCTAssertEqual(left.maxX, fit.maxX, accuracy: 1e-9)
+        let down = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: z, pan: CGSize(width: 0, height: m))
+        XCTAssertEqual(down.minY, fit.minY, accuracy: 1e-9, "panned fully down: the picture's TOP edge is at the fit rect's top edge")
+        let up = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: z, pan: CGSize(width: 0, height: -m))
+        XCTAssertEqual(up.maxY, fit.maxY, accuracy: 1e-9)
+    }
+
+    /// The y-DOWN rect and the renderer's y-UP origin are the same placement: mirroring the rect about the fit rect's centre gives
+    /// the renderer's bottom-left origin, which is exactly what `ImageRenderer.fitted` uses (it calls `zoomedOriginYUp`).
+    func testTheDisplayedRectAgreesWithTheRenderersYUpOrigin() {
+        for (z, p) in [(1.0, CGSize.zero), (2.0, CGSize(width: 0.3, height: -0.2)), (5.0, CGSize(width: -1.5, height: 1.9))] as [(CGFloat, CGSize)] {
+            let up = ZoomPanGeometry.zoomedOriginYUp(fitRect: fit, zoom: z, panNorm: p)
+            let down = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: z, pan: p)
+            XCTAssertEqual(down.minX, up.x, accuracy: 1e-9)
+            XCTAssertEqual(2 * fit.midY - down.maxY, up.y, accuracy: 1e-9, "y-up bottom edge = mirror of the y-down bottom edge")
+        }
+    }
+
+    /// The cursor-anchored zoom keeps the point under the cursor fixed — expressed through the displayed rect: the image point under
+    /// the cursor before and after the zoom is the same.
+    func testZoomAboutTheCursorKeepsTheImagePointUnderIt() {
+        let cursor = CGPoint(x: 500, y: 150)
+        let f = ZoomPanGeometry.cursorFractionInFitRect(cursor: cursor, fitRect: fit)
+        let z0: CGFloat = 2, pan0 = CGSize(width: 0.2, height: -0.1)
+        let z1: CGFloat = 4
+        let pan1 = ZoomPanGeometry.clampedPan(ZoomPanGeometry.panForZoomAboutCursor(oldZoom: z0, newZoom: z1, cursorFraction: f, oldPan: pan0), zoom: z1)
+        func imagePoint(_ z: CGFloat, _ p: CGSize) -> CGPoint {
+            let r = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: z, pan: p)
+            return CGPoint(x: (cursor.x - r.minX) / r.width, y: (cursor.y - r.minY) / r.height)
+        }
+        let a = imagePoint(z0, pan0), b = imagePoint(z1, pan1)
+        XCTAssertEqual(a.x, b.x, accuracy: 1e-9); XCTAssertEqual(a.y, b.y, accuracy: 1e-9)
+    }
+
+    func testNonFiniteInputFallsBackToTheFitRect() {
+        XCTAssertEqual(ZoomPanGeometry.displayedRect(fitRect: fit, zoom: .nan, pan: .zero), fit)
+        XCTAssertEqual(ZoomPanGeometry.displayedRect(fitRect: fit, zoom: 2, pan: CGSize(width: CGFloat.infinity, height: 0)), fit)
+        XCTAssertEqual(ZoomPanGeometry.displayedRect(fitRect: fit, zoom: 0, pan: .zero), fit)
+    }
+
+    func testVisiblePictureRectIsTheIntersectionWithThePane() {
+        let pane = CGRect(x: 0, y: 0, width: 700, height: 450)
+        let displayed = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: 2, pan: .zero)   // spills well past the pane
+        XCTAssertEqual(ZoomPanGeometry.visiblePictureRect(displayedRect: displayed, paneBounds: pane), pane,
+                       "a zoomed picture covers the whole pane (it fills the letterbox too)")
+        XCTAssertEqual(ZoomPanGeometry.visiblePictureRect(displayedRect: fit, paneBounds: pane), fit, "at fit size: the fit rect")
+        XCTAssertTrue(ZoomPanGeometry.visiblePictureRect(displayedRect: CGRect(x: 900, y: 0, width: 10, height: 10), paneBounds: pane).isNull)
+    }
+}

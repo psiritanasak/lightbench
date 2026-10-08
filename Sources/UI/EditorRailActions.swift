@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// The rail's second group (under the tabs): Undo, Redo, Revert, History, Compare, Filmstrip, Enhance — what used to be the top
-/// toolbar's right-hand buttons. Same faces as the tab entries (`RailEntryLabel`); availability comes from `EditorRailActionRules`
-/// (the caller passes the precomputed `canCompare` / `canEnhance`, which depend on ContentView's armed-tool state).
+/// toolbar's right-hand buttons. Icon-only (the name is the tooltip and the VoiceOver label), drawn by the same `RailEntryLabel`
+/// as the tabs. Availability comes from `EditorRailActionRules` (the caller passes the precomputed `canCompare` / `canEnhance`,
+/// which depend on ContentView's armed-tool state).
 struct EditorRailActions: View {
     @ObservedObject var document: ImageDocumentModel
     @Binding var compareMode: CompareViewMode
@@ -50,12 +51,12 @@ struct EditorRailActions: View {
                 }
             }
         } label: {
-            RailEntryLabel(title: "Compare", symbol: "rectangle.split.2x1", isOn: compareMode != .off, isEnabled: canCompare)
+            RailEntryLabel(title: "Compare", symbol: "rectangle.split.2x1", isOn: compareMode != .off, isEnabled: canCompare, showsTitle: false)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         // Same fixed cell as every other entry: a bare borderless `Menu` pads itself and would push the entries below it out of line.
-        .frame(width: EditorToolRailMetrics.width - 8, height: RailEntryLabel.height)
+        .frame(width: EditorToolRailMetrics.width - 8, height: RailEntryLabel.iconOnlyHeight)
         .disabled(!canCompare)
         .help("Compare")
         .accessibilityLabel("Compare")
@@ -65,7 +66,7 @@ struct EditorRailActions: View {
     private func entry(_ title: String, _ symbol: String, on: Bool = false, enabled: Bool = true,
                        action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            RailEntryLabel(title: title, symbol: symbol, isOn: on, isEnabled: enabled)
+            RailEntryLabel(title: title, symbol: symbol, isOn: on, isEnabled: enabled, showsTitle: false)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)

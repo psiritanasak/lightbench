@@ -29,6 +29,11 @@ targets:
         LSMinimumSystemVersion: "14.0"
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: ""
+        # Opts out of the system "Liquid Glass" restyling that the macOS 26+ SDK applies to toolbars and controls (the user confirmed the
+        # flatter look by eye on 2026-10-08). Apple has called this key temporary. If it stops working, the app's own pieces keep PART of
+        # the look: the solid `Theme` panels, `withoutToolbarBackground()` on the Library toolbar items and the custom window buttons;
+        # other system controls would take the new style.
+        UIDesignRequiresCompatibility: true
     entitlements:
       path: Sources/App/PhotoApp.entitlements
       properties:

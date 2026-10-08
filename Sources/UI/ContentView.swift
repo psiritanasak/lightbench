@@ -1554,7 +1554,7 @@ struct ContentView: View {
             }
         }
         .toolbar {
-            libraryToolbarItems
+            libraryToolbarItems.withoutToolbarBackground()
             cropDoneToolbarItem
         }
         .navigationTitle(showLibrary ? "Library" : (document.currentFileName ?? "PhotoApp"))
@@ -2393,4 +2393,19 @@ struct ContentView: View {
         document: ImageDocumentModel(), catalog: CatalogModel(), pasteModel: PasteSettingsModel(),
         renameModel: RenameModel(), showLibrary: .constant(false)
     )
+}
+
+extension ToolbarContent {
+    /// Drops the circular / capsule background the macOS 26+ toolbar draws behind each item, leaving just the icon (a flatter,
+    /// more minimal look). A no-op before macOS 26, where that background does not exist, and ALSO while `UIDesignRequiresCompatibility`
+    /// is set in the Info.plist (compatibility mode draws no such background): today the flat toolbar comes from that key, and this is the
+    /// fallback if the key is ever removed or ignored.
+    @ToolbarContentBuilder
+    func withoutToolbarBackground() -> some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            self.sharedBackgroundVisibility(.hidden)
+        } else {
+            self
+        }
+    }
 }

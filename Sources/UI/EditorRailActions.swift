@@ -14,16 +14,29 @@ struct EditorRailActions: View {
     let canEnhance: Bool
     let onEnhance: () -> Void
 
+    /// The SF Symbol of each entry, in rail order. A symbol name that does not exist on the running macOS draws NOTHING (an icon-only
+    /// entry would be blank), so `EditorRailActionsSymbolTests` checks every one of these against the system.
+    enum Symbol {
+        static let undo = "arrow.uturn.backward"
+        static let redo = "arrow.uturn.forward"
+        static let revert = "arrow.counterclockwise"
+        static let history = "clock.arrow.circlepath"
+        static let compare = "rectangle.split.2x1"
+        static let filmstrip = "film"
+        static let enhance = "square.resize.up"
+        static let all = [undo, redo, revert, history, compare, filmstrip, enhance]
+    }
+
     var body: some View {
         let hasImage = document.currentImage != nil
         VStack(spacing: 6) {
-            entry("Undo", "arrow.uturn.backward", enabled: document.canUndo) { document.undo() }
-            entry("Redo", "arrow.uturn.forward", enabled: document.canRedo) { document.redo() }
-            entry("Revert", "arrow.counterclockwise",
+            entry("Undo", Symbol.undo, enabled: document.canUndo) { document.undo() }
+            entry("Redo", Symbol.redo, enabled: document.canRedo) { document.redo() }
+            entry("Revert", Symbol.revert,
                   enabled: EditorRailActionRules.canRevert(hasImage: hasImage, isEffectivelyIdentity: document.editState.isEffectivelyIdentity)) {
                 document.revertToOriginal()
             }
-            entry("History", "clock.arrow.circlepath", on: isHistoryPresented,
+            entry("History", Symbol.history, on: isHistoryPresented,
                   enabled: EditorRailActionRules.canShowHistory(hasImage: hasImage)) {
                 isHistoryPresented.toggle()
             }
@@ -31,8 +44,8 @@ struct EditorRailActions: View {
                 HistoryPopoverView(document: document)
             }
             compareMenu
-            entry("Filmstrip", "square.grid.3x1", on: isFilmstripVisible) { isFilmstripVisible.toggle() }
-            entry("Enhance", "square.resize.up", enabled: canEnhance, action: onEnhance)
+            entry("Filmstrip", Symbol.filmstrip, on: isFilmstripVisible) { isFilmstripVisible.toggle() }
+            entry("Enhance", Symbol.enhance, enabled: canEnhance, action: onEnhance)
         }
     }
 
@@ -51,7 +64,7 @@ struct EditorRailActions: View {
                 }
             }
         } label: {
-            RailEntryLabel(title: "Compare", symbol: "rectangle.split.2x1", isOn: compareMode != .off, isEnabled: canCompare, showsTitle: false)
+            RailEntryLabel(title: "Compare", symbol: Symbol.compare, isOn: compareMode != .off, isEnabled: canCompare, showsTitle: false)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)

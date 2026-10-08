@@ -66,13 +66,17 @@ struct CollectionSidebarView: View {
 
     var body: some View {
         List(selection: selection) {
+            // No hairline between rows anywhere in this list. `.listRowSeparator(.hidden)` must sit on EACH ROW — on the `List` itself it
+            // did nothing (measured: the separators were still drawn).
             Text("All Photos").tag(LibraryFilter.allPhotos)
+                .listRowSeparator(.hidden)
 
             Section(header: Self.header("Collections")) {
                 ForEach(catalog.collections.filter { !$0.isFolder }) { collection in
                     if let id = collection.id {
                         Text(collection.name)
                             .tag(LibraryFilter.collection(id))
+                            .listRowSeparator(.hidden)
                             .contextMenu {
                                 Button("Rename…") {
                                     renameText = collection.name
@@ -103,6 +107,7 @@ struct CollectionSidebarView: View {
                     isPresentingNewCollection = true
                 }
                 .buttonStyle(.plain)
+                .listRowSeparator(.hidden)
                 .foregroundStyle(.secondary)
             }
 
@@ -111,6 +116,7 @@ struct CollectionSidebarView: View {
                     if let id = smart.id {
                         Text(smart.name)
                             .tag(LibraryFilter.smartCollection(id))
+                            .listRowSeparator(.hidden)
                             .contextMenu {
                                 Button("Rename…") {
                                     smartRenameText = smart.name
@@ -137,6 +143,7 @@ struct CollectionSidebarView: View {
                     isPresentingNewSmart = true
                 }
                 .buttonStyle(.plain)
+                .listRowSeparator(.hidden)
                 .foregroundStyle(.secondary)
                 .disabled(!catalog.hasSaveableFilterCriteria)
                 .help("Save the rating, flag, label and keyword filters as a smart collection over the whole catalog (search text is not saved)")
@@ -148,6 +155,7 @@ struct CollectionSidebarView: View {
                     OutlineGroup(folderRoots, children: \.children) { node in
                         if let id = node.collection.id {
                             Text(node.collection.name).tag(LibraryFilter.collection(id))
+                                .listRowSeparator(.hidden)
                         }
                     }
                 }

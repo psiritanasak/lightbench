@@ -59,7 +59,7 @@ struct EditorFilmstripView: View {
             }
         }
         .frame(height: cellSize + 16)
-        .background(Color(white: 0.11))
+        .background(Theme.panel)
     }
 }
 

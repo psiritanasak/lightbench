@@ -2383,7 +2383,7 @@ struct ContentView: View {
         // gone.
         .scrollIndicators(.hidden)
         .disabled(document.currentImage == nil)
-        .background(Color(white: 0.11))
+        .background(Theme.panel)
     }
 
 }

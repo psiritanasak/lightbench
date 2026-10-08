@@ -59,11 +59,16 @@ struct CollectionSidebarView: View {
         )
     }
 
+    /// A section header in the Adjust panel's quiet style (small, uppercase, secondary) — a plain list would otherwise draw bold ones.
+    private static func header(_ title: String) -> some View {
+        Text(title).font(.caption).textCase(.uppercase).foregroundStyle(.secondary)
+    }
+
     var body: some View {
         List(selection: selection) {
             Text("All Photos").tag(LibraryFilter.allPhotos)
 
-            Section("Collections") {
+            Section(header: Self.header("Collections")) {
                 ForEach(catalog.collections.filter { !$0.isFolder }) { collection in
                     if let id = collection.id {
                         Text(collection.name)
@@ -101,7 +106,7 @@ struct CollectionSidebarView: View {
                 .foregroundStyle(.secondary)
             }
 
-            Section("Smart Collections") {
+            Section(header: Self.header("Smart Collections")) {
                 ForEach(catalog.smartCollections) { smart in
                     if let id = smart.id {
                         Text(smart.name)
@@ -139,7 +144,7 @@ struct CollectionSidebarView: View {
 
             let folderRoots = Self.buildFolderTree(from: catalog.collections)
             if !folderRoots.isEmpty {
-                Section("Folders") {
+                Section(header: Self.header("Folders")) {
                     OutlineGroup(folderRoots, children: \.children) { node in
                         if let id = node.collection.id {
                             Text(node.collection.name).tag(LibraryFilter.collection(id))
@@ -148,7 +153,10 @@ struct CollectionSidebarView: View {
                 }
             }
         }
-        .listStyle(.sidebar)
+        // Solid like the Editor's Adjust panel: `.sidebar` is what draws the system's translucent sidebar material.
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Theme.panel)
         .alert("New Collection", isPresented: $isPresentingNewCollection) {
             TextField("Name", text: $newCollectionName)
             Button("Create") {

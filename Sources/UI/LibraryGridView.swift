@@ -356,19 +356,11 @@ struct LibraryGridView: View {
         case .return: return openFocused(in: displayed)
         default: break
         }
-        if let character = keyPress.characters.first {
-            if let digit = character.wholeNumberValue, (0...5).contains(digit) {
-                return setRatingOnFocused(digit, in: displayed)
-            }
-            if let label = ColorLabel.forKey(character) {
-                return setLabelOnFocused(label, in: displayed)
-            }
-            switch character {
-            case ".", "f", "F": return setFlagOnFocused(nil, in: displayed)
-            case "p", "P": return setFlagOnFocused(.picked, in: displayed)
-            case "x", "X": return setFlagOnFocused(.rejected, in: displayed)
-            case "u", "U": return setFlagOnFocused(FlagStatus.none, in: displayed)
-            default: break
+        if let character = keyPress.characters.first, let command = PhotoKeyCommand.command(for: character) {
+            switch command {
+            case .rating(let digit): return setRatingOnFocused(digit, in: displayed)
+            case .label(let label): return setLabelOnFocused(label, in: displayed)
+            case .flag(let status): return setFlagOnFocused(status, in: displayed)
             }
         }
         return .ignored

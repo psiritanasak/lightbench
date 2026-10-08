@@ -31,8 +31,7 @@ struct PointColorDetailView: View {
             Button(pointColor.hasTarget ? "Re-pick Color" : "Pick Color") {
                 onBeginColorPick?()
             }
-            .buttonStyle(.bordered)
-            .frame(maxWidth: .infinity)
+            .buttonStyle(FlatButtonStyle(fullWidth: true))
 
             if pointColor.hasTarget {
                 // Reconstructed from the 2 stored scalars via

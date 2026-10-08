@@ -27,10 +27,11 @@ struct DuplicatesSheetView: View {
                     ProgressView(value: Double(model.progress?.completed ?? 0), total: Double(max(model.progress?.total ?? 1, 1)))
                         .frame(maxWidth: 220)
                     Text("\(model.progress?.completed ?? 0) of \(model.progress?.total ?? 0)").font(.caption).monospacedDigit()
-                    Button("Cancel") { model.cancel() }
+                    Button("Cancel") { model.cancel() }.buttonStyle(.flat)
                 } else {
                     Button(model.hasScanned ? "Scan Again" : "Scan") { catalog.beginDuplicateScan() }
                         .keyboardShortcut(.defaultAction)
+                        .buttonStyle(FlatButtonStyle(prominent: true))
                 }
             }
 
@@ -52,12 +53,13 @@ struct DuplicatesSheetView: View {
                         Text("\(model.groups.count) group\(model.groups.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         Button("Reject All But Best (\(rejectCount))") { confirmAll = true }
+                            .buttonStyle(.flat)
                             .disabled(rejectCount == 0)
                     }
                 }
             }
 
-            HStack { Spacer(); Button("Done", action: onDone).keyboardShortcut(.cancelAction) }
+            HStack { Spacer(); Button("Done", action: onDone).keyboardShortcut(.cancelAction).buttonStyle(.flat) }
         }
         .padding(20)
         .frame(width: 640)
@@ -87,7 +89,7 @@ struct DuplicatesSheetView: View {
                 Text("\(group.photoIDs.count) photos").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Keep best, reject others") { reject(group.othersIDs) }
-                    .controlSize(.small)
+                    .buttonStyle(FlatButtonStyle(compact: true))
                     .disabled(model.rejectable(group.othersIDs).reject.isEmpty)
                     .accessibilityLabel("Keep best, reject others: \(label(group.kind)), best is \(model.photosByID[group.bestID]?.filename ?? "unknown")")
             }

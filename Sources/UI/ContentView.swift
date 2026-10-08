@@ -1721,8 +1721,7 @@ struct ContentView: View {
         if selectedTab == .crop {
             ToolbarItem(placement: .automatic) {
                 Button("Done") { selectedTab = .adjust }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.accent)
+                    .buttonStyle(FlatButtonStyle(prominent: true))
             }
         }
     }

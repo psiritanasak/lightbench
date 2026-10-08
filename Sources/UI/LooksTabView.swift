@@ -98,7 +98,7 @@ struct LooksTabView: View {
             Text("Reset Look & Style")
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.flat)
         .disabled(document.editState.isLookAndStyleAtIdentity)
     }
 
@@ -178,7 +178,7 @@ struct LooksTabView: View {
                 ) { String(format: "%.0f%%", $0 * 100) }
             }
             Button("Import .cube…") { importLookFile() }
-                .frame(maxWidth: .infinity)
+                .buttonStyle(FlatButtonStyle(fullWidth: true))
                 .accessibilityLabel("Import Look")
                 .alert(
                     "Import Look",
@@ -242,7 +242,7 @@ struct LooksTabView: View {
             Button("Save Preset…") {
                 isPresentingSaveAlert = true
             }
-            .frame(maxWidth: .infinity)
+            .buttonStyle(FlatButtonStyle(fullWidth: true))
             if catalog.presets.isEmpty {
                 Text("No saved presets yet")
                     .font(.caption)

@@ -60,8 +60,8 @@ struct StyleSectionView: View {
             protectSkinControls
             textureControls
             Button("Reset Style") { document.resetStyle() }
+                .buttonStyle(FlatButtonStyle(fullWidth: true))
                 .disabled(isAtIdentity)
-                .frame(maxWidth: .infinity)
         }
     }
 

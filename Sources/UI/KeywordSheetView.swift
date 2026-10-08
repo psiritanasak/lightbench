@@ -55,6 +55,7 @@ struct KeywordSheetView: View {
                     .accessibilityLabel("New keywords")
                     .onSubmit(commitInput)
                 Button("Add", action: commitInput)
+                    .buttonStyle(.flat)
                     .disabled(KeywordName.parse(input).isEmpty)
                     .accessibilityLabel("Add keywords")
             }
@@ -71,8 +72,7 @@ struct KeywordSheetView: View {
                         } label: {
                             Label(partial ? "\(keyword.name) (partial)" : keyword.name, systemImage: "xmark.circle.fill")
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        .buttonStyle(FlatButtonStyle(compact: true))
                         .accessibilityLabel("Remove keyword \(keyword.name)")
                     }
                 }
@@ -85,8 +85,7 @@ struct KeywordSheetView: View {
                         Button(keyword.name) {
                             if keyword.id != nil { catalog.addKeywords(keyword.name, to: photoIDs) }
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        .buttonStyle(FlatButtonStyle(compact: true))
                         .accessibilityLabel("Add existing keyword \(keyword.name)")
                     }
                 }
@@ -116,7 +115,7 @@ struct KeywordSheetView: View {
 
             HStack {
                 Spacer()
-                Button("Done", action: onDone).keyboardShortcut(.defaultAction)
+                Button("Done", action: onDone).keyboardShortcut(.defaultAction).buttonStyle(FlatButtonStyle(prominent: true))
             }
         }
         .padding(20)

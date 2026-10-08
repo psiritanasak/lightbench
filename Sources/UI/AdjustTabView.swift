@@ -347,7 +347,7 @@ struct AdjustTabView: View {
                 Label("Auto", systemImage: "wand.and.stars")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.flat)
             .disabled(document.currentImage == nil)
             .help("Automatically set Exposure, Contrast, Highlights, Shadows, Black Point and Vibrance")
             EditSliderRow(
@@ -476,6 +476,7 @@ struct AdjustTabView: View {
                     let binding = toneCurvePointsBinding(for: panel.selectedToneCurveChannel)
                     binding.wrappedValue = ToneCurveEditing.addingAtWidestGap(of: binding.wrappedValue)
                 }
+                .buttonStyle(FlatButtonStyle(fullWidth: true))
                 .disabled(!ToneCurveEditing.canAddAtWidestGap(to: activeToneCurvePoints))
                 Button("Delete Point") {
                     let binding = toneCurvePointsBinding(for: panel.selectedToneCurveChannel)
@@ -484,6 +485,7 @@ struct AdjustTabView: View {
                     binding.wrappedValue = ToneCurveEditing.removing(pointAt: index, in: binding.wrappedValue)
                     panel.selectedToneCurvePointIndex = nil
                 }
+                .buttonStyle(FlatButtonStyle(fullWidth: true))
                 .disabled(!canDeleteSelectedCurvePoint)
             }
             .frame(maxWidth: .infinity)
@@ -491,7 +493,7 @@ struct AdjustTabView: View {
                 document.resetToneCurve(panel.selectedToneCurveChannel)
                 panel.selectedToneCurvePointIndex = nil
             }
-            .frame(maxWidth: .infinity)
+            .buttonStyle(FlatButtonStyle(fullWidth: true))
             .disabled(activeToneCurvePoints.isEmpty)
         }
     }
@@ -568,8 +570,7 @@ struct AdjustTabView: View {
                 Label("Pick White Balance", systemImage: "eyedropper")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
-            .tint(interactionMode.isPickingWhiteBalance ? Theme.accent : nil)
+            .buttonStyle(FlatButtonStyle(isOn: interactionMode.isPickingWhiteBalance))
             .accessibilityAddTraits(interactionMode.isPickingWhiteBalance ? [.isSelected] : [])
             Button {
                 document.fixColorCast()
@@ -577,7 +578,7 @@ struct AdjustTabView: View {
                 Label("Fix Color Cast", systemImage: "wand.and.rays")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.flat)
             .disabled(document.currentImage == nil)
             EditSliderRow(
                 label: "Hue", value: $document.editState.hslHue,
@@ -656,7 +657,7 @@ struct AdjustTabView: View {
                 colorGradingSaturationBinding(for: panel.selectedColorGradingRange).wrappedValue = 0
                 colorGradingLuminanceBinding(for: panel.selectedColorGradingRange).wrappedValue = 0
             }
-            .frame(maxWidth: .infinity)
+            .buttonStyle(FlatButtonStyle(fullWidth: true))
             .disabled(isSelectedColorGradingRangeAtIdentity)
         }
     }
@@ -812,8 +813,7 @@ struct AdjustTabView: View {
                 Label("Fix Red-Eye", systemImage: "eye.trianglebadge.exclamationmark")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
-            .tint(interactionMode.isPlacingRedEyeCorrections ? Theme.accent : nil)
+            .buttonStyle(FlatButtonStyle(isOn: interactionMode.isPlacingRedEyeCorrections))
             .accessibilityAddTraits(interactionMode.isPlacingRedEyeCorrections ? [.isSelected] : [])
             EditSliderRow(
                 label: "Red-Eye Size", value: $document.editState.redEyeSize,
@@ -826,6 +826,7 @@ struct AdjustTabView: View {
             Button("Clear All Red-Eye Corrections") {
                 document.editState.redEyePoints.removeAll()
             }
+            .buttonStyle(.flat)
             .disabled(document.editState.redEyePoints.isEmpty)
         }
     }
@@ -900,24 +901,24 @@ struct AdjustTabView: View {
                     Button("Radial") {
                         addMask(kind: .radial)
                     }
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(FlatButtonStyle(fullWidth: true))
                     .accessibilityLabel("Add Radial Mask")
                     Button("Linear") {
                         addMask(kind: .linear)
                     }
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(FlatButtonStyle(fullWidth: true))
                     .accessibilityLabel("Add Linear Mask")
                 }
                 HStack {
                     Button("Brush") {
                         addMask(kind: .brush)
                     }
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(FlatButtonStyle(fullWidth: true))
                     .accessibilityLabel("Add Brush Mask")
                     Button("Luminance") {
                         addMask(kind: .luminanceRange)
                     }
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(FlatButtonStyle(fullWidth: true))
                     .accessibilityLabel("Add Luminance Range Mask")
                 }
                 // Phase 7 slice 5 second half: a third row, one new
@@ -931,12 +932,12 @@ struct AdjustTabView: View {
                     Button("Color") {
                         addMask(kind: .colorRange)
                     }
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(FlatButtonStyle(fullWidth: true))
                     .accessibilityLabel("Add Color Range Mask")
                     Button(document.isSelectingSubject ? "Finding…" : "Subject") {
                         addSubjectMask()
                     }
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(FlatButtonStyle(fullWidth: true))
                     .disabled(document.isSelectingSubject)
                     .accessibilityLabel("Add Subject Mask")
                     .accessibilityValue(document.isSelectingSubject ? "Finding subject" : "")
@@ -1230,7 +1231,7 @@ struct AdjustTabView: View {
             Button("Add Point Color") {
                 addPointColor()
             }
-            .frame(maxWidth: .infinity)
+            .buttonStyle(FlatButtonStyle(fullWidth: true))
             .disabled(document.currentImage == nil)
             if document.editState.pointColors.isEmpty {
                 Text("No point colors yet").font(.caption).foregroundStyle(.secondary)
@@ -1506,8 +1507,8 @@ struct AdjustTabView: View {
                 Label(interactionMode.isPlacingRetouchSpot ? "Stop Placing Spots" : "Place Spots", systemImage: "scope")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
-            .tint(interactionMode.isPlacingRetouchSpot ? Theme.accent : nil)
+            .buttonStyle(FlatButtonStyle(isOn: interactionMode.isPlacingRetouchSpot))
+            .accessibilityAddTraits(interactionMode.isPlacingRetouchSpot ? [.isSelected] : [])
             // Never greyed out while ARMED: an Undo/Redo can bring back non-identity geometry (the layer hides but the mode stays armed),
             // and this button is then the way to stop.
             .disabled((document.currentImage == nil || !identity) && !interactionMode.isPlacingRetouchSpot)
@@ -1521,7 +1522,7 @@ struct AdjustTabView: View {
             } label: {
                 Label("Add Spot", systemImage: "plus.circle").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.flat)
             .disabled(document.currentImage == nil || !identity || spots.count >= EditState.maxRetouchSpots)
             .accessibilityLabel("Add Spot")
             .alert(
@@ -1606,8 +1607,7 @@ struct AdjustTabView: View {
             label: "Source Y", value: binding.sourceDY, range: -1...1, identity: 0, displayMultiplier: 100
         ) { String(format: "%+.1f%%", $0 * 100) }
         Button("Find Source") { document.findRetouchSource(for: id) }
-            .buttonStyle(.bordered)
-            .frame(maxWidth: .infinity)
+            .buttonStyle(FlatButtonStyle(fullWidth: true))
             .accessibilityLabel("Find Source Automatically")
     }
 
@@ -1787,10 +1787,8 @@ struct AdjustTabView: View {
         } label: {
             Text("Reset Adjustments")
                 .frame(maxWidth: .infinity)
-                // White (primary) text; dimmed while there is nothing to reset.
-                .foregroundStyle(Color.primary.opacity(isAdjustTabAtIdentity ? 0.4 : 1))
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.flat)
         .disabled(isAdjustTabAtIdentity)
     }
 

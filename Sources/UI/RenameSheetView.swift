@@ -74,11 +74,12 @@ struct RenameSheetView: View {
                 if model.isWorking { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Cancel") { model.cancel() }
+                    .buttonStyle(.flat)
                     .keyboardShortcut(.cancelAction)
                     .disabled(model.isWorking)
                 Button("Rename") { model.apply() }
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(FlatButtonStyle(prominent: true))
                     .disabled(!model.canApply)
             }
         }

@@ -579,6 +579,7 @@ struct LibraryGridView: View {
             Button("Clear Filters") {
                 catalog.clearLibraryFilters()
             }
+            .buttonStyle(.flat)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

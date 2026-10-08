@@ -221,9 +221,8 @@ struct MaskDetailView: View {
             }
             if mask.subjectInstancePNGs.count > 1, let onTogglePickSubjects {
                 Button(isPickingSubjects ? "Done Picking" : "Pick on Image") { onTogglePickSubjects() }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
-                    .tint(isPickingSubjects ? Theme.accent : nil)
+                    .buttonStyle(FlatButtonStyle(isOn: isPickingSubjects, fullWidth: true))
+                    .accessibilityAddTraits(isPickingSubjects ? [.isSelected] : [])
                     .accessibilityLabel(isPickingSubjects ? "Finish Picking Subjects" : "Pick Subjects on the Photo")
                 if isPickingSubjects {
                     Text("Click a subject in the photo to include or exclude it. Red marks the subjects you have chosen. Esc or Done to finish.")
@@ -235,8 +234,7 @@ struct MaskDetailView: View {
             Button(isRecomputingSubject ? "Finding…" : "Recompute Subject") {
                 onRecomputeSubject?()
             }
-            .buttonStyle(.bordered)
-            .frame(maxWidth: .infinity)
+            .buttonStyle(FlatButtonStyle(fullWidth: true))
             .disabled(isRecomputingSubject)
             if !mask.hasStoredSubject {
                 Text("No subject stored for this mask.").font(.caption).foregroundStyle(.secondary)
@@ -330,8 +328,7 @@ struct MaskDetailView: View {
             Button(mask.brushPoints.isEmpty ? "Paint Stroke" : "Redraw Stroke") {
                 onBeginBrushStroke?()
             }
-            .buttonStyle(.bordered)
-            .frame(maxWidth: .infinity)
+            .buttonStyle(FlatButtonStyle(fullWidth: true))
             Text(mask.brushPoints.isEmpty ? "No stroke painted yet" : "\(mask.brushPoints.count) points painted")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -394,8 +391,7 @@ struct MaskDetailView: View {
             Button(mask.colorRangeHasTarget ? "Re-pick Color" : "Pick Color") {
                 onBeginColorPick?()
             }
-            .buttonStyle(.bordered)
-            .frame(maxWidth: .infinity)
+            .buttonStyle(FlatButtonStyle(fullWidth: true))
             if mask.colorRangeHasTarget {
                 let swatch = ColorRangeSelection.displaySRGB(
                     hue: mask.colorRangeTargetHue, saturation: mask.colorRangeTargetSaturation,

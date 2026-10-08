@@ -62,6 +62,7 @@ struct CropTabView: View {
             ) { String(format: "%.0f%%", $0 * 100) }
 
             Button("Reset") { onReset() }
+                .buttonStyle(.flat)
                 .disabled(document.currentImage == nil)
         }
     }

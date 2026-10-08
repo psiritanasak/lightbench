@@ -155,6 +155,7 @@ struct ExportOptionsView: View {
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
+                    .buttonStyle(.flat)
                 Button("Export") {
                     // `resized(_:option:)` also guards against a
                     // non-positive value, but clamping here too means an
@@ -176,7 +177,7 @@ struct ExportOptionsView: View {
                         onExport()
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(FlatButtonStyle(prominent: true))
                 .disabled(photoCount == 0 || (preview?.blocksExport ?? false))
             }
         }

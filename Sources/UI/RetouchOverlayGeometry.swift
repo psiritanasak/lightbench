@@ -130,4 +130,47 @@ enum RetouchOverlayGeometry {
     static func radius(afterHandleDragTo point: CGPoint, spot: RetouchSpot, fitRect: CGRect) -> Double? {
         radius(fromCenter: centerPoint(of: spot, in: fitRect), dragPoint: point, fitRect: fitRect)
     }
+
+    // MARK: - Zoomed view
+
+    /// Whether a press at `point` (pane coordinates) lands on the VISIBLE part of the picture: `pictureRect` is where the picture is
+    /// actually displayed (the zoomed rect when zoomed — `ZoomPanGeometry.displayedRect`), clipped to the pane. At fit size that is
+    /// the fit rect; zoomed it is the whole pane. A press outside the pane or on the letterbox never places a spot.
+    static func acceptsPress(at point: CGPoint, pictureRect: CGRect, paneSize: CGSize) -> Bool {
+        guard point.x.isFinite, point.y.isFinite, paneSize.width > 0, paneSize.height > 0 else { return false }
+        let visible = ZoomPanGeometry.visiblePictureRect(displayedRect: pictureRect, paneBounds: CGRect(origin: .zero, size: paneSize))
+        return !visible.isNull && visible.contains(point)
+    }
+
+    /// The picture rect remembered at the START of one press (see `recordPress`).
+    struct PressRecord: Equatable {
+        var start: CGPoint
+        var rect: CGRect
+    }
+
+    /// Records the picture rect for the press that began at `startLocation`: a record for the SAME start point is kept as is (even
+    /// if the view has zoomed or panned since — that is exactly what must be detected), anything else starts a new record with
+    /// `currentRect`. Keyed to the press's own start point, not to its movement, so moving back to the start point mid-press cannot
+    /// re-record the rect and hide a zoom.
+    static func recordPress(_ existing: PressRecord?, startLocation: CGPoint, currentRect: CGRect) -> PressRecord {
+        if let existing, existing.start == startLocation { return existing }
+        return PressRecord(start: startLocation, rect: currentRect)
+    }
+
+    /// A press measured against one picture rect must be committed against that SAME rect: if the view zoomed or panned during the
+    /// press (the scroll-wheel monitor fires mid-drag), the press points are in stale coordinates and the placement/selection is
+    /// dropped rather than put in the wrong spot. `pressRect == nil` (no change event was seen for this press) is VALID — nothing
+    /// is known to have moved, and dropping every plain click would be the worst way to fail.
+    static func isPlacementStillValid(pressRect: CGRect?, currentRect: CGRect) -> Bool {
+        guard let pressRect else { return true }
+        return pressRect == currentRect
+    }
+
+    /// Whether a handle centred at `point` (pane coordinates) is inside the pane and may take presses. `clipped()` only clips DRAWING,
+    /// not hit-testing, so a handle whose centre has been panned off the pane must be switched off explicitly or it could take
+    /// clicks meant for the tab bar or sidebar around the pane.
+    static func isInsidePane(_ point: CGPoint, paneSize: CGSize) -> Bool {
+        guard point.x.isFinite, point.y.isFinite, paneSize.width > 0, paneSize.height > 0 else { return false }
+        return CGRect(origin: .zero, size: paneSize).contains(point)
+    }
 }

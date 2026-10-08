@@ -2159,6 +2159,7 @@ struct ContentView: View {
         if showsRetouchSpots, let fitRect = currentFitRect {
             RetouchSpotsOverlay(
                 fitRect: fitRect,
+                paneSize: containerSize,
                 spots: document.editState.retouchSpots,
                 selectedID: isEditingRetouchSpot ? adjustPanel.selectedRetouchSpotID : nil,
                 isArmed: isPlacingRetouchSpot,
@@ -2174,7 +2175,7 @@ struct ContentView: View {
            let id = adjustPanel.selectedRetouchSpotID,
            let spotBinding = $document.editState.retouchSpot(id: id),
            let fitRect = currentFitRect {
-            RetouchOverlayView(fitRect: fitRect, spot: spotBinding, onRadiusCommitted: { adjustPanel.retouchNewSpotRadius = $0 })
+            RetouchOverlayView(fitRect: fitRect, paneSize: containerSize, spot: spotBinding, onRadiusCommitted: { adjustPanel.retouchNewSpotRadius = $0 })
         }
         // Phase 7 slice 5 (second half): the Color Range eyedropper's
         // tap-capture layer — mirrors the WB eyedropper's own capture

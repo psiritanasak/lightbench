@@ -9,7 +9,12 @@ import SwiftUI
 /// All the maths is `RetouchOverlayGeometry` (unit-tested); this view only wires gestures to it. `.accessibilityHidden(true)` is
 /// defensible only because every action here has a sidebar equivalent (Add Spot button, the spot rows, the detail sliders).
 struct RetouchSpotsOverlay: View {
+    /// Where the picture is DISPLAYED, in pane coordinates: the fit rect at fit size, the zoomed rect when zoomed (callers pass
+    /// `ZoomPanGeometry.displayedRect`). The name is historical; every `RetouchOverlayGeometry` call takes it as the picture's rect.
     let fitRect: CGRect
+    /// The pane's size: the layer clips itself to it (a zoomed picture's circles would otherwise draw over the tab bar and sidebar)
+    /// and accepts presses only on the visible part of the picture.
+    let paneSize: CGSize
     let spots: [RetouchSpot]
     let selectedID: UUID?
     let isArmed: Bool
@@ -23,6 +28,10 @@ struct RetouchSpotsOverlay: View {
     /// window or app switch), where `onEnded` never runs and a plain `@State` would leave a stale preview ring and a wrong drag origin.
     private struct Press: Equatable { var start: CGPoint; var current: CGPoint }
     @GestureState private var press: Press?
+    /// The picture rect at the START of the current press (`RetouchOverlayGeometry.recordPress`), to drop a placement or selection
+    /// if the view zoomed/panned mid-press. A plain `@State`: a cancelled gesture can leave it stale, and it is replaced when the next
+    /// press starts at a different point.
+    @State private var pressRecord: RetouchOverlayGeometry.PressRecord?
 
     var body: some View {
         ZStack {
@@ -41,12 +50,20 @@ struct RetouchSpotsOverlay: View {
                     .gesture(placeGesture)
             }
         }
+        // Clip to the PANE, anchored top-left inside whatever the parent offers (the pane size can lag a resize by one update; a plain
+        // fixed frame would be CENTRED in a mismatched parent and shift every ring).
+        .frame(width: paneSize.width, height: paneSize.height)
+        .clipped()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityHidden(true)
+        // A press cancelled by disarming (Escape mid-press) never reaches `onEnded`; drop its record so the next press cannot inherit it.
+        .onChange(of: isArmed) { _, _ in pressRecord = nil }
     }
 
     /// The circle a new spot would get if the pointer were released now (nil unless a press on empty picture is in progress).
     private var creationPreview: (center: CGPoint, radius: CGFloat)? {
-        guard let press, case let start = press.start, case let current = press.current, fitRect.contains(start),
+        guard let press, case let start = press.start, case let current = press.current,
+              RetouchOverlayGeometry.acceptsPress(at: start, pictureRect: fitRect, paneSize: paneSize),
               RetouchOverlayGeometry.hitTest(point: start, spots: spots, fitRect: fitRect) == nil,
               let r = RetouchOverlayGeometry.newSpotRadius(fromCenter: start, dragPoint: current, fitRect: fitRect, defaultRadius: defaultRadius)
         else { return nil }
@@ -67,13 +84,20 @@ struct RetouchSpotsOverlay: View {
             .updating($press) { value, state, _ in
                 state = Press(start: value.startLocation, current: value.location)
             }
+            .onChanged { value in
+                pressRecord = RetouchOverlayGeometry.recordPress(pressRecord, startLocation: value.startLocation, currentRect: fitRect)
+            }
             .onEnded { value in
+                let recorded = pressRecord?.rect
+                defer { pressRecord = nil }
+                // Stale coordinates (the view zoomed/panned during the press): neither select nor place.
+                guard RetouchOverlayGeometry.isPlacementStillValid(pressRect: recorded, currentRect: fitRect) else { return }
                 let start = value.startLocation, end = value.location
                 if let hit = RetouchOverlayGeometry.hitTest(point: start, spots: spots, fitRect: fitRect) {
                     onSelect(hit)
                     return
                 }
-                guard fitRect.contains(start),
+                guard RetouchOverlayGeometry.acceptsPress(at: start, pictureRect: fitRect, paneSize: paneSize),
                       let position = RetouchOverlayGeometry.normalizedPoint(from: start, in: fitRect),
                       let radius = RetouchOverlayGeometry.newSpotRadius(
                           fromCenter: start, dragPoint: end, fitRect: fitRect, defaultRadius: defaultRadius)

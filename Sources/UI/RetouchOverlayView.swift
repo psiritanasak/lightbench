@@ -6,11 +6,16 @@ import SwiftUI
 /// remember it).
 /// Shown only at identity geometry (`RetouchSpot` explains why) and only while the Remove section has a spot
 /// selected. Modelled on `MaskOverlayView`: one narrow `Binding<RetouchSpot>`, a snapshot baseline per drag,
-/// everything drawn directly in the parent's space (no enclosing frame) so circles near the edge still hit-test.
+/// everything drawn in the pane's space and CLIPPED to the pane (`paneSize`) — drawing only: a handle whose centre has been
+/// panned off the pane is also switched off for presses (`RetouchOverlayGeometry.isInsidePane`), since `clipped()` does not limit hit-testing.
 /// `.accessibilityHidden(true)` is defensible ONLY because the same values are AT-adjustable in the Remove
 /// section's labeled sliders (Size, Source X/Y) — a mouse-only surface otherwise.
 struct RetouchOverlayView: View {
+    /// Where the picture is DISPLAYED in pane coordinates (the zoomed rect when zoomed — callers pass `ZoomPanGeometry.displayedRect`;
+    /// see `RetouchSpotsOverlay.fitRect`).
     let fitRect: CGRect
+    /// The pane's size: the handles clip themselves to it so a zoomed picture's circles never draw over the tab bar or sidebar.
+    let paneSize: CGSize
     @Binding var spot: RetouchSpot
     /// Called once when a radius-handle drag ends, with the spot's new radius.
     var onRadiusCommitted: ((Double) -> Void)?
@@ -33,11 +38,18 @@ struct RetouchOverlayView: View {
                 .allowsHitTesting(false)
                 circle(at: source, radius: radius, dashed: true)
                     .gesture(sourceDrag)
+                    .allowsHitTesting(RetouchOverlayGeometry.isInsidePane(source, paneSize: paneSize))
                 circle(at: center, radius: radius, dashed: false)
                     .gesture(centerDrag)
+                    .allowsHitTesting(RetouchOverlayGeometry.isInsidePane(center, paneSize: paneSize))
                 radiusHandle(center: center, visibleRadius: radius)
                     .gesture(radiusDrag)
+                    .allowsHitTesting(RetouchOverlayGeometry.isInsidePane(
+                        CGPoint(x: center.x + radius, y: center.y), paneSize: paneSize))
             }
+            .frame(width: paneSize.width, height: paneSize.height)
+            .clipped()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .accessibilityHidden(true)
         }
     }

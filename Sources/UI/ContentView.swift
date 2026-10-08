@@ -131,7 +131,7 @@ struct ContentView: View {
     /// everything below uses it exactly as before, through the binding.
     @Binding var showLibrary: Bool
 
-    /// Which top-level editing tool is active — Apple Photos-style tab bar.
+    /// Which top-level editing tool is active — Apple Photos-style tool switcher (now the right-hand rail).
     /// Selecting `.crop` IS entering crop-editing mode (see `isCroppingActive`
     /// below); there's no separate in-sidebar toggle anymore.
     @State private var selectedTab: EditorTab = .adjust
@@ -436,17 +436,6 @@ struct ContentView: View {
     @State private var adjustPanel = AdjustPanelState()
     /// The Looks tab's thumbnail previews. Owned here, not by `LooksTabView`, which is torn down on every tab switch.
     @StateObject private var lookPreviews = LookPreviewModel()
-
-    /// The image pane's `EditorTabBar` row's actual rendered height,
-    /// measured live (not guessed) — see `editControls`'s top padding,
-    /// which uses this to match the sidebar's top clearance to it exactly.
-    /// Both `HSplitView` panes start at the SAME native y-offset below the
-    /// window's toolbar chrome (that chrome is outside the SwiftUI view
-    /// hierarchy entirely, applied uniformly to the whole window); the
-    /// image pane's real content only LOOKS lower because `EditorTabBar` is
-    /// prepended above it. A fixed guessed padding constant (tried twice)
-    /// undershot both times; measuring the real value is the actual fix.
-    @State private var tabBarHeight: CGFloat = 44
 
     /// The on-screen rect the image currently occupies, fit against the
     /// ACTUAL displayed extent (post-straighten/perspective, crop-zeroed) —
@@ -1949,12 +1938,16 @@ struct ContentView: View {
     /// D1(b) added the filmstrip below it, just extracted so `editorContent`
     /// can wrap it in a `VStack` alongside `EditorFilmstripView`.
     private var editorSplitView: some View {
+        HStack(spacing: 0) {
+            editorPanes
+            EditorToolRail(selectedTab: $selectedTab)
+        }
+    }
+
+    /// The image pane and the control sidebar (the rail sits beside them, outside the split view).
+    private var editorPanes: some View {
         HSplitView {
             VStack(spacing: 0) {
-                EditorTabBar(selectedTab: $selectedTab)
-                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { newHeight in
-                        tabBarHeight = newHeight
-                    }
                 GeometryReader { proxy in
                     ZStack {
                         MetalImageView(
@@ -2495,15 +2488,9 @@ struct ContentView: View {
             }
             .padding(.horizontal)
             .padding(.bottom)
-            // Both `HSplitView` panes start at the SAME native y-offset
-            // below the window's toolbar chrome — the image pane's content
-            // only sits lower because `EditorTabBar` is prepended above it.
-            // Match that exactly via the MEASURED `tabBarHeight` (see its
-            // own doc comment) rather than a guessed constant — a guessed
-            // constant (20) undershot in practice, since what's actually
-            // needed is the tab bar's own real height, not an arbitrary
-            // buffer.
-            .padding(.top, tabBarHeight)
+            // Both `HSplitView` panes start at the SAME native y-offset below the window's toolbar chrome; a small fixed top
+            // clearance (there is no tab bar above the photo any more, so nothing needs measuring to line the two up).
+            .padding(.top, 12)
             // Belt-and-suspenders: guarantees this content block always
             // fills the full width the ScrollView offers.
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2512,8 +2499,7 @@ struct ContentView: View {
         // starting scrolled a row past the top on appear — "Temperature"
         // existed and was correctly laid out, just not visible until
         // scrolled up manually. Not a padding/spacing problem at all (the
-        // `tabBarHeight`-matched top padding above is a real, separate,
-        // correct visual-alignment choice, but it wasn't THIS bug's fix).
+        // top padding above is a separate visual-alignment choice, not THIS bug's fix).
         // `.defaultScrollAnchor(.top)` pins the initial/default scroll
         // position to the top explicitly, overriding whatever implicit
         // macOS focus-driven auto-scroll was otherwise moving it.

@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import PhotoApp
 
@@ -32,5 +33,27 @@ final class EditorTabTests: XCTestCase {
         XCTAssertTrue(panel.isStyleSectionExpanded)
         XCTAssertFalse(panel.isPresetsSectionExpanded)
         XCTAssertFalse(panel.isLightSectionExpanded)
+    }
+
+    // MARK: - Tool rail
+
+    func testRailShowsEditLooksCropInOrderAndNotTheInertCleanUp() {
+        XCTAssertEqual(EditorTab.railTabs, [.adjust, .looks, .crop])
+        XCTAssertEqual(EditorTab.railTabs.map(\.railTitle), ["Edit", "Looks", "Crop"])
+        XCTAssertFalse(EditorTab.railTabs.contains(.cleanUp))
+    }
+
+    func testRailSymbolsAreDistinctAndRealSystemSymbols() {
+        let symbols = EditorTab.allCases.map(\.railSymbol)
+        XCTAssertEqual(Set(symbols).count, symbols.count, "each tab needs its own icon")
+        for symbol in symbols {
+            XCTAssertNotNil(NSImage(systemSymbolName: symbol, accessibilityDescription: nil), symbol)
+        }
+    }
+
+    /// The rail is a pure relocation: the tab's own label and every tab-change rule are untouched.
+    func testRailTitlesDoNotReplaceTheTabLabels() {
+        XCTAssertEqual(EditorTab.adjust.label, "Adjust")
+        XCTAssertEqual(EditorTab.adjust.railTitle, "Edit")
     }
 }

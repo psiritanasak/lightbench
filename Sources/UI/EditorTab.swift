@@ -23,4 +23,30 @@ enum EditorTab: CaseIterable {
     /// the mask / Point Color / retouch selections. Only Adjust has controls for those, so every other tab disarms them —
     /// otherwise their overlays would stay live on a tab with no way to turn them off.
     var disarmsPointModes: Bool { self != .adjust }
+
+    // MARK: - Tool rail
+
+    /// The tabs the right-hand tool rail shows, top to bottom. `.cleanUp` is an inert placeholder with nothing to show, so it has
+    /// no rail entry (the case stays so existing switch statements keep compiling).
+    static let railTabs: [EditorTab] = [.adjust, .looks, .crop]
+
+    /// The rail's caption ("Edit" for Adjust, as the rail names its tools by what you do).
+    var railTitle: String {
+        switch self {
+        case .adjust: return "Edit"
+        case .looks: return "Looks"
+        case .crop: return "Crop"
+        case .cleanUp: return "Clean Up"
+        }
+    }
+
+    /// The rail's SF Symbol.
+    var railSymbol: String {
+        switch self {
+        case .adjust: return "slider.horizontal.3"
+        case .looks: return "camera.filters"
+        case .crop: return "crop"
+        case .cleanUp: return "sparkles"
+        }
+    }
 }

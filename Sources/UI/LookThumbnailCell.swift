@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// One cell of the Looks tab's grids: the photo with a Look or Style applied (or a neutral placeholder until its preview is
-/// ready), the name underneath, an accent ring when it is the current choice. Presentation only — the caller supplies the
+/// ready), the name underneath, a white ring when it is the current choice. Presentation only — the caller supplies the
 /// image and the action (`selectLook` / `ImageDocumentModel.selectStyle`).
 struct LookThumbnailCell: View {
     let name: String
@@ -28,7 +28,7 @@ struct LookThumbnailCell: View {
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(isSelected ? Theme.accent : Color.clear, lineWidth: 2))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(isSelected ? Theme.selectedOutline : Color.clear, lineWidth: 2))
                 Text(name)
                     .font(.caption2)
                     .lineLimit(1)

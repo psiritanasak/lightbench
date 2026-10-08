@@ -203,24 +203,19 @@ struct ToneCurveEditorView: View {
         return path
     }
 
-    /// Deliberately NOT tinted by `channel` (unlike the curve stroke and
-    /// histogram backdrop) — handle color here encodes SELECTION
-    /// (`Theme.accent` when selected, `.white` otherwise), and
-    /// overloading it with channel identity too would leave nothing left
-    /// to show selection with. It would also actively hurt legibility in
-    /// the one case it would matter most: `Theme.accent` (this app's
-    /// own blue accent) over a pure-blue curve stroke and blue
-    /// histogram overlay is the worst-contrast combination this feature
-    /// has. The channel is already unambiguous from the picker, the curve
-    /// stroke, the histogram tint, and the accessibility label — a fifth,
-    /// redundant signal here would cost contrast for no new information.
+    /// Deliberately NOT tinted by `channel` (unlike the curve stroke and histogram backdrop) — handle color here encodes SELECTION
+    /// (solid white when selected, translucent white otherwise; the size also differs), and overloading it with channel identity too
+    /// would leave nothing left to show selection with. It would also actively hurt legibility in the one case it would matter most: a
+    /// coloured handle over a pure-blue curve stroke and blue histogram overlay is the worst-contrast combination this feature can
+    /// have. The channel is already unambiguous from the picker, the curve stroke, the histogram tint, and the accessibility label — a
+    /// fifth, redundant signal here would cost contrast for no new information.
     private func handles(plotRect: CGRect) -> some View {
         ZStack {
             ForEach(Array(points.enumerated()), id: \.offset) { index, point in
                 let isSelected = index == validatedSelection
                 let diameter: CGFloat = isSelected ? 12 : 8
                 Circle()
-                    .fill(isSelected ? Theme.accent : Color.white)
+                    .fill(isSelected ? Color.white : Color.white.opacity(0.55))
                     .frame(width: diameter, height: diameter)
                     .overlay(Circle().stroke(Color.black.opacity(0.6), lineWidth: 1))
                     .position(ToneCurveEditing.screenPoint(point, in: plotRect))

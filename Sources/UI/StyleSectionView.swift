@@ -150,8 +150,8 @@ struct StyleSectionView: View {
             Text(name).font(.callout).lineLimit(1).frame(maxWidth: .infinity).padding(.vertical, 5)
         }
         .buttonStyle(.plain)
-        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.accent.opacity(0.35) : Color.primary.opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Theme.accent : Color.clear, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Color(white: 0.32) : Color.primary.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Theme.selectedOutline : Color.clear, lineWidth: 1))
         .fontWeight(selected ? .semibold : .regular)
         .accessibilityLabel(label)
         .accessibilityAddTraits(selected ? .isSelected : [])

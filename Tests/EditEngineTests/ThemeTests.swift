@@ -110,7 +110,7 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(bluePixels(rep, in: CGRect(x: 440, y: 0, width: 160, height: 36), width: size.width), 0, "Copy Settings text/icon")
     }
 
-    func testIdleCompareEntryIsNotBlueButTheActiveOneIs() throws {
+    func testNeitherIdleNorActiveCompareEntryIsBlueButActiveIsWhite() throws {
         let size = CGSize(width: EditorToolRailMetrics.width, height: 7 * 42)
         func entry(compare: CompareViewMode) -> NSBitmapImageRep {
             render(EditorRailActions(document: ImageDocumentModel(), compareMode: .constant(compare), splitOrientation: .constant(.vertical),
@@ -119,7 +119,20 @@ final class ThemeTests: XCTestCase {
         }
         let band = CGRect(x: 0, y: 4 * 42, width: size.width, height: 36)
         XCTAssertEqual(bluePixels(entry(compare: .off), in: band, width: size.width), 0, "idle Compare icon is not blue")
-        XCTAssertGreaterThan(bluePixels(entry(compare: .split), in: band, width: size.width), 10, "active Compare icon is the accent")
+        XCTAssertEqual(bluePixels(entry(compare: .split), in: band, width: size.width), 0, "active Compare icon is not blue either")
+        // …and it is a CHIP: a point inside the cell but outside the glyph is `Theme.selectedFill` when active, not when idle.
+        let on = entry(compare: .split), off = entry(compare: .off)
+        let spot = CGPoint(x: 8, y: band.minY + 18)
+        func at(_ rep: NSBitmapImageRep) throws -> NSColor {
+            let scale = CGFloat(rep.pixelsWide) / size.width
+            return try XCTUnwrap(rep.colorAt(x: Int(spot.x * scale), y: Int(spot.y * scale))?.usingColorSpace(.sRGB))
+        }
+        let onColour = try at(on), offColour = try at(off)
+        // The pipeline shifts dark greys, so the expectation is a plain `selectedFill` rectangle rendered the same way.
+        let want = try at(render(Theme.selectedFill, size: size))
+        XCTAssertGreaterThan(onColour.alphaComponent, 0.9, "the chip is drawn")
+        XCTAssertGreaterThan(onColour.redComponent, offColour.redComponent * offColour.alphaComponent + 0.05, "brighter than idle")
+        XCTAssertEqual(onColour.redComponent, want.redComponent, accuracy: 0.05, "the chip colour is selectedFill")
     }
 
     // MARK: No translucent materials left
@@ -142,6 +155,25 @@ final class ThemeTests: XCTestCase {
                 let code = line.components(separatedBy: "//").first ?? ""
                 for word in banned where code.contains(word) {
                     XCTFail("\(file.lastPathComponent):\(number + 1) uses \(word) — use Theme.panel / solidPanel / Theme.accent instead")
+                }
+            }
+        }
+    }
+
+    /// Selected / current marks are never blue: the accent is for the primary action of a bar or sheet only (`FlatButtonStyle(prominent:)`),
+    /// so it may be named only in the token file and the button style (plus `PhotoAppApp`, which is outside `Sources/UI` and sets the root `.tint`).
+    func testTheAccentIsOnlyUsedByTheTokenFileAndTheButtonStyle() throws {
+        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/UI")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        let allowed: Set<String> = ["Theme.swift", "FlatButtonStyle.swift"]
+        for file in files where !allowed.contains(file.lastPathComponent) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (number, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                let code = line.components(separatedBy: "//").first ?? ""
+                if code.contains("Theme.accent") {
+                    XCTFail("\(file.lastPathComponent):\(number + 1) uses Theme.accent — a selected/current mark is Theme.selectedFill / selectedOutline")
                 }
             }
         }

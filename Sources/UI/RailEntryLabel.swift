@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// One rail entry's face: an SF Symbol, with a small caption under it unless `showsTitle` is false. The tab entries show the caption;
-/// the action entries are icon-only. Shared so both groups are drawn by the same code. `isOn` = the accent-tinted "selected /
-/// active" state (the current tab, History open, Compare active, Filmstrip visible); `isEnabled == false` dims it. Drawing only —
-/// the caller owns the button / menu around it.
+/// One rail entry's face: an SF Symbol, with a small caption under it unless `showsTitle` is false. The tab entries show the
+/// caption; the action entries are icon-only. Shared so both groups are drawn by the same code. `isOn` is the quiet "selected /
+/// active" state (the current tab, History open, Compare active, Filmstrip visible): a white icon on a grey chip, never blue.
+/// `isEnabled == false` dims it. Drawing only — the caller owns the button / menu around it.
 struct RailEntryLabel: View {
     let title: String
     let symbol: String
@@ -21,7 +21,7 @@ struct RailEntryLabel: View {
         // Dimmed through the COLOUR, not `.opacity`: a `Menu` draws its label itself and ignores an opacity set on it, but it follows
         // the foreground colour (this is what makes a disabled Compare entry look disabled like the others).
         .foregroundStyle(Self.color(isOn: isOn, isEnabled: isEnabled))
-        .background(RoundedRectangle(cornerRadius: 8).fill(isOn ? Theme.accent.opacity(isEnabled ? 0.18 : 0.06) : Color.clear))
+        .background(RoundedRectangle(cornerRadius: 8).fill(isOn ? Theme.selectedFill.opacity(isEnabled ? 1 : 0.4) : Color.clear))
         .contentShape(RoundedRectangle(cornerRadius: 8))
     }
 
@@ -29,10 +29,10 @@ struct RailEntryLabel: View {
     /// The cell height without a caption.
     static let iconOnlyHeight: CGFloat = 36
 
-    /// Dimmed through the COLOUR (a disabled `Menu` label ignores `.opacity`). Enabled entries use the plain `Theme.accent` /
+    /// Dimmed through the COLOUR (a disabled `Menu` label ignores `.opacity`). Enabled entries use plain white (on) /
     /// `Color.secondary` values; only a disabled entry gets a dimmed copy.
     static func color(isOn: Bool, isEnabled: Bool) -> Color {
-        let base = isOn ? Theme.accent : Color.secondary
+        let base = isOn ? Color.white : Color.secondary
         return isEnabled ? base : base.opacity(0.35)
     }
 }

@@ -67,7 +67,7 @@ struct EditorRailActions: View {
             RailEntryLabel(title: "Compare", symbol: Symbol.compare, isOn: compareMode != .off, isEnabled: canCompare, showsTitle: false)
         }
         // `.button` + `.plain` so the label is drawn like the other entries' plain buttons; the tint keeps the root accent from colouring
-        // the idle state (it was blue all the time) — grey like its neighbours, the accent only while Compare is on.
+        // the idle state (it was blue all the time) — grey like its neighbours, a white icon on a grey chip only while Compare is on.
         .menuStyle(.button)
         .buttonStyle(.plain)
         .tint(RailEntryLabel.color(isOn: compareMode != .off, isEnabled: canCompare))

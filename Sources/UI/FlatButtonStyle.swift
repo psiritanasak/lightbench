@@ -15,13 +15,13 @@ struct FlatButtonStyle: ButtonStyle {
     /// The chip's fill; pure so the colours can be tested. Pressed = one step lighter (a prominent button, slightly translucent).
     static func fill(isOn: Bool, prominent: Bool, pressed: Bool) -> Color {
         if prominent { return pressed ? Theme.accent.opacity(0.8) : Theme.accent }
-        if isOn { return pressed ? Theme.accent.opacity(0.35) : Theme.accent.opacity(0.22) }
+        if isOn { return pressed ? Color(white: 0.32) : Color(white: 0.27) }
         return pressed ? Color(white: 0.23) : Theme.raised
     }
 
     static func outline(isOn: Bool, prominent: Bool) -> Color {
         if prominent { return .clear }
-        return isOn ? Theme.accent : Theme.hairline
+        return isOn ? Theme.selectedOutline : Theme.hairline
     }
 
     func makeBody(configuration: Configuration) -> some View {

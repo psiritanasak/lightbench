@@ -124,14 +124,14 @@ private struct FilmstripCell: View {
         .clipped()
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .stroke(Theme.accent, lineWidth: isCurrent ? 2 : 0)
+                .stroke(Theme.selectedOutline, lineWidth: isCurrent ? 2 : 0)
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         // D6 (IMPROVEMENTS.md): same gap as `LibraryThumbnailCell` — an
         // `.onTapGesture` on a plain view isn't AT-actionable, the
         // thumbnail is `Image(decorative:)` (deliberately silent), and
-        // "current photo" is an accent-color stroke only. `children:
+        // "current photo" is a white ring only. `children:
         // .ignore` (not `.contain`) since this cell, unlike the Library
         // grid's, has no child controls of its own to preserve.
         .accessibilityElement(children: .ignore)

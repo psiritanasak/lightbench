@@ -10,11 +10,11 @@ final class FlatButtonStyleTests: XCTestCase {
     func testFillAndOutlineRules() {
         XCTAssertEqual(FlatButtonStyle.fill(isOn: false, prominent: false, pressed: false), Theme.raised)
         XCTAssertEqual(FlatButtonStyle.fill(isOn: false, prominent: false, pressed: true), Color(white: 0.23))
-        XCTAssertEqual(FlatButtonStyle.fill(isOn: true, prominent: false, pressed: false), Theme.accent.opacity(0.22))
+        XCTAssertEqual(FlatButtonStyle.fill(isOn: true, prominent: false, pressed: false), Color(white: 0.27), "armed = a lighter grey chip, never blue")
         XCTAssertEqual(FlatButtonStyle.fill(isOn: false, prominent: true, pressed: false), Theme.accent)
         XCTAssertEqual(FlatButtonStyle.fill(isOn: true, prominent: true, pressed: false), Theme.accent, "prominent wins over on")
         XCTAssertEqual(FlatButtonStyle.outline(isOn: false, prominent: false), Theme.hairline)
-        XCTAssertEqual(FlatButtonStyle.outline(isOn: true, prominent: false), Theme.accent)
+        XCTAssertEqual(FlatButtonStyle.outline(isOn: true, prominent: false), Theme.selectedOutline)
         XCTAssertEqual(FlatButtonStyle.outline(isOn: false, prominent: true), Color.clear)
     }
 
@@ -68,11 +68,13 @@ final class FlatButtonStyleTests: XCTestCase {
         XCTAssertEqual(count(rep) { $0.blueComponent > 0.45 && $0.blueComponent > $0.redComponent + 0.25 }, 0, "no blue anywhere")
     }
 
-    func testAnArmedButtonIsTintedWithTheAccent() throws {
-        let normal = try sample(button(FlatButtonStyle(fullWidth: true)))
-        let armed = try sample(button(FlatButtonStyle(isOn: true, fullWidth: true)))
-        XCTAssertGreaterThan(armed.blueComponent - armed.redComponent, normal.blueComponent - normal.redComponent + 0.05,
-                             "armed is bluer than normal")
+    func testAnArmedButtonIsALighterGreyAndNeverBlue() throws {
+        let normalRep = button(FlatButtonStyle(fullWidth: true))
+        let armedRep = button(FlatButtonStyle(isOn: true, fullWidth: true))
+        let normal = try sample(normalRep), armed = try sample(armedRep)
+        XCTAssertGreaterThan(armed.redComponent, normal.redComponent + 0.05, "armed chip is lighter than normal")
+        XCTAssertEqual(armed.blueComponent - armed.redComponent, 0, accuracy: 0.03, "grey, not tinted")
+        XCTAssertEqual(count(armedRep) { $0.blueComponent > $0.redComponent + 0.15 }, 0, "no blue anywhere")
     }
 
     func testAProminentButtonIsSolidAccentBlue() throws {

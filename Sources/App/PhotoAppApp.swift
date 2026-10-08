@@ -46,6 +46,9 @@ struct PhotoAppApp: App {
                 document: document, catalog: catalog, pasteModel: pasteModel, renameModel: renameModel,
                 showLibrary: $showLibrary
             )
+            // Flat window buttons instead of the system's glass ones (see `WindowChrome.swift`). To go back to the system buttons,
+            // delete this one line.
+            .background(WindowChromeInstaller())
         }
         .commands {
             // Replaces macOS's default (inert) Edit > Undo/Redo items —

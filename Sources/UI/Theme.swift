@@ -11,8 +11,15 @@ enum Theme {
     static let raised = Color(white: 0.17)
     /// A faint outline for `raised` surfaces.
     static let hairline = Color(white: 1, opacity: 0.10)
-    /// The single accent (#0165DD): the selected tool, the armed tool, the current item, prominent buttons.
+    /// The single accent (#0165DD). Used ONLY for the primary action of a sheet or bar (`FlatButtonStyle(prominent:)`): a SELECTED or
+    /// CURRENT mark is never blue — it is the soft grey chip (`selectedFill`) or a white outline (`selectedOutline`).
     static let accent = Color(red: 0.004, green: 0.396, blue: 0.867)
+    /// The selected / current chip: the raised grey, one step lighter than the panel it sits on.
+    static let selectedFill = raised
+    /// A white outline for selected / current marks over photos or where a fill alone is too subtle (armed buttons, rings).
+    static let selectedOutline = Color(white: 1, opacity: 0.55)
+    /// A fainter chip for the row under the pointer.
+    static let hoverFill = Color(white: 1, opacity: 0.05)
 }
 
 extension View {
@@ -20,5 +27,12 @@ extension View {
     func solidPanel(cornerRadius: CGFloat) -> some View {
         background(RoundedRectangle(cornerRadius: cornerRadius).fill(Theme.raised))
             .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Theme.hairline, lineWidth: 1))
+    }
+}
+
+extension View {
+    /// The quiet selection mark: a soft grey rounded chip behind the content when selected (nothing otherwise).
+    func selectionChip(isSelected: Bool, isHovered: Bool = false, cornerRadius: CGFloat = 6) -> some View {
+        background(RoundedRectangle(cornerRadius: cornerRadius).fill(isSelected ? Theme.selectedFill : (isHovered ? Theme.hoverFill : Color.clear)))
     }
 }

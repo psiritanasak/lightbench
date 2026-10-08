@@ -1,13 +1,10 @@
 import SwiftUI
 
-/// The Library's left sidebar — Phase 4 slice 4, the first `List` in this
-/// app. Lists "All Photos", a "Collections" section (flat, user-created
-/// `PhotoCollection`s), and — for folder-mirrored nested collections — a
-/// "Folders" section showing the recursive on-disk tree via
-/// `OutlineGroup` (this file's `FolderTreeNode`/`buildFolderTree`, built
-/// client-side from the same flat `catalog.collections` array; no
-/// separate published tree state on `CatalogModel`). Every row, at any
-/// depth, is bound the same way: `catalog.selectedFilter`;
+/// The Library's left sidebar. Lists "All Photos", a "Collections" section (flat, user-created `PhotoCollection`s), "Smart
+/// Collections", and — for folder-mirrored nested collections — a "Folders" section showing the recursive on-disk tree. It draws its
+/// OWN rows (`SidebarRows` is the pure, ordered row list) instead of using a system `List`, because the system's selection highlight
+/// is the accent blue and cannot be restyled: the selected row is a soft grey chip (`Theme.selectedFill`). Every row, at any depth,
+/// is bound the same way: `catalog.selectedFilter`;
 /// `CatalogModel.refresh()` re-filters `photos` whenever that selection
 /// changes. Creating a (manual) collection is a simple name-entry
 /// `.alert`, matching this app's existing alert-based prompt pattern
@@ -44,127 +41,50 @@ struct CollectionSidebarView: View {
     @State private var smartRenameText = ""
     @State private var smartPendingDeletion: SmartCollection?
 
-    /// `List(selection:)` only accepts an Optional-wrapped selection
-    /// binding (it needs to represent "nothing selected"), even though
-    /// `catalog.selectedFilter` itself is deliberately non-optional (see
-    /// `LibraryFilter`'s own doc comment for why). This coerces the rare
-    /// "deselected" case back to `.allPhotos` rather than ever letting
-    /// `catalog.selectedFilter` observe a real `nil` — every row's own
-    /// `.tag(...)` below is still a concrete, non-optional `LibraryFilter`
-    /// value, which is what actually avoids the live-discovered bug.
-    private var selection: Binding<LibraryFilter?> {
-        Binding(
-            get: { catalog.selectedFilter },
-            set: { catalog.selectedFilter = $0 ?? .allPhotos }
-        )
-    }
-
-    /// A section header in the Adjust panel's quiet style (small, uppercase, secondary) — a plain list would otherwise draw bold ones.
+    /// A section header in the Adjust panel's quiet style (small, uppercase, secondary).
     private static func header(_ title: String) -> some View {
         Text(title).font(.caption).textCase(.uppercase).foregroundStyle(.secondary)
     }
 
+    /// Folders whose children are shown. Collapsed by default, like the old `OutlineGroup`.
+    @State private var expandedFolders: Set<Int64> = []
+    @State private var hoveredRowID: String?
+    @FocusState private var isFocused: Bool
+
+    private var rows: [SidebarRow] {
+        SidebarRows.rows(collections: catalog.collections, smartCollections: catalog.smartCollections, expandedFolders: expandedFolders)
+    }
+
     var body: some View {
-        List(selection: selection) {
-            // No hairline between rows anywhere in this list. `.listRowSeparator(.hidden)` must sit on EACH ROW — on the `List` itself it
-            // did nothing (measured: the separators were still drawn).
-            Text("All Photos").tag(LibraryFilter.allPhotos)
-                .listRowSeparator(.hidden)
-
-            Section(header: Self.header("Collections")) {
-                ForEach(catalog.collections.filter { !$0.isFolder }) { collection in
-                    if let id = collection.id {
-                        Text(collection.name)
-                            .tag(LibraryFilter.collection(id))
-                            .listRowSeparator(.hidden)
-                            .contextMenu {
-                                Button("Rename…") {
-                                    renameText = collection.name
-                                    collectionPendingRename = collection
-                                }
-                                Button(role: .destructive) {
-                                    collectionPendingDeletion = collection
-                                } label: {
-                                    // `role: .destructive` alone doesn't
-                                    // render red text on a macOS context
-                                    // menu item — the same live-caught
-                                    // lesson already documented at
-                                    // `LibraryGridView`'s own destructive
-                                    // menu item.
-                                    Label {
-                                        Text("Delete")
-                                            .foregroundStyle(.red)
-                                    } icon: {
-                                        Image(systemName: "trash")
-                                            .foregroundStyle(.red)
-                                    }
-                                }
-                            }
-                    }
-                }
-                Button("New Collection…") {
-                    newCollectionName = ""
-                    isPresentingNewCollection = true
-                }
-                .buttonStyle(.plain)
-                .listRowSeparator(.hidden)
-                .foregroundStyle(.secondary)
+        let rows = rows
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 1) {
+                ForEach(rows) { row in rowView(row) }
             }
-
-            Section(header: Self.header("Smart Collections")) {
-                ForEach(catalog.smartCollections) { smart in
-                    if let id = smart.id {
-                        Text(smart.name)
-                            .tag(LibraryFilter.smartCollection(id))
-                            .listRowSeparator(.hidden)
-                            .contextMenu {
-                                Button("Rename…") {
-                                    smartRenameText = smart.name
-                                    smartPendingRename = smart
-                                }
-                                Button("Update from Current Filters") {
-                                    Task { await catalog.updateSmartCollectionFromFilters(smart) }
-                                }
-                                .disabled(!catalog.hasSaveableFilterCriteria)
-                                Button(role: .destructive) {
-                                    smartPendingDeletion = smart
-                                } label: {
-                                    Label {
-                                        Text("Delete").foregroundStyle(.red)
-                                    } icon: {
-                                        Image(systemName: "trash").foregroundStyle(.red)
-                                    }
-                                }
-                            }
-                    }
-                }
-                Button("Save Current Filters…") {
-                    newSmartName = ""
-                    isPresentingNewSmart = true
-                }
-                .buttonStyle(.plain)
-                .listRowSeparator(.hidden)
-                .foregroundStyle(.secondary)
-                .disabled(!catalog.hasSaveableFilterCriteria)
-                .help("Save the rating, flag, label and keyword filters as a smart collection over the whole catalog (search text is not saved)")
-            }
-
-            let folderRoots = Self.buildFolderTree(from: catalog.collections)
-            if !folderRoots.isEmpty {
-                Section(header: Self.header("Folders")) {
-                    OutlineGroup(folderRoots, children: \.children) { node in
-                        if let id = node.collection.id {
-                            Text(node.collection.name).tag(LibraryFilter.collection(id))
-                                .listRowSeparator(.hidden)
-                        }
-                    }
-                }
-            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
         }
-        // Solid like the Editor's Adjust panel: `.sidebar` is what draws the system's translucent sidebar material.
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
+        // Solid like the Editor's Adjust panel (no system sidebar material).
         .background(Theme.panel)
+        // Keyboard: Up / Down move the selection, Right / Left expand / collapse a folder (the system List did this for us).
+        .focusable()
+        .focused($isFocused)
+        .focusEffectDisabled()
+        .onKeyPress(.upArrow) { catalog.selectedFilter = SidebarRows.moved(from: catalog.selectedFilter, by: -1, in: rows); return .handled }
+        .onKeyPress(.downArrow) { catalog.selectedFilter = SidebarRows.moved(from: catalog.selectedFilter, by: 1, in: rows); return .handled }
+        .onKeyPress(.rightArrow) {
+            expandedFolders = SidebarRows.expanding(catalog.selectedFilter, expanded: expandedFolders, in: rows)
+            return .handled
+        }
+        .onKeyPress(.leftArrow) {
+            let result = SidebarRows.collapsing(catalog.selectedFilter, expanded: expandedFolders, in: rows)
+            expandedFolders = result.expanded
+            catalog.selectedFilter = result.selection
+            return .handled
+        }
+        .onChange(of: catalog.collections) { _, collections in
+            expandedFolders = SidebarRows.pruned(expandedFolders, collections: collections)
+        }
         .alert("New Collection", isPresented: $isPresentingNewCollection) {
             TextField("Name", text: $newCollectionName)
             Button("Create") {
@@ -250,34 +170,154 @@ struct CollectionSidebarView: View {
         }
     }
 
-    /// Builds the `OutlineGroup`-ready tree from `catalog.collections`'
-    /// `isFolder`/`parentId` fields, keeping `CatalogModel` itself free of
-    /// any tree-shaped state — it only ever needs to publish a flat array.
-    private static func buildFolderTree(from collections: [PhotoCollection]) -> [FolderTreeNode] {
-        let folders = collections.filter(\.isFolder)
-        let byParent = Dictionary(grouping: folders, by: \.parentId)
-        func node(for collection: PhotoCollection) -> FolderTreeNode {
-            let childCollections = (byParent[collection.id] ?? []).sorted { $0.name < $1.name }
-            return FolderTreeNode(collection: collection, rawChildren: childCollections.map(node(for:)))
+    // MARK: Rows
+
+    @ViewBuilder
+    private func rowView(_ row: SidebarRow) -> some View {
+        switch row.kind {
+        case .header:
+            Self.header(row.title)
+                .padding(.horizontal, 8)
+                .padding(.top, 10)
+                .padding(.bottom, 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .action:
+            Button(row.title) { perform(row.action) }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .disabled(row.action == .saveFilters && !catalog.hasSaveableFilterCriteria)
+                .help(row.action == .saveFilters
+                      ? "Save the rating, flag, label and keyword filters as a smart collection over the whole catalog (search text is not saved)"
+                      : "")
+        case .item:
+            itemRow(row)
         }
-        return (byParent[nil] ?? []).sorted { $0.name < $1.name }.map(node(for:))
+    }
+
+    private func perform(_ action: SidebarRow.Action?) {
+        switch action {
+        case .newCollection:
+            newCollectionName = ""
+            isPresentingNewCollection = true
+        case .saveFilters:
+            newSmartName = ""
+            isPresentingNewSmart = true
+        case nil: break
+        }
+    }
+
+    private func itemRow(_ row: SidebarRow) -> some View {
+        let isSelected = row.filter == catalog.selectedFilter
+        return HStack(spacing: 4) {
+            Color.clear.frame(width: CGFloat(row.depth) * 14, height: 1)
+            if row.folderID != nil {
+                // A fixed-width disclosure slot so titles line up whether or not a folder has sub-folders.
+                if row.hasChildren, let id = row.folderID {
+                    Image(systemName: row.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12, height: 16)
+                        .contentShape(Rectangle())
+                        .onTapGesture { isFocused = true; toggle(id) }
+                        .accessibilityLabel(row.isExpanded ? "Collapse \(row.title)" : "Expand \(row.title)")
+                        .accessibilityAddTraits(.isButton)
+                } else {
+                    Color.clear.frame(width: 12, height: 16)
+                }
+            }
+            Text(row.title).lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .selectionChip(isSelected: isSelected, isHovered: hoveredRowID == row.id)
+        .contentShape(Rectangle())
+        .onHover { inside in
+            if inside { hoveredRowID = row.id } else if hoveredRowID == row.id { hoveredRowID = nil }
+        }
+        .onTapGesture { select(row) }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(row.title)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
+        .accessibilityAction { select(row) }
+        .modifier(DisclosureAccessibility(row: row) { if let id = row.folderID { toggle(id) } })
+        .contextMenu { contextMenu(for: row) }
+    }
+
+    /// A click takes keyboard focus (a bare `.focusable()` view does not on macOS), so Up / Down reach the sidebar, not the grid.
+    private func select(_ row: SidebarRow) {
+        isFocused = true
+        if let filter = row.filter { catalog.selectedFilter = filter }
+    }
+
+    private func toggle(_ folderID: Int64) {
+        let result = SidebarRows.toggled(folderID, selected: catalog.selectedFilter, expanded: expandedFolders, in: rows)
+        expandedFolders = result.expanded
+        catalog.selectedFilter = result.selection
+    }
+
+    /// Rename / Delete on the flat collections and smart collections; nothing on folder rows (deleting a folder collection deletes
+    /// its whole subtree — see the note on `collectionPendingRename`).
+    @ViewBuilder
+    private func contextMenu(for row: SidebarRow) -> some View {
+        switch row.source {
+        case .collection(let collection):
+            Button("Rename…") {
+                renameText = collection.name
+                collectionPendingRename = collection
+            }
+            Button(role: .destructive) {
+                collectionPendingDeletion = collection
+            } label: {
+                // `role: .destructive` alone doesn't render red text on a macOS context menu item — the same live-caught lesson
+                // already documented at `LibraryGridView`'s own destructive menu item.
+                Label {
+                    Text("Delete").foregroundStyle(.red)
+                } icon: {
+                    Image(systemName: "trash").foregroundStyle(.red)
+                }
+            }
+        case .smart(let smart):
+            Button("Rename…") {
+                smartRenameText = smart.name
+                smartPendingRename = smart
+            }
+            Button("Update from Current Filters") {
+                Task { await catalog.updateSmartCollectionFromFilters(smart) }
+            }
+            .disabled(!catalog.hasSaveableFilterCriteria)
+            Button(role: .destructive) {
+                smartPendingDeletion = smart
+            } label: {
+                Label {
+                    Text("Delete").foregroundStyle(.red)
+                } icon: {
+                    Image(systemName: "trash").foregroundStyle(.red)
+                }
+            }
+        case .allPhotos, .folder, nil:
+            EmptyView()
+        }
     }
 }
 
-/// One node in the folder-mirrored collection tree, wrapping a
-/// `PhotoCollection` (`isFolder == true`) plus its already-resolved
-/// children.
-private struct FolderTreeNode: Identifiable {
-    let collection: PhotoCollection
-    let rawChildren: [FolderTreeNode]
+/// Exposes a folder row's expanded / collapsed state and an Expand / Collapse action to VoiceOver (the row is one combined element, so
+/// the chevron's own button is not reachable).
+private struct DisclosureAccessibility: ViewModifier {
+    let row: SidebarRow
+    let toggle: () -> Void
 
-    var id: Int64 { collection.id ?? -1 }
-
-    /// `nil`, not an empty array, when there are no children — required
-    /// so `OutlineGroup` hides the disclosure triangle on a leaf folder
-    /// (a "Day" node with photos but no subfolders) rather than showing
-    /// an always-empty one.
-    var children: [FolderTreeNode]? {
-        rawChildren.isEmpty ? nil : rawChildren
+    func body(content: Content) -> some View {
+        if row.hasChildren {
+            content
+                .accessibilityValue(row.isExpanded ? "expanded" : "collapsed")
+                .accessibilityAction(named: row.isExpanded ? "Collapse" : "Expand", toggle)
+        } else {
+            content
+        }
     }
 }

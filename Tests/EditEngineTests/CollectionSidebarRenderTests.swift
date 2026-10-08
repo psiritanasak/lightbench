@@ -102,4 +102,45 @@ final class CollectionSidebarRenderTests: XCTestCase {
         let rep = render(CollectionSidebarView(catalog: catalog), size: tall)
         XCTAssertEqual(try separatorLineCount(rep, size: tall), 0, "no hairline between rows")
     }
+
+    /// Pixels in the horizontal band [y0, y1) (points) that equal `chip`, and blue-dominant pixels in the whole image.
+    private func tally(_ rep: NSBitmapImageRep, chip: NSColor, band: ClosedRange<Int>? = nil) -> (blue: Int, chip: Int) {
+        let scale = rep.pixelsWide / Int(size.width)
+        var blue = 0, chipCount = 0
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if c.blueComponent - c.redComponent > 0.25 { blue += 1 }
+                let inBand = band.map { $0.contains(y / scale) } ?? true
+                if inBand, abs(c.redComponent - chip.redComponent) < 0.004, abs(c.greenComponent - chip.greenComponent) < 0.004,
+                   abs(c.blueComponent - chip.blueComponent) < 0.004 { chipCount += 1 }
+            }
+        }
+        return (blue, chipCount)
+    }
+
+    /// The selected row is the soft grey chip (`Theme.selectedFill`) in ITS OWN band and only there, and the sidebar has NO blue anywhere.
+    /// Rows: All Photos is the first row (top), "test1" sits below the "Collections" header; the bands are wide enough to be robust to
+    /// small metric changes yet disjoint. The chip colour is a plain `Theme.selectedFill` rectangle rendered through the same pipeline.
+    func testTheSelectedRowIsAGreyChipInItsOwnBandAndNothingIsBlue() async throws {
+        let defaults = UserDefaults(suiteName: "CollectionSidebarRenderTests-\(UUID().uuidString)")!
+        let database = try CatalogDatabase(inMemory: true)
+        let collection = try await database.createCollection(name: "test1")
+        let catalog = CatalogModel(database: database, defaults: defaults)
+        await catalog.refresh()
+        let chip = try pixel(render(Theme.selectedFill), CGPoint(x: 100, y: 100))
+        let allBand = 8...34, testBand = 60...110
+
+        catalog.selectedFilter = .allPhotos
+        let first = render(CollectionSidebarView(catalog: catalog))
+        catalog.selectedFilter = .collection(try XCTUnwrap(collection.id))
+        let second = render(CollectionSidebarView(catalog: catalog))
+
+        XCTAssertEqual(tally(first, chip: chip).blue, 0, "no blue pixel in the sidebar")
+        XCTAssertEqual(tally(second, chip: chip).blue, 0)
+        XCTAssertGreaterThan(tally(first, chip: chip, band: allBand).chip, 1500, "All Photos selected: chip on its row")
+        XCTAssertLessThan(tally(first, chip: chip, band: testBand).chip, 50, "…and not on test1's (a few edge pixels of the neighbouring chip may fall in the band)")
+        XCTAssertGreaterThan(tally(second, chip: chip, band: testBand).chip, 1500, "test1 selected: chip on its row")
+        XCTAssertLessThan(tally(second, chip: chip, band: allBand).chip, 50, "…and not on All Photos'")
+    }
 }

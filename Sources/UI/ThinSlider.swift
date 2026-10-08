@@ -75,6 +75,8 @@ struct ThinSlider: View {
     /// required elsewhere.
     var valueDescription: ((Double) -> String)? = nil
 
+    /// The filled part of the track is a dimmer white than the thumb, so the thumb is the one bright mark.
+    static let filledTrackOpacity = 0.55
     private let trackHeight: CGFloat = 4
     private let thumbWidth: CGFloat = 5
     private let thumbHeight: CGFloat = 18
@@ -93,12 +95,12 @@ struct ThinSlider: View {
                     .fill(Color.white.opacity(0.15))
                     .frame(height: trackHeight)
                 Capsule()
-                    .fill(Color.white)
+                    .fill(Color.white.opacity(Self.filledTrackOpacity))
                     .frame(width: thumbX, height: trackHeight)
+                // No shadow on the thumb: flat, like the rest of the editor.
                 Capsule()
                     .fill(Color.white)
                     .frame(width: thumbWidth, height: thumbHeight)
-                    .shadow(color: .black.opacity(0.4), radius: 1, y: 0.5)
                     .offset(x: thumbX - thumbWidth / 2)
             }
             .frame(maxHeight: .infinity, alignment: .center)

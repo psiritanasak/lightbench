@@ -172,7 +172,7 @@ struct StylePadView: View {
         GeometryReader { proxy in
             let rect = CGRect(origin: .zero, size: proxy.size)
             ZStack {
-                Rectangle().fill(LinearGradient(colors: [.white.opacity(0.14), .black.opacity(0.35)], startPoint: .top, endPoint: .bottom))
+                Rectangle().fill(Theme.raised)
                 Path { path in
                     path.move(to: CGPoint(x: rect.midX, y: 0)); path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
                     path.move(to: CGPoint(x: 0, y: rect.midY)); path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))

@@ -33,7 +33,7 @@ struct LooksTabView: View {
                 .textCase(.uppercase)
             looksSectionContainer
             styleSectionContainer
-            AdjustSectionContainer(icon: "list.star", title: "Presets", isExpanded: $panel.isPresetsSectionExpanded) {
+            AdjustSectionContainer(title: "Presets", isExpanded: $panel.isPresetsSectionExpanded) {
                 presetsSection
             }
             Divider()
@@ -108,7 +108,7 @@ struct LooksTabView: View {
     /// applies it before them). One computed property so `body`'s already-long `VStack` gains a single child.
     private var looksSectionContainer: some View {
         Group {
-            AdjustSectionContainer(icon: "camera.filters", title: "Looks", isExpanded: $panel.isLooksSectionExpanded) {
+            AdjustSectionContainer(title: "Looks", isExpanded: $panel.isLooksSectionExpanded) {
                 looksSection
             }
             Divider()
@@ -121,7 +121,7 @@ struct LooksTabView: View {
     /// right under Looks. One computed property so `body`'s already-long `VStack` gains a single child.
     private var styleSectionContainer: some View {
         Group {
-            AdjustSectionContainer(icon: "slider.horizontal.below.square.and.square.filled", title: "Style", isExpanded: $panel.isStyleSectionExpanded) {
+            AdjustSectionContainer(title: "Style", isExpanded: $panel.isStyleSectionExpanded) {
                 StyleSectionView(document: document, previews: previews)
             }
             Divider()

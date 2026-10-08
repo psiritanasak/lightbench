@@ -278,54 +278,54 @@ struct AdjustTabView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
-            AdjustSectionContainer(icon: "sun.max", title: "Light", isExpanded: $panel.isLightSectionExpanded) {
+            AdjustSectionContainer(title: "Light", isExpanded: $panel.isLightSectionExpanded) {
                 lightSection
             }
             Divider()
-            AdjustSectionContainer(icon: "chart.xyaxis.line", title: "Curve", isExpanded: $panel.isCurveSectionExpanded) {
+            AdjustSectionContainer(title: "Curve", isExpanded: $panel.isCurveSectionExpanded) {
                 curveSection
             }
             Divider()
-            AdjustSectionContainer(icon: "paintpalette", title: "Color", isExpanded: $panel.isColorSectionExpanded) {
+            AdjustSectionContainer(title: "Color", isExpanded: $panel.isColorSectionExpanded) {
                 colorSection
             }
             Divider()
             AdjustSectionContainer(
-                icon: "square.grid.3x3", title: "Selective Color", isExpanded: $panel.isSelectiveColorSectionExpanded
+                title: "Selective Color", isExpanded: $panel.isSelectiveColorSectionExpanded
             ) {
                 selectiveColorSection
             }
             Divider()
             AdjustSectionContainer(
-                icon: "eyedropper", title: "Point Color", isExpanded: pointColorSectionExpandedBinding
+                title: "Point Color", isExpanded: pointColorSectionExpandedBinding
             ) {
                 pointColorSection
             }
             Divider()
             AdjustSectionContainer(
-                icon: "circle.lefthalf.filled", title: "Black & White", isExpanded: $panel.isBlackAndWhiteSectionExpanded
+                title: "Black & White", isExpanded: $panel.isBlackAndWhiteSectionExpanded
             ) {
                 blackAndWhiteSection
             }
             Divider()
             AdjustSectionContainer(
-                icon: "circle.hexagongrid", title: "Color Grading", isExpanded: $panel.isColorGradingSectionExpanded
+                title: "Color Grading", isExpanded: $panel.isColorGradingSectionExpanded
             ) {
                 colorGradingSection
             }
             Divider()
-            AdjustSectionContainer(icon: "sparkles", title: "Effects", isExpanded: $panel.isEffectsSectionExpanded) {
+            AdjustSectionContainer(title: "Effects", isExpanded: $panel.isEffectsSectionExpanded) {
                 effectsSection
             }
             Divider()
             AdjustSectionContainer(
-                icon: "eye.trianglebadge.exclamationmark", title: "Red-Eye", isExpanded: $panel.isRedEyeSectionExpanded
+                title: "Red-Eye", isExpanded: $panel.isRedEyeSectionExpanded
             ) {
                 redEyeSection
             }
             Divider()
             retouchSectionContainer
-            AdjustSectionContainer(icon: "circle.dashed", title: "Masks", isExpanded: masksSectionExpandedBinding) {
+            AdjustSectionContainer(title: "Masks", isExpanded: masksSectionExpandedBinding) {
                 masksSection
             }
             rawSectionContainer
@@ -1349,7 +1349,7 @@ struct AdjustTabView: View {
     @ViewBuilder private var rawSectionContainer: some View {
         if isCurrentPhotoRaw {
             Divider()
-            AdjustSectionContainer(icon: "camera.aperture", title: "RAW", isExpanded: $panel.isRawSectionExpanded) {
+            AdjustSectionContainer(title: "RAW", isExpanded: $panel.isRawSectionExpanded) {
                 rawSection
             }
         }
@@ -1479,7 +1479,7 @@ struct AdjustTabView: View {
     /// One computed property so `body`'s already-long `VStack` gains a single child (like `LooksTabView.looksSectionContainer`).
     private var retouchSectionContainer: some View {
         Group {
-            AdjustSectionContainer(icon: "bandage", title: "Remove", isExpanded: retouchSectionExpandedBinding) {
+            AdjustSectionContainer(title: "Remove", isExpanded: retouchSectionExpandedBinding) {
                 retouchSection
             }
             Divider()
@@ -1864,7 +1864,6 @@ struct AdjustTabView: View {
 /// `PROGRESS.md`) — that was a hand-written `NSViewRepresentable`, this
 /// is not.
 struct AdjustSectionContainer<Content: View>: View {
-    let icon: String
     let title: String
     @Binding var isExpanded: Bool
     @ViewBuilder let content: () -> Content
@@ -1876,7 +1875,8 @@ struct AdjustSectionContainer<Content: View>: View {
             }
             .padding(.top, 8)
         } label: {
-            Label(title, systemImage: icon).font(.headline)
+            // Quiet header: just the title (no per-section icon), small and medium weight; the chevron stays.
+            Text(title).font(.subheadline.weight(.medium))
         }
     }
 }

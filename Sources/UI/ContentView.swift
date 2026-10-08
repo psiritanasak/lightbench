@@ -168,9 +168,11 @@ struct ContentView: View {
 
     /// Whether scroll-to-zoom/click-drag-to-pan are currently armable.
     /// Compare being active does NOT block zoom (the whole point is being
-    /// able to zoom in while comparing) — only the four overlay-owning
+    /// able to zoom in while comparing) — only the overlay-owning
     /// point-interaction/crop/mask modes do, since their overlays are
     /// positioned against `currentFitRect` assuming no zoom/pan is active.
+    /// The Remove tool (Place Spots / a selected spot) is the exception: its overlays are positioned against
+    /// `ZoomPanGeometry.displayedRect`, so zoom stays available there.
     /// Phase 7 slice 3 Session A briefly narrowed this to a `.radial`-only
     /// variant of this check (a since-deleted `isEditingRadialMask`
     /// property — don't grep for it, it's gone), since the Linear mask had
@@ -200,13 +202,14 @@ struct ContentView: View {
         // reasoning, same un-zoomed assumption in its own tap-capture layer.
         document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance
             && !isPlacingRedEyeCorrections && !isEditingOverlayMask && !isPaintingBrush && !isPickingColorRange
-            && !isPickingPointColor && !isEditingRetouchSpot && !isPlacingRetouchSpot && !isPickingSubject
+            && !isPickingPointColor && !isPickingSubject
     }
 
     /// Spot removal: whether a spot is selected in the (expanded) Remove section at identity geometry — the only
     /// state in which its on-image circles are drawn. Resolved against the LIVE array (Undo/Revert can delete the
-    /// selected spot without passing through any disarm site) and, like every overlay, it blocks zoom/pan because the
-    /// circles are positioned against the un-zoomed `currentFitRect`.
+    /// selected spot without passing through any disarm site). Unlike the other overlays it does NOT block zoom/pan: the spot
+    /// overlays are positioned against `ZoomPanGeometry.displayedRect` (the zoomed, panned picture), and panning is Space + drag
+    /// while the tool is active (`RetouchZoomRules`).
     private var isEditingRetouchSpot: Bool {
         guard adjustPanel.isRetouchSectionExpanded, !isCroppingActive,
               document.editState.isGeometryAtIdentity,
@@ -214,14 +217,19 @@ struct ContentView: View {
         return document.editState.retouchSpots.contains { $0.id == id }
     }
 
+    /// The Remove tool owns plain pointer drags on the photo (armed, or a spot selected): panning is then Space + drag.
+    private var retouchToolActive: Bool {
+        RetouchZoomRules.isToolActive(sectionExpanded: adjustPanel.isRetouchSectionExpanded, isCropping: isCroppingActive,
+                                      geometryAtIdentity: document.editState.isGeometryAtIdentity,
+                                      isArmed: isPlacingRetouchSpot, hasSelectedSpot: isEditingRetouchSpot)
+    }
+
     /// Whether the Remove section's on-image spot layer (every spot as a thin circle, plus the armed capture layer) is up: the
     /// section is expanded, no crop, identity geometry, single-image view and no other point tool armed. A pure function of state,
     /// like `isEditingRetouchSpot`.
     private var showsRetouchSpots: Bool {
         adjustPanel.isRetouchSectionExpanded && !isCroppingActive && document.editState.isGeometryAtIdentity
-            // Zoomed in, the photo moves but these rings are positioned against the UN-zoomed fit rect (zoom is only blocked while a
-            // spot is selected or the tool is armed), so they would drift: hide them until the view is back at fit size.
-            && zoomScale <= 1 && compareMode == .off && !isPickingWhiteBalance && !isPlacingRedEyeCorrections && !isPickingColorRange
+            && compareMode == .off && !isPickingWhiteBalance && !isPlacingRedEyeCorrections && !isPickingColorRange
             && !isPickingPointColor && !isPickingSubject && !isPaintingBrush
     }
 
@@ -414,6 +422,9 @@ struct ContentView: View {
     /// fitted(_:into:zoomScale:panOffsetNorm:)`'s own doc comment for
     /// where this gets converted to the renderer's y-UP space.
     @State private var panOffset: CGSize = .zero
+    /// Space is held while the Remove tool is active: the drag-to-pan layer is mounted for as long as it is (`RetouchZoomRules`). Reset
+    /// whenever the tool ends or the image pane loses keyboard focus, so a lost key-up cannot leave it on.
+    @State private var isSpaceHeld = false
 
     /// The Adjust panel's own presentation-only state (section expansion,
     /// histogram mode, selected Selective Color band). Owned HERE rather than
@@ -559,6 +570,17 @@ struct ContentView: View {
             return handlePanKeyPress(keyPress)
         }
         return .ignored
+    }
+
+    /// Pans an off-screen spot to the centre when it is selected while zoomed in (selecting from the sidebar no longer resets zoom, so the
+    /// spot could otherwise be out of view — and Delete would remove something the user cannot see). A spot already comfortably in
+    /// view, or any selection at fit size, changes nothing.
+    private func revealRetouchSpot(_ id: UUID?) {
+        guard let id, zoomScale > 1, let fitRect = currentFitRect,
+              let spot = document.editState.retouchSpots.first(where: { $0.id == id }), spot.isFinite else { return }
+        let displayed = ZoomPanGeometry.displayedRect(fitRect: fitRect, zoom: zoomScale, pan: panOffset)
+        guard !RetouchOverlayGeometry.isCentreVisible(of: spot, pictureRect: displayed, paneSize: containerSize) else { return }
+        panOffset = ZoomPanGeometry.panToCenter(spotX: spot.x, spotYUp: spot.y, zoom: zoomScale)
     }
 
     /// Selects spot `id` from a click on the photo (the Place Spots tool stays armed; the other overlay-owning selections clear so two
@@ -1329,6 +1351,17 @@ struct ContentView: View {
                 isImagePaneFocused = true
             }
         }
+        // A held Space (the Remove tool's temporary hand tool) must not outlive the tool or keyboard focus: a lost key-up would leave the
+        // full-pane pan layer mounted over the spot layers. SwiftUI keeps `@FocusState` when the app/window deactivates, so those two
+        // are reset explicitly as well.
+        .onChange(of: retouchToolActive) { _, active in
+            isSpaceHeld = RetouchZoomRules.spaceHeldAfterChange(spaceHeld: isSpaceHeld, toolActive: active, paneFocused: isImagePaneFocused)
+        }
+        .onChange(of: isImagePaneFocused) { _, focused in
+            isSpaceHeld = RetouchZoomRules.spaceHeldAfterChange(spaceHeld: isSpaceHeld, toolActive: retouchToolActive, paneFocused: focused)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in isSpaceHeld = false }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in isSpaceHeld = false }
         // Arming Place Spots grabs image-pane focus so Delete/Escape work with no extra click.
         .onChange(of: isPlacingRetouchSpot) { _, isArmed in
             if isArmed { isImagePaneFocused = true }
@@ -1935,6 +1968,14 @@ struct ContentView: View {
                     .focusEffectDisabled()
                     .focused($isImagePaneFocused)
                     .onKeyPress { keyPress in handleImagePaneKeyPress(keyPress) }
+                    // Space = the temporary hand tool, only while the Remove tool is active (elsewhere it keeps its normal meaning). A
+                    // separate handler: `handleImagePaneKeyPress` is `.down`/`.repeat` only and its Escape paths assume that.
+                    // `.repeat` is included and swallowed: left to fall through, key repeat would beep for as long as Space is held.
+                    .onKeyPress(keys: [.space], phases: [.down, .repeat, .up]) { keyPress in
+                        guard RetouchZoomRules.spaceIsHandTool(toolActive: retouchToolActive) else { return .ignored }
+                        isSpaceHeld = keyPress.phase != .up
+                        return .handled
+                    }
                     .simultaneousGesture(TapGesture().onEnded { isImagePaneFocused = true })
                     // Reviewer-caught: a focusable view with no
                     // accessibility label announces nothing when tabbed/
@@ -2158,7 +2199,8 @@ struct ContentView: View {
         // spots. BELOW the selected spot's handles (drawn after it), so a press on those wins.
         if showsRetouchSpots, let fitRect = currentFitRect {
             RetouchSpotsOverlay(
-                fitRect: fitRect,
+                // Where the picture is actually DISPLAYED: the zoomed, panned rect (the fit rect at fit size).
+                fitRect: ZoomPanGeometry.displayedRect(fitRect: fitRect, zoom: zoomScale, pan: panOffset),
                 paneSize: containerSize,
                 spots: document.editState.retouchSpots,
                 selectedID: isEditingRetouchSpot ? adjustPanel.selectedRetouchSpotID : nil,
@@ -2175,7 +2217,8 @@ struct ContentView: View {
            let id = adjustPanel.selectedRetouchSpotID,
            let spotBinding = $document.editState.retouchSpot(id: id),
            let fitRect = currentFitRect {
-            RetouchOverlayView(fitRect: fitRect, paneSize: containerSize, spot: spotBinding, onRadiusCommitted: { adjustPanel.retouchNewSpotRadius = $0 })
+            RetouchOverlayView(fitRect: ZoomPanGeometry.displayedRect(fitRect: fitRect, zoom: zoomScale, pan: panOffset),
+                               paneSize: containerSize, spot: spotBinding, onRadiusCommitted: { adjustPanel.retouchNewSpotRadius = $0 })
         }
         // Phase 7 slice 5 (second half): the Color Range eyedropper's
         // tap-capture layer — mirrors the WB eyedropper's own capture
@@ -2339,15 +2382,20 @@ struct ContentView: View {
         // changing zoom. In Side by Side, TWO overlays (one per half, both
         // bound to the same `$zoomScale`/`$panOffset`) so dragging either
         // photo pans both in sync. D8's keyboard pan (`handleImagePaneKeyPress`
-        // below) reuses this SAME `canZoom && zoomScale > 1 && compareMode
-        // != .split` gate, so it never offers more than the mouse already
-        // does.
+        // below) reuses the same `canZoom && zoomScale > 1 && compareMode
+        // != .split` gate. While the Remove tool is active this layer is mounted only with Space held
+        // (`RetouchZoomRules.mountsPanLayer`), whereas the arrow keys always pan.
         if canZoom, zoomScale > 1 {
             if compareMode == .sideBySide, let (leftRect, rightRect) = sideBySideFitRects {
                 PanOverlay(fitRect: leftRect, zoomScale: $zoomScale, panOffset: $panOffset)
                 PanOverlay(fitRect: rightRect, zoomScale: $zoomScale, panOffset: $panOffset)
-            } else if compareMode != .split, let fitRect = currentFitRect {
-                PanOverlay(fitRect: fitRect, zoomScale: $zoomScale, panOffset: $panOffset)
+            } else if RetouchZoomRules.mountsPanLayer(canZoom: canZoom, zoomScale: zoomScale, compareIsSplit: compareMode == .split,
+                                                      toolActive: retouchToolActive, spaceHeld: isSpaceHeld),
+                      let fitRect = currentFitRect {
+                // While the Remove tool is active this layer exists only with Space held (it would steal placement and handle drags),
+                // and then grabs drags anywhere over the pane, not just over the fit rect.
+                PanOverlay(fitRect: fitRect, grabRect: retouchToolActive ? CGRect(origin: .zero, size: containerSize) : nil,
+                           zoomScale: $zoomScale, panOffset: $panOffset)
             }
         }
     }
@@ -2361,6 +2409,14 @@ struct ContentView: View {
                         document: document,
                         panel: $adjustPanel,
                         interactionMode: $interactionMode,
+                        // The Remove tool keeps the current zoom/pan (spots are placed zoomed in); it only leaves Compare and takes focus.
+                        // `spotID` is set only when a spot was picked from the SIDEBAR: while zoomed in it may be off screen, so it is panned
+                        // into view. (Selecting on the photo never moves the view: the user is working right there.)
+                        onEnterRetouchEditing: { spotID in
+                            compareMode = .off
+                            isImagePaneFocused = true
+                            revealRetouchSpot(spotID)
+                        },
                         onEnterPointPickingMode: {
                             compareMode = .off
                             zoomScale = 1

@@ -173,4 +173,14 @@ enum RetouchOverlayGeometry {
         guard point.x.isFinite, point.y.isFinite, paneSize.width > 0, paneSize.height > 0 else { return false }
         return CGRect(origin: .zero, size: paneSize).contains(point)
     }
+
+    /// Whether a spot's centre is comfortably on screen: inside the visible part of the picture, inset by `margin` points so a spot
+    /// hugging the pane edge still counts as needing to be brought into view.
+    static func isCentreVisible(of spot: RetouchSpot, pictureRect: CGRect, paneSize: CGSize, margin: CGFloat = 24) -> Bool {
+        guard spot.isFinite, paneSize.width > 0, paneSize.height > 0 else { return false }
+        let visible = ZoomPanGeometry.visiblePictureRect(displayedRect: pictureRect, paneBounds: CGRect(origin: .zero, size: paneSize))
+        guard !visible.isNull else { return false }
+        return visible.insetBy(dx: margin, dy: margin).contains(centerPoint(of: spot, in: pictureRect))
+    }
 }
+

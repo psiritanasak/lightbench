@@ -174,4 +174,19 @@ final class RetouchZoomedPressTests: XCTestCase {
         XCTAssertFalse(G.isInsidePane(CGPoint(x: CGFloat.nan, y: 10), paneSize: pane))
         XCTAssertFalse(G.isInsidePane(CGPoint(x: 10, y: 10), paneSize: .zero))
     }
+
+    func testASpotNearOrBeyondThePaneEdgeIsNotComfortablyVisible() {
+        var s = RetouchSpot(); s.radius = 0.01
+        let displayed = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: 4, pan: .zero)   // 2400x1600, centred on the fit rect's centre
+        s.x = 0.5; s.y = 0.5
+        XCTAssertTrue(G.isCentreVisible(of: s, pictureRect: displayed, paneSize: pane), "the centre of the picture is on screen")
+        s.x = 0.1; s.y = 0.5
+        XCTAssertFalse(G.isCentreVisible(of: s, pictureRect: displayed, paneSize: pane), "far left of a 4x picture: off screen")
+        let edge = CGPoint(x: 8, y: pane.height / 2)   // 8 pt from the pane's left edge: inside the pane but under the 24 pt margin
+        s.x = Double((edge.x - displayed.minX) / displayed.width); s.y = 0.5
+        XCTAssertFalse(G.isCentreVisible(of: s, pictureRect: displayed, paneSize: pane), "hugging the edge counts as needing to be brought in")
+        s.radius = .nan
+        XCTAssertFalse(G.isCentreVisible(of: s, pictureRect: displayed, paneSize: pane))
+    }
 }
+

@@ -146,6 +146,10 @@ struct AdjustTabView: View {
     /// used to keep mutually exclusive by hand — see `EditorInteractionMode`'s
     /// own doc comment for the full history (IMPROVEMENTS.md D14).
     @Binding var interactionMode: EditorInteractionMode
+    /// Called when the Remove section's Place Spots tool is armed (`nil`) or a spot is selected from the sidebar (its id): leaves
+    /// Compare and takes image-pane focus but KEEPS the current zoom/pan (unlike `onEnterPointPickingMode`, which resets both); a
+    /// sidebar-picked spot that is off screen is panned into view.
+    let onEnterRetouchEditing: (UUID?) -> Void
     /// Called when EITHER point-picking mode is entered. `ContentView` exits
     /// Compare and resets zoom/pan in response — passed as a callback so this
     /// view doesn't take bindings to three unrelated viewport states.
@@ -1496,7 +1500,7 @@ struct AdjustTabView: View {
                     panel.selectedMaskID = nil
                     panel.selectedPointColorID = nil
                     interactionMode = .placingRetouchSpot
-                    onEnterPointPickingMode()
+                    onEnterRetouchEditing(nil)
                 }
             } label: {
                 Label(interactionMode.isPlacingRetouchSpot ? "Stop Placing Spots" : "Place Spots", systemImage: "scope")
@@ -1542,16 +1546,16 @@ struct AdjustTabView: View {
         }
     }
 
-    /// Selecting a spot shows its on-image circles, which are positioned against the UN-ZOOMED single-image fit
-    /// rect: like selecting a mask with an overlay, reset zoom/Compare (`onEnterPointPickingMode`), clear the other
-    /// overlay-owning selections and any armed point mode, so two sets of drag handles are never live at once.
+    /// Selecting a spot shows its on-image circles, positioned against the DISPLAYED picture rect, so the current zoom/pan is
+    /// kept (`onEnterRetouchEditing` only leaves Compare and takes focus). Like selecting a mask with an overlay, it clears the
+    /// other overlay-owning selections and any armed point mode, so two sets of drag handles are never live at once.
     private func selectRetouchSpot(_ id: UUID) {
         panel.selectedMaskID = nil
         panel.selectedPointColorID = nil
         // Selecting a spot must not switch off the Place Spots tool the user is working with; any OTHER armed tool is disarmed.
         if !interactionMode.isPlacingRetouchSpot { interactionMode = .none }
         panel.selectedRetouchSpotID = id
-        onEnterPointPickingMode()
+        onEnterRetouchEditing(id)
     }
 
     private func retouchSpotRow(number: Int, spot: RetouchSpot) -> some View {

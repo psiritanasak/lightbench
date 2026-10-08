@@ -231,3 +231,36 @@ final class ZoomPanDisplayedRectTests: XCTestCase {
         XCTAssertTrue(ZoomPanGeometry.visiblePictureRect(displayedRect: CGRect(x: 900, y: 0, width: 10, height: 10), paneBounds: pane).isNull)
     }
 }
+
+final class ZoomPanToCenterTests: XCTestCase {
+    private let fit = CGRect(x: 40, y: 25, width: 600, height: 400)
+
+    func testASpotAtTheCentreNeedsNoPan() {
+        XCTAssertEqual(ZoomPanGeometry.panToCenter(spotX: 0.5, spotYUp: 0.5, zoom: 4), .zero)
+    }
+
+    /// The point really lands at the centre of the fit rect: checked THROUGH `displayedRect`, not by re-deriving the formula.
+    func testThePannedSpotSitsAtTheFitRectCentre() {
+        for (x, yUp, z) in [(0.55, 0.45, 4.0), (0.4, 0.6, 3.0), (0.52, 0.5, 8.0)] as [(Double, Double, CGFloat)] {
+            let pan = ZoomPanGeometry.panToCenter(spotX: x, spotYUp: yUp, zoom: z)
+            let r = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: z, pan: pan)
+            XCTAssertEqual(r.minX + CGFloat(x) * r.width, fit.midX, accuracy: 1e-6, "x \(x) z \(z)")
+            XCTAssertEqual(r.minY + CGFloat(1 - yUp) * r.height, fit.midY, accuracy: 1e-6, "y-up \(yUp) z \(z) (spot y runs UP)")
+        }
+    }
+
+    func testCornerSpotsClampSoThePictureStillCoversTheFitRect() {
+        let pan = ZoomPanGeometry.panToCenter(spotX: 0.02, spotYUp: 0.98, zoom: 2)
+        XCTAssertEqual(pan, ZoomPanGeometry.clampedPan(pan, zoom: 2), "already within the clamp")
+        let r = ZoomPanGeometry.displayedRect(fitRect: fit, zoom: 2, pan: pan)
+        XCTAssertLessThanOrEqual(r.minX, fit.minX + 1e-9); XCTAssertGreaterThanOrEqual(r.maxX, fit.maxX - 1e-9)
+        XCTAssertLessThanOrEqual(r.minY, fit.minY + 1e-9); XCTAssertGreaterThanOrEqual(r.maxY, fit.maxY - 1e-9)
+    }
+
+    func testBadInputGivesNoPan() {
+        XCTAssertEqual(ZoomPanGeometry.panToCenter(spotX: .nan, spotYUp: 0.5, zoom: 2), .zero)
+        XCTAssertEqual(ZoomPanGeometry.panToCenter(spotX: 0.2, spotYUp: 0.5, zoom: 0.5), .zero)
+        XCTAssertEqual(ZoomPanGeometry.panToCenter(spotX: 0.2, spotYUp: 0.5, zoom: .infinity), .zero)
+    }
+}
+

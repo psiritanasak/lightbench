@@ -108,4 +108,15 @@ enum ZoomPanGeometry {
     static func visiblePictureRect(displayedRect: CGRect, paneBounds: CGRect) -> CGRect {
         displayedRect.intersection(paneBounds)
     }
+
+    /// The pan that puts the image point (`spotX` right, `spotYUp` UP, both 0...1 fractions of the picture) at the centre of the fit
+    /// rect, for the given zoom — clamped so the picture still covers the fit rect. Used to bring an off-screen spot into view.
+    /// Derived from `displayedRect`: the point sits at `minX + x*W`, and `minX = midX - W/2 + pan.w*fit.w` gives `pan.w = z*(0.5 - x)`;
+    /// in y-DOWN terms `yDown = 1 - spotYUp`, so `pan.h = z*(0.5 - yDown)`.
+    static func panToCenter(spotX: Double, spotYUp: Double, zoom: CGFloat) -> CGSize {
+        guard spotX.isFinite, spotYUp.isFinite, zoom.isFinite, zoom >= 1 else { return .zero }
+        let yDown = 1 - spotYUp
+        return clampedPan(CGSize(width: zoom * (0.5 - CGFloat(spotX)), height: zoom * (0.5 - CGFloat(yDown))), zoom: zoom)
+    }
 }
+

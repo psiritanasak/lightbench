@@ -43,7 +43,7 @@ struct EditorToolRail<Actions: View>: View {
         }
         .frame(width: EditorToolRailMetrics.width)
         .frame(maxHeight: .infinity)
-        .background(Color(white: 0.12))
+        .background(Theme.panel)
         .overlay(alignment: .leading) { Divider() }
     }
 }

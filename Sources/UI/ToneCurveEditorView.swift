@@ -205,11 +205,11 @@ struct ToneCurveEditorView: View {
 
     /// Deliberately NOT tinted by `channel` (unlike the curve stroke and
     /// histogram backdrop) — handle color here encodes SELECTION
-    /// (`Color.accentColor` when selected, `.white` otherwise), and
+    /// (`Theme.accent` when selected, `.white` otherwise), and
     /// overloading it with channel identity too would leave nothing left
     /// to show selection with. It would also actively hurt legibility in
-    /// the one case it would matter most: `Color.accentColor` (this app's
-    /// own blue-ish system accent) over a pure-blue curve stroke and blue
+    /// the one case it would matter most: `Theme.accent` (this app's
+    /// own blue accent) over a pure-blue curve stroke and blue
     /// histogram overlay is the worst-contrast combination this feature
     /// has. The channel is already unambiguous from the picker, the curve
     /// stroke, the histogram tint, and the accessibility label — a fifth,
@@ -220,7 +220,7 @@ struct ToneCurveEditorView: View {
                 let isSelected = index == validatedSelection
                 let diameter: CGFloat = isSelected ? 12 : 8
                 Circle()
-                    .fill(isSelected ? Color.accentColor : Color.white)
+                    .fill(isSelected ? Theme.accent : Color.white)
                     .frame(width: diameter, height: diameter)
                     .overlay(Circle().stroke(Color.black.opacity(0.6), lineWidth: 1))
                     .position(ToneCurveEditing.screenPoint(point, in: plotRect))

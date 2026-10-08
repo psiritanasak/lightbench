@@ -1722,7 +1722,7 @@ struct ContentView: View {
             ToolbarItem(placement: .automatic) {
                 Button("Done") { selectedTab = .adjust }
                     .buttonStyle(.borderedProminent)
-                    .tint(.yellow)
+                    .tint(Theme.accent)
             }
         }
     }
@@ -1821,7 +1821,7 @@ struct ContentView: View {
                         if document.isLoadingImage {
                             ProgressView("Decoding RAW photo…")
                                 .padding(24)
-                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                                .solidPanel(cornerRadius: 12)
                         }
                         // D8 (IMPROVEMENTS.md): extracted out of this
                         // `ZStack` (Crop/WB/Red-Eye/CompareDivider/Pan×1-2,

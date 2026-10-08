@@ -738,7 +738,7 @@ private struct LibraryThumbnailCell: View {
                             .frame(width: 22, height: 22)
                         Image(systemName: catalog.isSelected(photo) ? "checkmark.circle.fill" : "circle")
                             .font(.system(size: 18))
-                            .foregroundStyle(catalog.isSelected(photo) ? Color.accentColor : .white)
+                            .foregroundStyle(catalog.isSelected(photo) ? Theme.accent : .white)
                     }
                 }
                 .buttonStyle(.plain)
@@ -765,7 +765,7 @@ private struct LibraryThumbnailCell: View {
             }
             // D4 (IMPROVEMENTS.md): the keyboard-focus ring — deliberately
             // a DIFFERENT color from the selection checkbox's
-            // `Color.accentColor` (above) and the Editor filmstrip's own
+            // `Theme.accent` (above) and the Editor filmstrip's own
             // accent-colored "current photo" ring, so "keyboard-focused"
             // never visually reads as "export-selected". Same technique as
             // `EditorFilmstripView`'s current-photo ring, just white

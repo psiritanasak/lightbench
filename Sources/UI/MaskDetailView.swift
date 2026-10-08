@@ -223,7 +223,7 @@ struct MaskDetailView: View {
                 Button(isPickingSubjects ? "Done Picking" : "Pick on Image") { onTogglePickSubjects() }
                     .buttonStyle(.bordered)
                     .frame(maxWidth: .infinity)
-                    .tint(isPickingSubjects ? .orange : nil)
+                    .tint(isPickingSubjects ? Theme.accent : nil)
                     .accessibilityLabel(isPickingSubjects ? "Finish Picking Subjects" : "Pick Subjects on the Photo")
                 if isPickingSubjects {
                     Text("Click a subject in the photo to include or exclude it. Red marks the subjects you have chosen. Esc or Done to finish.")

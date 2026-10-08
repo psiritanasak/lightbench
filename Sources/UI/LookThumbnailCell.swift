@@ -28,7 +28,7 @@ struct LookThumbnailCell: View {
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(isSelected ? Theme.accent : Color.clear, lineWidth: 2))
                 Text(name)
                     .font(.caption2)
                     .lineLimit(1)

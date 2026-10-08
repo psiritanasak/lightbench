@@ -49,6 +49,8 @@ struct PhotoAppApp: App {
             // Flat window buttons instead of the system's glass ones (see `WindowChrome.swift`). To go back to the system buttons,
             // delete this one line.
             .background(WindowChromeInstaller())
+            // The one accent colour for the whole app (selected tool, armed tool, prominent buttons): see `Theme`.
+            .tint(Theme.accent)
         }
         .commands {
             // Replaces macOS's default (inert) Edit > Undo/Redo items —

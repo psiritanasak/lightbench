@@ -21,7 +21,7 @@ struct RailEntryLabel: View {
         // Dimmed through the COLOUR, not `.opacity`: a `Menu` draws its label itself and ignores an opacity set on it, but it follows
         // the foreground colour (this is what makes a disabled Compare entry look disabled like the others).
         .foregroundStyle(Self.color(isOn: isOn, isEnabled: isEnabled))
-        .background(RoundedRectangle(cornerRadius: 8).fill(isOn ? Color.accentColor.opacity(isEnabled ? 0.18 : 0.06) : Color.clear))
+        .background(RoundedRectangle(cornerRadius: 8).fill(isOn ? Theme.accent.opacity(isEnabled ? 0.18 : 0.06) : Color.clear))
         .contentShape(RoundedRectangle(cornerRadius: 8))
     }
 
@@ -29,10 +29,10 @@ struct RailEntryLabel: View {
     /// The cell height without a caption.
     static let iconOnlyHeight: CGFloat = 36
 
-    /// The enabled colours are the plain `Color.accentColor` / `Color.secondary` values (wrapping them in `.opacity(1)` changed how a
-    /// `Menu` label resolved the accent); only a disabled entry gets a dimmed copy.
+    /// Dimmed through the COLOUR (a disabled `Menu` label ignores `.opacity`). Enabled entries use the plain `Theme.accent` /
+    /// `Color.secondary` values; only a disabled entry gets a dimmed copy.
     private static func color(isOn: Bool, isEnabled: Bool) -> Color {
-        let base = isOn ? Color.accentColor : Color.secondary
+        let base = isOn ? Theme.accent : Color.secondary
         return isEnabled ? base : base.opacity(0.35)
     }
 }

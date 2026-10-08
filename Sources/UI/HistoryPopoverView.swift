@@ -60,11 +60,11 @@ struct HistoryPopoverView: View {
                     .fontWeight(row.isCurrent ? .semibold : .regular)
                     .foregroundStyle(row.position == .undone ? .secondary : .primary)
                 Spacer()
-                if row.isCurrent { Image(systemName: "checkmark").font(.caption).foregroundStyle(Color.accentColor) }
+                if row.isCurrent { Image(systemName: "checkmark").font(.caption).foregroundStyle(Theme.accent) }
             }
             .padding(.horizontal, 8)
             .frame(height: Self.rowHeight)
-            .background(RoundedRectangle(cornerRadius: 6).fill(row.isCurrent ? Color.accentColor.opacity(0.15) : Color.clear))
+            .background(RoundedRectangle(cornerRadius: 6).fill(row.isCurrent ? Theme.accent.opacity(0.15) : Color.clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

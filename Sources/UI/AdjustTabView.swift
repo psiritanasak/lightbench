@@ -569,7 +569,7 @@ struct AdjustTabView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .tint(interactionMode.isPickingWhiteBalance ? .yellow : nil)
+            .tint(interactionMode.isPickingWhiteBalance ? Theme.accent : nil)
             .accessibilityAddTraits(interactionMode.isPickingWhiteBalance ? [.isSelected] : [])
             Button {
                 document.fixColorCast()
@@ -813,7 +813,7 @@ struct AdjustTabView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .tint(interactionMode.isPlacingRedEyeCorrections ? .yellow : nil)
+            .tint(interactionMode.isPlacingRedEyeCorrections ? Theme.accent : nil)
             .accessibilityAddTraits(interactionMode.isPlacingRedEyeCorrections ? [.isSelected] : [])
             EditSliderRow(
                 label: "Red-Eye Size", value: $document.editState.redEyeSize,
@@ -1507,7 +1507,7 @@ struct AdjustTabView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .tint(interactionMode.isPlacingRetouchSpot ? .yellow : nil)
+            .tint(interactionMode.isPlacingRetouchSpot ? Theme.accent : nil)
             // Never greyed out while ARMED: an Undo/Redo can bring back non-identity geometry (the layer hides but the mode stays armed),
             // and this button is then the way to stop.
             .disabled((document.currentImage == nil || !identity) && !interactionMode.isPlacingRetouchSpot)

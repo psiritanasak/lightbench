@@ -124,7 +124,7 @@ private struct FilmstripCell: View {
         .clipped()
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .stroke(Color.accentColor, lineWidth: isCurrent ? 2 : 0)
+                .stroke(Theme.accent, lineWidth: isCurrent ? 2 : 0)
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)

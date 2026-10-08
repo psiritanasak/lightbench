@@ -4,7 +4,7 @@ import SwiftUI
 /// sidebar. Each is a pure function of its inputs — no state, no access to
 /// `ContentView`'s own — which is exactly why they were extracted out of it.
 
-/// Small feedback badge while zoomed past fit — same `.regularMaterial`
+/// Small feedback badge while zoomed past fit — same solid `solidPanel`
 /// HUD styling `ExportProgressHUD` already uses, so it reads as the
 /// same family of transient overlay. Purely informational, matches
 /// `zoomScale`'s own "1 = fit" convention (shown as 100%).
@@ -17,7 +17,7 @@ struct ZoomPercentageHUD: View {
             .monospacedDigit()
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+            .solidPanel(cornerRadius: 6)
             .padding(12)
             .allowsHitTesting(false)
     }
@@ -34,12 +34,12 @@ struct ExportProgressHUD: View {
                 .frame(width: 220)
         }
         .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .solidPanel(cornerRadius: 10)
         .padding(.bottom, 16)
     }
 }
 
-/// Same `.regularMaterial` HUD family as `ExportProgressHUD` — an
+/// Same solid HUD family as `ExportProgressHUD` — an
 /// indeterminate spinner, not a percentage bar, since `PhotoEnhancer
 /// .enhance` is one atomic async call with no incremental progress signal
 /// to report (unlike Export's own per-photo batch loop).
@@ -52,7 +52,7 @@ struct EnhancingHUD: View {
                 .font(.caption)
         }
         .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .solidPanel(cornerRadius: 10)
         .padding(.bottom, 16)
     }
 }

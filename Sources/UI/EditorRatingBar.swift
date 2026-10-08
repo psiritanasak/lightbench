@@ -28,7 +28,7 @@ struct EditorRatingBar: View {
         .padding(.horizontal, 12)
         .frame(height: 36)
         .frame(maxWidth: .infinity)
-        .background(.bar)
+        .background(Theme.panel)
         .overlay(alignment: .top) { Divider() }
     }
 

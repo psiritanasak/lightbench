@@ -51,9 +51,9 @@ struct PhotoAppApp: App {
             // Replaces macOS's default (inert) Edit > Undo/Redo items —
             // the canonical, keyboard-shortcut-owning home for these
             // actions. Wired to the SAME `document.undo()`/`.redo()` the
-            // toolbar buttons already call; `canUndo`/`canRedo` being
+            // rail's Undo/Redo entries call; `canUndo`/`canRedo` being
             // `@Published` on `document` means these reactively
-            // enable/disable in sync with the toolbar.
+            // enable/disable in sync with the rail.
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo") { document.undo() }
                     .keyboardShortcut("z", modifiers: .command)

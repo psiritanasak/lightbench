@@ -7,7 +7,7 @@ import XCTest
 /// (synthetic events do not reach this app) — see the manual checklist in PROGRESS.md.
 @MainActor
 final class EditorToolRailRenderTests: XCTestCase {
-    private let size = CGSize(width: EditorToolRail.width, height: 300)
+    private let size = CGSize(width: EditorToolRailMetrics.width, height: 300)
 
     private func render(selected: EditorTab) -> NSBitmapImageRep {
         let view = EditorToolRail(selectedTab: .constant(selected)).environment(\.colorScheme, .dark)
@@ -52,6 +52,6 @@ final class EditorToolRailRenderTests: XCTestCase {
     }
 
     func testRailHasItsFixedWidth() {
-        XCTAssertEqual(EditorToolRail.width, 56)
+        XCTAssertEqual(EditorToolRailMetrics.width, 56)
     }
 }

@@ -1335,7 +1335,7 @@ struct ContentView: View {
         // Leaving the Adjust tab disarms the point-interaction modes and clears the mask/Point Color/retouch selections — none has
         // controls on another tab, and their overlays would otherwise stay live (`EditorTab.disarmsPointModes`). Compare and
         // zoom survive a switch to Looks (before/after while browsing looks) but reset on Crop/Clean Up
-        // (`EditorTab.keepsCompareAndZoom`; the toolbar Menu's `.disabled(...)` and `canZoom` already gate Crop).
+        // (`EditorTab.keepsCompareAndZoom`; the rail's Compare entry (`EditorRailActionRules.canCompare`) and `canZoom` already gate Crop).
         // A closed popover leaves keyboard focus nowhere: hand it back to the image pane (Escape/arrows/Delete live there). Not in
         // Library mode (the grid claims its own focus), and not when the click that dismissed the popover landed on a text field
         // — checked one run-loop turn later, once that field has taken focus (a field being edited has an `NSTextView` first
@@ -1348,6 +1348,19 @@ struct ContentView: View {
             }
         }
         .onChange(of: showLibrary) { _, _ in isHistoryPresented = false }
+        // Turning Compare on clears every armed mode and the overlay/detail selections (masks stay APPLIED — Compare is the best way
+        // to see what a mask did; only the SELECTION goes). The Compare control disables itself while a mode is armed, but
+        // `compareMode` is a plain `@State` this observes however it changed (reviewer-caught: this was once missing, so Point
+        // Color's eyedropper could stay armed over a Side-by-Side/Split viewport whose `currentFitRect` assumption no longer holds).
+        // Retouch circles are positioned against the single-image fit rect, hence cleared too.
+        .onChange(of: compareMode) { _, newMode in
+            if newMode != .off {
+                interactionMode = .none
+                adjustPanel.selectedMaskID = nil
+                adjustPanel.selectedPointColorID = nil
+                adjustPanel.selectedRetouchSpotID = nil
+            }
+        }
         .onChange(of: selectedTab) { _, newTab in
             if newTab == .crop { isHistoryPresented = false } // jumping history mid-crop would fight the crop edit
             if newTab.disarmsPointModes {
@@ -1542,10 +1555,6 @@ struct ContentView: View {
         }
         .toolbar {
             libraryToolbarItems
-            editHistoryToolbarItems
-            historyToolbarItem
-            compareToolbarItem
-            filmstripToolbarItem
             cropDoneToolbarItem
         }
         .navigationTitle(showLibrary ? "Library" : (document.currentFileName ?? "PhotoApp"))
@@ -1555,8 +1564,8 @@ struct ContentView: View {
     /// out of `mainContent`'s `.toolbar { }` (alongside the other
     /// `*ToolbarItem`/`*ToolbarItems` properties below) purely to keep that
     /// closure's statement count low enough for the Swift type-checker —
-    /// see `filmstripToolbarItem`'s doc comment for the full story; this
-    /// split predates D1(b) reaching in but was needed once it did.
+    /// the Editor's other toolbar buttons (Undo/Redo/History/Compare/Filmstrip/Enhance) later moved into the right-hand rail
+    /// (`EditorRailActions`), which is what finally kept that closure small.
     /// Compacted from one `ToolbarItem` (and one Liquid-Glass capsule) per
     /// action to two `ToolbarItemGroup`s of icon-only controls — same
     /// actions/`.disabled` logic throughout, just fewer/smaller controls.
@@ -1707,134 +1716,6 @@ struct ContentView: View {
         return "Export Selected (\(selectedPhotosVisibleInGrid.count))…"
     }
 
-    /// Grouped into two `ToolbarItemGroup`s (history vs. document actions)
-    /// instead of five separate `ToolbarItem`s — same actions/`.disabled`
-    /// logic, just fewer Liquid-Glass capsules on macOS 26+.
-    @ToolbarContentBuilder
-    private var editHistoryToolbarItems: some ToolbarContent {
-        ToolbarItemGroup(placement: .automatic) {
-            Button {
-                document.undo()
-            } label: {
-                Label("Undo", systemImage: "arrow.uturn.backward")
-            }
-            // No .keyboardShortcut here — the Edit menu
-            // (`PhotoAppApp`'s `.commands { CommandGroup(replacing:
-            // .undoRedo) }`) is the canonical ⌘Z/⇧⌘Z owner now, so two
-            // separate views don't both claim the same key combo.
-            .disabled(!document.canUndo)
-
-            Button {
-                document.redo()
-            } label: {
-                Label("Redo", systemImage: "arrow.uturn.forward")
-            }
-            .disabled(!document.canRedo)
-
-            Button {
-                document.revertToOriginal()
-            } label: {
-                Label("Revert to Original", systemImage: "arrow.counterclockwise")
-            }
-            // `isEffectivelyIdentity`, not `== .identity` — a RAW photo's
-            // `rawDecoderVersionPin` is invisible bookkeeping set on
-            // every open, not a user edit; a bare `== .identity` check
-            // would leave this button permanently enabled for every RAW
-            // photo, including never-touched ones (Phase 6 slice 7
-            // review round 2). See `EditState.isEffectivelyIdentity`'s
-            // own doc comment.
-            .disabled(document.currentImage == nil || document.editState.isEffectivelyIdentity)
-        }
-        ToolbarItemGroup(placement: .automatic) {
-            Button {
-                pasteModel.copy(document.editState, fileName: document.currentFileName ?? "photo")
-            } label: {
-                Label("Copy Settings", systemImage: "doc.on.doc")
-            }
-            // Same condition as "Revert to Original" just above, and
-            // deliberately NOT gated on `!showLibrary` — this whole
-            // toolbar group already renders (disabled as appropriate) in
-            // BOTH the Library and Editor panes; a new gate here would be
-            // an inconsistency, not a safety improvement.
-            .disabled(document.currentImage == nil)
-
-            Button {
-                // Snapshotted synchronously, same pattern as "Copy
-                // Settings" just above — `enhanceModel.enhance` reads
-                // exactly what's on screen right now, including an edit
-                // still inside its debounce window.
-                guard !renameModel.isWorking else { return }
-                enhanceModel.enhance(sourceURL: document.currentURL, editState: document.editState, catalog: catalog)
-            } label: {
-                Label("Enhance", systemImage: "square.resize.up")
-            }
-            // `wand.and.stars` is already Auto Tone's icon (Light section,
-            // AdjustTabView) — `square.resize.up` avoids the collision.
-            // `isLoadInFlight`/`isEnhancing` both gate this: a photo
-            // switch or an enhance already in progress must not let a
-            // second click start a second one on top of it.
-            .disabled(
-                document.currentImage == nil || document.isLoadInFlight || enhanceModel.isEnhancing
-                    || renameModel.isWorking
-            )
-        }
-    }
-
-    @ToolbarContentBuilder
-    private var compareToolbarItem: some ToolbarContent {
-        ToolbarItem(placement: .automatic) {
-            Menu {
-                Picker("Compare", selection: $compareMode) {
-                    Text("Off").tag(CompareViewMode.off)
-                    Text("Side by Side").tag(CompareViewMode.sideBySide)
-                    Text("Split (Before/After)").tag(CompareViewMode.split)
-                }
-                if compareMode == .split {
-                    Divider()
-                    Picker("Orientation", selection: $splitOrientation) {
-                        Text("Vertical").tag(SplitOrientation.vertical)
-                        Text("Horizontal").tag(SplitOrientation.horizontal)
-                    }
-                }
-            } label: {
-                Label("Compare", systemImage: "rectangle.split.2x1")
-            }
-            // Not on the Crop tab, and not with another
-            // point-interaction mode armed — same one-at-a-time
-            // invariant the WB/red-eye buttons already keep (see their
-            // own `.disabled`/mutual-disarm below).
-            .disabled(
-                document.currentImage == nil || isCroppingActive
-                    || isPickingWhiteBalance || isPlacingRedEyeCorrections || isPickingColorRange
-                    || isPickingPointColor || isPickingSubject || isPlacingRetouchSpot
-            )
-            .tint(compareMode != .off ? .yellow : nil)
-            .accessibilityAddTraits(compareMode != .off ? [.isSelected] : [])
-            .onChange(of: compareMode) { _, newMode in
-                if newMode != .off {
-                    // Clears every armed mode in one assignment now —
-                    // the `.disabled` above blocks entering Compare from
-                    // the MENU while armed, but `compareMode` is also a
-                    // plain `@State` this `.onChange` observes regardless
-                    // of how it changed (reviewer-caught: this branch was
-                    // once missing entirely, so nothing actually stopped
-                    // Point Color's eyedropper from staying armed over a
-                    // Side-by-Side/Split viewport whose `currentFitRect`
-                    // assumption no longer holds).
-                    interactionMode = .none
-                    // Deliberately does NOT disable the Compare menu itself
-                    // above (masks stay APPLIED — Compare is the best way
-                    // to see what a mask did) — this only clears the
-                    // overlay/detail-panel SELECTION, matching the armed-mode
-                    // clear right above.
-                    adjustPanel.selectedMaskID = nil
-                    adjustPanel.selectedPointColorID = nil
-                    adjustPanel.selectedRetouchSpotID = nil // its circles are positioned against the single-image fit rect
-                }
-            }
-        }
-    }
-
     @ToolbarContentBuilder
     private var cropDoneToolbarItem: some ToolbarContent {
         if selectedTab == .crop {
@@ -1872,53 +1753,8 @@ struct ContentView: View {
         }
     }
 
-    /// The History button: opens `HistoryPopoverView` (the edit timeline) as a popover, the app's first. Editor only, and in its own
-    /// `@ToolbarContentBuilder` property for the same type-checker reason as `filmstripToolbarItem`. Yellow tint + `.isSelected`
-    /// while open, like the filmstrip toggle.
-    @ToolbarContentBuilder
-    private var historyToolbarItem: some ToolbarContent {
-        if !showLibrary {
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    isHistoryPresented.toggle()
-                } label: {
-                    Label("History", systemImage: "clock.arrow.circlepath")
-                }
-                .disabled(document.currentImage == nil)
-                .tint(isHistoryPresented ? .yellow : nil)
-                .accessibilityAddTraits(isHistoryPresented ? [.isSelected] : [])
-                .popover(isPresented: $isHistoryPresented, arrowEdge: .bottom) {
-                    HistoryPopoverView(document: document)
-                }
-            }
-        }
-    }
-
-    /// The single-photo editor — unchanged from before the Library grid
-    /// was added, just extracted out of `mainContent` so `mainContent` can
-    /// switch between this and `LibraryGridView`.
-    /// IMPROVEMENTS.md D1(b)'s filmstrip toggle, extracted out of the main
-    /// `.toolbar { }` closure into its own `@ToolbarContentBuilder` property
-    /// — inlining it there pushed that closure's item count past the point
-    /// where the Swift type-checker could resolve it in reasonable time
-    /// (a real build failure, not a style preference); splitting complex
-    /// `ToolbarContent`/`ViewBuilder` closures into named sub-properties is
-    /// the standard fix.
-    @ToolbarContentBuilder
-    private var filmstripToolbarItem: some ToolbarContent {
-        if !showLibrary {
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    isFilmstripVisible.toggle()
-                } label: {
-                    Label("Filmstrip", systemImage: "square.grid.3x1")
-                }
-                .tint(isFilmstripVisible ? .yellow : nil)
-                .accessibilityAddTraits(isFilmstripVisible ? [.isSelected] : [])
-            }
-        }
-    }
-
+    /// The single-photo editor — unchanged from before the Library grid was added, just extracted out of `mainContent` so
+    /// `mainContent` can switch between this and `LibraryGridView`.
     private var editorContent: some View {
         VStack(spacing: 0) {
             editorSplitView
@@ -1934,13 +1770,35 @@ struct ContentView: View {
         }
     }
 
+    /// The rail's second group (Undo / Redo / Revert / History / Compare / Filmstrip / Enhance) with its availability rules
+    /// (`EditorRailActionRules`) fed from this view's armed-tool state. Extracted: this file's type-checker ceiling.
+    private var editorRailActions: some View {
+        let hasImage = document.currentImage != nil
+        let armed = EditorRailActionRules.ArmedModes(
+            whiteBalance: isPickingWhiteBalance, redEye: isPlacingRedEyeCorrections, colorRange: isPickingColorRange,
+            pointColor: isPickingPointColor, subject: isPickingSubject, retouchSpot: isPlacingRetouchSpot)
+        return EditorRailActions(
+            document: document, compareMode: $compareMode, splitOrientation: $splitOrientation,
+            isHistoryPresented: $isHistoryPresented, isFilmstripVisible: $isFilmstripVisible,
+            canCompare: EditorRailActionRules.canCompare(hasImage: hasImage, isCropping: isCroppingActive, armed: armed),
+            canEnhance: EditorRailActionRules.canEnhance(
+                hasImage: hasImage, isLoadInFlight: document.isLoadInFlight, isEnhancing: enhanceModel.isEnhancing,
+                isRenameWorking: renameModel.isWorking),
+            onEnhance: {
+                // Snapshotted synchronously: `enhance` reads exactly what is on screen now, including an edit still inside its
+                // debounce window.
+                guard !renameModel.isWorking else { return }
+                enhanceModel.enhance(sourceURL: document.currentURL, editState: document.editState, catalog: catalog)
+            })
+    }
+
     /// The Editor's image pane + control sidebar — unchanged from before
     /// D1(b) added the filmstrip below it, just extracted so `editorContent`
     /// can wrap it in a `VStack` alongside `EditorFilmstripView`.
     private var editorSplitView: some View {
         HStack(spacing: 0) {
             editorPanes
-            EditorToolRail(selectedTab: $selectedTab)
+            EditorToolRail(selectedTab: $selectedTab) { editorRailActions }
         }
     }
 
@@ -1971,7 +1829,7 @@ struct ContentView: View {
                         // keep the `ZStack`'s OWN literal small — this file
                         // has hit real Swift type-checker failures from
                         // exactly this shape before (see `mainContent`'s
-                        // and `filmstripToolbarItem`'s own doc comments);
+                        // own doc comment);
                         // "extract into a named sub-property" is the
                         // established fix here, applied proactively rather
                         // than after a 7th branch actually broke the build.
@@ -2372,8 +2230,8 @@ struct ContentView: View {
         }
         // Compare Split's draggable divider. `compareMode` can only be
         // non-`.off` with no WB-eyedropper/Red-Eye-placement mode armed —
-        // belt-and-braces enforced BOTH by the toolbar Menu's own
-        // `.disabled(...)` (gates on `isPickingWhiteBalance`/
+        // belt-and-braces enforced BOTH by the rail Compare entry's own
+        // `.disabled(...)` (`EditorRailActionRules.canCompare`) (gates on `isPickingWhiteBalance`/
         // `isPlacingRedEyeCorrections`) AND by arming either one calling
         // `onEnterPointPickingMode()`, which sets `compareMode = .off`.
         // A selected MASK is a separate case — the Menu's `.disabled(...)`
@@ -2386,7 +2244,7 @@ struct ContentView: View {
         // `.brush`) it doesn't overlap in practice because the OTHER
         // direction is covered instead: selecting one
         // (`AdjustTabView.select(_:)`) calls `onEnterPointPickingMode()`,
-        // forcing `compareMode = .off`, and `compareToolbarItem`'s own
+        // forcing `compareMode = .off`, and the editor-level
         // `.onChange(of: compareMode)` clears `selectedMaskID` the moment
         // `compareMode` becomes non-`.off` again — so the two states stay
         // mutually exclusive by construction, not because either
@@ -2401,7 +2259,7 @@ struct ContentView: View {
         // just a theoretical one. This is deliberate and safe: no overlay
         // is drawn for this kind (see `isEditingOverlayMask`), so nothing
         // competes with `CompareDividerOverlay` below for the same screen
-        // real estate. `compareToolbarItem`'s own `.onChange(of:
+        // real estate. the editor-level `.onChange(of:
         // compareMode)` still unconditionally clears `selectedMaskID` the
         // other way (engaging Compare still deselects ANY mask, including
         // this kind) — making that kind-aware too, so a `.luminanceRange`

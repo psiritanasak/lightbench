@@ -107,8 +107,8 @@ final class ImageDocumentModel: ObservableObject {
     /// Whether an undo/redo step is available — mirrors `EditHistory`'s own
     /// `canUndo`/`canRedo` as `@Published` properties, since SwiftUI can't
     /// observe mutation of a plain (non-`ObservableObject`) struct property;
-    /// refreshed after every history operation. Drives the toolbar buttons'
-    /// enabled state.
+    /// refreshed after every history operation. Drives the rail's Undo/Redo
+    /// entries' enabled state.
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
 
@@ -1357,7 +1357,7 @@ final class ImageDocumentModel: ObservableObject {
     }
 
     /// Republishes every `EditHistory`-derived `@Published` property —
-    /// `canUndo`/`canRedo` (the toolbar buttons) and `historyEntries`/
+    /// `canUndo`/`canRedo` (the rail's Undo/Redo entries) and `historyEntries`/
     /// `currentHistoryIndex` (the History panel) — from the current
     /// `history`. Named for what it now covers as a whole, not just the
     /// undo/redo flags it originally published alone; called after every
@@ -1461,7 +1461,7 @@ final class ImageDocumentModel: ObservableObject {
     /// committed step — going through the debounce instead would leave a
     /// ~350ms window where a follow-up edit could merge into the same
     /// commit as the revert, and where `canUndo`/`canRedo` would be stale
-    /// relative to what the toolbar buttons show.
+    /// relative to what the rail's Undo/Redo entries show.
     func revertToOriginal() {
         cancelPendingSkinDetection() // a still-running detection must not land its raster on the reverted photo
         finalizePendingCommit()

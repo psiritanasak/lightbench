@@ -1076,7 +1076,7 @@ private struct LibraryThumbnailCell: View {
 /// Color band swatches in `ContentView.swift`). Tapping the star that's
 /// already the current rating clears it to 0 — the standard Lightroom/
 /// Photos toggle-off convenience.
-private struct StarRatingRow: View {
+struct StarRatingRow: View {
     let rating: Int
     let onSet: (Int) -> Void
 

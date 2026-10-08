@@ -174,25 +174,26 @@ final class WindowChromeTests: XCTestCase {
         TrafficLightKind.allCases.compactMap { window.standardWindowButton($0.windowButtonType) }
     }
 
-    func testInstallHidesTheSystemButtonsAndAddsExactlyOneView() throws {
+    func testInstallMakesTheSystemButtonsInvisibleAndAddsExactlyOneView() throws {
         let window = makeWindow()
         let first = try XCTUnwrap(FlatTrafficLights.install(in: window, actions: SpyActions()))
         let second = try XCTUnwrap(FlatTrafficLights.install(in: window, actions: SpyActions()))
         XCTAssertTrue(first === second, "installing twice reuses the view")
         let container = try XCTUnwrap(standardButtons(window).first?.superview)
         XCTAssertEqual(container.subviews.filter { $0 is FlatTrafficLightsView }.count, 1)
-        for button in standardButtons(window) { XCTAssertTrue(button.isHidden, "system button hidden") }
+        for button in standardButtons(window) { XCTAssertTrue(FlatTrafficLights.isInvisible(button), "system button invisible but still laid out") }
     }
 
-    func testTheSystemButtonsStayHiddenWhenAppKitShowsThemAgain() throws {
+    func testTheSystemButtonsStayInvisibleWhenAppKitChangesThemAgain() throws {
         let window = makeWindow()
         _ = try XCTUnwrap(FlatTrafficLights.install(in: window, actions: SpyActions()))
         let button = try XCTUnwrap(standardButtons(window).first)
-        button.isHidden = false
-        let hidden = expectation(description: "re-hidden")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { hidden.fulfill() }
-        wait(for: [hidden], timeout: 2)
-        XCTAssertTrue(button.isHidden)
+        button.alphaValue = 1
+        button.isHidden = true
+        let restored = expectation(description: "invisible again")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { restored.fulfill() }
+        wait(for: [restored], timeout: 2)
+        XCTAssertTrue(FlatTrafficLights.isInvisible(button))
     }
 
     func testInstallCopiesTheOriginalButtonsDisabledState() throws {
@@ -280,20 +281,66 @@ final class WindowChromeTests: XCTestCase {
         XCTAssertTrue(view.superview === newContainer)
     }
 
-    func testTheDotsAreRealPressableAccessibilityButtons() throws {
-        let spy = SpyActions()
-        let view = FlatTrafficLightsView(layout: .from(frames: frames), actions: spy)
-        let first = try XCTUnwrap(view.accessibilityChildren() as? [NSAccessibilityElement])
-        let second = try XCTUnwrap(view.accessibilityChildren() as? [NSAccessibilityElement])
-        XCTAssertEqual(first.map { $0.accessibilityLabel() }, ["Close", "Minimize", "Zoom"])
-        XCTAssertEqual(first.map { $0.accessibilityRole() }, [.button, .button, .button])
-        XCTAssertTrue(zip(first, second).allSatisfy { $0 === $1 }, "the same elements every time, so VoiceOver keeps its place")
-        XCTAssertTrue(first[1].accessibilityPerformPress())
-        XCTAssertTrue(first[0].accessibilityPerformPress())
-        XCTAssertEqual(spy.minimizes, 1)
-        XCTAssertEqual(spy.closes, 1)
-        view.enabledKinds = [.minimize, .zoom]
-        XCTAssertFalse(first[0].accessibilityPerformPress(), "a disabled button reports that it could not be pressed")
-        XCTAssertEqual(spy.closes, 1)
+    private func accessibilityButtonCount(_ node: Any) -> Int {
+        guard let element = node as? NSAccessibilityProtocol else { return 0 }
+        var n = element.accessibilityRole() == .button ? 1 : 0
+        for child in element.accessibilityChildren() ?? [] { n += accessibilityButtonCount(child) }
+        return n
+    }
+
+    /// The dots add NO accessibility elements: they would duplicate the system buttons, which stay laid out and exposed (measured by a
+    /// reviewer: hidden buttons drop out of accessibility, invisible-but-laid-out ones do not). Exactly three AXButtons under the title bar.
+    func testTheDotsDoNotDuplicateTheSystemButtonsInAccessibility() throws {
+        let window = makeToolbarWindow(id: "ax-\(UUID().uuidString)")
+        let before = accessibilityButtonCount(try XCTUnwrap(standardButtons(window).first?.superview))
+        _ = try XCTUnwrap(FlatTrafficLights.install(in: window, actions: SpyActions()))
+        let after = accessibilityButtonCount(try XCTUnwrap(standardButtons(window).first?.superview))
+        XCTAssertEqual(before, 3, "close / minimize / zoom")
+        XCTAssertEqual(after, before, "installing the dots must not add or remove accessibility buttons")
+        window.orderOut(nil)
+    }
+
+    // MARK: The window title must not slide under the dots
+
+    private func titleMinX(of window: NSWindow, title: String) -> CGFloat? {
+        func find(_ view: NSView) -> CGFloat? {
+            if let field = view as? NSTextField, field.stringValue == title { return field.convert(field.bounds, to: nil).minX }
+            for sub in view.subviews { if let x = find(sub) { return x } }
+            return nil
+        }
+        return window.contentView?.superview.flatMap(find)
+    }
+
+    private func makeToolbarWindow(id: String) -> NSWindow {
+        let window = NSWindow(contentRect: CGRect(x: -5000, y: -5000, width: 320, height: 200),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let toolbar = NSToolbar(identifier: id)
+        toolbar.displayMode = .iconOnly
+        window.toolbar = toolbar
+        window.toolbarStyle = .unified
+        window.title = "IMG_0989 2.jpg"
+        window.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        return window
+    }
+
+    /// MEASURED regression: hiding the system buttons (or alpha 0) made AppKit lay the title out 70 pt further left, under the dots
+    /// (so "IMG_0989 2.jpg" and "Library" ran behind them in a narrow window). Invisible-but-visible keeps the title where it was.
+    func testTheWindowTitleStaysWhereItWasWithTheSystemButtonsInvisible() throws {
+        let untouched = makeToolbarWindow(id: "untouched-\(UUID().uuidString)")
+        let styled = makeToolbarWindow(id: "styled-\(UUID().uuidString)")
+        _ = try XCTUnwrap(FlatTrafficLights.install(in: styled, actions: SpyActions()))
+        for window in [untouched, styled] {
+            window.setContentSize(CGSize(width: 330, height: 200))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            window.setContentSize(CGSize(width: 320, height: 200))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        let want = try XCTUnwrap(titleMinX(of: untouched, title: "IMG_0989 2.jpg"))
+        let got = try XCTUnwrap(titleMinX(of: styled, title: "IMG_0989 2.jpg"))
+        XCTAssertGreaterThan(want, 60, "the title normally starts after the buttons")
+        XCTAssertEqual(got, want, accuracy: 0.5, "the title must not move under the dots")
+        untouched.orderOut(nil)
+        styled.orderOut(nil)
     }
 }

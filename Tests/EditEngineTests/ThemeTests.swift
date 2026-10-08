@@ -84,6 +84,44 @@ final class ThemeTests: XCTestCase {
                    try pixel(render(Theme.panel, size: size), point, width: size.width), "tool rail")
     }
 
+    // MARK: Text / icon colours that must not be the accent blue
+
+    /// Pixels in a rectangle (view points) that look accent-blue: clearly more blue than red.
+    private func bluePixels(_ rep: NSBitmapImageRep, in rect: CGRect, width: CGFloat) -> Int {
+        let scale = CGFloat(rep.pixelsWide) / width
+        var n = 0
+        for y in Int(rect.minY * scale)..<Int(rect.maxY * scale) {
+            for x in Int(rect.minX * scale)..<Int(rect.maxX * scale) {
+                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), c.alphaComponent > 0.5 else { continue }
+                if c.blueComponent > 0.45 && c.blueComponent > c.redComponent + 0.25 { n += 1 }
+            }
+        }
+        return n
+    }
+
+    func testCopySettingsLabelIsWhiteNotAccentBlue() async throws {
+        let row = Photo(id: 1, path: "/a.jpg", filename: "a", fileSize: nil, importedAt: Date(timeIntervalSince1970: 0))
+        let meta = EditorPhotoMeta(resolve: { _ in row })
+        await meta.sync(path: "/a.jpg", isLoading: false)?.value
+        let size = CGSize(width: 600, height: 36)
+        // `.tint` at the app root (as in PhotoAppApp) is what turns borderless button text blue.
+        let bar = EditorRatingBar(meta: meta, canCopy: true, onCopy: {}).tint(Theme.accent)
+        let rep = render(bar, size: size)
+        XCTAssertEqual(bluePixels(rep, in: CGRect(x: 440, y: 0, width: 160, height: 36), width: size.width), 0, "Copy Settings text/icon")
+    }
+
+    func testIdleCompareEntryIsNotBlueButTheActiveOneIs() throws {
+        let size = CGSize(width: EditorToolRailMetrics.width, height: 7 * 42)
+        func entry(compare: CompareViewMode) -> NSBitmapImageRep {
+            render(EditorRailActions(document: ImageDocumentModel(), compareMode: .constant(compare), splitOrientation: .constant(.vertical),
+                                     isHistoryPresented: .constant(false), isFilmstripVisible: .constant(false),
+                                     canCompare: true, canEnhance: true, onEnhance: {}).tint(Theme.accent), size: size)
+        }
+        let band = CGRect(x: 0, y: 4 * 42, width: size.width, height: 36)
+        XCTAssertEqual(bluePixels(entry(compare: .off), in: band, width: size.width), 0, "idle Compare icon is not blue")
+        XCTAssertGreaterThan(bluePixels(entry(compare: .split), in: band, width: size.width), 10, "active Compare icon is the accent")
+    }
+
     // MARK: No translucent materials left
 
     /// A blunt guard for the HUDs, bars and selection marks that a render test cannot reach one by one: no UI source may use a translucent

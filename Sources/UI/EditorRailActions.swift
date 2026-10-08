@@ -66,7 +66,11 @@ struct EditorRailActions: View {
         } label: {
             RailEntryLabel(title: "Compare", symbol: Symbol.compare, isOn: compareMode != .off, isEnabled: canCompare, showsTitle: false)
         }
-        .menuStyle(.borderlessButton)
+        // `.button` + `.plain` so the label is drawn like the other entries' plain buttons; the tint keeps the root accent from colouring
+        // the idle state (it was blue all the time) — grey like its neighbours, the accent only while Compare is on.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .tint(RailEntryLabel.color(isOn: compareMode != .off, isEnabled: canCompare))
         .menuIndicator(.hidden)
         // Same fixed cell as every other entry: a bare borderless `Menu` pads itself and would push the entries below it out of line.
         .frame(width: EditorToolRailMetrics.width - 8, height: RailEntryLabel.iconOnlyHeight)

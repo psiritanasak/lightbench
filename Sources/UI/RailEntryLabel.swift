@@ -31,7 +31,7 @@ struct RailEntryLabel: View {
 
     /// Dimmed through the COLOUR (a disabled `Menu` label ignores `.opacity`). Enabled entries use the plain `Theme.accent` /
     /// `Color.secondary` values; only a disabled entry gets a dimmed copy.
-    private static func color(isOn: Bool, isEnabled: Bool) -> Color {
+    static func color(isOn: Bool, isEnabled: Bool) -> Color {
         let base = isOn ? Theme.accent : Color.secondary
         return isEnabled ? base : base.opacity(0.35)
     }

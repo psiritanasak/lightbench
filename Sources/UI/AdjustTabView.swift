@@ -1787,6 +1787,8 @@ struct AdjustTabView: View {
         } label: {
             Text("Reset Adjustments")
                 .frame(maxWidth: .infinity)
+                // White (primary) text; dimmed while there is nothing to reset.
+                .foregroundStyle(Color.primary.opacity(isAdjustTabAtIdentity ? 0.4 : 1))
         }
         .buttonStyle(.bordered)
         .disabled(isAdjustTabAtIdentity)

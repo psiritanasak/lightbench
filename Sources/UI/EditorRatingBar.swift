@@ -22,6 +22,8 @@ struct EditorRatingBar: View {
             Spacer(minLength: 8)
             Button(action: onCopy) { Label("Copy Settings", systemImage: "doc.on.doc") }
                 .buttonStyle(.borderless)
+                // White (primary) text, not the accent blue a borderless button takes by default.
+                .foregroundStyle(canCopy ? Color.primary : Color.secondary)
                 .disabled(!canCopy)
                 .help("Copy this photo's edit settings (⇧⌘C)")
         }

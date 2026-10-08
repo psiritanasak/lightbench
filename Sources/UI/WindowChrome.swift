@@ -217,45 +217,12 @@ final class FlatTrafficLightsView: NSView {
 
     // MARK: Accessibility
 
-    private lazy var accessibilityDots: [TrafficLightAccessibilityElement] = TrafficLightKind.allCases.map {
-        TrafficLightAccessibilityElement(kind: $0, owner: self)
-    }
-
-    /// The three dots as real, pressable accessibility buttons (the system buttons are hidden, so these are the ones VoiceOver, Switch
-    /// Control and AX automation find). Created once so VoiceOver keeps its place.
-    override func accessibilityChildren() -> [Any]? { accessibilityDots }
+    /// No accessibility elements of its own: the system buttons underneath stay laid out (measured: a HIDDEN button drops out of
+    /// accessibility, an invisible-but-laid-out one does not), are fully functional and sit exactly under the dots, so VoiceOver,
+    /// Switch Control and AX automation (`AXCloseButton`, ...) use them. Elements here would duplicate them.
+    override func accessibilityChildren() -> [Any]? { [] }
 
     override func isAccessibilityElement() -> Bool { false }
-
-    /// A dot's rectangle in screen coordinates, computed on demand so it follows window moves.
-    func screenFrame(of kind: TrafficLightKind) -> NSRect {
-        guard let index = TrafficLightKind.allCases.firstIndex(of: kind), index < layoutModel.centers.count else { return .zero }
-        let c = layoutModel.centers[index], r = layoutModel.radius
-        return window?.convertToScreen(convert(CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r), to: nil)) ?? .zero
-    }
-}
-
-@MainActor
-final class TrafficLightAccessibilityElement: NSAccessibilityElement {
-    let kind: TrafficLightKind
-    private weak var owner: FlatTrafficLightsView?
-
-    init(kind: TrafficLightKind, owner: FlatTrafficLightsView) {
-        self.kind = kind
-        self.owner = owner
-        super.init()
-        setAccessibilityRole(.button)
-        setAccessibilityLabel(kind.title)
-        setAccessibilityParent(owner)
-    }
-
-    override func accessibilityFrame() -> NSRect { owner?.screenFrame(of: kind) ?? .zero }
-
-    override func accessibilityPerformPress() -> Bool {
-        guard let owner, owner.enabledKinds.contains(kind) else { return false }
-        owner.activate(kind)
-        return true
-    }
 }
 
 // MARK: - Installing it on a window
@@ -264,7 +231,7 @@ final class TrafficLightAccessibilityElement: NSAccessibilityElement {
 enum FlatTrafficLights {
     static let identifier = NSUserInterfaceItemIdentifier("FlatTrafficLights")
 
-    /// Hides the window's three system buttons and puts ONE `FlatTrafficLightsView` where they were. Safe to call repeatedly (the
+    /// Makes the window's three system buttons invisible (but still laid out) and puts ONE `FlatTrafficLightsView` where they were. Safe to call repeatedly (the
     /// existing view is reused). Returns nil if the window has no standard buttons (e.g. a borderless window).
     @discardableResult
     static func install(in window: NSWindow, actions: WindowActions? = nil) -> FlatTrafficLightsView? {
@@ -272,7 +239,7 @@ enum FlatTrafficLights {
         guard buttons.count == 3, let container = buttons[0].superview else { return nil }
 
         if let existing = container.subviews.compactMap({ $0 as? FlatTrafficLightsView }).first(where: { $0.identifier == identifier }) {
-            keepButtonsHidden(buttons)
+            keepButtonsInvisible(buttons)
             return existing
         }
         let layout = TrafficLightLayout.from(frames: buttons.map(\.frame))
@@ -282,12 +249,30 @@ enum FlatTrafficLights {
         view.enabledKinds = Set(zip(TrafficLightKind.allCases, buttons).filter { $0.1.isEnabled }.map(\.0))
         view.isWindowActive = window.isMainWindow
         container.addSubview(view)
-        keepButtonsHidden(buttons)
+        keepButtonsInvisible(buttons)
         Observers.attach(to: view, window: window, buttons: buttons)
         return view
     }
 
-    private static func keepButtonsHidden(_ buttons: [NSButton]) { buttons.forEach { $0.isHidden = true } }
+    /// The alpha the system buttons are left at. NOT 0 and NOT `isHidden`: AppKit lays the window title out after the buttons that are
+    /// VISIBLE, and measured on a titled window with a toolbar, hidden buttons (or alpha 0) moved the title 70 pt to the left, under
+    /// the dots, while alpha 0.01 + `isTransparent` kept it at its normal position (106 pt) and draws nothing.
+    static let invisibleAlpha: CGFloat = 0.01
+
+    /// Whether a system button is in the "invisible but still laid out" state.
+    static func isInvisible(_ button: NSButton) -> Bool {
+        !button.isHidden && button.alphaValue > 0 && button.alphaValue <= 0.05 && button.isTransparent
+    }
+
+    static func restore(_ button: NSButton) { keepButtonsInvisible([button]) }
+
+    private static func keepButtonsInvisible(_ buttons: [NSButton]) {
+        for button in buttons where !isInvisible(button) {
+            button.isHidden = false
+            button.alphaValue = invisibleAlpha
+            button.isTransparent = true
+        }
+    }
 
     /// AppKit moves the standard buttons itself when the title bar re-lays out (a toolbar appearing or changing height, full screen,
     /// a different container): follow them. Re-parents the dots if the buttons moved to another container, and refreshes which
@@ -301,7 +286,7 @@ enum FlatTrafficLights {
         }
         view.apply(layout: TrafficLightLayout.from(frames: buttons.map(\.frame)))
         view.enabledKinds = Set(zip(TrafficLightKind.allCases, buttons).filter { $0.1.isEnabled }.map(\.0))
-        keepButtonsHidden(buttons)
+        keepButtonsInvisible(buttons)
     }
 
     /// Window / button notifications and a KVO on each button's `isHidden`: AppKit re-shows its buttons now and then, MOVES them when the
@@ -337,8 +322,12 @@ enum FlatTrafficLights {
                     [weak view, weak window] _ in
                     MainActor.assumeIsolated { if let view, let window { FlatTrafficLights.resync(view, in: window) } }
                 })
+                // AppKit hides / re-shows / re-fades its buttons now and then: put them back in the invisible-but-laid-out state.
                 holder.kvo.append(button.observe(\.isHidden, options: [.new]) { button, _ in
-                    MainActor.assumeIsolated { if !button.isHidden { DispatchQueue.main.async { button.isHidden = true } } }
+                    MainActor.assumeIsolated { if !FlatTrafficLights.isInvisible(button) { DispatchQueue.main.async { FlatTrafficLights.restore(button) } } }
+                })
+                holder.kvo.append(button.observe(\.alphaValue, options: [.new]) { button, _ in
+                    MainActor.assumeIsolated { if !FlatTrafficLights.isInvisible(button) { DispatchQueue.main.async { FlatTrafficLights.restore(button) } } }
                 })
             }
             // The holder lives as long as the view does.

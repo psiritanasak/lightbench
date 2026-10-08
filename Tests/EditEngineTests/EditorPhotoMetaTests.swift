@@ -15,7 +15,7 @@ final class EditorPhotoMetaTests: XCTestCase {
     }
 
     private func make(_ rows: [String: Photo], calls: Calls = Calls(),
-                      resolve: ((String) async throws -> Photo?)? = nil) -> EditorPhotoMeta {
+                      resolve: EditorPhotoMeta.Resolver? = nil) -> EditorPhotoMeta {
         EditorPhotoMeta(
             resolve: resolve ?? { rows[$0] },
             setRating: { r, _ in calls.ratings.append(r) },

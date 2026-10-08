@@ -49,6 +49,8 @@ struct ContentView: View {
     /// `PhotoAppApp`) — unlike `document`/`catalog`, nothing outside this
     /// view (no Scene-level command, no other view) needs to observe it.
     @StateObject private var exportModel = ExportModel()
+    /// The open photo's catalog row (rating / flag / label) for the bar under the photo and the editor's rating keys.
+    @StateObject private var editorMeta = EditorPhotoMeta()
 
     /// Enhance/Super Resolution. Same scoping reasoning as `exportModel`
     /// — v1 deliberately has no Photo-menu item (unlike `pasteModel`'s
@@ -566,10 +568,45 @@ struct ContentView: View {
             let pointColorResult = handlePointColorKeyPress(keyPress)
             if pointColorResult == .handled { return pointColorResult }
         }
+        // Rating / flag / label keys (1-5, P/X/U/F/., 6-9 — `0` stays "reset zoom"): the same table as the Library grid. Only when
+        // the open photo has a catalog row (`editorMeta.apply` is false otherwise, so any other key still reaches pan handling).
+        if !isCroppingActive, let character = keyPress.characters.first,
+           let command = PhotoKeyCommand.command(for: character, allowsZero: false), editorMeta.apply(command) {
+            return .handled
+        }
         if canZoom, zoomScale > 1, compareMode != .split {
             return handlePanKeyPress(keyPress)
         }
         return .ignored
+    }
+
+    /// The rating / flag / label / Copy Settings bar under the photo (outside the image `GeometryReader`, so the fit rect simply
+    /// shrinks). Extracted from `editorSplitView` — this file's type-checker ceiling.
+    private var editorRatingBar: some View {
+        EditorRatingBar(meta: editorMeta, canCopy: document.currentImage != nil) {
+            pasteModel.copy(document.editState, fileName: document.currentFileName ?? "photo")
+        }
+    }
+
+    /// The grid's own row for the open photo. The path is read ONCE (not per element: `URL.path` in the closure measured ~70x
+    /// slower), and nothing is scanned with no photo open — this runs on every body evaluation, including each slider tick.
+    private var openPhotoGridRow: Photo? {
+        guard let openPath = document.currentURL?.path else { return nil }
+        return catalog.photos.first(where: { $0.path == openPath })
+    }
+
+    /// Points `editorMeta` at the catalog (resolver reads the grid's already-updated rows first, then the database) and looks the
+    /// open photo up again.
+    private func syncEditorMeta() {
+        editorMeta.configure(
+            resolve: { path in
+                if let row = catalog.photos.first(where: { $0.path == path }) { return row }
+                return try await catalog.catalogedPhoto(atPath: path)
+            },
+            setRating: { catalog.setRating($0, for: $1) },
+            setFlagStatus: { catalog.setFlagStatus($0, for: $1) },
+            setColorLabel: { catalog.setColorLabel($0, for: $1) })
+        editorMeta.sync(path: document.currentURL?.path, isLoading: document.isLoadInFlight)
     }
 
     /// Pans an off-screen spot to the centre when it is selected while zoomed in (selecting from the sidebar no longer resets zoom, so the
@@ -1286,7 +1323,12 @@ struct ContentView: View {
         // key silently skips this whole reset. Reachable now that ⌘←/⌘→ can
         // step straight between them — the Name (A–Z) sort puts identical
         // filenames adjacent.
+        .onAppear { syncEditorMeta() }
+        .onChange(of: document.isLoadInFlight) { _, _ in syncEditorMeta() }
+        // The grid's own row for the open photo (rating changed elsewhere, a failed write's refresh, the catalog finishing loading).
+        .onChange(of: openPhotoGridRow) { _, _ in syncEditorMeta() }
         .onChange(of: document.currentURL) { _, _ in
+            syncEditorMeta()
             isHistoryPresented = false
             selectedTab = .adjust
             selectedAspect = .freeform
@@ -2006,6 +2048,7 @@ struct ContentView: View {
                             : isEditingOverlayMask ? "Mask editing" : "Image"
                     )
                 }
+                editorRatingBar
             }
             .frame(minWidth: 480, minHeight: 360)
             .layoutPriority(1)

@@ -12,7 +12,7 @@ import Foundation
 final class EditorPhotoMeta: ObservableObject {
     @Published private(set) var photo: Photo?
 
-    typealias Resolver = (String) async throws -> Photo?
+    typealias Resolver = @MainActor (String) async throws -> Photo?
     private var resolve: Resolver
     private var setRatingInCatalog: (Int, Photo) -> Void
     private var setFlagInCatalog: (FlagStatus, Photo) -> Void

@@ -36,7 +36,7 @@ enum EditorInteractionMode: Equatable {
     case pickingPointColor(pointColorID: UUID)
     /// Click-on-image subject picking: stays armed so several subjects can be toggled (like Red-Eye placement).
     case pickingSubject(maskID: UUID)
-    /// The Remove section's "Place Spots" tool: stays armed so every click on the photo adds a spot (Lightroom's spot-removal
+    /// The Retouch tab's "Place Spots" tool: stays armed so every click on the photo adds a spot (Lightroom's spot-removal
     /// tool). No payload — spot selection is `AdjustPanelState.selectedRetouchSpotID`, not part of the mode.
     case placingRetouchSpot
 
@@ -118,6 +118,21 @@ enum EditorInteractionMode: Equatable {
     mutating func disarmPointColorPick() {
         if case .pickingPointColor = self {
             self = .none
+        }
+    }
+}
+
+extension EditorInteractionMode {
+    /// The tab whose controls arm and disarm this mode (`nil` for `.none`). Used by `EditorTab.switchEffects`: leaving that tab
+    /// disarms it. White balance and Point Color picking belong to Adjust; red-eye and spot placement to their own tabs; brush
+    /// painting, colour-range picking and subject picking to Masks.
+    var ownerTab: EditorTab? {
+        switch self {
+        case .none: return nil
+        case .pickingWhiteBalance, .pickingPointColor: return .adjust
+        case .placingRedEye: return .redEye
+        case .placingRetouchSpot: return .retouch
+        case .paintingBrush, .pickingColorRange, .pickingSubject: return .masks
         }
     }
 }

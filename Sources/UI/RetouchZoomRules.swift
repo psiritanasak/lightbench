@@ -4,10 +4,10 @@ import CoreGraphics
 /// While the Place Spots tool is armed or a spot is selected, plain dragging belongs to the tool, so panning is a HELD-SPACE
 /// gesture (Space = temporary hand tool, as in Photoshop/Lightroom); arrow keys always pan, scroll always zooms.
 enum RetouchZoomRules {
-    /// The Remove tool is "active" — it owns plain pointer drags on the photo: the section is expanded, the Crop tab is not showing,
+    /// The Remove tool is "active" — it owns plain pointer drags on the photo: the Retouch tab is showing, the Crop tab is not showing,
     /// and the tool is armed or a spot is selected.
-    static func isToolActive(sectionExpanded: Bool, isCropping: Bool, geometryAtIdentity: Bool, isArmed: Bool, hasSelectedSpot: Bool) -> Bool {
-        sectionExpanded && !isCropping && geometryAtIdentity && (isArmed || hasSelectedSpot)
+    static func isToolActive(retouchTabShowing: Bool, isCropping: Bool, geometryAtIdentity: Bool, isArmed: Bool, hasSelectedSpot: Bool) -> Bool {
+        retouchTabShowing && !isCropping && geometryAtIdentity && (isArmed || hasSelectedSpot)
     }
 
     /// Whether the Space key is taken as the hand tool: only while the tool is active (anywhere else Space keeps its normal meaning).

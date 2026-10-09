@@ -4,14 +4,14 @@ import XCTest
 final class RetouchZoomRulesTests: XCTestCase {
     typealias R = RetouchZoomRules
 
-    func testTheToolIsActiveWhenArmedOrASpotIsSelectedInTheOpenSectionOutsideCropAtIdentityGeometry() {
-        func active(section: Bool = true, crop: Bool = false, identity: Bool = true, armed: Bool = false, selected: Bool = false) -> Bool {
-            R.isToolActive(sectionExpanded: section, isCropping: crop, geometryAtIdentity: identity, isArmed: armed, hasSelectedSpot: selected)
+    func testTheToolIsActiveWhenArmedOrASpotIsSelectedOnTheRetouchTabOutsideCropAtIdentityGeometry() {
+        func active(tab: Bool = true, crop: Bool = false, identity: Bool = true, armed: Bool = false, selected: Bool = false) -> Bool {
+            R.isToolActive(retouchTabShowing: tab, isCropping: crop, geometryAtIdentity: identity, isArmed: armed, hasSelectedSpot: selected)
         }
         XCTAssertTrue(active(armed: true))
         XCTAssertTrue(active(selected: true))
         XCTAssertFalse(active())
-        XCTAssertFalse(active(section: false, armed: true, selected: true))
+        XCTAssertFalse(active(tab: false, armed: true, selected: true))
         XCTAssertFalse(active(crop: true, armed: true, selected: true))
         XCTAssertFalse(active(identity: false, armed: true, selected: true),
                        "armed through an Undo that restored non-identity geometry: the layer is hidden, so a plain drag must pan")

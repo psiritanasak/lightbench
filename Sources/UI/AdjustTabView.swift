@@ -35,11 +35,7 @@ struct AdjustPanelState {
     /// for anyone who never opens it.
     var isColorGradingSectionExpanded = false
     var isEffectsSectionExpanded = false
-    var isRedEyeSectionExpanded = false
 
-    /// Spot removal ("Remove" section): whether it is expanded, and which spot's controls + on-image circles are
-    /// shown. Collapsing the section clears the selection (so the overlay hides), like Masks.
-    var isRetouchSectionExpanded = false
     var selectedRetouchSpotID: UUID?
 
     /// The radius a plain click gives a spot placed with the Place Spots tool: the last size the user dragged out (or resized
@@ -75,9 +71,6 @@ struct AdjustPanelState {
     /// reasoning as every other section bool above.
     var isRawSectionExpanded = false
 
-    /// Phase 7 slice 2: whether the Masks section is expanded. Same
-    /// reasoning as every other section bool above.
-    var isMasksSectionExpanded = false
 
     /// Which mask's sliders + on-image overlay are shown.
     /// Presentation-only, exactly like `selectedSelectiveColorBand` —
@@ -132,7 +125,7 @@ struct AdjustPanelState {
 }
 
 /// The Editor's Adjust tab: the collapsible Light/Curve/Color/Selective Color/Point Color/Black & White/Color Grading/
-/// Effects/Red-Eye/Remove/Masks/RAW sections and "Reset Adjustments" (sliders only — Look, Style and Presets live in
+/// Effects/RAW sections (Red-Eye, Retouch and Masks are their own rail tabs, served by this same view with a `scope`) and "Reset Adjustments" (sliders only — Look, Style and Presets live in
 /// `LooksTabView`, with their own "Reset Look & Style"; the edit History lives in the toolbar's History popover).
 struct AdjustTabView: View {
     @ObservedObject var document: ImageDocumentModel
@@ -146,7 +139,7 @@ struct AdjustTabView: View {
     /// used to keep mutually exclusive by hand — see `EditorInteractionMode`'s
     /// own doc comment for the full history (IMPROVEMENTS.md D14).
     @Binding var interactionMode: EditorInteractionMode
-    /// Called when the Remove section's Place Spots tool is armed (`nil`) or a spot is selected from the sidebar (its id): leaves
+    /// Called when the Retouch tab's Place Spots tool is armed (`nil`) or a spot is selected from the sidebar (its id): leaves
     /// Compare and takes image-pane focus but KEEPS the current zoom/pan (unlike `onEnterPointPickingMode`, which resets both); a
     /// sidebar-picked spot that is off screen is panned into view.
     let onEnterRetouchEditing: (UUID?) -> Void
@@ -272,7 +265,34 @@ struct AdjustTabView: View {
             .frame(maxWidth: .infinity, alignment: .center)
     }
 
+    /// Which tab this view is serving. `.adjust` is the slider sections; the other three each show ONE point tool (they were sections of
+    /// the Adjust scroll before they became their own rail entries) under a plain header — no collapsing, the tab is the section.
+    enum Scope { case adjust, retouch, redEye, masks }
+    var scope: Scope = .adjust
+    /// Whether this view's tab is still the selected one. Asynchronous results (the Vision subject mask) check it before they select
+    /// anything, since the user may have switched tabs while Vision ran.
+    var isTabCurrent: () -> Bool = { true }
+
     var body: some View {
+        switch scope {
+        case .adjust: adjustBody
+        case .retouch: toolBody("Retouch") { retouchSection }
+        case .redEye: toolBody("Red-Eye") { redEyeSection }
+        case .masks: toolBody("Masks") { masksSection }
+        }
+    }
+
+    private func toolBody<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(Theme.textSecondary)
+                .textCase(.uppercase)
+            content()
+        }
+    }
+
+    private var adjustBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Adjust")
                 .font(.caption)
@@ -318,16 +338,6 @@ struct AdjustTabView: View {
                 effectsSection
             }
             Divider()
-            AdjustSectionContainer(
-                title: "Red-Eye", isExpanded: $panel.isRedEyeSectionExpanded
-            ) {
-                redEyeSection
-            }
-            Divider()
-            retouchSectionContainer
-            AdjustSectionContainer(title: "Masks", isExpanded: masksSectionExpandedBinding) {
-                masksSection
-            }
             rawSectionContainer
             Divider()
             resetAdjustmentsButton
@@ -845,34 +855,6 @@ struct AdjustTabView: View {
     /// a plain value. The slider detail view for that mask is
     /// `MaskDetailView`, a separate top-level file — see that file's own
     /// doc comment for why it isn't inlined here.
-    /// Reviewer-caught: collapsing the section while a mask is selected
-    /// would otherwise hide the list/detail panel but leave mask-editing
-    /// mode fully armed underneath (the on-image overlay stays, `canZoom`
-    /// stays blocked) — with no visible way back in except Escape or
-    /// re-expanding. Clearing the selection on collapse closes that gap;
-    /// expanding never needs to touch it.
-    private var masksSectionExpandedBinding: Binding<Bool> {
-        Binding(
-            get: { panel.isMasksSectionExpanded },
-            set: { newValue in
-                // Reviewer-caught: ONE write through `panel`, not two
-                // sequential ones — `panel` is itself a `@Binding`, and two
-                // separate read-modify-writes through it risk the second
-                // clobbering the first if either ever observes a stale
-                // snapshot instead of the live value.
-                var next = panel
-                next.isMasksSectionExpanded = newValue
-                if !newValue {
-                    next.selectedMaskID = nil
-                    document.subjectMaskMessage = nil // its alert lives inside this section
-                }
-                panel = next
-                if !newValue {
-                    interactionMode.disarmMaskModes()
-                }
-            }
-        )
-    }
 
     private var masksSection: some View {
         Group {
@@ -1032,7 +1014,7 @@ struct AdjustTabView: View {
         let selectionAtClick = panel.selectedMaskID
         document.selectSubject { id in
             guard let id, let mask = document.editState.masks.first(where: { $0.id == id }),
-                  panel.isMasksSectionExpanded, interactionMode == modeAtClick,
+                  isTabCurrent(), interactionMode == modeAtClick,
                   panel.selectedMaskID == selectionAtClick else { return }
             select(mask)
         }
@@ -1204,9 +1186,8 @@ struct AdjustTabView: View {
 
     // MARK: - Point Color
 
-    /// Mirrors `masksSectionExpandedBinding` exactly: ONE write through
-    /// `panel`, not two sequential ones, and disarms the eyedropper on
-    /// collapse.
+    /// ONE write through `panel`, not two sequential ones (a second read-modify-write through the
+    /// `@Binding` could clobber the first with a stale snapshot), and disarms the eyedropper on collapse.
     private var pointColorSectionExpandedBinding: Binding<Bool> {
         Binding(
             get: { panel.isPointColorSectionExpanded },
@@ -1460,31 +1441,6 @@ struct AdjustTabView: View {
     /// closure (the toolbar's `.toolbar {}`), so this stays a flat list of
     /// plain rows.
     // MARK: - Remove (spot removal)
-
-    private var retouchSectionExpandedBinding: Binding<Bool> {
-        Binding(
-            get: { panel.isRetouchSectionExpanded },
-            set: { newValue in
-                var next = panel
-                next.isRetouchSectionExpanded = newValue
-                if !newValue {
-                    next.selectedRetouchSpotID = nil
-                    interactionMode.disarm(.placingRetouchSpot) // the tool has no on-image layer once the section is closed
-                }
-                panel = next
-            }
-        )
-    }
-
-    /// One computed property so `body`'s already-long `VStack` gains a single child (like `LooksTabView.looksSectionContainer`).
-    private var retouchSectionContainer: some View {
-        Group {
-            AdjustSectionContainer(title: "Remove", isExpanded: retouchSectionExpandedBinding) {
-                retouchSection
-            }
-            Divider()
-        }
-    }
 
     private var retouchSection: some View {
         let spots = document.editState.retouchSpots

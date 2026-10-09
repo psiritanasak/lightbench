@@ -1090,7 +1090,7 @@ final class ImageDocumentModel: ObservableObject {
 
     // MARK: - Spot removal
 
-    /// Shown by the Remove section's own alert (placement refusals, a failed auto-source).
+    /// Shown by the Retouch tab's own alert (placement refusals, a failed auto-source).
     @Published var retouchMessage: String?
 
     /// Appends a spot in the middle of the frame (the "Add Spot" button; later ones spiral outward) and finds its source in the

@@ -4,7 +4,7 @@ import SwiftUI
 /// travels along), the dashed SOURCE circle (drag to choose where the repair is copied from), joined by a line, and a small
 /// RADIUS handle on the spot's right edge (drag to resize; `onRadiusCommitted` reports the final size so the Place Spots tool can
 /// remember it).
-/// Shown only at identity geometry (`RetouchSpot` explains why) and only while the Remove section has a spot
+/// Shown only at identity geometry (`RetouchSpot` explains why) and only while the Retouch tab has a spot
 /// selected. Modelled on `MaskOverlayView`: one narrow `Binding<RetouchSpot>`, a snapshot baseline per drag,
 /// everything drawn in the pane's space and CLIPPED to the pane (`paneSize`) — drawing only: a handle whose centre has been
 /// panned off the pane is also switched off for presses (`RetouchOverlayGeometry.isInsidePane`), since `clipped()` does not limit hit-testing.

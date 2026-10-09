@@ -207,13 +207,13 @@ struct ContentView: View {
             && !isPickingPointColor && !isPickingSubject
     }
 
-    /// Spot removal: whether a spot is selected in the (expanded) Remove section at identity geometry — the only
+    /// Spot removal: whether a spot is selected on the Retouch tab at identity geometry — the only
     /// state in which its on-image circles are drawn. Resolved against the LIVE array (Undo/Revert can delete the
     /// selected spot without passing through any disarm site). Unlike the other overlays it does NOT block zoom/pan: the spot
     /// overlays are positioned against `ZoomPanGeometry.displayedRect` (the zoomed, panned picture), and panning is Space + drag
     /// while the tool is active (`RetouchZoomRules`).
     private var isEditingRetouchSpot: Bool {
-        guard adjustPanel.isRetouchSectionExpanded, !isCroppingActive,
+        guard selectedTab == .retouch, !isCroppingActive,
               document.editState.isGeometryAtIdentity,
               let id = adjustPanel.selectedRetouchSpotID else { return false }
         return document.editState.retouchSpots.contains { $0.id == id }
@@ -221,16 +221,16 @@ struct ContentView: View {
 
     /// The Remove tool owns plain pointer drags on the photo (armed, or a spot selected): panning is then Space + drag.
     private var retouchToolActive: Bool {
-        RetouchZoomRules.isToolActive(sectionExpanded: adjustPanel.isRetouchSectionExpanded, isCropping: isCroppingActive,
+        RetouchZoomRules.isToolActive(retouchTabShowing: selectedTab == .retouch, isCropping: isCroppingActive,
                                       geometryAtIdentity: document.editState.isGeometryAtIdentity,
                                       isArmed: isPlacingRetouchSpot, hasSelectedSpot: isEditingRetouchSpot)
     }
 
-    /// Whether the Remove section's on-image spot layer (every spot as a thin circle, plus the armed capture layer) is up: the
-    /// section is expanded, no crop, identity geometry, single-image view and no other point tool armed. A pure function of state,
+    /// Whether the Retouch tab's on-image spot layer (every spot as a thin circle, plus the armed capture layer) is up: the
+    /// the Retouch tab is showing, no crop, identity geometry, single-image view and no other point tool armed. A pure function of state,
     /// like `isEditingRetouchSpot`.
     private var showsRetouchSpots: Bool {
-        adjustPanel.isRetouchSectionExpanded && !isCroppingActive && document.editState.isGeometryAtIdentity
+        selectedTab == .retouch && !isCroppingActive && document.editState.isGeometryAtIdentity
             && compareMode == .off && !isPickingWhiteBalance && !isPlacingRedEyeCorrections && !isPickingColorRange
             && !isPickingPointColor && !isPickingSubject && !isPaintingBrush
     }
@@ -367,9 +367,9 @@ struct ContentView: View {
     /// points. UNLIKE `isPickingWhiteBalance`, placing a point does NOT
     /// auto-disarm this mode — the user will often place several
     /// corrections (both eyes) in one sitting, so it stays armed until
-    /// toggled off or the user leaves the Adjust tab.
+    /// toggled off or the user leaves the Red-Eye tab.
     private var isPlacingRedEyeCorrections: Bool { interactionMode.isPlacingRedEyeCorrections }
-    /// The Remove section's Place Spots tool is armed (every click on the photo adds a spot).
+    /// The Retouch tab's Place Spots tool is armed (every click on the photo adds a spot).
     private var isPlacingRetouchSpot: Bool { interactionMode.isPlacingRetouchSpot }
 
     /// D8 (IMPROVEMENTS.md): the keyboard-driven crosshair's current
@@ -538,7 +538,7 @@ struct ContentView: View {
         // whichever kind currently does or doesn't block zoom.
         // Spot removal: Delete removes the selected spot, Escape deselects then stops the tool (`RetouchKeyAction`). Same
         // only-intercept-on-`.handled` form as the branches below, so any other key still reaches pan handling.
-        if !isCroppingActive, adjustPanel.isRetouchSectionExpanded, isPlacingRetouchSpot || isEditingRetouchSpot {
+        if !isCroppingActive, selectedTab == .retouch, isPlacingRetouchSpot || isEditingRetouchSpot {
             if handleRetouchKeyPress(keyPress) == .handled { return .handled }
         }
         if !isCroppingActive, isEditingMask {
@@ -719,7 +719,7 @@ struct ContentView: View {
     /// the `.onChange` below), which covers every disarm route EXCEPT
     /// PHOTO SWITCH (Escape, natural stroke end via `onStrokeEnded`, tab
     /// switch, Compare, WB, Red-Eye, selecting another mask, collapsing
-    /// the Masks section ARE all covered — confirmed, not just claimed,
+    /// the Masks tab ARE all covered — confirmed, not just claimed,
     /// via a reviewer trace) in ONE place, rather than needing each disarm
     /// site to separately remember this cleanup. Never fires for "Redraw
     /// Stroke" on an already-painted mask: that mask has real points (F5
@@ -995,7 +995,7 @@ struct ContentView: View {
     /// `nil` when Compare is off (the default, unchanged single-image
     /// render path); otherwise bundles everything `ImageRenderer` needs.
     /// Compare never runs on the Crop tab (see the toolbar `Menu`'s
-    /// `.disabled(...)` and the tab-change reset — it survives Adjust and Looks,
+    /// `.disabled(...)` and the tab-change reset — it survives every tab but Crop and Clean Up,
     /// `EditorTab.keepsCompareAndZoom`), so
     /// `compareOriginalEditState`/`displayEditState` are never substituting
     /// for crop-editing mode at the same time.
@@ -1332,9 +1332,9 @@ struct ContentView: View {
             zoomScale = 1
             panOffset = .zero
         }
-        // Leaving the Adjust tab disarms the point-interaction modes and clears the mask/Point Color/retouch selections — none has
-        // controls on another tab, and their overlays would otherwise stay live (`EditorTab.disarmsPointModes`). Compare and
-        // zoom survive a switch to Looks (before/after while browsing looks) but reset on Crop/Clean Up
+        // Each point tool belongs to one tab (`EditorTab.switchEffects`): a switch disarms the armed mode and clears the mask / Point
+        // Color / retouch selections unless the destination tab owns them, so no overlay stays live on a tab with no way to turn it off. Compare and
+        // zoom survive a switch to any tab that shows the live image (before/after while browsing looks) but reset on Crop/Clean Up
         // (`EditorTab.keepsCompareAndZoom`; the rail's Compare entry (`EditorRailActionRules.canCompare`) and `canZoom` already gate Crop).
         // A closed popover leaves keyboard focus nowhere: hand it back to the image pane (Escape/arrows/Delete live there). Not in
         // Library mode (the grid claims its own focus), and not when the click that dismissed the popover landed on a text field
@@ -1363,12 +1363,14 @@ struct ContentView: View {
         }
         .onChange(of: selectedTab) { _, newTab in
             if newTab == .crop { isHistoryPresented = false } // jumping history mid-crop would fight the crop edit
-            if newTab.disarmsPointModes {
-                interactionMode = .none
-                adjustPanel.selectedMaskID = nil
-                adjustPanel.selectedPointColorID = nil
-                adjustPanel.selectedRetouchSpotID = nil
-            }
+            let effects = newTab.switchEffects(armed: interactionMode)
+            if effects.disarmsMode { interactionMode = .none }
+            if effects.clearsMaskSelection { adjustPanel.selectedMaskID = nil }
+            if effects.clearsPointColorSelection { adjustPanel.selectedPointColorID = nil }
+            if effects.clearsRetouchSelection { adjustPanel.selectedRetouchSpotID = nil }
+            // The Masks tab's subject-mask alert lives inside that tab: a message a slow Vision run sets after the user left must not pop
+            // up when they come back (the old Masks collapse binding cleared it).
+            if newTab != .masks { document.subjectMaskMessage = nil }
             if !newTab.keepsCompareAndZoom {
                 compareMode = .off
                 zoomScale = 1
@@ -1436,7 +1438,7 @@ struct ContentView: View {
         // `selectedMaskID` `.onChange` above); every other transition is
         // the ONE place every disarm route EXCEPT photo switch (Escape,
         // natural stroke end via `onStrokeEnded`, tab switch, Compare, WB,
-        // Red-Eye, selecting another mask, collapsing the Masks section)
+        // Red-Eye, selecting another mask, leaving the Masks tab)
         // funnels through, so none of those sites individually needs to
         // remember `discardUnpaintedBrushMask` — F4's whole reason for
         // `UUID?` instead of `Bool`: this closure captures `oldID`, the
@@ -1959,7 +1961,7 @@ struct ContentView: View {
         }
         // WB eyedropper tap-capture. Gated on `!isCroppingActive` (on top
         // of `isPickingWhiteBalance` itself only ever being armable from
-        // the Adjust tab — see the `.onChange(of: selectedTab)` below) so
+        // the Adjust tab — see the `.onChange(of: selectedTab)` above) so
         // this and `CropOverlayView`'s own drag gestures above can never
         // both be live at once.
         if isPickingWhiteBalance, !isCroppingActive, let fitRect = currentFitRect {
@@ -1998,7 +2000,7 @@ struct ContentView: View {
         // Red-Eye correction markers/tap-capture. Gated on
         // `!isCroppingActive` and `!isPickingWhiteBalance` (on top of
         // `isPlacingRedEyeCorrections` itself only ever being armable from
-        // the Adjust tab) so only one of the three point-interaction modes
+        // the Red-Eye tab) so only one of the three point-interaction modes
         // can ever be live at once. UNLIKE the WB eyedropper, a tap does
         // NOT disarm this mode — see `isPlacingRedEyeCorrections`'s own
         // doc comment.
@@ -2016,7 +2018,7 @@ struct ContentView: View {
         }
         // Phase 7 slice 2: the selected mask's resize/move handles. Gated
         // on ALL THREE earlier modes, on top of `isEditingMask` itself only
-        // ever being armable from the Masks section — same cumulative-
+        // ever being armable from the Masks tab — same cumulative-
         // exclusion discipline as the Red-Eye branch above (each new mode
         // re-checks every earlier one; earlier modes never gain a
         // predicate about this one — mutual exclusion is enforced by
@@ -2293,44 +2295,61 @@ struct ContentView: View {
         }
     }
 
+    /// The Adjust sliders, or ONE of the point tools (Retouch / Red-Eye / Masks): one view serves all four, so the arming callbacks
+    /// are wired once.
+    private func adjustTabView(scope: AdjustTabView.Scope) -> AdjustTabView {
+        let tab: EditorTab
+        switch scope {
+        case .adjust: tab = .adjust
+        case .retouch: tab = .retouch
+        case .redEye: tab = .redEye
+        case .masks: tab = .masks
+        }
+        return AdjustTabView(
+            document: document,
+            panel: $adjustPanel,
+            interactionMode: $interactionMode,
+            // The Remove tool keeps the current zoom/pan (spots are placed zoomed in); it only leaves Compare and takes focus.
+            // `spotID` is set only when a spot was picked from the SIDEBAR: while zoomed in it may be off screen, so it is panned
+            // into view. (Selecting on the photo never moves the view: the user is working right there.)
+            onEnterRetouchEditing: { spotID in
+                compareMode = .off
+                isImagePaneFocused = true
+                revealRetouchSpot(spotID)
+            },
+            onEnterPointPickingMode: {
+                compareMode = .off
+                zoomScale = 1
+                panOffset = .zero
+                // Reviewer-caught: WB/Red-Eye arming is a bool
+                // TOGGLE, so `.onChange(of: isPickingWhiteBalance/
+                // isPlacingRedEyeCorrections)` always fires on a
+                // true rising edge and grabs focus there. Mask
+                // selection is by ID, not a toggle — clicking an
+                // ALREADY-selected mask's row calls `select(_:)`
+                // (which calls this closure) without changing
+                // `selectedMaskID`, so the corresponding
+                // `.onChange(of: adjustPanel.selectedMaskID)`
+                // would silently NOT fire, leaving Escape
+                // unreachable if focus had since moved to a
+                // sidebar slider. Grabbing focus here too closes
+                // that gap unconditionally — redundant but
+                // harmless for WB/Red-Eye's own already-working case.
+                isImagePaneFocused = true
+            },
+            scope: scope,
+            isTabCurrent: { selectedTab == tab }
+        )
+    }
+
     private var editControls: some View {
         ScrollView {
             Group {
                 switch selectedTab {
-                case .adjust:
-                    AdjustTabView(
-                        document: document,
-                        panel: $adjustPanel,
-                        interactionMode: $interactionMode,
-                        // The Remove tool keeps the current zoom/pan (spots are placed zoomed in); it only leaves Compare and takes focus.
-                        // `spotID` is set only when a spot was picked from the SIDEBAR: while zoomed in it may be off screen, so it is panned
-                        // into view. (Selecting on the photo never moves the view: the user is working right there.)
-                        onEnterRetouchEditing: { spotID in
-                            compareMode = .off
-                            isImagePaneFocused = true
-                            revealRetouchSpot(spotID)
-                        },
-                        onEnterPointPickingMode: {
-                            compareMode = .off
-                            zoomScale = 1
-                            panOffset = .zero
-                            // Reviewer-caught: WB/Red-Eye arming is a bool
-                            // TOGGLE, so `.onChange(of: isPickingWhiteBalance/
-                            // isPlacingRedEyeCorrections)` always fires on a
-                            // true rising edge and grabs focus there. Mask
-                            // selection is by ID, not a toggle — clicking an
-                            // ALREADY-selected mask's row calls `select(_:)`
-                            // (which calls this closure) without changing
-                            // `selectedMaskID`, so the corresponding
-                            // `.onChange(of: adjustPanel.selectedMaskID)`
-                            // would silently NOT fire, leaving Escape
-                            // unreachable if focus had since moved to a
-                            // sidebar slider. Grabbing focus here too closes
-                            // that gap unconditionally — redundant but
-                            // harmless for WB/Red-Eye's own already-working case.
-                            isImagePaneFocused = true
-                        }
-                    )
+                case .adjust: adjustTabView(scope: .adjust)
+                case .retouch: adjustTabView(scope: .retouch)
+                case .redEye: adjustTabView(scope: .redEye)
+                case .masks: adjustTabView(scope: .masks)
                 case .crop:
                     CropTabView(
                         document: document,

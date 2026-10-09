@@ -43,7 +43,8 @@ struct ContentView: View {
                     isImporting: catalog.isImporting,
                     hasPendingPaste: pasteModel.pendingTargets != nil,
                     hasModalPanel: NSApp.modalWindow != nil,
-                    isToolScanRunning: catalog.faces.isWorking || catalog.duplicates.isScanning
+                    isToolScanRunning: catalog.faces.isWorking || catalog.duplicates.isScanning,
+                    isMerging: catalog.mergeBusy
                 ).reason
             }
         )
@@ -1323,7 +1324,7 @@ struct ContentView: View {
     /// True while any other sheet/dialog a keyword sheet could collide with is up (or a long operation runs).
     private var otherSheetIsPresented: Bool {
         renameModel.isPresentingSheet || renameModel.isWorking || exportModel.isPresentingOptions
-            || exportModel.isExporting || pasteModel.pendingTargets != nil
+            || exportModel.isExporting || pasteModel.pendingTargets != nil || catalog.mergeBusy
     }
 
     private var mainContent: some View {
@@ -1722,18 +1723,25 @@ struct ContentView: View {
                         }
                         .disabled(selectedPhotosVisibleInGrid.isEmpty || otherSheetIsPresented)
 
+                        // The merge acts on the selected photos the grid actually SHOWS (`selectedPhotosInDisplayedGrid`), so the label and the
+                        // enabled state use that same set (`selectedPhotosVisibleInGrid` is the raw selection and includes filtered-out photos).
+                        Button("Merge to HDR (\(catalog.selectedPhotosInDisplayedGrid.count))…") {
+                            catalog.mergeRequested = .hdr
+                        }
+                        .disabled(catalog.selectedPhotosInDisplayedGrid.count < 2 || otherSheetIsPresented || catalog.mergeBusy || document.isLoadInFlight)
+
                         Button("Rename Files (\(selectedPhotosVisibleInGrid.count))…") {
                             renameModel.begin(photos: selectedPhotosVisibleInGrid, catalog: catalog, providers: renameProviders)
                         }
                         .disabled(
                             selectedPhotosVisibleInGrid.isEmpty || renameModel.isWorking || renameModel.isPresentingSheet
-                                || document.isLoadInFlight
+                                || document.isLoadInFlight || catalog.mergeBusy
                         )
 
                         Button("Undo Rename") {
                             renameModel.undo(catalog: catalog, providers: renameProviders)
                         }
-                        .disabled(!renameModel.canUndo || renameModel.isWorking || document.isLoadInFlight)
+                        .disabled(!renameModel.canUndo || renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy)
 
                         Button("Paste Settings (\(selectedPhotosVisibleInGrid.count))…") {
                             pasteModel.requestPaste(onto: selectedPhotosVisibleInGrid)

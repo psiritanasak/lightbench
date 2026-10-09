@@ -28,12 +28,15 @@ struct RenameBusyState {
     var hasModalPanel = false
     /// A Faces or Duplicates scan is reading files (it can outlive its sheet: Done only cancels it).
     var isToolScanRunning = false
+    /// A Photo Merge confirmation is up or a merge is rendering: it reads the selected originals, so they must not be renamed under it.
+    var isMerging = false
 
     var reason: String? {
         if hasModalPanel { return "Finish or cancel the open dialog first." }
         if isLoadInFlight { return "A photo is still loading — try again in a moment." }
         if isExporting || isExportSheetOpen { return "An export is running or being set up — finish or cancel it first." }
         if isEnhancing { return "Enhance is running — wait for it to finish." }
+        if isMerging { return "Photo Merge is in progress — wait for it to finish." }
         if isImporting { return "An import is running — wait for it to finish." }
         if isToolScanRunning { return "A face or duplicate scan is still running — wait for it to finish." }
         if hasPendingPaste { return "Finish or cancel the Paste Settings prompt first." }

@@ -127,7 +127,7 @@ struct PhotoAppApp: App {
                 // scoped to the Library pane, so it needs the SAME guard
                 // independently, not just the toolbar button's copy of it.
                 .disabled(
-                    cull.isActive || pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight
+                    cull.isActive || pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight || catalog.mergeBusy
                         || renameModel.isWorking || renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil
                         || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
                 )
@@ -154,14 +154,21 @@ struct PhotoAppApp: App {
                         cull.isActive || !showLibrary || catalog.peopleSheetPresented || catalog.duplicatesSheetPresented
                             || catalog.keywordSheetPhotoIDs != nil || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
+                // Library-only; only REQUESTS (`MergeDialogModifier` drops it while another sheet is up). Needs 2+ visible selected photos.
+                Button("Merge Photos to HDR…") { catalog.mergeRequested = .hdr }
+                    .disabled(
+                        cull.isActive || !showLibrary || catalog.selectedPhotosInDisplayedGrid.count < 2 || catalog.mergeBusy
+                            || catalog.peopleSheetPresented || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil
+                            || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
+                    )
                 Button("Rename Files…") { renameModel.request = .rename }
                     .disabled(
-                        cull.isActive || catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight
+                        cull.isActive || catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy
                             || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
                     )
                 Button("Undo Rename") { renameModel.request = .undo }
                     .disabled(
-                        cull.isActive || !renameModel.canUndo || renameModel.isWorking || renameModel.isPresentingSheet
+                        cull.isActive || !renameModel.canUndo || renameModel.isWorking || renameModel.isPresentingSheet || catalog.mergeBusy
                             || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
                     )
             }

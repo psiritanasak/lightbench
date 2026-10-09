@@ -129,6 +129,11 @@ final class CatalogModel: ObservableObject {
     @Published var peopleSheetRequested = false
     @Published var peopleSheetPresented = false
     let faces = FacesModel()
+    /// Photo Merge (see `MergeModel`): the Photo / selection menus set `mergeRequested`; `MergeDialogModifier` performs it. `mergeBusy` mirrors
+    /// "a merge confirmation is up or a merge is running" so views observing only this model can block on it.
+    @Published var mergeRequested: MergeModel.Kind?
+    @Published var mergeBusy = false
+    let merge = MergeModel()
     @Published var searchText: String = ""
 
     /// What the Library grid actually renders — `photos` (the
@@ -956,6 +961,13 @@ final class CatalogModel: ObservableObject {
         photos.filter { isSelected($0) }
     }
 
+    /// The selected photos that the Library grid is actually showing (`selectedPhotos` also holds ones hidden by the current filters): what a
+    /// merge acts on, so photos the user cannot see are never merged.
+    var selectedPhotosInDisplayedGrid: [Photo] {
+        let visible = Set(displayedPhotos.compactMap(\.id))
+        return selectedPhotos.filter { $0.id.map(visible.contains) ?? false }
+    }
+
     func clearSelection() {
         selectedPhotoIDs.removeAll()
     }
@@ -1040,7 +1052,7 @@ final class CatalogModel: ObservableObject {
 
     /// True while a Library tool sheet (keywords, duplicates, people) is up or one of their scans runs; batch rename must not start then.
     var toolSheetIsBusy: Bool {
-        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking
+        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy
     }
 
     /// The People sheet's scan: finds faces in the photos the Library is currently drawing from, then regroups ALL stored faces.

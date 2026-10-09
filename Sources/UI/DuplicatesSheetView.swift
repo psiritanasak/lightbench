@@ -180,15 +180,19 @@ struct DuplicatesSheetModifier: ViewModifier {
 }
 
 /// The Library tool sheets (keywords, duplicates, people) as ONE modifier: `ContentView.body` is at the type-checker's limit, so
-/// each extra `.modifier` in its chain is not free. The three sheets block each other.
+/// each extra `.modifier` in its chain is not free. The sheets block each other; Photo Merge's dialog rides along.
 struct LibraryToolSheetsModifier: ViewModifier {
     @ObservedObject var catalog: CatalogModel
     let blocked: Bool
 
     func body(content: Content) -> some View {
         content
-            .modifier(KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented))
-            .modifier(DuplicatesSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.peopleSheetPresented))
-            .modifier(PeopleSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented))
+            .modifier(KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy))
+            .modifier(DuplicatesSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.peopleSheetPresented || catalog.mergeBusy))
+            .modifier(PeopleSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.mergeBusy))
+            .modifier(MergeDialogModifier(
+                catalog: catalog, model: catalog.merge,
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+            ))
     }
 }

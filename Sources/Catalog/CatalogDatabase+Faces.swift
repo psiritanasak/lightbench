@@ -110,22 +110,65 @@ extension CatalogDatabase {
     /// A `nil` person takes an unconfirmed face out of its person.
     func applyAutomaticAssignments(_ assignments: [FaceAssignment]) async throws {
         try await dbQueue.write { db in
-            try Self.apply(assignments, in: db)
+            _ = try Self.apply(assignments, in: db)
         }
     }
 
-    static func apply(_ assignments: [FaceAssignment], in db: Database) throws {
+    struct GroupingApplied: Equatable, Sendable {
+        /// New people that exist after the write (a group whose faces were all guarded out is not counted).
+        var newPeople: Int
+        /// Faces whose person actually changed.
+        var facesChanged: Int
+    }
+
+    /// Applies a `FaceGrouping` plan in ONE transaction: creates the new unnamed people, assigns their faces, applies the other
+    /// assignments (with the guards of `apply`), then removes the unnamed, VISIBLE, now-empty people among the ones this plan touched
+    /// (the people faces left, and the ones created here). A person the user hid, a named one, and an empty person someone just
+    /// created in the UI are never pruned.
+    func applyGroupingPlan(_ plan: FaceGrouping.Plan) async throws -> GroupingApplied {
+        try await dbQueue.write { db in
+            var all = plan.assignments
+            var touched = Set<Int64>()
+            for assignment in plan.assignments {
+                if let old = try Int64.fetchOne(db, sql: "SELECT personId FROM face WHERE id = ?", arguments: [assignment.faceID]) { touched.insert(old) }
+            }
+            var created: [Int64] = []
+            for group in plan.newGroups {
+                var person = Person(id: nil, name: nil, nameKey: nil, isHidden: false, createdAt: Date())
+                try person.insert(db)
+                guard let personID = person.id else { continue }
+                created.append(personID)
+                touched.insert(personID)
+                all.append(contentsOf: group.map { FaceAssignment(faceID: $0, personID: personID) })
+            }
+            let changed = try Self.apply(all, in: db)
+            for personID in touched {
+                try db.execute(sql: """
+                    DELETE FROM person WHERE id = ? AND name IS NULL AND isHidden = 0
+                    AND NOT EXISTS (SELECT 1 FROM face WHERE face.personId = person.id)
+                    """, arguments: [personID])
+            }
+            let surviving = try created.filter { try Person.fetchOne(db, key: $0) != nil }
+            return GroupingApplied(newPeople: surviving.count, facesChanged: changed)
+        }
+    }
+
+    @discardableResult
+    static func apply(_ assignments: [FaceAssignment], in db: Database) throws -> Int {
+        var changed = 0
         for assignment in assignments {
             if let personID = assignment.personID {
                 try db.execute(sql: """
-                    UPDATE face SET personId = ?1 WHERE id = ?2 AND isConfirmed = 0
+                    UPDATE face SET personId = ?1 WHERE id = ?2 AND isConfirmed = 0 AND personId IS NOT ?1
                     AND EXISTS (SELECT 1 FROM person WHERE id = ?1)
                     AND NOT EXISTS (SELECT 1 FROM face_exclusion WHERE faceId = ?2 AND personId = ?1)
                     """, arguments: [personID, assignment.faceID])
             } else {
-                try db.execute(sql: "UPDATE face SET personId = NULL WHERE id = ? AND isConfirmed = 0", arguments: [assignment.faceID])
+                try db.execute(sql: "UPDATE face SET personId = NULL WHERE id = ? AND isConfirmed = 0 AND personId IS NOT NULL", arguments: [assignment.faceID])
             }
+            changed += db.changesCount
         }
+        return changed
     }
 
     // MARK: People

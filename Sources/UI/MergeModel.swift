@@ -14,6 +14,15 @@ import ImageIO
 final class MergeModel: ObservableObject {
     enum Kind: Equatable {
         case hdr
+        case panorama
+    }
+
+    /// What the confirmation dialog's button chose.
+    enum Option: Equatable {
+        /// `align: false` is for a tripod bracket (frames already in register).
+        case hdr(align: Bool)
+        /// `crop: true` trims the ragged edges to the largest valid rectangle.
+        case panorama(crop: Bool)
     }
 
     struct Request: Equatable {
@@ -59,8 +68,7 @@ final class MergeModel: ObservableObject {
 
     /// Runs `request` (the value the confirmation dialog handed its button, NOT `pending`: SwiftUI does not document whether it clears the
     /// dialog's `isPresented` binding before or after a button's action, and `pending` may already be nil by then).
-    /// `align: false` is for a tripod bracket (frames already in register): the frames are merged as they are.
-    func confirm(_ request: Request, align: Bool, catalog: CatalogModel) {
+    func confirm(_ request: Request, option: Option, catalog: CatalogModel) {
         self.catalog = catalog
         guard !isMerging else { return }
         pending = nil
@@ -83,12 +91,12 @@ final class MergeModel: ObservableObject {
                     statusMessage = "Photo Merge needs access to “\(folder.lastPathComponent)” (or a parent folder containing it) — try again."
                     return
                 }
-                await run(urls: urls, align: align, accessScope: grantedFolder, destinationFolder: folder, catalog: catalog)
+                await run(urls: urls, option: option, accessScope: grantedFolder, destinationFolder: folder, catalog: catalog)
             }
         }
     }
 
-    private func run(urls: [URL], align: Bool, accessScope: URL, destinationFolder: URL, catalog: CatalogModel) async {
+    private func run(urls: [URL], option: Option, accessScope: URL, destinationFolder: URL, catalog: CatalogModel) async {
         guard accessScope.startAccessingSecurityScopedResource() else {
             statusMessage = "Couldn't get access to the destination folder."
             return
@@ -98,7 +106,10 @@ final class MergeModel: ObservableObject {
         let outcome: MergeOutcome
         do {
             outcome = try await Task.detached {
-                try await PhotoMerger.mergeHDR(sourceURLs: urls, align: align, into: destinationFolder)
+                switch option {
+                case .hdr(let align): return try await PhotoMerger.mergeHDR(sourceURLs: urls, align: align, into: destinationFolder)
+                case .panorama(let crop): return try await PanoramaMerger.mergePanorama(sourceURLs: urls, cropToFill: crop, into: destinationFolder)
+                }
             }.value
         } catch {
             statusMessage = "Photo Merge failed: \(error.localizedDescription)"
@@ -124,31 +135,57 @@ final class MergeModel: ObservableObject {
             if count < 2 { return "Select at least two photos taken at different exposures to merge to HDR." }
             if count > HDRMergeFilter.maxFrames { return "HDR merge supports at most \(HDRMergeFilter.maxFrames) photos; \(count) are selected." }
             return nil
+        case .panorama:
+            if count < 2 { return "Select at least two overlapping photos to make a panorama." }
+            if count > PanoramaPlan.maxFrames { return "A panorama supports at most \(PanoramaPlan.maxFrames) photos; \(count) are selected." }
+            return nil
         }
     }
 
     nonisolated static func confirmationTitle(_ request: Request) -> String {
         switch request.kind {
         case .hdr: return "Merge \(request.photos.count) photos to HDR?"
+        case .panorama: return "Stitch \(request.photos.count) photos into a panorama?"
         }
     }
 
     nonisolated static func confirmationMessage(_ request: Request) -> String {
-        var text = "The photos are combined into one new high-dynamic-range file saved next to “\(request.photos.first?.filename ?? "the first photo")”. "
-            + "The originals are not changed. The result is a floating-point TIFF so highlights above white stay editable"
-        if let bytes = request.estimatedBytes {
-            text += " — roughly \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
+        let first = request.photos.first?.filename ?? "the first photo"
+        switch request.kind {
+        case .hdr:
+            var text = "The photos are combined into one new high-dynamic-range file saved next to “\(first)”. "
+                + "The originals are not changed. The result is a floating-point TIFF so highlights above white stay editable"
+            if let bytes = request.estimatedBytes {
+                text += " — roughly \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
+            }
+            return text + ". Choose “Tripod” only if the camera did not move between shots."
+        case .panorama:
+            var text = "The photos are joined, in the order they were taken, into one new panorama saved next to “\(first)”. "
+                + "The originals are not changed. Neighbouring photos need to overlap by about half and be taken from one spot; very wide sweeps are refused. "
+                + "The result is a floating-point TIFF"
+            if let bytes = request.estimatedBytes {
+                // About (n + 1) / 2 frames' worth for a level sweep with half overlap; a sweep that drifts up or down, or "Keep Edges", can be larger.
+                text += " — roughly \(ByteCountFormatter.string(fromByteCount: bytes * Int64(request.photos.count + 1) / 2, countStyle: .file)) for a level sweep"
+            }
+            return text + "."
         }
-        text += ". Choose “Tripod” only if the camera did not move between shots."
-        return text
     }
 
     nonisolated static func summary(_ outcome: MergeOutcome) -> String {
         let name = outcome.url.lastPathComponent
-        var text = "Created “\(name)” from \(outcome.frameCount) photos (exposure reference: \(outcome.referenceName))"
-        text += outcome.alignment.isEmpty ? ", without alignment." : ", aligned."
+        var text: String
+        switch outcome.mode {
+        case .hdr:
+            text = "Created “\(name)” from \(outcome.frameCount) photos (exposure reference: \(outcome.referenceName))"
+            text += outcome.alignment.isEmpty ? ", without alignment." : ", aligned."
+        case .panorama:
+            text = "Created “\(name)” (\(Int(outcome.size.width)) × \(Int(outcome.size.height))) from \(outcome.frameCount) photos"
+            text += outcome.cropped ? ", edges cropped." : ", edges kept."
+        }
         if let weakest = outcome.alignment.min(by: { $0.inlierRatio < $1.inlierRatio }), weakest.inlierRatio < 0.5 {
-            text += " Alignment of “\(weakest.name)” was uncertain (\(weakest.inlierCount) of \(weakest.matchCount) matches agreed) — check the result for ghosting."
+            text += outcome.mode == .panorama
+                ? " The join at “\(weakest.name)” was uncertain (\(weakest.inlierCount) of \(weakest.matchCount) matches agreed) — check the seam."
+                : " Alignment of “\(weakest.name)” was uncertain (\(weakest.inlierCount) of \(weakest.matchCount) matches agreed) — check the result for ghosting."
         }
         if let biggest = outcome.gains.max(by: { abs($0.correction) < abs($1.correction) }), abs(biggest.correction) >= 0.05 {
             text += " The exposure of “\(biggest.name)” was measured \(Int((abs(biggest.correction) * 100).rounded()))% "

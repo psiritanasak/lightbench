@@ -161,6 +161,12 @@ struct PhotoAppApp: App {
                             || catalog.peopleSheetPresented || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil
                             || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
+                Button("Merge Photos to Panorama…") { catalog.mergeRequested = .panorama }
+                    .disabled(
+                        cull.isActive || !showLibrary || catalog.selectedPhotosInDisplayedGrid.count < 2 || catalog.mergeBusy
+                            || catalog.peopleSheetPresented || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil
+                            || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
+                    )
                 Button("Rename Files…") { renameModel.request = .rename }
                     .disabled(
                         cull.isActive || catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy

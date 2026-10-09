@@ -33,6 +33,12 @@ enum HDRMergeFilter {
         return finalize.apply(extent: extent, arguments: [acc])?.cropped(to: extent)
     }
 
+    /// The finalize step alone: turns a PREMULTIPLIED sum image (rgb = sum of w * colour, alpha = sum of w) into the weighted mean colour, alpha 1
+    /// where anything contributed. `PanoramaMerger` feeds it a sum of feathered, warped frames.
+    static func finalize(sum: CIImage, extent: CGRect) -> CIImage? {
+        finalizeKernel?.apply(extent: extent, arguments: [sum])?.cropped(to: extent)
+    }
+
     private static func kernel(named name: String) -> CIColorKernel? {
         guard let url = Bundle.main.url(forResource: name, withExtension: "cikernel"),
               let source = try? String(contentsOf: url, encoding: .utf8)

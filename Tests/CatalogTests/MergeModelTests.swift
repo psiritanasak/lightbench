@@ -50,6 +50,45 @@ final class MergeModelTests: XCTestCase {
         XCTAssertFalse(catalog.toolSheetIsBusy)
     }
 
+    func testPanoramaRequestsFollowTheirOwnLimitsAndText() {
+        model.request(.panorama, photos: [photo("a.jpg", id: 1)], catalog: catalog)
+        XCTAssertNil(model.pending)
+        XCTAssertEqual(model.statusMessage, "Select at least two overlapping photos to make a panorama.")
+        model.statusMessage = nil
+        model.request(.panorama, photos: (1...13).map { photo("p\($0).jpg", id: Int64($0)) }, catalog: catalog)
+        XCTAssertNil(model.pending)
+        XCTAssertTrue(model.statusMessage?.contains("at most 12") ?? false)
+        model.statusMessage = nil
+        // Ten photos are fine for a panorama but too many for an HDR bracket.
+        let ten = (1...10).map { photo("p\($0).jpg", id: Int64($0)) }
+        XCTAssertNil(MergeModel.selectionProblem(.panorama, count: 10))
+        XCTAssertNotNil(MergeModel.selectionProblem(.hdr, count: 10))
+        model.request(.panorama, photos: ten, catalog: catalog)
+        XCTAssertEqual(model.pending?.kind, .panorama)
+        let request = try! XCTUnwrap(model.pending)
+        XCTAssertEqual(MergeModel.confirmationTitle(request), "Stitch 10 photos into a panorama?")
+        let message = MergeModel.confirmationMessage(.init(kind: .panorama, photos: ten, estimatedBytes: 1_000_000))
+        XCTAssertTrue(message.contains("overlap by about half"))
+        XCTAssertTrue(message.contains("order they were taken"))
+        XCTAssertTrue(message.contains("roughly") && !message.contains("up to"), "an estimate, not a bound: a diagonal sweep can exceed it")
+        XCTAssertTrue(message.contains("5.5 MB") || message.contains("6 MB") || message.contains("5,5 MB"), "about (10 + 1) / 2 frames of 1 MB: \(message)")
+        XCTAssertFalse(message.contains("Tripod"), "tripod is an HDR concept")
+    }
+
+    func testPanoramaSummaryReportsSizeCroppingAndAWeakJoin() {
+        let url = URL(fileURLWithPath: "/tmp/a-Pano.tiff")
+        var outcome = MergeOutcome(url: url, frameCount: 3, referenceName: "b.jpg",
+                                   alignment: [.init(name: "b.jpg", inlierCount: 90, matchCount: 100), .init(name: "c.jpg", inlierCount: 14, matchCount: 50)])
+        outcome.mode = .panorama
+        outcome.size = CGSize(width: 5200, height: 3100)
+        outcome.cropped = true
+        let text = MergeModel.summary(outcome)
+        XCTAssertTrue(text.hasPrefix("Created “a-Pano.tiff” (5200 × 3100) from 3 photos, edges cropped."))
+        XCTAssertTrue(text.contains("The join at “c.jpg” was uncertain"))
+        outcome.cropped = false
+        XCTAssertTrue(MergeModel.summary(outcome).contains("edges kept."))
+    }
+
     func testASecondRequestWhileOneIsPendingIsIgnored() {
         model.request(.hdr, photos: [photo("a.jpg", id: 1), photo("b.jpg", id: 2)], catalog: catalog)
         let first = model.pending
@@ -69,7 +108,7 @@ final class MergeModelTests: XCTestCase {
     func testConfirmRunsTheRequestItIsGivenEvenWhenPendingWasAlreadyCleared() async throws {
         let request = MergeModel.Request(kind: .hdr, photos: [photo("a.jpg", id: 1), photo("b.jpg", id: 2)], estimatedBytes: nil)
         XCTAssertNil(model.pending)
-        model.confirm(request, align: true, catalog: catalog)
+        model.confirm(request, option: .hdr(align: true), catalog: catalog)
         XCTAssertTrue(model.isMerging, "confirm must start the merge from the request it was handed")
         XCTAssertTrue(catalog.mergeBusy)
         for _ in 0..<500 where model.isMerging { try await Task.sleep(nanoseconds: 10_000_000) }
@@ -80,9 +119,9 @@ final class MergeModelTests: XCTestCase {
 
     func testConfirmIsIgnoredWhileAMergeIsAlreadyRunning() async throws {
         let request = MergeModel.Request(kind: .hdr, photos: [photo("a.jpg", id: 1), photo("b.jpg", id: 2)], estimatedBytes: nil)
-        model.confirm(request, align: true, catalog: catalog)
+        model.confirm(request, option: .hdr(align: true), catalog: catalog)
         XCTAssertTrue(model.isMerging)
-        model.confirm(request, align: false, catalog: catalog) // a double click must not start a second merge
+        model.confirm(request, option: .hdr(align: false), catalog: catalog) // a double click must not start a second merge
         for _ in 0..<500 where model.isMerging { try await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertFalse(model.isMerging)
         XCTAssertEqual(access.requests, 1, "only ONE merge started")
@@ -172,6 +211,8 @@ final class MergeWiringTests: XCTestCase {
     func testThePhotoMenuItemIsLibraryOnlyNeedsTwoVisiblePhotosAndRespectsBusyState() throws {
         let app = try text("Sources/App/PhotoAppApp.swift")
         XCTAssertTrue(app.contains("Button(\"Merge Photos to HDR…\") { catalog.mergeRequested = .hdr }"))
+        XCTAssertTrue(app.contains("Button(\"Merge Photos to Panorama…\") { catalog.mergeRequested = .panorama }"))
+        XCTAssertEqual(app.components(separatedBy: "catalog.selectedPhotosInDisplayedGrid.count < 2 || catalog.mergeBusy").count - 1, 2, "both merge items need 2+ visible photos")
         XCTAssertTrue(app.contains("cull.isActive || !showLibrary || catalog.selectedPhotosInDisplayedGrid.count < 2 || catalog.mergeBusy"))
     }
 
@@ -190,6 +231,8 @@ final class MergeWiringTests: XCTestCase {
     func testTheSelectionMenuHasAMergeItemThatNeedsTwoVisiblePhotos() throws {
         let content = try text("Sources/UI/ContentView.swift")
         XCTAssertTrue(content.contains("catalog.mergeRequested = .hdr"))
+        XCTAssertTrue(content.contains("catalog.mergeRequested = .panorama"))
+        XCTAssertTrue(content.contains("Merge to Panorama (\\(catalog.selectedPhotosInDisplayedGrid.count))…"))
         XCTAssertTrue(content.contains("catalog.selectedPhotosInDisplayedGrid.count < 2 || otherSheetIsPresented || catalog.mergeBusy"),
                       "the enabled state uses the SAME set the merge acts on")
         XCTAssertTrue(content.contains("Merge to HDR (\\(catalog.selectedPhotosInDisplayedGrid.count))…"), "so does the label")

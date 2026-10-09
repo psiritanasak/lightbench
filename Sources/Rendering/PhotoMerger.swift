@@ -19,6 +19,16 @@ struct MergeOutcome: Sendable {
         var correction: Float { usedGain / exifGain - 1 }
     }
 
+    enum Mode: Sendable {
+        case hdr
+        case panorama
+    }
+
+    var mode: Mode = .hdr
+    /// Pixel size of the written file (panorama); `.zero` when not recorded.
+    var size: CGSize = .zero
+    /// Panorama only: whether the ragged edges were cropped away.
+    var cropped = false
     let url: URL
     let frameCount: Int
     let referenceName: String
@@ -32,6 +42,9 @@ enum PhotoMergeError: LocalizedError {
     case unreadableSource(String)
     case incompleteSource(String)
     case plan(HDRBracket.PlanError)
+    case panorama(PanoramaPlan.PlanError)
+    /// Two consecutive panorama frames (by shooting order) could not be registered.
+    case noOverlap(String, String)
     case sizeMismatch(String)
     case alignmentFailed(String)
     case mergeFailed
@@ -48,6 +61,14 @@ enum PhotoMergeError: LocalizedError {
             case .gainOutOfRange(let i): return "Photo \(i + 1) is more than 4 stops away from the middle exposure; HDR merge supports up to 4."
             case .noExposureDifference: return "These photos all have the same exposure, so there is nothing to merge. Select a bracket (different shutter speeds)."
             }
+        case .panorama(let error):
+            switch error {
+            case .tooFewFrames: return "Select at least two overlapping photos to make a panorama."
+            case .tooManyFrames(let limit): return "A panorama supports at most \(limit) photos."
+            case .implausibleFrame(let i): return "Photo \(i + 1) (in shooting order) lands in an impossible place — the sweep is too wide or too curved for a flat panorama. Try fewer photos, or a narrower sweep."
+            case .canvasTooLarge: return "The panorama would be too large to write."
+            }
+        case .noOverlap(let a, let b): return "Couldn't match “\(a)” with “\(b)”: they need to overlap by at least about half and share detail. Photos taken in a different order, or with too little overlap, can't be joined."
         case .sizeMismatch(let name): return "\"\(name)\" has a different size than the others; HDR merge needs photos of identical dimensions."
         case .alignmentFailed(let name): return "Couldn't align \"\(name)\" with the others (not enough matching detail). If the camera was on a tripod, turn off Auto-align."
         case .mergeFailed: return "Couldn't merge these photos."
@@ -97,7 +118,7 @@ enum PhotoMerger {
         var alignment: [MergeOutcome.FrameAlignment] = []
         var gains: [MergeOutcome.FrameGain] = []
         var mergeFrames: [HDRMergeFilter.Frame] = []
-        let referenceProxy = await renderedProxy(of: frames[plan.referenceIndex])
+        let referenceProxy = await MergeProxy.render(frames[plan.referenceIndex], longEdge: proxyLongEdge)
         let referenceLuma = referenceProxy.flatMap { MergeAlignment.linearLumaAndValidity(rgbaFloat: $0.rgba, width: $0.width, height: $0.height) }
         for (i, image) in frames.enumerated() {
             if i == plan.referenceIndex {
@@ -105,7 +126,7 @@ enum PhotoMerger {
                 continue
             }
             let g = plan.gains[i]
-            let targetProxy = await renderedProxy(of: image)
+            let targetProxy = await MergeProxy.render(image, longEdge: proxyLongEdge)
             var frameImage = image
             var proxyHomography = matrix_identity_float3x3
             if align {
@@ -126,7 +147,7 @@ enum PhotoMerger {
             // Measure the frame's real gain on the aligned proxies; EXIF is the fallback (see `HDRGainRefinement`).
             var usedGain = g
             if let referenceProxy, let referenceLuma, let targetProxy,
-               let aligned = await alignedLuma(of: targetProxy, by: align ? proxyHomography : nil, width: referenceProxy.width, height: referenceProxy.height) {
+               let aligned = await MergeProxy.alignedLuma(of: targetProxy, by: align ? proxyHomography : nil, width: referenceProxy.width, height: referenceProxy.height) {
                 usedGain = HDRGainRefinement.refine(
                     exifGain: g, referenceLuma: referenceLuma.luma, referencePeak: referenceLuma.peak,
                     frameLuma: aligned.luma, framePeak: aligned.peak, validity: aligned.validity
@@ -173,7 +194,7 @@ enum PhotoMerger {
         return state
     }()
 
-    private static let linearSpace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB) ?? CGColorSpaceCreateDeviceRGB()
+    static let linearSpace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB) ?? CGColorSpaceCreateDeviceRGB()
 
     /// EXIF shutter, aperture and ISO of a file (nil members when absent).
     static func exposureMetadata(of url: URL) -> HDRBracket.ExposureMetadata {
@@ -187,36 +208,5 @@ enum PhotoMerger {
             fNumber: (exif[kCGImagePropertyExifFNumber] as? NSNumber)?.doubleValue,
             iso: iso
         )
-    }
-
-    private struct ProxyBitmap {
-        let width: Int
-        let height: Int
-        let rgba: [Float]
-        /// The realised proxy image (origin 0,0), kept so it can be warped again without rebuilding it.
-        let image: CIImage
-    }
-
-    /// Linear luminance and coverage of `proxy` after warping it by the PROXY-space homography `h` (nil = as is) onto a `width x height` canvas.
-    private static func alignedLuma(of proxy: ProxyBitmap, by h: simd_float3x3?, width: Int, height: Int) async -> (luma: [Float], peak: [Float], validity: [Float])? {
-        guard proxy.width == width, proxy.height == height else { return nil }
-        guard let h else { return MergeAlignment.linearLumaAndValidity(rgbaFloat: proxy.rgba, width: width, height: height) }
-        let canvas = CGRect(x: 0, y: 0, width: width, height: height)
-        guard let warped = MergeAlignment.warped(proxy.image, by: h, extent: canvas) else { return nil }
-        var buffer = [Float](repeating: 0, count: width * height * 4)
-        PhotoExporter.context.render(warped, toBitmap: &buffer, rowBytes: width * 16, bounds: canvas, format: .RGBAf, colorSpace: linearSpace)
-        PhotoExporter.context.clearCaches() // proxy-sized, but keep the shared context from holding intermediates (same finding as ProxyBuilder)
-        return MergeAlignment.linearLumaAndValidity(rgbaFloat: buffer, width: width, height: height)
-    }
-
-    /// A ~960 px linear RGBAf bitmap of `image` (top row first), built through `ProxyBuilder` (which routes a RAW render through `RenderGate`).
-    private static func renderedProxy(of image: CIImage) async -> ProxyBitmap? {
-        let longEdge = max(image.extent.width, image.extent.height)
-        let scale = min(1, proxyLongEdge / longEdge)
-        guard let proxy = await ProxyBuilder.build(image, scale: scale) else { return nil }
-        let w = Int(proxy.extent.width), h = Int(proxy.extent.height)
-        var buffer = [Float](repeating: 0, count: w * h * 4)
-        PhotoExporter.context.render(proxy, toBitmap: &buffer, rowBytes: w * 16, bounds: proxy.extent, format: .RGBAf, colorSpace: linearSpace)
-        return ProxyBitmap(width: w, height: h, rgba: buffer, image: proxy)
     }
 }

@@ -1730,6 +1730,11 @@ struct ContentView: View {
                         }
                         .disabled(catalog.selectedPhotosInDisplayedGrid.count < 2 || otherSheetIsPresented || catalog.mergeBusy || document.isLoadInFlight)
 
+                        Button("Merge to Panorama (\(catalog.selectedPhotosInDisplayedGrid.count))…") {
+                            catalog.mergeRequested = .panorama
+                        }
+                        .disabled(catalog.selectedPhotosInDisplayedGrid.count < 2 || otherSheetIsPresented || catalog.mergeBusy || document.isLoadInFlight)
+
                         Button("Rename Files (\(selectedPhotosVisibleInGrid.count))…") {
                             renameModel.begin(photos: selectedPhotosVisibleInGrid, catalog: catalog, providers: renameProviders)
                         }

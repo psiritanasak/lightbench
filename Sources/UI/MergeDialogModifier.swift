@@ -36,8 +36,14 @@ struct MergeDialogModifier: ViewModifier {
                 titleVisibility: .visible,
                 presenting: model.pending
             ) { request in
-                Button("Merge — Auto-align") { model.confirm(request, align: true, catalog: catalog) }
-                Button("Merge — Tripod (no alignment)") { model.confirm(request, align: false, catalog: catalog) }
+                switch request.kind {
+                case .hdr:
+                    Button("Merge — Auto-align") { model.confirm(request, option: .hdr(align: true), catalog: catalog) }
+                    Button("Merge — Tripod (no alignment)") { model.confirm(request, option: .hdr(align: false), catalog: catalog) }
+                case .panorama:
+                    Button("Stitch — Crop to Fill") { model.confirm(request, option: .panorama(crop: true), catalog: catalog) }
+                    Button("Stitch — Keep Edges") { model.confirm(request, option: .panorama(crop: false), catalog: catalog) }
+                }
                 Button("Cancel", role: .cancel) { model.cancel() }
             } message: { request in
                 Text(MergeModel.confirmationMessage(request))

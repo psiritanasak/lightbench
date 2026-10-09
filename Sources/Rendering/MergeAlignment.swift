@@ -40,19 +40,22 @@ enum MergeAlignment {
 
     /// Where the four corners of a `width x height` image go under `h` (a TOP-LEFT-coordinate homography), returned in Core Image's BOTTOM-LEFT
     /// coordinates: (topLeft, topRight, bottomLeft, bottomRight) of the source image.
-    static func mappedCorners(_ h: simd_float3x3, width: Double, height: Double)
+    /// `outputHeight` is the height of the image the corners land in (default: the same as the source), needed to flip back to bottom-left.
+    static func mappedCorners(_ h: simd_float3x3, width: Double, height: Double, outputHeight: Double? = nil)
         -> (topLeft: CGPoint, topRight: CGPoint, bottomLeft: CGPoint, bottomRight: CGPoint) {
+        let flipHeight = outputHeight ?? height
         func map(_ x: Double, _ yTop: Double) -> CGPoint {
             let q = FeatureMatcher.apply(h, to: SIMD2(Float(x), Float(yTop)))
-            return CGPoint(x: CGFloat(q.x), y: CGFloat(height) - CGFloat(q.y)) // back to bottom-left
+            return CGPoint(x: CGFloat(q.x), y: CGFloat(flipHeight) - CGFloat(q.y)) // back to bottom-left
         }
         return (map(0, 0), map(width, 0), map(0, height), map(width, height))
     }
 
     /// `image` warped by the TOP-LEFT homography `h` (target -> reference pixels), expressed on `extent`: transparent wherever the warped frame does
-    /// not reach, which is what `HDRMergeFilter` reads as "no data". `image.extent` must have its origin at (0, 0).
+    /// not reach, which is what `HDRMergeFilter` reads as "no data". `image.extent` and `extent` must have their origin at (0, 0); `extent` may be larger than
+    /// the image (a panorama canvas), in which case `h` maps into that canvas's top-left coordinates.
     static func warped(_ image: CIImage, by h: simd_float3x3, extent: CGRect) -> CIImage? {
-        let corners = mappedCorners(h, width: Double(image.extent.width), height: Double(image.extent.height))
+        let corners = mappedCorners(h, width: Double(image.extent.width), height: Double(image.extent.height), outputHeight: Double(extent.height))
         let filter = CIFilter.perspectiveTransform()
         filter.inputImage = image
         filter.topLeft = corners.topLeft

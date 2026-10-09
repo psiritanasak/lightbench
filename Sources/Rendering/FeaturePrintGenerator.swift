@@ -21,20 +21,22 @@ enum FeaturePrintGenerator {
     /// RAW's large preview (no decode), but a camera JPEG's EXIF thumbnail is ~160 px and an editor that rewrites pixels may
     /// leave a STALE one behind (two different images would then print identically). So when the result is well under
     /// `maxPixelSize`, regenerate from the real image data.
-    static func thumbnail(ofFileAt url: URL) -> CGImage? {
+    ///
+    /// `pixelSize` defaults to the duplicate scan's 512; the face scan asks for a larger image (small faces need the pixels).
+    static func thumbnail(ofFileAt url: URL, pixelSize: Int = maxPixelSize) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         func make(always: Bool) -> CGImage? {
             CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 (always ? kCGImageSourceCreateThumbnailFromImageAlways : kCGImageSourceCreateThumbnailFromImageIfAbsent): true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+                kCGImageSourceThumbnailMaxPixelSize: pixelSize,
             ] as CFDictionary)
         }
         guard let first = make(always: false) else { return nil }
         // Never for RAW: `FromImageAlways` on a RAW is a FULL RAW decode, which would run outside `RawDecoder.RenderGate` in a
         // loop over the library. A RAW keeps whatever embedded preview it has.
         if RawDecoder.isRaw(url) { return first }
-        if max(first.width, first.height) * 10 >= maxPixelSize * 9 { return first }
+        if max(first.width, first.height) * 10 >= pixelSize * 9 { return first }
         return make(always: true) ?? first
     }
 

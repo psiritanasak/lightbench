@@ -137,4 +137,38 @@ final class ThinSliderGeometryTests: XCTestCase {
         XCTAssertEqual(ThinSliderGeometry.incremented(3, in: 3...3), 3, accuracy: accuracy)
         XCTAssertEqual(ThinSliderGeometry.decremented(3, in: 3...3), 3, accuracy: accuracy)
     }
+
+    // MARK: - keyed(_:key:coarse:in:) — keyboard control of a focused slider
+
+    func testArrowKeysStepByOneTwentiethAndShiftByFour() {
+        XCTAssertEqual(ThinSliderGeometry.keyed(50, key: .increase, coarse: false, in: 0...100), 55, accuracy: accuracy)
+        XCTAssertEqual(ThinSliderGeometry.keyed(50, key: .decrease, coarse: false, in: 0...100), 45, accuracy: accuracy)
+        XCTAssertEqual(ThinSliderGeometry.keyed(50, key: .increase, coarse: true, in: 0...100), 70, accuracy: accuracy)
+        XCTAssertEqual(ThinSliderGeometry.keyed(50, key: .decrease, coarse: true, in: 0...100), 30, accuracy: accuracy)
+    }
+
+    func testKeyedStepMatchesTheVoiceOverStep() {
+        XCTAssertEqual(ThinSliderGeometry.keyed(0.3, key: .increase, coarse: false, in: 0.1...1.0), ThinSliderGeometry.incremented(0.3, in: 0.1...1.0), accuracy: accuracy)
+    }
+
+    func testHomeAndEndJumpToTheEnds() {
+        XCTAssertEqual(ThinSliderGeometry.keyed(42, key: .minimum, coarse: false, in: -50...50), -50, accuracy: accuracy)
+        XCTAssertEqual(ThinSliderGeometry.keyed(42, key: .maximum, coarse: false, in: -50...50), 50, accuracy: accuracy)
+    }
+
+    func testKeyedClampsAtBothEndsEvenWhenCoarse() {
+        XCTAssertEqual(ThinSliderGeometry.keyed(95, key: .increase, coarse: true, in: 0...100), 100, accuracy: accuracy)
+        XCTAssertEqual(ThinSliderGeometry.keyed(5, key: .decrease, coarse: true, in: 0...100), 0, accuracy: accuracy)
+    }
+
+    func testKeyedOnAZeroWidthRangeStaysPut() {
+        for key in [ThinSliderGeometry.Key.decrease, .increase, .minimum, .maximum] {
+            XCTAssertEqual(ThinSliderGeometry.keyed(3, key: key, coarse: true, in: 3...3), 3, accuracy: accuracy)
+        }
+    }
+
+    func testKeyedClampsAValueThatStartsOutsideTheRange() {
+        XCTAssertEqual(ThinSliderGeometry.keyed(1.5, key: .decrease, coarse: false, in: 0.1...1.0), 0.955, accuracy: accuracy)
+        XCTAssertEqual(ThinSliderGeometry.keyed(-3, key: .increase, coarse: false, in: 0.1...1.0), 0.145, accuracy: accuracy)
+    }
 }

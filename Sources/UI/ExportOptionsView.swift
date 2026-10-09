@@ -83,7 +83,12 @@ struct ExportOptionsView: View {
             if exportModel.settings.format == .jpeg {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Quality: \(Int(exportModel.settings.quality * 100))%")
-                    Slider(value: $exportModel.settings.quality, in: 0.1...1.0)
+                    ThinSlider(
+                        value: Binding(get: { Double(exportModel.settings.quality) }, set: { exportModel.settings.quality = CGFloat(($0 * 100).rounded() / 100) }),
+                        range: 0.1...1.0,
+                        valueDescription: { "\(Int($0 * 100))%" }
+                    )
+                    .accessibilityLabel("JPEG quality")
                 }
             }
 
@@ -126,12 +131,12 @@ struct ExportOptionsView: View {
                     }
                     HStack {
                         Text("Size")
-                        Slider(value: $exportModel.settings.watermark.sizeFraction, in: ExportWatermark.sizeRange)
+                        ThinSlider(value: $exportModel.settings.watermark.sizeFraction, range: ExportWatermark.sizeRange)
                             .accessibilityLabel("Watermark size")
                     }
                     HStack {
                         Text("Opacity")
-                        Slider(value: $exportModel.settings.watermark.opacity, in: ExportWatermark.opacityRange)
+                        ThinSlider(value: $exportModel.settings.watermark.opacity, range: ExportWatermark.opacityRange)
                             .accessibilityLabel("Watermark opacity")
                     }
                     if !exportModel.settings.watermark.isActive {

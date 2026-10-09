@@ -50,6 +50,38 @@ enum ThinSliderGeometry {
     static func decremented(_ value: Double, in range: ClosedRange<Double>) -> Double {
         Swift.max(value - step(in: range), range.lowerBound)
     }
+
+    /// A keyboard action on a focused `ThinSlider`.
+    enum Key { case decrease, increase, minimum, maximum }
+
+    /// What a key does to `value`: arrows move one step (the same 1/20th VoiceOver uses), `coarse` (Shift) moves four steps, Home / End
+    /// jump to the ends. Always clamped to `range`; a zero-width range stays put.
+    static func keyed(_ value: Double, key: Key, coarse: Bool, in range: ClosedRange<Double>) -> Double {
+        let amount = step(in: range) * (coarse ? 4 : 1)
+        let current = value.clamped(to: range)
+        switch key {
+        case .decrease: return Swift.max(current - amount, range.lowerBound)
+        case .increase: return Swift.min(current + amount, range.upperBound)
+        case .minimum: return range.lowerBound
+        case .maximum: return range.upperBound
+        }
+    }
+}
+
+/// The slider's knob. Drawn as its own view so the keyboard-focus ring can be rendered (and tested) without real focus: the system
+/// focus effect is switched off on the slider, so a focused knob shows this outline instead.
+struct ThinSliderThumb: View {
+    let width: CGFloat
+    let height: CGFloat
+    let isFocused: Bool
+
+    var body: some View {
+        // No shadow on the thumb: flat, like the rest of the editor.
+        Capsule()
+            .fill(Color.white)
+            .frame(width: width, height: height)
+            .overlay(Capsule().stroke(Theme.selectedOutline, lineWidth: 1.5).padding(-3).opacity(isFocused ? 1 : 0))
+    }
 }
 
 private extension Double {
@@ -81,6 +113,9 @@ struct ThinSlider: View {
     private let thumbWidth: CGFloat = 5
     private let thumbHeight: CGFloat = 18
     private let rowHeight: CGFloat = 22
+    /// Keyboard focus is reached with Tab only (full keyboard access): a drag deliberately does NOT take focus, because the image
+    /// pane and the Library grid take it back on click and a slider stealing it would stop their arrow-key handling.
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         GeometryReader { proxy in
@@ -97,10 +132,7 @@ struct ThinSlider: View {
                 Capsule()
                     .fill(Color.white.opacity(Self.filledTrackOpacity))
                     .frame(width: thumbX, height: trackHeight)
-                // No shadow on the thumb: flat, like the rest of the editor.
-                Capsule()
-                    .fill(Color.white)
-                    .frame(width: thumbWidth, height: thumbHeight)
+                ThinSliderThumb(width: thumbWidth, height: thumbHeight, isFocused: isFocused)
                     .offset(x: thumbX - thumbWidth / 2)
             }
             .frame(maxHeight: .infinity, alignment: .center)
@@ -116,6 +148,10 @@ struct ThinSlider: View {
             )
         }
         .frame(height: rowHeight)
+        .focusable()
+        .focused($isFocused)
+        .focusEffectDisabled()
+        .onKeyPress(phases: [.down, .repeat]) { press in handleKey(press) }
         .accessibilityElement()
         .accessibilityValue(Text(
             valueDescription?(value) ?? String(format: "%.0f%%", ThinSliderGeometry.fraction(of: value, in: range) * 100)
@@ -127,5 +163,21 @@ struct ThinSlider: View {
             @unknown default: break
             }
         }
+    }
+
+    /// Left / Down and Right / Up step, Home / End jump; Shift steps four at a time. Command / Option / Control are left alone (menu
+    /// shortcuts such as ⌘← win). Plain arrows carry the numeric-pad / function flags, so the check is `isDisjoint`, not "is empty".
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.isDisjoint(with: [.command, .option, .control]) else { return .ignored }
+        let key: ThinSliderGeometry.Key
+        switch press.key {
+        case .leftArrow, .downArrow: key = .decrease
+        case .rightArrow, .upArrow: key = .increase
+        case .home: key = .minimum
+        case .end: key = .maximum
+        default: return .ignored
+        }
+        value = ThinSliderGeometry.keyed(value, key: key, coarse: press.modifiers.contains(.shift), in: range)
+        return .handled
     }
 }

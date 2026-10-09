@@ -150,6 +150,10 @@ final class MergeModel: ObservableObject {
         if let weakest = outcome.alignment.min(by: { $0.inlierRatio < $1.inlierRatio }), weakest.inlierRatio < 0.5 {
             text += " Alignment of “\(weakest.name)” was uncertain (\(weakest.inlierCount) of \(weakest.matchCount) matches agreed) — check the result for ghosting."
         }
+        if let biggest = outcome.gains.max(by: { abs($0.correction) < abs($1.correction) }), abs(biggest.correction) >= 0.05 {
+            text += " The exposure of “\(biggest.name)” was measured \(Int((abs(biggest.correction) * 100).rounded()))% "
+                + (biggest.correction > 0 ? "brighter" : "darker") + " than its camera data implied and was corrected."
+        }
         return text
     }
 

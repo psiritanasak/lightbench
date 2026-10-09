@@ -112,6 +112,40 @@ final class PhotoMergerTests: XCTestCase {
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix(".") }.isEmpty, "no temp file left behind")
     }
 
+    /// Real cameras are not as exact as their EXIF: a real D610 pair measured 12% off. Here the bright frame's EXIF claims 15% more exposure than
+    /// the frame really has; the merge must measure the true gain from the pixels, so the result stays accurate and the correction is reported.
+    func testMeasuresTheRealGainWhenExifIsWrongByFifteenPercent() async throws {
+        let urls = [try writeFrame("bright.jpg", ev: 2, shift: (0, 0), exposureTime: 1.0 / 25 * 1.15),
+                    try writeFrame("dark.jpg", ev: -2, shift: (0, 0), exposureTime: 1.0 / 400),
+                    try writeFrame("mid.jpg", ev: 0, shift: (0, 0), exposureTime: 1.0 / 100)]
+        let outcome = try await PhotoMerger.mergeHDR(sourceURLs: urls, align: false, into: folder)
+        let bright = try XCTUnwrap(outcome.gains.first { $0.name == "bright.jpg" })
+        XCTAssertEqual(bright.exifGain, 4 * 1.15, accuracy: 0.01)
+        XCTAssertEqual(bright.usedGain, 4, accuracy: 0.15, "the gain is measured from the pixels")
+        XCTAssertEqual(bright.correction, -0.13, accuracy: 0.04)
+        let dark = try XCTUnwrap(outcome.gains.first { $0.name == "dark.jpg" })
+        XCTAssertEqual(abs(dark.correction), 0, accuracy: 0.03, "a correct EXIF is left essentially alone")
+        let c = compare(try await readOutput(outcome.url))
+        print("PROBE merge with 15% wrong EXIF: gains \(outcome.gains.map { "\($0.name) exif \($0.exifGain) used \($0.usedGain)" }), meanRelError \(c.meanRelError)")
+        XCTAssertLessThan(c.meanRelError, 0.04)
+    }
+
+    /// The aligned measurement path: the frames are SHIFTED, so the gain can only be measured correctly if the proxy is warped by the right
+    /// homography first (reviewer-found gap: only align:false was covered, so a missing or inverted proxy warp passed). EXIF is 15% wrong for the bright frame.
+    func testMeasuresTheRealGainOnAlignedProxiesWhenFramesAreShifted() async throws {
+        // 30 px shifts across a brightness gradient: measured on UNALIGNED proxies the per-pixel ratios would be biased by the gradient.
+        let urls = [try writeFrame("bright.jpg", ev: 2, shift: (-30, 0), exposureTime: 1.0 / 25 * 1.15),
+                    try writeFrame("dark.jpg", ev: -2, shift: (30, 0), exposureTime: 1.0 / 400),
+                    try writeFrame("mid.jpg", ev: 0, shift: (0, 0), exposureTime: 1.0 / 100)]
+        let outcome = try await PhotoMerger.mergeHDR(sourceURLs: urls, into: folder)
+        XCTAssertEqual(outcome.alignment.count, 2, "registered")
+        let bright = try XCTUnwrap(outcome.gains.first { $0.name == "bright.jpg" })
+        XCTAssertEqual(bright.usedGain, 4, accuracy: 0.08)
+        let c = compare(try await readOutput(outcome.url))
+        print("PROBE merge shifted + 15% wrong EXIF: used \(bright.usedGain) (exif \(bright.exifGain)), meanRelError \(c.meanRelError)")
+        XCTAssertLessThan(c.meanRelError, 0.05)
+    }
+
     func testSkippingAlignmentOnATripodBracketIsAccurateAndDoesNotRegister() async throws {
         let outcome = try await PhotoMerger.mergeHDR(sourceURLs: try bracket(shifted: false), align: false, into: folder)
         XCTAssertTrue(outcome.alignment.isEmpty)
@@ -139,6 +173,17 @@ final class PhotoMergerTests: XCTestCase {
         XCTAssertEqual(s.rawDetailAdjust, -3)
         XCTAssertEqual(s.rawExposureEV, 0, "no exposure shift: gains come from EXIF")
         XCTAssertEqual(EditState().boostAmount, 1, "a default decode would have the tone curve on")
+    }
+
+    func testLinearLumaUnpremultipliesAndReportsCoverage() {
+        // Two pixels: fully covered (0.2, 0.2, 0.2, a 1) and half covered premultiplied (0.1, 0.1, 0.1, a 0.5) => straight 0.2; a third uncovered.
+        let rgba: [Float] = [0.2, 0.2, 0.2, 1, 0.1, 0.1, 0.1, 0.5, 0, 0, 0, 0]
+        let r = MergeAlignment.linearLumaAndValidity(rgbaFloat: rgba, width: 3, height: 1)
+        XCTAssertEqual(r?.luma[0] ?? -1, 0.2, accuracy: 1e-6)
+        XCTAssertEqual(r?.luma[1] ?? -1, 0.2, accuracy: 1e-6, "premultiplied colour is divided back by alpha")
+        XCTAssertEqual(r?.validity ?? [], [1, 0.5, 0])
+        XCTAssertEqual(r?.peak[1] ?? -1, 0.2, accuracy: 1e-6, "the largest channel is un-premultiplied too")
+        XCTAssertNil(MergeAlignment.linearLumaAndValidity(rgbaFloat: rgba, width: 4, height: 1))
     }
 
     func testSecondMergeNeverOverwritesTheFirst() async throws {

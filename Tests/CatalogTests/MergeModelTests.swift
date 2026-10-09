@@ -117,6 +117,12 @@ final class MergeModelTests: XCTestCase {
         let weak = MergeOutcome(url: url, frameCount: 3, referenceName: "mid.jpg",
                                 alignment: [.init(name: "a.jpg", inlierCount: 80, matchCount: 100), .init(name: "b.jpg", inlierCount: 13, matchCount: 40)])
         XCTAssertTrue(MergeModel.summary(weak).contains("“b.jpg” was uncertain"))
+        let corrected = MergeOutcome(url: url, frameCount: 2, referenceName: "mid.jpg", alignment: [],
+                                    gains: [.init(name: "b.jpg", exifGain: 2.0, usedGain: 2.24)])
+        XCTAssertTrue(MergeModel.summary(corrected).contains("“b.jpg” was measured 12% brighter than its camera data implied and was corrected"))
+        let negligible = MergeOutcome(url: url, frameCount: 2, referenceName: "mid.jpg", alignment: [],
+                                      gains: [.init(name: "b.jpg", exifGain: 2.0, usedGain: 2.05)])
+        XCTAssertFalse(MergeModel.summary(negligible).contains("corrected"), "a 2.5% difference is not worth mentioning")
         let tripod = MergeOutcome(url: url, frameCount: 2, referenceName: "mid.jpg", alignment: [])
         XCTAssertTrue(MergeModel.summary(tripod).hasSuffix("without alignment."))
     }

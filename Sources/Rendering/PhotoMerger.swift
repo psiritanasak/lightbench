@@ -10,11 +10,22 @@ struct MergeOutcome: Sendable {
         let matchCount: Int
     }
 
+    /// The exposure gain used for one non-reference frame: what EXIF implied and what was measured from the aligned image data and used.
+    struct FrameGain: Sendable {
+        let name: String
+        let exifGain: Float
+        let usedGain: Float
+        /// Relative difference, e.g. 0.12 = the measured gain is 12% above the EXIF one.
+        var correction: Float { usedGain / exifGain - 1 }
+    }
+
     let url: URL
     let frameCount: Int
     let referenceName: String
     /// One entry per NON-reference frame when alignment ran; empty when alignment was turned off.
     let alignment: [FrameAlignment]
+    /// One entry per NON-reference frame, always.
+    var gains: [FrameGain] = []
 }
 
 enum PhotoMergeError: LocalizedError {
@@ -84,30 +95,45 @@ enum PhotoMerger {
         let referenceURL = sourceURLs[plan.referenceIndex]
 
         var alignment: [MergeOutcome.FrameAlignment] = []
+        var gains: [MergeOutcome.FrameGain] = []
         var mergeFrames: [HDRMergeFilter.Frame] = []
-        let referenceProxy = align ? await renderedProxy(of: frames[plan.referenceIndex]) : nil
+        let referenceProxy = await renderedProxy(of: frames[plan.referenceIndex])
+        let referenceLuma = referenceProxy.flatMap { MergeAlignment.linearLumaAndValidity(rgbaFloat: $0.rgba, width: $0.width, height: $0.height) }
         for (i, image) in frames.enumerated() {
             if i == plan.referenceIndex {
                 mergeFrames.append(.init(image: image, gain: 1))
                 continue
             }
-            guard align, let referenceProxy, let targetProxy = await renderedProxy(of: image) else {
-                if align { throw PhotoMergeError.alignmentFailed(sourceURLs[i].lastPathComponent) }
-                mergeFrames.append(.init(image: image, gain: plan.gains[i]))
-                continue
-            }
-            // Brighten the DARKER frame to the brighter one's exposure before matching (measured requirement).
             let g = plan.gains[i]
-            guard let refGray = MergeAlignment.lumaProxy(rgbaFloat: referenceProxy.rgba, width: referenceProxy.width, height: referenceProxy.height, exposureFactor: max(g, 1)),
-                  let targetGray = MergeAlignment.lumaProxy(rgbaFloat: targetProxy.rgba, width: targetProxy.width, height: targetProxy.height, exposureFactor: max(1 / g, 1)),
-                  let registration = FeatureMatcher.register(target: targetGray, reference: refGray)
-            else { throw PhotoMergeError.alignmentFailed(sourceURLs[i].lastPathComponent) }
-            let full = FeatureMatcher.scaled(registration.homography, by: Float(extent.width) / Float(referenceProxy.width))
-            guard let warped = MergeAlignment.warped(image, by: full, extent: extent) else {
-                throw PhotoMergeError.alignmentFailed(sourceURLs[i].lastPathComponent)
+            let targetProxy = await renderedProxy(of: image)
+            var frameImage = image
+            var proxyHomography = matrix_identity_float3x3
+            if align {
+                guard let referenceProxy, let targetProxy,
+                      // Brighten the DARKER frame to the brighter one's exposure before matching (measured requirement).
+                      let refGray = MergeAlignment.lumaProxy(rgbaFloat: referenceProxy.rgba, width: referenceProxy.width, height: referenceProxy.height, exposureFactor: max(g, 1)),
+                      let targetGray = MergeAlignment.lumaProxy(rgbaFloat: targetProxy.rgba, width: targetProxy.width, height: targetProxy.height, exposureFactor: max(1 / g, 1)),
+                      let registration = FeatureMatcher.register(target: targetGray, reference: refGray)
+                else { throw PhotoMergeError.alignmentFailed(sourceURLs[i].lastPathComponent) }
+                proxyHomography = registration.homography
+                let full = FeatureMatcher.scaled(registration.homography, by: Float(extent.width) / Float(referenceProxy.width))
+                guard let warped = MergeAlignment.warped(image, by: full, extent: extent) else {
+                    throw PhotoMergeError.alignmentFailed(sourceURLs[i].lastPathComponent)
+                }
+                frameImage = warped
+                alignment.append(.init(name: sourceURLs[i].lastPathComponent, inlierCount: registration.inlierCount, matchCount: registration.matchCount))
             }
-            alignment.append(.init(name: sourceURLs[i].lastPathComponent, inlierCount: registration.inlierCount, matchCount: registration.matchCount))
-            mergeFrames.append(.init(image: warped, gain: g))
+            // Measure the frame's real gain on the aligned proxies; EXIF is the fallback (see `HDRGainRefinement`).
+            var usedGain = g
+            if let referenceProxy, let referenceLuma, let targetProxy,
+               let aligned = await alignedLuma(of: targetProxy, by: align ? proxyHomography : nil, width: referenceProxy.width, height: referenceProxy.height) {
+                usedGain = HDRGainRefinement.refine(
+                    exifGain: g, referenceLuma: referenceLuma.luma, referencePeak: referenceLuma.peak,
+                    frameLuma: aligned.luma, framePeak: aligned.peak, validity: aligned.validity
+                )
+            }
+            gains.append(.init(name: sourceURLs[i].lastPathComponent, exifGain: g, usedGain: usedGain))
+            mergeFrames.append(.init(image: frameImage, gain: usedGain))
         }
         guard let merged = HDRMergeFilter.merge(mergeFrames, extent: extent) else { throw PhotoMergeError.mergeFailed }
 
@@ -125,7 +151,7 @@ enum PhotoMerger {
         let outputURL = try PhotoEnhancer.commitExclusively(tempURL) {
             PhotoExporter.uniqueFileURL(baseName: baseName, fileExtension: "tiff", in: folder)
         }
-        return MergeOutcome(url: outputURL, frameCount: frames.count, referenceName: referenceURL.lastPathComponent, alignment: alignment)
+        return MergeOutcome(url: outputURL, frameCount: frames.count, referenceName: referenceURL.lastPathComponent, alignment: alignment, gains: gains)
     }
 
     // MARK: - Helpers
@@ -167,6 +193,20 @@ enum PhotoMerger {
         let width: Int
         let height: Int
         let rgba: [Float]
+        /// The realised proxy image (origin 0,0), kept so it can be warped again without rebuilding it.
+        let image: CIImage
+    }
+
+    /// Linear luminance and coverage of `proxy` after warping it by the PROXY-space homography `h` (nil = as is) onto a `width x height` canvas.
+    private static func alignedLuma(of proxy: ProxyBitmap, by h: simd_float3x3?, width: Int, height: Int) async -> (luma: [Float], peak: [Float], validity: [Float])? {
+        guard proxy.width == width, proxy.height == height else { return nil }
+        guard let h else { return MergeAlignment.linearLumaAndValidity(rgbaFloat: proxy.rgba, width: width, height: height) }
+        let canvas = CGRect(x: 0, y: 0, width: width, height: height)
+        guard let warped = MergeAlignment.warped(proxy.image, by: h, extent: canvas) else { return nil }
+        var buffer = [Float](repeating: 0, count: width * height * 4)
+        PhotoExporter.context.render(warped, toBitmap: &buffer, rowBytes: width * 16, bounds: canvas, format: .RGBAf, colorSpace: linearSpace)
+        PhotoExporter.context.clearCaches() // proxy-sized, but keep the shared context from holding intermediates (same finding as ProxyBuilder)
+        return MergeAlignment.linearLumaAndValidity(rgbaFloat: buffer, width: width, height: height)
     }
 
     /// A ~960 px linear RGBAf bitmap of `image` (top row first), built through `ProxyBuilder` (which routes a RAW render through `RenderGate`).
@@ -177,6 +217,6 @@ enum PhotoMerger {
         let w = Int(proxy.extent.width), h = Int(proxy.extent.height)
         var buffer = [Float](repeating: 0, count: w * h * 4)
         PhotoExporter.context.render(proxy, toBitmap: &buffer, rowBytes: w * 16, bounds: proxy.extent, format: .RGBAf, colorSpace: linearSpace)
-        return ProxyBitmap(width: w, height: h, rgba: buffer)
+        return ProxyBitmap(width: w, height: h, rgba: buffer, image: proxy)
     }
 }

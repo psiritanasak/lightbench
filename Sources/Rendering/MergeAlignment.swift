@@ -20,6 +20,24 @@ enum MergeAlignment {
         return FeatureMatcher.GrayImage(width: width, height: height, pixels: pixels)
     }
 
+    /// Linear luminance, largest channel and coverage of a top-down RGBAf bitmap whose colour is PREMULTIPLIED by alpha (a warped frame): both of the
+    /// straight colour where alpha > 0, else 0, plus alpha as the validity. Used to measure a frame's real exposure gain on aligned proxies
+    /// (`HDRGainRefinement`: luminance for the ratio, the largest channel for the merge's own well-exposedness weight).
+    static func linearLumaAndValidity(rgbaFloat: [Float], width: Int, height: Int) -> (luma: [Float], peak: [Float], validity: [Float])? {
+        guard rgbaFloat.count == width * height * 4 else { return nil }
+        var luma = [Float](repeating: 0, count: width * height)
+        var peak = luma, validity = luma
+        for i in 0..<(width * height) {
+            let a = rgbaFloat[i * 4 + 3]
+            guard a > 0 else { continue }
+            validity[i] = min(a, 1)
+            let r = rgbaFloat[i * 4] / a, g = rgbaFloat[i * 4 + 1] / a, b = rgbaFloat[i * 4 + 2] / a
+            luma[i] = 0.2126 * r + 0.7152 * g + 0.0722 * b
+            peak[i] = max(r, max(g, b))
+        }
+        return (luma, peak, validity)
+    }
+
     /// Where the four corners of a `width x height` image go under `h` (a TOP-LEFT-coordinate homography), returned in Core Image's BOTTOM-LEFT
     /// coordinates: (topLeft, topRight, bottomLeft, bottomRight) of the source image.
     static func mappedCorners(_ h: simd_float3x3, width: Double, height: Double)

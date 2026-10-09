@@ -1391,3 +1391,5 @@ Takeaway for us: the part worth copying is not any single control but that the r
 
 **D58 item 4 finished (2026-10-09): Retouch / Red-eye / Masks are rail tabs** (see CLAUDE.md). Open nits: after the move the cross-clears of other tools' selections inside Adjust-view select/arm sites are dead defence in depth; Crop's Done always returns to Edit; `ThinSlider` adds one Tab stop per slider (46 in Edit) with Full Keyboard Access; the new scope render test is slow (~27 s).
 
+**D58 Library polish + tab memory done (2026-10-09).** Open nits: scroll memory is macOS 15+ only and unverified live (a remembered offset round-trip could be off by a top inset); the cell label menu has no swatch (a second image could displace the checkmark; a drawn-check swatch would fix it); dimmed cell chrome ignores Increase Contrast; `isHovered` can stick if a cell scrolls away under the pointer; the filter-pop-up swatches are AppKit-drawn (confirm colour live).
+

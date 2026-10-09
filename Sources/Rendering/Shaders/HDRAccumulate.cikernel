@@ -1,0 +1,31 @@
+// HDR merge, accumulation step — adds one aligned bracket frame to a running (numerator, weight-sum) pair.
+//
+// The accumulator is packed into one RGBA image so N frames chain as N small kernel passes with no intermediate buffers:
+//     acc.rgb = scale * sum_i w_i * x_i / g_i            acc.a = scale * sum_i w_i
+// `scale` (a power of two, so scaling is exact; `HDRMergeFilter.packingScale` = 1024) lifts the packed WEIGHT SUM out of half-float's subnormal
+// range (the weight floor 1e-6 packs to ~1e-3, a normal half value): if Core Image stores a half-float intermediate between passes (its choice,
+// not ours) the unscaled floor was lost, MEASURED by the reviewer: an all-clipped radiance-20 pixel came back +69% before scaling. It also
+// improves the packed rgb of dark pixels but does NOT cure them: when every frame's x * w / g is below ~6e-5 / scale the rgb is still quantised
+// (a bracket whose brightest frame has x < ~1e-4 loses accuracy; see IMPROVEMENTS.md). Upper bound: w * x peaks at ~0.215 (peak ~0.233; above a
+// peak of 1 the weight falls to the floor), so with at most 9 frames and gains in 1/16...16 the packed rgb is at most about
+// 9 * 0.215 * 16 * 1024 = 31.7k, below half-float's 65504 (alpha at most 9 * 1024 = 9.2k). The ratio rgb / a, all the finalize step uses, is
+// unchanged by `scale`.
+// `HDRFinalize.cikernel` divides the two. Mirrors `HDRMergeMath` (EditEngine) exactly — that file documents the model and its measurements.
+//
+//   x_i   the frame's linear, un-premultiplied RGB (frame.rgb / frame.a; frame alpha is the VALIDITY of the warped frame: 0 where
+//         alignment left no data, so a missing frame contributes nothing there)
+//   g_i   `gain` = 2^EV of this frame relative to the reference frame
+//   w_i   (tent(srgbEncode(clamp(max channel, 0, 1)))^2 + 1e-6) * validity,  tent(s) = max(0, 1 - |2s - 1|)
+//
+// The all-zero accumulator (rgb 0, a 0) is the start value. Inputs and output are NOT colours in the usual sense (alpha is a weight sum), so
+// nothing may convert, clamp or premultiply between passes — `HDRMergeFilter` chains them directly.
+kernel vec4 hdrAccumulate(__sample acc, __sample frame, float gain, float scale) {
+    float validity = frame.a;
+    if (validity <= 0.0 || gain <= 0.0) { return acc; }
+    vec3 lin = frame.rgb / validity;
+    float peak = clamp(max(max(lin.r, lin.g), lin.b), 0.0, 1.0);
+    float s = (peak <= 0.0031308) ? 12.92 * peak : 1.055 * pow(peak, 1.0 / 2.4) - 0.055;
+    float tent = max(0.0, 1.0 - abs(2.0 * s - 1.0));
+    float w = (tent * tent + 0.000001) * validity;
+    return vec4(acc.rgb + (w * scale / gain) * lin, acc.a + w * scale);
+}

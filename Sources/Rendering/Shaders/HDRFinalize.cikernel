@@ -1,0 +1,7 @@
+// HDR merge, final step — turns the packed accumulator from `HDRAccumulate.cikernel` into the merged linear image:
+//     rgb = acc.rgb / acc.a,  alpha = 1 where any frame contributed (acc.a > 0), else 0 (transparent, so the caller can crop it away).
+// Mirrors `HDRMergeMath.merge`.
+kernel vec4 hdrFinalize(__sample acc) {
+    if (acc.a <= 0.0) { return vec4(0.0, 0.0, 0.0, 0.0); }
+    return vec4(acc.rgb / acc.a, 1.0);
+}

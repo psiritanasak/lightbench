@@ -69,6 +69,21 @@ struct LibraryFilterBar: View {
             .frame(maxWidth: 150)
             .background(chip(state.isKeywordActive))
 
+            // Only when the catalog has people (the People sheet makes them); a hidden person is left out, unless it is the active filter.
+            let visiblePeople = catalog.people.filter { !$0.isHidden || $0.id == catalog.personFilterID }
+            if !visiblePeople.isEmpty {
+                Picker("Person", selection: $catalog.personFilterID) {
+                    Text("All People").tag(Int64?.none)
+                    ForEach(visiblePeople) { person in
+                        Text("\(person.displayName) (\(person.photoCount))").tag(Int64?.some(person.id))
+                    }
+                }
+                .labelsHidden()
+                .accessibilityLabel("Person")
+                .frame(maxWidth: 140)
+                .background(chip(state.isPersonActive))
+            }
+
             if state.isActive {
                 Button {
                     catalog.clearFiltersKeepingSort()

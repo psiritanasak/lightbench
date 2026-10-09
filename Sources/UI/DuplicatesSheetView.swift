@@ -179,15 +179,16 @@ struct DuplicatesSheetModifier: ViewModifier {
     }
 }
 
-/// The Library tool sheets (keywords, duplicates) as ONE modifier: `ContentView.body` is at the type-checker's limit, so
-/// each extra `.modifier` in its chain is not free. The two sheets block each other.
+/// The Library tool sheets (keywords, duplicates, people) as ONE modifier: `ContentView.body` is at the type-checker's limit, so
+/// each extra `.modifier` in its chain is not free. The three sheets block each other.
 struct LibraryToolSheetsModifier: ViewModifier {
     @ObservedObject var catalog: CatalogModel
     let blocked: Bool
 
     func body(content: Content) -> some View {
         content
-            .modifier(KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.duplicatesSheetPresented))
-            .modifier(DuplicatesSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil))
+            .modifier(KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented))
+            .modifier(DuplicatesSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.peopleSheetPresented))
+            .modifier(PeopleSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented))
     }
 }

@@ -101,6 +101,7 @@ enum LibraryFilterSort {
     ///   - keywordFilter: the keyword ids a photo must carry (ANY of them
     ///     matches); `nil` (the default) means no keyword filter. A photo
     ///     with no entry in `keywordIDsByPhotoID` carries none.
+    ///   - personFilter: keep only photos with a face assigned to this person (`nil`: no person filter).
     ///   - keywordNamesByPhotoID: each photo's keyword display names, so
     ///     the search box also matches keywords (substring, case-insensitive,
     ///     like filenames). Only consulted when `searchText` is non-empty.
@@ -110,9 +111,15 @@ enum LibraryFilterSort {
         labelFilter: LibraryLabelFilter = .all,
         keywordFilter: Set<Int64>? = nil,
         keywordIDsByPhotoID: [Int64: Set<Int64>] = [:],
-        keywordNamesByPhotoID: [Int64: [String]] = [:]
+        keywordNamesByPhotoID: [Int64: [String]] = [:],
+        personFilter: Int64? = nil,
+        personIDsByPhotoID: [Int64: Set<Int64>] = [:]
     ) -> [Photo] {
         var result = photos
+        if let personFilter {
+            // A photo with no entry has no assigned face: it is never "a photo of" anyone.
+            result = result.filter { photo in photo.id.flatMap { personIDsByPhotoID[$0] }?.contains(personFilter) == true }
+        }
         if let keywordFilter {
             result = result.filter { photo in
                 guard let id = photo.id, let own = keywordIDsByPhotoID[id] else { return false }
@@ -161,15 +168,17 @@ struct LibraryFilterState: Equatable {
     var labelFilter = LibraryLabelFilter.all
     var keywordFilterID: Int64?
     var searchText = ""
+    var personFilterID: Int64?
 
     var isRatingActive: Bool { minimumRating > 0 }
     var isFlagActive: Bool { flagFilter != .all }
     var isLabelActive: Bool { labelFilter != .all }
     var isKeywordActive: Bool { keywordFilterID != nil }
     var isSearchActive: Bool { !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var isPersonActive: Bool { personFilterID != nil }
 
     var activeCount: Int {
-        [isRatingActive, isFlagActive, isLabelActive, isKeywordActive, isSearchActive].filter { $0 }.count
+        [isRatingActive, isFlagActive, isLabelActive, isKeywordActive, isSearchActive, isPersonActive].filter { $0 }.count
     }
     var isActive: Bool { activeCount > 0 }
 }

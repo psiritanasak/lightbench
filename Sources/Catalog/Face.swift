@@ -79,6 +79,9 @@ struct PersonSummary: Equatable, Identifiable, Sendable {
     var isHidden: Bool
     var faceCount: Int
     var photoCount: Int
+
+    /// An automatically found person has no name until the user gives one.
+    var displayName: String { name ?? "Person \(id)" }
 }
 
 enum PersonRenameResult: Equatable, Sendable {

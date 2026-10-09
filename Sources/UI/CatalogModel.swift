@@ -122,6 +122,13 @@ final class CatalogModel: ObservableObject {
     @Published var keywordSheetRequested = false
     /// The keyword the grid is filtered to; `nil` = no keyword filter.
     @Published var keywordFilterID: Int64?
+    /// Faces and people (see `FacesModel`): the people list, which photos each person is in, and the Library's Person filter.
+    @Published private(set) var people: [PersonSummary] = []
+    @Published private(set) var personIDsByPhotoID: [Int64: Set<Int64>] = [:]
+    @Published var personFilterID: Int64?
+    @Published var peopleSheetRequested = false
+    @Published var peopleSheetPresented = false
+    let faces = FacesModel()
     @Published var searchText: String = ""
 
     /// What the Library grid actually renders — `photos` (the
@@ -140,7 +147,9 @@ final class CatalogModel: ObservableObject {
             labelFilter: labelFilter,
             keywordFilter: keywordFilterID.map { [$0] },
             keywordIDsByPhotoID: keywordIDsByPhotoID,
-            keywordNamesByPhotoID: keywordNamesForSearch
+            keywordNamesByPhotoID: keywordNamesForSearch,
+            personFilter: personFilterID,
+            personIDsByPhotoID: personIDsByPhotoID
         )
     }
 
@@ -172,7 +181,7 @@ final class CatalogModel: ObservableObject {
     /// The current filter fields as a value (sort excluded): what the filter bar checks for its "active" cue.
     var libraryFilterState: LibraryFilterState {
         LibraryFilterState(minimumRating: minimumRating, flagFilter: flagFilter, labelFilter: labelFilter,
-                           keywordFilterID: keywordFilterID, searchText: searchText)
+                           keywordFilterID: keywordFilterID, searchText: searchText, personFilterID: personFilterID)
     }
 
     /// The filter bar's Clear button: resets the five filters but KEEPS the sort order (`clearLibraryFilters` below resets it too).
@@ -182,6 +191,7 @@ final class CatalogModel: ObservableObject {
         labelFilter = .all
         keywordFilterID = nil
         searchText = ""
+        personFilterID = nil
     }
 
     /// Resets all five sort/filter/search fields to their defaults — the
@@ -194,6 +204,7 @@ final class CatalogModel: ObservableObject {
         labelFilter = .all
         keywordFilterID = nil
         searchText = ""
+        personFilterID = nil
     }
 
     /// `nil` until the background open+migrate in `init()` completes (or
@@ -205,7 +216,13 @@ final class CatalogModel: ObservableObject {
     /// never blocks the main thread". Instead `init()` kicks off a
     /// detached `Task` that does the open off-main and hops back only to
     /// publish the result.
-    private var database: CatalogDatabase?
+    private var database: CatalogDatabase? { didSet { connectFaces() } }
+
+    /// Gives the People model the database and a way to refresh this model's people list after it changes something.
+    private func connectFaces() {
+        faces.database = database
+        faces.onPeopleChanged = { [weak self] in Task { await self?.refresh() } }
+    }
     /// Set if `CatalogDatabase()` failed to open (e.g. the Application
     /// Support directory couldn't be created), or left `nil` while the
     /// background open is still in flight. Either way `importFolder()`
@@ -306,6 +323,7 @@ final class CatalogModel: ObservableObject {
     init(database: CatalogDatabase, defaults: UserDefaults = .standard) {
         self.database = database
         self.defaults = defaults
+        connectFaces()
     }
 
     func importFolder() {
@@ -443,6 +461,17 @@ final class CatalogModel: ObservableObject {
             keywords = Self.sortedKeywords(loadedKeywords)
             keywordIDsByPhotoID = Dictionary(grouping: keywordLinks, by: \.photoId)
                 .mapValues { Set($0.map(\.keywordId)) }
+            // Its own do/catch: a failed face read must not stop the photos below from refreshing.
+            do {
+                people = try await database.peopleSummaries()
+                personIDsByPhotoID = try await database.personIDsByPhotoID()
+                // A person deleted or merged away while the filter was on: drop the filter instead of showing nothing forever.
+                if let filter = personFilterID, !people.contains(where: { $0.id == filter }) { personFilterID = nil }
+            } catch {
+                people = []
+                personIDsByPhotoID = [:]
+                personFilterID = nil
+            }
             do {
                 smartCollections = try await database.allSmartCollections()
                 smartCollectionLoadError = nil
@@ -1009,6 +1038,19 @@ final class CatalogModel: ObservableObject {
         duplicates.scan(photos: smartCollectionSourcePhotos, database: database)
     }
 
+    /// True while a Library tool sheet (keywords, duplicates, people) is up or one of their scans runs; batch rename must not start then.
+    var toolSheetIsBusy: Bool {
+        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking
+    }
+
+    /// The People sheet's scan: finds faces in the photos the Library is currently drawing from, then regroups ALL stored faces.
+    /// Same guards as the duplicate scan (a rename moves files under it).
+    func beginFaceScan() {
+        guard !isRenameInProgress else { faces.statusMessage = Self.renameInProgressMessage; return }
+        guard let database else { faces.statusMessage = "The photo catalog isn't ready yet — try again in a moment."; return }
+        faces.scanAndGroup(photos: smartCollectionSourcePhotos, database: database)
+    }
+
     /// Sets `photo`'s color label — same local-first shape/reasoning as `setFlagStatus`.
     func setColorLabel(_ label: ColorLabel, for photo: Photo) {
         guard let database, let id = photo.id else { return }
@@ -1043,6 +1085,7 @@ final class CatalogModel: ObservableObject {
         selectedPhotoIDs.remove(id)
         membershipsByPhotoID.removeValue(forKey: id)
         keywordIDsByPhotoID.removeValue(forKey: id)
+        personIDsByPhotoID.removeValue(forKey: id)
         invalidateThumbnail(for: URL(fileURLWithPath: photo.path))
         Task.detached { [weak self] in
             do { try await database.deletePhoto(id: id) } catch { await self?.refresh() }

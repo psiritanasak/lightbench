@@ -42,7 +42,8 @@ struct ContentView: View {
                     isEnhancing: enhanceModel.isEnhancing,
                     isImporting: catalog.isImporting,
                     hasPendingPaste: pasteModel.pendingTargets != nil,
-                    hasModalPanel: NSApp.modalWindow != nil
+                    hasModalPanel: NSApp.modalWindow != nil,
+                    isToolScanRunning: catalog.faces.isWorking || catalog.duplicates.isScanning
                 ).reason
             }
         )
@@ -1286,7 +1287,7 @@ struct ContentView: View {
             .onChange(of: renameModel.request) { _, request in
                 guard let request else { return }
                 renameModel.request = nil
-                guard catalog.keywordSheetPhotoIDs == nil, !catalog.duplicatesSheetPresented, !catalog.duplicates.isScanning else { return }
+                guard !catalog.toolSheetIsBusy else { return }
                 switch request {
                 case .rename:
                     renameModel.begin(photos: selectedPhotosVisibleInGrid, catalog: catalog, providers: renameProviders)
@@ -1306,6 +1307,17 @@ struct ContentView: View {
                     EnhancingHUD()
                 }
             }
+    }
+
+    /// Library toolbar "People" button (its own property: `body` is at the type-checker's limit).
+    private var peopleButton: some View {
+        Button {
+            catalog.peopleSheetRequested = true
+        } label: {
+            Label("People", systemImage: "person.2")
+        }
+        .disabled(catalog.photos.isEmpty || renameModel.isWorking || document.isLoadInFlight || otherSheetIsPresented)
+        .help("Find and name the people in your photos")
     }
 
     /// True while any other sheet/dialog a keyword sheet could collide with is up (or a long operation runs).
@@ -1671,6 +1683,8 @@ struct ContentView: View {
                 }
                 .disabled(catalog.photos.isEmpty || renameModel.isWorking || document.isLoadInFlight)
                 .help("Cull Photos (⌥⌘C) — Esc returns to the Library")
+
+                peopleButton
 
                 // Deliberately the RAW `catalog.selectedPhotoIDs`, not
                 // `selectedPhotosVisibleInGrid` (IMPROVEMENTS.md D33,

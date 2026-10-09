@@ -129,7 +129,7 @@ struct PhotoAppApp: App {
                 .disabled(
                     cull.isActive || pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight
                         || renameModel.isWorking || renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil
-                        || catalog.duplicatesSheetPresented
+                        || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
                 )
                 Divider()
                 // Batch rename: no default shortcut (matches Enhance). These only REQUEST — `ContentView`
@@ -145,18 +145,24 @@ struct PhotoAppApp: App {
                 // Library-only; only REQUESTS (`DuplicatesSheetModifier` drops it while another sheet is up).
                 Button("Find Duplicates…") { catalog.duplicatesSheetRequested = true }
                     .disabled(
-                        cull.isActive || !showLibrary || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil
+                        cull.isActive || !showLibrary || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.keywordSheetPhotoIDs != nil
                             || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
+                    )
+                // Library-only; only REQUESTS (`PeopleSheetModifier` drops it while another sheet is up). No default shortcut.
+                Button("People…") { catalog.peopleSheetRequested = true }
+                    .disabled(
+                        cull.isActive || !showLibrary || catalog.peopleSheetPresented || catalog.duplicatesSheetPresented
+                            || catalog.keywordSheetPhotoIDs != nil || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
                 Button("Rename Files…") { renameModel.request = .rename }
                     .disabled(
                         cull.isActive || catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight
-                            || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented
+                            || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
                     )
                 Button("Undo Rename") { renameModel.request = .undo }
                     .disabled(
                         cull.isActive || !renameModel.canUndo || renameModel.isWorking || renameModel.isPresentingSheet
-                            || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented
+                            || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
                     )
             }
         }

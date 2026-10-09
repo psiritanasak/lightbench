@@ -26,6 +26,8 @@ struct RenameBusyState {
     var isImporting = false
     var hasPendingPaste = false
     var hasModalPanel = false
+    /// A Faces or Duplicates scan is reading files (it can outlive its sheet: Done only cancels it).
+    var isToolScanRunning = false
 
     var reason: String? {
         if hasModalPanel { return "Finish or cancel the open dialog first." }
@@ -33,6 +35,7 @@ struct RenameBusyState {
         if isExporting || isExportSheetOpen { return "An export is running or being set up — finish or cancel it first." }
         if isEnhancing { return "Enhance is running — wait for it to finish." }
         if isImporting { return "An import is running — wait for it to finish." }
+        if isToolScanRunning { return "A face or duplicate scan is still running — wait for it to finish." }
         if hasPendingPaste { return "Finish or cancel the Paste Settings prompt first." }
         return nil
     }

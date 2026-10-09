@@ -434,6 +434,8 @@ struct ContentView: View {
     /// `switch`, which would destroy child-owned `@State` on every switch to
     /// Crop and back — see `AdjustPanelState`'s own doc comment.
     @State private var adjustPanel = AdjustPanelState()
+    /// Per-tab sidebar scroll offsets and the retouch-spot / Point Color selections remembered across tab switches (`TabMemory`).
+    @State private var tabMemory = TabMemory()
     /// The Looks tab's thumbnail previews. Owned here, not by `LooksTabView`, which is torn down on every tab switch.
     @StateObject private var lookPreviews = LookPreviewModel()
 
@@ -1326,6 +1328,7 @@ struct ContentView: View {
             adjustPanel.selectedMaskID = nil
             adjustPanel.selectedPointColorID = nil
             adjustPanel.selectedRetouchSpotID = nil
+            tabMemory.reset()
             compareMode = .off
             splitOrientation = .vertical
             splitPosition = 0.5
@@ -1361,8 +1364,10 @@ struct ContentView: View {
                 adjustPanel.selectedRetouchSpotID = nil
             }
         }
-        .onChange(of: selectedTab) { _, newTab in
+        .onChange(of: selectedTab) { oldTab, newTab in
             if newTab == .crop { isHistoryPresented = false } // jumping history mid-crop would fight the crop edit
+            // Remember the owning tab's selection BEFORE the switch clears it (`TabMemory`: only the owner writes its entry).
+            tabMemory.stash(leaving: oldTab, retouchSpotID: adjustPanel.selectedRetouchSpotID, pointColorID: adjustPanel.selectedPointColorID)
             let effects = newTab.switchEffects(armed: interactionMode)
             if effects.disarmsMode { interactionMode = .none }
             if effects.clearsMaskSelection { adjustPanel.selectedMaskID = nil }
@@ -1375,6 +1380,18 @@ struct ContentView: View {
                 compareMode = .off
                 zoomScale = 1
                 panOffset = .zero
+            }
+            // Returning to a tab that owns a selection brings it back if it still exists (never the mask: see `TabMemory`).
+            if newTab == .retouch {
+                adjustPanel.selectedRetouchSpotID = tabMemory.restoredRetouchSpotID(
+                    existing: document.editState.retouchSpots.map(\.id), compareIsOff: compareMode == .off,
+                    geometryAtIdentity: document.editState.isGeometryAtIdentity)
+                // Zoom and pan carry over into this tab, so the remembered spot may be off screen: pan it into view exactly as a
+                // sidebar pick does (an off-screen selected spot could be Deleted unseen — see `revealRetouchSpot`).
+                if let restored = adjustPanel.selectedRetouchSpotID { revealRetouchSpot(restored) }
+            }
+            if newTab == .adjust {
+                adjustPanel.selectedPointColorID = tabMemory.restoredPointColorID(existing: document.editState.pointColors.map(\.id))
             }
         }
         // A Compare-mode switch gets a fresh zoom/pan — the fit rect
@@ -2402,6 +2419,7 @@ struct ContentView: View {
         .scrollIndicators(.hidden)
         .disabled(document.currentImage == nil)
         .background(Theme.panel)
+        .tabScrollMemory(tab: selectedTab, memory: $tabMemory)
     }
 
 }

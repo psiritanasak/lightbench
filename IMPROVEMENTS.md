@@ -1389,3 +1389,5 @@ Takeaway for us: the part worth copying is not any single control but that the r
 
 **D58 finishing pass (2026-10-09): items "Library marks", "text-grey tokens", "quiet system controls" done** — see CLAUDE.md. Open nits: `ThinSlider` has no keyboard focus/arrow handling (the native Slider did), so the 3 Export sliders stay native; text greys are fixed (no Increase Contrast adaptation); no font swap / no `Theme.Font` roles (only aliases would result); `Color.gray.opacity` placeholders remain; segmented-picker and progress-bar tint are not testable offscreen.
 
+**D58 item 4 finished (2026-10-09): Retouch / Red-eye / Masks are rail tabs** (see CLAUDE.md). Open nits: after the move the cross-clears of other tools' selections inside Adjust-view select/arm sites are dead defence in depth; Crop's Done always returns to Edit; `ThinSlider` adds one Tab stop per slider (46 in Edit) with Full Keyboard Access; the new scope render test is slow (~27 s).
+

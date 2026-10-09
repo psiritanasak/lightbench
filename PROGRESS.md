@@ -7,6 +7,10 @@ archived at its end under "Archived from PROGRESS.md on 2026-09-30". Shipped
 improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
+## Point tools on the rail + ThinSlider keyboard + yellow Pick (2026-10-09) — shipped
+Retouch, Red-Eye and Masks are rail tabs (Edit, Looks, Retouch, Red-eye, Masks, Crop); ownership rules in `EditorTab.switchEffects`; `AdjustTabView(scope:)` (not new files — avoids moving ~1000 lines of private helpers); Remove overlay now only on the Retouch tab (it used to stay on Looks if the section was left open); the Masks tab clears `subjectMaskMessage` on leave. `ThinSlider`: Tab focus + arrows/Shift/Home/End + focus ring, Export sliders migrated. Pick flag yellow (stars/BEST grey).
+Manual checklist: click Retouch -> Place Spots, add/drag spots while zoomed, switch to Edit/Looks -> circles gone and tool off; Red-eye -> Fix Red-Eye armed, switch to Masks -> disarmed; Masks -> add radial/brush/colour-range/subject, switch tab -> overlay gone, back -> selection cleared by design; Compare/zoom still work on the new tabs and reset on Crop; Crop Done lands on Edit; rail scrolls in a short window; Export sheet: Tab to a slider, arrows/Shift/Home/End change it, ring visible, dragging does not steal arrows from the grid/image pane.
+
 ## Minimal look finishing pass (2026-10-09) — shipped (commits 1e5465c, e709d10, + root-tint commit)
 1. Library marks: filled stars / Pick / duplicates BEST badge = `Theme.markOn`; amber `Theme.warning` replaces orange text. 2. Tokens: text greys, button fills, `Theme.Metrics` (identical numeric values; lint bans system `.secondary`/`.tertiary`/`.orange`). 3. Root tint = `Theme.controlTint` (grey).
 Not done / decided: no font swap (already one system font); native Sliders KEPT in Export (ThinSlider has no keyboard handling — IMPROVEMENTS); AccentColor asset experiment skipped (alerts/menus/focus rings stay the user's macOS accent).

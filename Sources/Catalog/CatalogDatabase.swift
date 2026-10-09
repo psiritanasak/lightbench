@@ -25,7 +25,8 @@ struct CatalogDatabaseError: Error {
 /// the main thread" — callers `await` these from a background `Task`
 /// (see `CatalogModel.importFolder` in the UI layer).
 final class CatalogDatabase: Sendable {
-    private let dbQueue: DatabaseQueue
+    /// Internal (not private) so same-module extensions in their own files (`CatalogDatabase+Faces.swift`) can use it.
+    let dbQueue: DatabaseQueue
 
     /// Opens (creating if needed) the on-disk catalog at
     /// `Application Support/PhotoApp/catalog.sqlite`. This lives inside
@@ -114,6 +115,7 @@ final class CatalogDatabase: Sendable {
         Migration010Keywords.register(in: &migrator)
         Migration011SmartCollections.register(in: &migrator)
         Migration012PhotoFingerprint.register(in: &migrator)
+        Migration013Faces.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 

@@ -1387,3 +1387,5 @@ Takeaway for us: the part worth copying is not any single control but that the r
 
 **D58 follow-up (2026-10-08): quiet selection done** — see CLAUDE.md "Quiet selection". Open nits: root `.tint(Theme.accent)` still turns system toggles/segmented pickers blue; the custom sidebar lacks type-to-select, drag, scroll-into-view; `moved` Up/Down from a hidden selection jumps to the first row; History chip may be faint on the popover background (judge by eye).
 
+**D58 finishing pass (2026-10-09): items "Library marks", "text-grey tokens", "quiet system controls" done** — see CLAUDE.md. Open nits: `ThinSlider` has no keyboard focus/arrow handling (the native Slider did), so the 3 Export sliders stay native; text greys are fixed (no Increase Contrast adaptation); no font swap / no `Theme.Font` roles (only aliases would result); `Color.gray.opacity` placeholders remain; segmented-picker and progress-bar tint are not testable offscreen.
+

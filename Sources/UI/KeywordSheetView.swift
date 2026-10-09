@@ -44,7 +44,7 @@ struct KeywordSheetView: View {
             Text("Keywords for \(photoIDs.count) Photo\(photoIDs.count == 1 ? "" : "s")").font(.headline)
             if hiddenCount > 0 {
                 Text("\(hiddenCount) of them \(hiddenCount == 1 ? "is" : "are") hidden by the current filters and will be changed too.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Theme.warning)
             }
             Text("Keywords are stored in the catalog only — your original files are never changed. Exports can embed them (see the export options).")
                 .font(.caption).foregroundStyle(.secondary)

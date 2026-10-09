@@ -44,7 +44,7 @@ struct StyleSectionView: View {
             }
             if !state.styleID.isEmpty, StyleLibrary.preset(for: state.styleID) == nil {
                 Text("Style not found — this photo uses a style from a newer version. It is shown without it.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Theme.warning)
             }
             StylePadView(tone: toneBinding, color: colorBinding)
             Text(readout).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
@@ -75,7 +75,7 @@ struct StyleSectionView: View {
             if document.isDetectingSkin {
                 Text("Finding people…").font(.caption).foregroundStyle(.secondary)
             } else if let message = document.skinProtectionMessage {
-                Text(message).font(.caption).foregroundStyle(.orange)
+                Text(message).font(.caption).foregroundStyle(Theme.warning)
             }
             EditSliderRow(label: "Protection", value: protectAmountBinding, range: 0...1, identity: 1, displayMultiplier: 100) {
                 String(format: "%.0f%%", $0 * 100)
@@ -97,7 +97,7 @@ struct StyleSectionView: View {
             }
             if !state.styleTexture.isEmpty, StyleTexture(rawValue: state.styleTexture) == nil {
                 Text("Texture not found — this photo uses a texture from a newer version. It is shown without it.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Theme.warning)
             }
             EditSliderRow(label: "Texture strength", value: textureAmountBinding, range: 0...1, identity: 1, displayMultiplier: 100) {
                 String(format: "%.0f%%", $0 * 100)

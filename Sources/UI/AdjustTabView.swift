@@ -1492,7 +1492,7 @@ struct AdjustTabView: View {
         return Group {
             if !identity {
                 Text("Reset crop, straighten, perspective, scale and flip to add or move spots. Existing spots still apply.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Theme.warning)
             }
             Button {
                 if interactionMode.isPlacingRetouchSpot {

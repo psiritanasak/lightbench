@@ -36,7 +36,7 @@ struct DuplicatesSheetView: View {
             }
 
             if let summary = model.summary { Text(summary).font(.caption).foregroundStyle(.secondary) }
-            if let message = model.statusMessage { Text(message).font(.caption).foregroundStyle(.orange) }
+            if let message = model.statusMessage { Text(message).font(.caption).foregroundStyle(Theme.warning) }
 
             if model.hasScanned && !model.isScanning {
                 if model.groups.isEmpty {
@@ -143,7 +143,7 @@ private struct DuplicateThumbnail: View {
                 .opacity(photo.flagStatus == .rejected ? 0.4 : 1)
                 if isBest {
                     Text("BEST").font(.caption2.bold()).padding(.horizontal, 4).padding(.vertical, 1)
-                        .background(Color.green.opacity(0.85), in: Capsule()).foregroundStyle(.black).padding(3)
+                        .background(Theme.markOn, in: Capsule()).foregroundStyle(.black).padding(3)
                 }
             }
             Text(photo.filename).font(.caption2).lineLimit(1).frame(width: 96)

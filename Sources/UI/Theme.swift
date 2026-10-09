@@ -20,6 +20,10 @@ enum Theme {
     static let selectedOutline = Color(white: 1, opacity: 0.55)
     /// A fainter chip for the row under the pointer.
     static let hoverFill = Color(white: 1, opacity: 0.05)
+    /// A "set" mark that carries no meaning of its own: a filled star, a Picked flag. Plain light grey, never yellow.
+    static let markOn = Color(white: 0.85)
+    /// The one caution colour (amber): missing files, notes that something will not behave as expected. Reject keeps red.
+    static let warning = Color(red: 0.89, green: 0.66, blue: 0.24)
 }
 
 extension View {

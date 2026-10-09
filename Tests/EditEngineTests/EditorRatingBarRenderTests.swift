@@ -45,16 +45,31 @@ final class EditorRatingBarRenderTests: XCTestCase {
         return n
     }
 
-    private func isYellow(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> Bool { r > 0.85 && g > 0.7 && b < 0.35 }
+    private func isYellow(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> Bool { r > 0.7 && g > 0.6 && b < 0.35 && r - b > 0.4 }
     private func isRed(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> Bool { r > 0.9 && g < 0.5 && b < 0.45 && r - g > 0.4 }
     private func isWhite(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> Bool { r > 0.8 && g > 0.8 && b > 0.8 }
+    /// The plain light grey of a filled star / Picked flag (`Theme.markOn`, 0.85) — neutral and bright.
+    private func isMarkGrey(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> Bool {
+        r > 0.7 && abs(r - g) < 0.04 && abs(r - b) < 0.04
+    }
 
-    func testMoreStarsFillMoreYellow() async {
-        let none = count(render(await meta(rating: 0)), isYellow)
-        let three = count(render(await meta(rating: 3)), isYellow)
-        let five = count(render(await meta(rating: 5)), isYellow)
+    func testMoreStarsFillMoreLightGreyAndNeverYellow() async {
+        let none = count(render(await meta(rating: 0)), isMarkGrey)
+        let three = count(render(await meta(rating: 3)), isMarkGrey)
+        let five = count(render(await meta(rating: 5)), isMarkGrey)
         XCTAssertGreaterThan(three, none)
         XCTAssertGreaterThan(five, three)
+        // The yellow LABEL dot is always in the bar (meaning keeps its colour), so "not yellow" = filling stars adds no yellow.
+        let yellowFive = count(render(await meta(rating: 5)), isYellow), yellowNone = count(render(await meta(rating: 0)), isYellow)
+        XCTAssertEqual(yellowFive, yellowNone, "filled stars are not yellow")
+    }
+
+    func testPickedFlagIsLightGreyNotYellow() async {
+        let unflagged = count(render(await meta()), isMarkGrey)
+        let picked = count(render(await meta(flag: .picked)), isMarkGrey)
+        XCTAssertGreaterThan(picked, unflagged, "the Pick flag lights up grey")
+        let yellowPicked = count(render(await meta(flag: .picked)), isYellow), yellowPlain = count(render(await meta()), isYellow)
+        XCTAssertEqual(yellowPicked, yellowPlain, "Pick adds no yellow")
     }
 
     func testRejectedAndLabelShowRed() async {
@@ -68,7 +83,7 @@ final class EditorRatingBarRenderTests: XCTestCase {
     }
 
     /// The lookup finding nothing leaves no row (the bar then draws its empty, disabled state — the render of that state is
-    /// `testMoreStarsFillMoreYellow`'s zero-rating case plus the hint text).
+    /// `testMoreStarsFillMoreLightGreyAndNeverYellow`'s zero-rating case plus the hint text).
     func testNoCatalogRowLeavesNoPhoto() async {
         let m = await meta(rating: 4, resolved: false)
         XCTAssertNil(m.photo)

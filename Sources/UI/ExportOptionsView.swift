@@ -100,7 +100,7 @@ struct ExportOptionsView: View {
                 case .photoError(let error):
                     Text("The first photo would fail: \(error.errorDescription ?? "invalid name"). Other photos may still export.")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.warning)
                 case .example(let name):
                     Text("Example: \(name)")
                         .font(.caption)

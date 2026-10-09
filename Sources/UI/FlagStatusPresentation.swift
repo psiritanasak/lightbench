@@ -20,7 +20,7 @@ extension FlagStatus {
 
     var tint: Color {
         switch self {
-        case .picked: return .yellow
+        case .picked: return Theme.markOn
         case .rejected: return .red
         case .none: return .secondary
         }

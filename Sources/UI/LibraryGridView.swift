@@ -1040,7 +1040,7 @@ private struct LibraryThumbnailCell: View {
         VStack(spacing: 4) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 20))
-                .foregroundStyle(.orange)
+                .foregroundStyle(Theme.warning)
             Text("Missing")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -1087,7 +1087,7 @@ struct StarRatingRow: View {
                         .font(.caption2)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(star <= rating ? .yellow : .secondary)
+                .foregroundStyle(star <= rating ? Theme.markOn : Color.secondary)
             }
         }
         // D6 (IMPROVEMENTS.md): without this, VoiceOver sees 5 separate,

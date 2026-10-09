@@ -169,7 +169,7 @@ struct LooksTabView: View {
                 // A sidecar can name a look this Mac doesn't have (another machine, a removed file): it renders
                 // as no look and must be visible as such, not silently ignored.
                 Text("Look not found — this photo uses a look that isn't installed. It is shown without it.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Theme.warning)
             }
             if !current.isEmpty {
                 EditSliderRow(

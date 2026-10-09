@@ -101,7 +101,7 @@ private struct FilmstripCell: View {
                 // cell's own label instead (see below) so nothing regresses.
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 14))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.warning)
                     .frame(width: cellSize, height: cellSize)
             } else if let image {
                 // `.frame` BEFORE `.clipShape` — same load-bearing ordering

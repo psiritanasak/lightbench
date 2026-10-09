@@ -64,12 +64,10 @@ final class EditorRatingBarRenderTests: XCTestCase {
         XCTAssertEqual(yellowFive, yellowNone, "filled stars are not yellow")
     }
 
-    func testPickedFlagIsLightGreyNotYellow() async {
-        let unflagged = count(render(await meta()), isMarkGrey)
-        let picked = count(render(await meta(flag: .picked)), isMarkGrey)
-        XCTAssertGreaterThan(picked, unflagged, "the Pick flag lights up grey")
-        let yellowPicked = count(render(await meta(flag: .picked)), isYellow), yellowPlain = count(render(await meta()), isYellow)
-        XCTAssertEqual(yellowPicked, yellowPlain, "Pick adds no yellow")
+    func testPickedFlagIsYellow() async {
+        let plainYellow = count(render(await meta()), isYellow)
+        let pickedYellow = count(render(await meta(flag: .picked)), isYellow)
+        XCTAssertGreaterThan(pickedYellow, plainYellow, "the Pick flag lights up yellow")
     }
 
     func testRejectedAndLabelShowRed() async {

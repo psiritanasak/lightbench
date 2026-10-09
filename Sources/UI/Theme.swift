@@ -30,7 +30,7 @@ enum Theme {
     static let selectedOutline = Color(white: 1, opacity: 0.55)
     /// A fainter chip for the row under the pointer.
     static let hoverFill = Color(white: 1, opacity: 0.05)
-    /// A "set" mark that carries no meaning of its own: a filled star, a Picked flag. Plain light grey, never yellow.
+    /// A "set" mark that carries no meaning of its own: a filled star, the duplicates BEST badge. Plain light grey, never yellow. (The Picked flag is yellow: it is a flag state, set apart from the stars.)
     static let markOn = Color(white: 0.85)
     /// Text greys (the app is dark-only): body-level, secondary captions, hints / disabled. Replace the system `.secondary` / `.tertiary`.
     static let textPrimary = Color(white: 0.90)

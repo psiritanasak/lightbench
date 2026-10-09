@@ -456,55 +456,7 @@ struct LibraryGridView: View {
         catalog.focusedPhotoPath = freshList.indices.contains(clampedIndex) ? freshList[clampedIndex].path : nil
     }
 
-    private var filterBar: some View {
-        HStack(spacing: 12) {
-            Picker("Sort", selection: $catalog.sortOption) {
-                ForEach(LibrarySortOption.allCases) { option in
-                    Text(option.label).tag(option)
-                }
-            }
-            .frame(maxWidth: 160)
-
-            Picker("Rating", selection: $catalog.minimumRating) {
-                Text("Any Rating").tag(0)
-                ForEach(1...5, id: \.self) { stars in
-                    Text(String(repeating: "★", count: stars) + "+").tag(stars)
-                }
-            }
-            .frame(maxWidth: 130)
-
-            Picker("Flag", selection: $catalog.flagFilter) {
-                ForEach(LibraryFlagFilter.allCases) { option in
-                    Text(option.label).tag(option)
-                }
-            }
-            .frame(maxWidth: 150)
-
-            Picker("Label", selection: $catalog.labelFilter) {
-                ForEach(LibraryLabelFilter.allCases) { option in
-                    Text(option.label).tag(option)
-                }
-            }
-            .frame(maxWidth: 150)
-
-            Picker("Keyword", selection: $catalog.keywordFilterID) {
-                Text("All Keywords").tag(Int64?.none)
-                let counts = catalog.keywordPhotoCounts
-                ForEach(catalog.keywords) { keyword in
-                    Text("\(keyword.name) (\(counts[keyword.id ?? -1, default: 0]))").tag(keyword.id)
-                }
-            }
-            .frame(maxWidth: 170)
-
-            Spacer(minLength: 12)
-
-            TextField("Search filename or keyword…", text: $catalog.searchText)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 220)
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-    }
+    private var filterBar: some View { LibraryFilterBar(catalog: catalog) }
 
     /// D2 (IMPROVEMENTS.md): bottom-right thumbnail-size slider, Photos'
     /// own convention. `ThinSlider`, this app's custom-styled slider
@@ -652,6 +604,8 @@ private struct LibraryThumbnailCell: View {
     /// before its file was deleted would otherwise never re-fail the
     /// decode at all (caught live, after this looked correct in review).
     @State private var isMissing = false
+    /// The pointer is over this cell (drives `CellChrome`'s dimming).
+    @State private var isHovered = false
 
     var body: some View {
         VStack(spacing: 4) {
@@ -724,7 +678,7 @@ private struct LibraryThumbnailCell: View {
                 .accessibilityLabel(thumbnailAccessibilityLabel)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { onTap() }
-                // Always-visible selection checkbox — tapping IT toggles
+                // Always-present selection checkbox (dimmed at rest, see `CellChrome`) — tapping IT toggles
                 // selection (a `Button` claims its own tap before the
                 // cell's whole-VStack `.onTapGesture` below sees it, the
                 // same already-proven pattern the star row/flag/menu
@@ -741,6 +695,9 @@ private struct LibraryThumbnailCell: View {
                             .font(.system(size: 18))
                             .foregroundStyle(.white)
                     }
+                    // Dimmed (never hidden) until hover / selection: see `CellChrome`.
+                    .opacity(CellChrome.checkOpacity(isHovered: isHovered, isSelected: catalog.isSelected(photo),
+                                                     anySelected: !catalog.selectedPhotoIDs.isEmpty))
                 }
                 .buttonStyle(.plain)
                 .padding(6)
@@ -923,6 +880,11 @@ private struct LibraryThumbnailCell: View {
                 .accessibilityLabel("Photo options")
             }
         }
+            // Dimmed (never hidden, never resized) until hover / selection / focus, unless the photo carries a rating, flag or label:
+            // see `CellChrome`. Opacity keeps the measured width budget, the hit areas and VoiceOver exactly as they were.
+            .opacity(CellChrome.rowOpacity(
+                isHovered: isHovered, isSelected: catalog.isSelected(photo), isFocused: isFocused,
+                hasRatingFlagOrLabel: photo.rating > 0 || photo.flagStatus != .none || photo.colorLabel != .none))
         // Live-caught: only the thumbnail `ZStack` above constrained its
         // own width to `cellSize` — the outer VStack (filename + the
         // star/flag/folder row below it) had no width constraint of its
@@ -980,12 +942,14 @@ private struct LibraryThumbnailCell: View {
         // `photo.filename` (it's both the thumbnail child's label AND the
         // visible `Text(photo.filename)` row below, both already children).
         .accessibilityElement(children: .contain)
+        .onHover { isHovered = $0 }
         .task(id: ThumbnailTaskKey(path: photo.path, revision: thumbnailRevision)) {
             // Reset immediately: a reused cell carries over `@State` from
             // whatever photo it PREVIOUSLY showed (same as `image`/
             // `hasEdits` below), and a stale "Missing" is more alarming
             // than a stale thumbnail.
             isMissing = false
+            isHovered = false // a recycled cell must not inherit the previous photo's hover
             // `async let` so the cheap synchronous sidecar stat below
             // doesn't serialize behind either of these two slower async
             // calls.

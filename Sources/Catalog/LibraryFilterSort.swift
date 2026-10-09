@@ -152,3 +152,25 @@ enum LibraryFilterSort {
         return result
     }
 }
+
+/// Which of the Library's filters are away from their defaults. SORT is deliberately not a filter (changing the order hides nothing), so it
+/// never counts; a whitespace-only search is no search. Drives the filter bar's "active" cue and its Clear button.
+struct LibraryFilterState: Equatable {
+    var minimumRating = 0
+    var flagFilter = LibraryFlagFilter.all
+    var labelFilter = LibraryLabelFilter.all
+    var keywordFilterID: Int64?
+    var searchText = ""
+
+    var isRatingActive: Bool { minimumRating > 0 }
+    var isFlagActive: Bool { flagFilter != .all }
+    var isLabelActive: Bool { labelFilter != .all }
+    var isKeywordActive: Bool { keywordFilterID != nil }
+    var isSearchActive: Bool { !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var activeCount: Int {
+        [isRatingActive, isFlagActive, isLabelActive, isKeywordActive, isSearchActive].filter { $0 }.count
+    }
+    var isActive: Bool { activeCount > 0 }
+}
+

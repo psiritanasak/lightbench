@@ -139,6 +139,27 @@ final class CatalogModelTests: XCTestCase {
         XCTAssertEqual(model.labelFilter, .all)
     }
 
+    func testClearFiltersKeepingSortResetsTheFiveFiltersButNotTheSort() async throws {
+        let model = await makeModel()
+        model.sortOption = .nameAZ
+        model.minimumRating = 3
+        model.flagFilter = .picked
+        model.labelFilter = .blue
+        model.keywordFilterID = 7
+        model.searchText = "beach"
+        XCTAssertEqual(model.libraryFilterState.activeCount, 5)
+
+        model.clearFiltersKeepingSort()
+
+        XCTAssertEqual(model.sortOption, .nameAZ, "sort is not a filter")
+        XCTAssertEqual(model.libraryFilterState, LibraryFilterState())
+        XCTAssertFalse(model.libraryFilterState.isActive)
+        // The full reset (the no-matches state's button) still resets the sort too.
+        model.minimumRating = 2
+        model.clearLibraryFilters()
+        XCTAssertEqual(model.sortOption, .dateOldest)
+    }
+
     func testSetRatingPersistsToTheCatalog() async throws {
         let model = await makeModel()
         let photo = try XCTUnwrap(model.photos.first)

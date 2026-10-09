@@ -169,6 +169,21 @@ final class CatalogModel: ObservableObject {
         return keywordIDsByPhotoID.mapValues { $0.compactMap { namesByID[$0] } }
     }
 
+    /// The current filter fields as a value (sort excluded): what the filter bar checks for its "active" cue.
+    var libraryFilterState: LibraryFilterState {
+        LibraryFilterState(minimumRating: minimumRating, flagFilter: flagFilter, labelFilter: labelFilter,
+                           keywordFilterID: keywordFilterID, searchText: searchText)
+    }
+
+    /// The filter bar's Clear button: resets the five filters but KEEPS the sort order (`clearLibraryFilters` below resets it too).
+    func clearFiltersKeepingSort() {
+        minimumRating = 0
+        flagFilter = .all
+        labelFilter = .all
+        keywordFilterID = nil
+        searchText = ""
+    }
+
     /// Resets all five sort/filter/search fields to their defaults — the
     /// Library grid's "Clear Filters" action, for when they've filtered
     /// the current source set down to nothing.

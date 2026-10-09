@@ -40,6 +40,9 @@ enum Theme {
     static let pressedFill = Color(white: 0.23)
     static let armedFill = Color(white: 0.27)
     static let strongFill = Color(white: 0.32)
+    /// The root `.tint`: what system controls (a checked Toggle, a native Slider; a progress bar and segmented Picker are expected to follow but are manual-check only) fill with. A light grey, so
+    /// no system control is blue; `accent` is applied explicitly by `FlatButtonStyle(prominent:)` and does not depend on the tint.
+    static let controlTint = Color(white: 0.85)
     /// The one caution colour (amber): missing files, notes that something will not behave as expected. Reject keeps red.
     static let warning = Color(red: 0.89, green: 0.66, blue: 0.24)
 }

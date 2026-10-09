@@ -1393,3 +1393,5 @@ Takeaway for us: the part worth copying is not any single control but that the r
 
 **D58 Library polish + tab memory done (2026-10-09).** Open nits: scroll memory is macOS 15+ only and unverified live (a remembered offset round-trip could be off by a top inset); the cell label menu has no swatch (a second image could displace the checkmark; a drawn-check swatch would fix it); dimmed cell chrome ignores Increase Contrast; `isHovered` can stick if a cell scrolls away under the pointer; the filter-pop-up swatches are AppKit-drawn (confirm colour live).
 
+**Culling v1 follow-ups (2026-10-09):** compare-two photos (renderer: Compare only does before/after of ONE photo today), survey view, "also advance after rating" toggle, 100% zoom (zoom is relative to fit, no 1:1 concept), id->index map on `CatalogModel` so `rows` is O(1), serialise rating/flag/label DB writes per photo (separate `Task.detached` writes can reorder), exit back to the Editor when the pass started there, Increase Contrast for the cull bars.
+

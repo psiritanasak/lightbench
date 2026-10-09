@@ -26,6 +26,10 @@ struct PhotoAppApp: App {
     /// (which can see the selection and the Export/Enhance state) performs it.
     @StateObject private var renameModel = RenameModel()
 
+    /// The culling pass. Owned here, same reasoning as `renameModel`: the Photo menu's ⌘Z must undo a CULL action (not the Editor's edit
+    /// history) while culling, and "Cull Photos" starts it.
+    @StateObject private var cull = CullModel()
+
     /// Whether the window is showing the Library grid instead of the Editor.
     /// Presentation-only, and `ContentView`'s own `@State` until the Photo
     /// menu below needed it: prev/next is EDITOR navigation, so it must
@@ -43,7 +47,7 @@ struct PhotoAppApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(
-                document: document, catalog: catalog, pasteModel: pasteModel, renameModel: renameModel,
+                document: document, catalog: catalog, pasteModel: pasteModel, renameModel: renameModel, cull: cull,
                 showLibrary: $showLibrary
             )
             // Flat window buttons instead of the system's glass ones (see `WindowChrome.swift`). To go back to the system buttons,
@@ -61,12 +65,13 @@ struct PhotoAppApp: App {
             // `@Published` on `document` means these reactively
             // enable/disable in sync with the rail.
             CommandGroup(replacing: .undoRedo) {
-                Button("Undo") { document.undo() }
+                // While culling, ⌘Z undoes the last CULL action (flag / rating / label) and never reaches the Editor's edit history.
+                Button("Undo") { if cull.isActive { cull.undo() } else { document.undo() } }
                     .keyboardShortcut("z", modifiers: .command)
-                    .disabled(!document.canUndo)
+                    .disabled(cull.isActive ? !cull.canUndo : !document.canUndo)
                 Button("Redo") { document.redo() }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(!document.canRedo)
+                    .disabled(cull.isActive || !document.canRedo)
             }
             // Move between photos without a round-trip through the Library
             // grid. Same pattern as the Edit menu above: the Scene-level
@@ -90,6 +95,15 @@ struct PhotoAppApp: App {
                     .keyboardShortcut(.rightArrow, modifiers: .command)
                     .disabled(neighbors.next == nil || renameModel.isWorking)
                 Divider()
+                // Culling: a full-window Pick / Reject review of the photos the Library is showing.
+                Button("Cull Photos") {
+                    guard !renameModel.isWorking else { return }
+                    cull.begin(startingAtPath: showLibrary ? catalog.focusedPhotoPath : document.currentURL?.path)
+                }
+                .keyboardShortcut("c", modifiers: [.command, .option])
+                .help("Review photos one by one. Esc returns to the Library.")
+                .disabled(cull.isActive || catalog.photos.isEmpty || renameModel.isWorking || document.isLoadInFlight)
+                Divider()
                 // Copy/Paste Edit Settings — Lightroom's own Photo-menu
                 // placement and shortcuts. "Paste Settings" here shows the
                 // SAME confirmation dialog the Library toolbar's own
@@ -102,7 +116,7 @@ struct PhotoAppApp: App {
                     pasteModel.copy(document.editState, fileName: document.currentFileName ?? "photo")
                 }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
-                .disabled(document.currentImage == nil)
+                .disabled(cull.isActive || document.currentImage == nil)
                 Button("Paste Settings") {
                     pasteModel.requestPaste(onto: catalog.selectedPhotos)
                 }
@@ -113,7 +127,7 @@ struct PhotoAppApp: App {
                 // scoped to the Library pane, so it needs the SAME guard
                 // independently, not just the toolbar button's copy of it.
                 .disabled(
-                    pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight
+                    cull.isActive || pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight
                         || renameModel.isWorking || renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil
                         || catalog.duplicatesSheetPresented
                 )
@@ -125,23 +139,23 @@ struct PhotoAppApp: App {
                 Button("Edit Keywords…") { catalog.keywordSheetRequested = true }
                     .keyboardShortcut("k", modifiers: [.command])
                     .disabled(
-                        !showLibrary || catalog.selectedPhotos.isEmpty || catalog.keywordSheetPhotoIDs != nil
+                        cull.isActive || !showLibrary || catalog.selectedPhotos.isEmpty || catalog.keywordSheetPhotoIDs != nil
                             || renameModel.isWorking || renameModel.isPresentingSheet
                     )
                 // Library-only; only REQUESTS (`DuplicatesSheetModifier` drops it while another sheet is up).
                 Button("Find Duplicates…") { catalog.duplicatesSheetRequested = true }
                     .disabled(
-                        !showLibrary || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil
+                        cull.isActive || !showLibrary || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil
                             || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
                 Button("Rename Files…") { renameModel.request = .rename }
                     .disabled(
-                        catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight
+                        cull.isActive || catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight
                             || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented
                     )
                 Button("Undo Rename") { renameModel.request = .undo }
                     .disabled(
-                        !renameModel.canUndo || renameModel.isWorking || renameModel.isPresentingSheet
+                        cull.isActive || !renameModel.canUndo || renameModel.isWorking || renameModel.isPresentingSheet
                             || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented
                     )
             }
@@ -157,7 +171,7 @@ struct PhotoAppApp: App {
     private var photoNeighbors: (previous: Photo?, next: Photo?) {
         // Both cheap disqualifiers first, so the common "no photo open" and
         // "browsing the grid" cases never touch the filter+sort at all.
-        guard !showLibrary, let currentPath = document.currentURL?.path else { return (nil, nil) }
+        guard !showLibrary, !cull.isActive, let currentPath = document.currentURL?.path else { return (nil, nil) }
         let displayed = catalog.displayedPhotos
         return (
             previous: LibraryNavigation.neighbor(of: currentPath, in: displayed, offset: -1),

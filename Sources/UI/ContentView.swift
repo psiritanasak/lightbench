@@ -25,6 +25,9 @@ struct ContentView: View {
     /// items must reach the same instance); those items only set `renameModel.request`, which this
     /// view performs below because only it can see the selection and the Export/Enhance state.
     @ObservedObject var renameModel: RenameModel
+    /// The culling pass (owned by `PhotoAppApp`: the Photo menu starts it and routes ⌘Z to it). While it is active the window shows
+    /// `CullView` instead of the Library or the Editor.
+    @ObservedObject var cull: CullModel
 
     /// What batch rename must re-check at APPLY and UNDO time (see `RenameModel`): a load in flight,
     /// a running Export/Enhance, or an open paste confirmation makes renaming unsafe right now.
@@ -584,6 +587,35 @@ struct ContentView: View {
     private var openPhotoGridRow: Photo? {
         guard let openPath = document.currentURL?.path else { return nil }
         return catalog.photos.first(where: { $0.path == openPath })
+    }
+
+    /// Points the culling pass at the catalog: photos in the Library's order, live rows, the same rating / flag / label setters the grid
+    /// and the Editor bar use, and the grid thumbnail as an instant placeholder.
+    private func configureCull() {
+        cull.configure(CullEnvironment(
+            photos: { catalog.displayedPhotos },
+            rows: { Dictionary(catalog.photos.compactMap { row in row.id.map { ($0, row) } }, uniquingKeysWith: { first, _ in first }) },
+            setRating: { catalog.setRating($0, for: $1) },
+            setFlag: { catalog.setFlagStatus($0, for: $1) },
+            setLabel: { catalog.setColorLabel($0, for: $1) },
+            thumbnail: { await catalog.thumbnail(for: $0) }))
+    }
+
+    /// Leaves culling for the Library, focused on the photo the pass ended on.
+    private func exitCulling() {
+        if let last = cull.end() { catalog.focusedPhotoPath = last.path }
+        showLibrary = true
+    }
+
+    /// Leaves culling and opens the current photo in the Editor (the same path as a grid tap).
+    private func openFromCulling(_ photo: Photo) {
+        guard !renameModel.isWorking else { return }
+        _ = cull.end()
+        showLibrary = false
+        Task {
+            await catalog.ensureAccessActive(forPhotoAt: photo.path)
+            await document.load(from: URL(fileURLWithPath: photo.path))
+        }
     }
 
     /// Points `editorMeta` at the catalog (resolver reads the grid's already-updated rows first, then the database) and looks the
@@ -1284,7 +1316,9 @@ struct ContentView: View {
 
     private var mainContent: some View {
         Group {
-            if showLibrary {
+            if cull.isActive {
+                CullView(model: cull, catalog: catalog, onExit: exitCulling, onOpenInEditor: openFromCulling)
+            } else if showLibrary {
                 libraryContent
             } else {
                 editorContent
@@ -1576,7 +1610,9 @@ struct ContentView: View {
             libraryToolbarItems.withoutToolbarBackground()
             cropDoneToolbarItem
         }
-        .navigationTitle(showLibrary ? "Library" : (document.currentFileName ?? "PhotoApp"))
+        .toolbar(cull.isActive ? .hidden : .automatic, for: .windowToolbar)
+        .onAppear { configureCull() }
+        .navigationTitle(cull.isActive ? "Culling" : (showLibrary ? "Library" : (document.currentFileName ?? "PhotoApp")))
     }
 
     /// Library-mode toggle + file-import + export/selection items, split
@@ -1626,6 +1662,15 @@ struct ContentView: View {
                 }
                 .disabled(photosToExport.isEmpty || exportModel.isExporting || renameModel.isWorking)
                 .help(exportButtonTitle)
+
+                Button {
+                    guard !renameModel.isWorking else { return }
+                    cull.begin(startingAtPath: catalog.focusedPhotoPath)
+                } label: {
+                    Label("Cull Photos", systemImage: "rectangle.stack")
+                }
+                .disabled(catalog.photos.isEmpty || renameModel.isWorking || document.isLoadInFlight)
+                .help("Cull Photos (⌥⌘C) — Esc returns to the Library")
 
                 // Deliberately the RAW `catalog.selectedPhotoIDs`, not
                 // `selectedPhotosVisibleInGrid` (IMPROVEMENTS.md D33,
@@ -2427,7 +2472,7 @@ struct ContentView: View {
 #Preview {
     ContentView(
         document: ImageDocumentModel(), catalog: CatalogModel(), pasteModel: PasteSettingsModel(),
-        renameModel: RenameModel(), showLibrary: .constant(false)
+        renameModel: RenameModel(), cull: CullModel(), showLibrary: .constant(false)
     )
 }
 

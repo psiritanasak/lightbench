@@ -879,12 +879,12 @@ private struct LibraryThumbnailCell: View {
                 .menuIndicator(.hidden)
                 .accessibilityLabel("Photo options")
             }
-        }
             // Dimmed (never hidden, never resized) until hover / selection / focus, unless the photo carries a rating, flag or label:
             // see `CellChrome`. Opacity keeps the measured width budget, the hit areas and VoiceOver exactly as they were.
             .opacity(CellChrome.rowOpacity(
                 isHovered: isHovered, isSelected: catalog.isSelected(photo), isFocused: isFocused,
                 hasRatingFlagOrLabel: photo.rating > 0 || photo.flagStatus != .none || photo.colorLabel != .none))
+        }
         // Live-caught: only the thumbnail `ZStack` above constrained its
         // own width to `cellSize` — the outer VStack (filename + the
         // star/flag/folder row below it) had no width constraint of its

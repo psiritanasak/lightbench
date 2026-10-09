@@ -22,6 +22,14 @@ struct TabMemory: Equatable {
 
     func scrollOffset(for tab: EditorTab) -> Double { scrollOffsets[tab] ?? 0 }
 
+    /// The distance scrolled from the top EDGE, as `ScrollPosition(y:)` expects it, from a scroll geometry's `contentOffset.y` and top
+    /// content inset. The geometry's offset is measured from ABOVE the inset (it is `-inset` at rest), so replaying it raw lands one inset
+    /// short — live-measured 2026-10-09: the Editor sidebar came back exactly the window's title-bar height (52 pt) too high.
+    static func scrollDistance(contentOffsetY: Double, topInset: Double) -> Double {
+        guard contentOffsetY.isFinite, topInset.isFinite else { return 0 }
+        return max(0, contentOffsetY + topInset)
+    }
+
     // MARK: Selections
 
     /// Called when LEAVING `tab` with the selections as they were before the switch clears them: only the owning tab writes its entry.
@@ -87,7 +95,10 @@ private struct RememberedScrollModifier: ViewModifier {
             .scrollPosition($position)
             .onScrollPhaseChange { oldPhase, newPhase, context in
                 if newPhase == .idle, oldPhase != .idle {
-                    memory.recordScroll(Double(context.geometry.contentOffset.y), for: tab)
+                    memory.recordScroll(
+                        TabMemory.scrollDistance(contentOffsetY: Double(context.geometry.contentOffset.y),
+                                                 topInset: Double(context.geometry.contentInsets.top)),
+                        for: tab)
                 }
             }
     }

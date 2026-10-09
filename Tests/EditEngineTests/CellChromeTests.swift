@@ -41,4 +41,22 @@ final class CellChromeTests: XCTestCase {
         XCTAssertTrue(text.contains(".opacity(CellChrome.checkOpacity("))
         XCTAssertFalse(text.contains(".hidden()"), "no control in the grid is hidden outright")
     }
+
+    /// Live-caught (2026-10-09): the row `.opacity` was once attached AFTER the cell's outer VStack closed, which dimmed the thumbnail and
+    /// filename too. It must follow the control row's own `HStack(spacing: 4) { … }`: the braces from that HStack's opening to the modifier
+    /// must balance to exactly zero (the HStack is closed, and nothing bigger is).
+    func testTheRowOpacityIsAttachedToTheControlRowAndNothingBigger() throws {
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/UI/LibraryGridView.swift")
+        let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+        let modifier = try XCTUnwrap(lines.firstIndex { $0.contains(".opacity(CellChrome.rowOpacity(") })
+        let start = try XCTUnwrap(lines[..<modifier].lastIndex { $0.contains("HStack(spacing: 4) {") })
+        var depth = 0
+        for line in lines[start..<modifier] {
+            let code = line.components(separatedBy: "//").first ?? ""
+            depth += code.filter { $0 == "{" }.count - code.filter { $0 == "}" }.count
+        }
+        XCTAssertEqual(depth, 0, "the modifier must directly follow the control row's HStack, not an enclosing container")
+    }
 }
+

@@ -78,4 +78,14 @@ final class TabMemoryTests: XCTestCase {
             XCTAssertTrue(tab.switchEffects(armed: .none).clearsMaskSelection, tab.label)
         }
     }
+
+    /// Live-measured bug: replaying the raw `contentOffset.y` came back one top inset (the 52 pt title bar) too high.
+    func testScrollDistanceAddsTheTopInsetToTheGeometryOffset() {
+        XCTAssertEqual(TabMemory.scrollDistance(contentOffsetY: -52, topInset: 52), 0, "at rest the geometry offset is -inset")
+        XCTAssertEqual(TabMemory.scrollDistance(contentOffsetY: 300, topInset: 52), 352)
+        XCTAssertEqual(TabMemory.scrollDistance(contentOffsetY: 120, topInset: 0), 120, "no inset: unchanged")
+        XCTAssertEqual(TabMemory.scrollDistance(contentOffsetY: -80, topInset: 52), 0, "overscroll bounce clamps to the top")
+        XCTAssertEqual(TabMemory.scrollDistance(contentOffsetY: .nan, topInset: 52), 0)
+    }
 }
+

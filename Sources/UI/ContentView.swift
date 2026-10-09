@@ -1733,7 +1733,7 @@ struct ContentView: View {
     private var libraryContent: some View {
         HSplitView {
             CollectionSidebarView(catalog: catalog)
-                .frame(minWidth: 160, idealWidth: 200, maxWidth: 260)
+                .frame(minWidth: Theme.Metrics.sidebarMinWidth, idealWidth: Theme.Metrics.sidebarIdealWidth, maxWidth: Theme.Metrics.sidebarMaxWidth)
             LibraryGridView(catalog: catalog) { photo in
                 // Switch to the Editor pane BEFORE the (possibly async, for
                 // RAW) load completes, not after — so a RAW photo's loading
@@ -1920,7 +1920,7 @@ struct ContentView: View {
                 // (by manually dragging the divider) doesn't clip Color
                 // Grading's caption/labels; `maxWidth` bumped 380 -> 420
                 // to keep some manual resize headroom above the new floor.
-                .frame(minWidth: 360, maxWidth: 420)
+                .frame(minWidth: Theme.Metrics.adjustPanelMinWidth, maxWidth: Theme.Metrics.adjustPanelMaxWidth)
         }
     }
 

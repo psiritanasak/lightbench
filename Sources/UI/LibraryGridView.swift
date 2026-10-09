@@ -516,7 +516,7 @@ struct LibraryGridView: View {
             Spacer()
             Image(systemName: "photo")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .accessibilityHidden(true)
             // Floor raised from 100 to 120 alongside the cell-width fix
             // below (live-caught overlap bug) — this comment went through
@@ -538,7 +538,7 @@ struct LibraryGridView: View {
                 .accessibilityLabel("Thumbnail size")
             Image(systemName: "photo")
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .accessibilityHidden(true)
         }
         .padding(.horizontal)
@@ -549,12 +549,12 @@ struct LibraryGridView: View {
         VStack(spacing: 8) {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 40))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
             Text("No photos imported yet")
                 .font(.headline)
             Text("Use \u{201c}Import Folder\u{2026}\u{201d} in the toolbar to add photos to your library.")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -569,12 +569,12 @@ struct LibraryGridView: View {
         VStack(spacing: 8) {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .font(.system(size: 40))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
             Text("No photos match")
                 .font(.headline)
             Text("Try a different search or adjust the rating/flag/label/keyword filters.")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
             Button("Clear Filters") {
                 catalog.clearLibraryFilters()
@@ -913,7 +913,7 @@ private struct LibraryThumbnailCell: View {
                         .font(.caption2)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 // Reviewer-caught: a macOS `Menu`'s built-in disclosure
                 // indicator isn't accounted for in the row-width
                 // measurement above at all — hiding it removes the
@@ -1043,7 +1043,7 @@ private struct LibraryThumbnailCell: View {
                 .foregroundStyle(Theme.warning)
             Text("Missing")
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
         }
         .frame(width: cellSize, height: cellSize)
     }
@@ -1087,7 +1087,7 @@ struct StarRatingRow: View {
                         .font(.caption2)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(star <= rating ? Theme.markOn : Color.secondary)
+                .foregroundStyle(star <= rating ? Theme.markOn : Theme.textSecondary)
             }
         }
         // D6 (IMPROVEMENTS.md): without this, VoiceOver sees 5 separate,

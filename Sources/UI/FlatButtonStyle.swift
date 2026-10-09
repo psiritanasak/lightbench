@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The app's quiet button: a solid `Theme.raised` chip with a hairline outline and white text — no bezel, gloss or system tint. Variants:
-/// `isOn` = an armed / selected tool (accent outline and a faint accent fill); `prominent` = the one primary action of a sheet or bar
+/// `isOn` = an armed / selected tool (a lighter grey chip with a white outline, never blue); `prominent` = the one primary action of a sheet or bar
 /// (solid accent fill, white text); `fullWidth` = stretch to the row; `compact` = the small chip for keyword lists. Disabled buttons dim.
 /// It replaces the system `.bordered` / `.borderedProminent` styles, whose label took the root tint's blue.
 struct FlatButtonStyle: ButtonStyle {
@@ -15,8 +15,8 @@ struct FlatButtonStyle: ButtonStyle {
     /// The chip's fill; pure so the colours can be tested. Pressed = one step lighter (a prominent button, slightly translucent).
     static func fill(isOn: Bool, prominent: Bool, pressed: Bool) -> Color {
         if prominent { return pressed ? Theme.accent.opacity(0.8) : Theme.accent }
-        if isOn { return pressed ? Color(white: 0.32) : Color(white: 0.27) }
-        return pressed ? Color(white: 0.23) : Theme.raised
+        if isOn { return pressed ? Theme.strongFill : Theme.armedFill }
+        return pressed ? Theme.pressedFill : Theme.raised
     }
 
     static func outline(isOn: Bool, prominent: Bool) -> Color {

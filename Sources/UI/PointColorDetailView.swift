@@ -51,14 +51,14 @@ struct PointColorDetailView: View {
                     Circle()
                         .fill(Color(red: swatch.r, green: swatch.g, blue: swatch.b))
                         .frame(width: 20, height: 20)
-                        .overlay(Circle().stroke(Color.secondary.opacity(0.5), lineWidth: 1))
+                        .overlay(Circle().stroke(Theme.textSecondary.opacity(0.5), lineWidth: 1))
                         .accessibilityHidden(true)
                     Text(String(format: "Hue %.0f°  Sat %.0f%%", pointColor.targetHue, pointColor.targetSaturation * 100))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                 }
             } else {
-                Text("No color picked yet").font(.caption).foregroundStyle(.secondary)
+                Text("No color picked yet").font(.caption).foregroundStyle(Theme.textSecondary)
             }
 
             EditSliderRow(

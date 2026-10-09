@@ -23,7 +23,7 @@ struct RenameSheetView: View {
                 .font(.headline)
             Text("This renames the original files on disk (and their edit files). Nothing is renamed until every row below is fine, and you can undo the last rename.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -38,7 +38,7 @@ struct RenameSheetView: View {
                 } else {
                     Text("Tokens: {name} {seq} {seq:4} {date} {datetime} {rating} {label} {flag} — the file extension is kept.")
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.textTertiary)
                 }
             }
 
@@ -53,11 +53,11 @@ struct RenameSheetView: View {
             }
 
             HStack {
-                Text(summary).font(.caption).foregroundStyle(.secondary)
+                Text(summary).font(.caption).foregroundStyle(Theme.textSecondary)
                 if model.isLoadingDates || model.isLoadingOwners {
                     ProgressView().controlSize(.small)
                     Text(model.isLoadingDates ? "Reading capture dates…" : "Checking the library…")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(Theme.textSecondary)
                 }
             }
 
@@ -100,7 +100,7 @@ struct RenameSheetView: View {
                 } else {
                     Text(model.templateError == nil ? "" : "Fix the template to see a preview.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                 }
             }
             .padding(6)
@@ -115,15 +115,15 @@ struct RenameSheetView: View {
         switch entry.decision {
         case .rename:
             HStack(spacing: 6) {
-                Text(oldName).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.tertiary)
+                Text(oldName).foregroundStyle(Theme.textSecondary).lineLimit(1).truncationMode(.middle)
+                Image(systemName: "arrow.right").font(.caption2).foregroundStyle(Theme.textTertiary)
                 Text(entry.newName ?? "").lineLimit(1).truncationMode(.middle)
             }
             .font(.system(.caption, design: .monospaced))
         case .unchanged:
             Text("\(oldName)  (unchanged)")
                 .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.textTertiary)
                 .lineLimit(1)
                 .truncationMode(.middle)
         case .blocked(let block):

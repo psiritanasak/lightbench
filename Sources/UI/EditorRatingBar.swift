@@ -17,18 +17,18 @@ struct EditorRatingBar: View {
             flagButton(.rejected, current: photo?.flagStatus ?? .none)
             labelDots(current: photo?.colorLabel ?? .none)
             if photo == nil {
-                Text("Not in your Library").font(.caption).foregroundStyle(.secondary)
+                Text("Not in your Library").font(.caption).foregroundStyle(Theme.textSecondary)
             }
             Spacer(minLength: 8)
             Button(action: onCopy) { Label("Copy Settings", systemImage: "doc.on.doc") }
                 .buttonStyle(.borderless)
                 // White (primary) text, not the accent blue a borderless button takes by default.
-                .foregroundStyle(canCopy ? Color.primary : Color.secondary)
+                .foregroundStyle(canCopy ? Color.primary : Theme.textSecondary)
                 .disabled(!canCopy)
                 .help("Copy this photo's edit settings (⇧⌘C)")
         }
         .padding(.horizontal, 12)
-        .frame(height: 36)
+        .frame(height: Theme.Metrics.barHeight)
         .frame(maxWidth: .infinity)
         .background(Theme.panel)
         .overlay(alignment: .top) { Divider() }
@@ -42,7 +42,7 @@ struct EditorRatingBar: View {
             meta.setFlag(isOn ? FlagStatus.none : target)
         } label: {
             Image(systemName: target == .picked ? (isOn ? "flag.fill" : "flag") : (isOn ? "xmark.circle.fill" : "xmark.circle"))
-                .foregroundStyle(isOn ? target.tint : Color.secondary)
+                .foregroundStyle(isOn ? target.tint : Theme.textSecondary)
         }
         .buttonStyle(.plain)
         .disabled(meta.photo == nil)

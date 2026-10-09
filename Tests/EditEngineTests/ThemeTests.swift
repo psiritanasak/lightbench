@@ -178,4 +178,36 @@ final class ThemeTests: XCTestCase {
             }
         }
     }
+
+    /// Text greys and the caution colour come from `Theme` (`textSecondary` / `textTertiary` / `warning`), not the system's adaptive
+    /// `.secondary` / `.tertiary` or a stray `.orange`: one place to retune, and a readable result on the fixed dark panels.
+    func testTextGreysAndWarningComeFromTheme() throws {
+        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/UI")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" && $0.lastPathComponent != "Theme.swift" }
+        let banned = [".foregroundStyle(.secondary", ".foregroundStyle(.tertiary", "Color.secondary", "Color.tertiary", ".foregroundStyle(.orange",
+                      "? .secondary", "? .tertiary", "color: .secondary", ".foregroundColor(", ".fill(.secondary", ".stroke(.secondary"]
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (number, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                let code = line.components(separatedBy: "//").first ?? ""
+                for word in banned where code.contains(word) {
+                    XCTFail("\(file.lastPathComponent):\(number + 1) uses \(word) — use Theme.textSecondary / textTertiary / warning")
+                }
+            }
+        }
+    }
+
+    func testTextGreysAreOrderedAndNeutral() throws {
+        func white(_ c: Color) throws -> CGFloat {
+            let n = try XCTUnwrap(NSColor(c).usingColorSpace(.sRGB))
+            XCTAssertEqual(n.redComponent, n.blueComponent, accuracy: 0.001)
+            return n.redComponent
+        }
+        let p = try white(Theme.textPrimary), s = try white(Theme.textSecondary), t = try white(Theme.textTertiary)
+        XCTAssertGreaterThan(p, s); XCTAssertGreaterThan(s, t)
+        // Readable on the 0.11 panel: secondary text keeps a clear luminance gap (a taste floor, not a WCAG claim).
+        XCTAssertGreaterThan(s - 0.11, 0.4)
+    }
 }

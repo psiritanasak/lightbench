@@ -47,7 +47,7 @@ struct StyleSectionView: View {
                     .font(.caption).foregroundStyle(Theme.warning)
             }
             StylePadView(tone: toneBinding, color: colorBinding)
-            Text(readout).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            Text(readout).font(.caption.monospacedDigit()).foregroundStyle(Theme.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .accessibilityHidden(true)
             EditSliderRow(label: "Style strength", value: strengthBinding, range: 0...1, identity: 1, displayMultiplier: 100) {
@@ -56,7 +56,7 @@ struct StyleSectionView: View {
             // Nothing to scale (no preset, pad centred): the slider would only write an invisible edit.
             .disabled(StyleMath.isIdentity(id: state.styleID, tone: state.styleTone, color: state.styleColor))
             Text("Color is mostly Vibrance (designed to spare skin tones) plus some Saturation. Protect skin below can hold the colour back on people.")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(Theme.textSecondary)
             protectSkinControls
             textureControls
             Button("Reset Style") { document.resetStyle() }
@@ -73,7 +73,7 @@ struct StyleSectionView: View {
                 .disabled(document.isDetectingSkin)
                 .accessibilityLabel("Protect skin")
             if document.isDetectingSkin {
-                Text("Finding people…").font(.caption).foregroundStyle(.secondary)
+                Text("Finding people…").font(.caption).foregroundStyle(Theme.textSecondary)
             } else if let message = document.skinProtectionMessage {
                 Text(message).font(.caption).foregroundStyle(Theme.warning)
             }
@@ -82,7 +82,7 @@ struct StyleSectionView: View {
             }
             .disabled(!state.styleProtectSkin)
             Text("Looks for skin on people: printed faces and underwater skin are missed, skin-coloured clothing is treated as skin, and large flat skin-coloured areas may be marked. Monochrome styles (Silver, Ink) are not protected. Tested on a narrow range of skin tones.")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(Theme.textSecondary)
         }
     }
 
@@ -90,7 +90,7 @@ struct StyleSectionView: View {
     /// which scales only the preset and the pad.
     private var textureControls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Texture").font(.caption).foregroundStyle(.secondary).textCase(.uppercase)
+            Text("Texture").font(.caption).foregroundStyle(Theme.textSecondary).textCase(.uppercase)
             LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 6) {
                 textureChip(id: "", name: "None")
                 ForEach(StyleTexture.allCases) { texture in textureChip(id: texture.id, name: texture.title) }
@@ -107,7 +107,7 @@ struct StyleSectionView: View {
             Toggle("Grain", isOn: Binding(get: { state.styleGrain }, set: { document.setStyleGrain($0) }))
                 .accessibilityLabel("Style grain")
             Text("Soft smooths detail and is not skin-aware; Glow blooms bright areas; Film adds crisp texture. Grain adds film grain, with or without a texture. Style strength scales the preset and pad only.")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(Theme.textSecondary)
         }
     }
 
@@ -122,7 +122,7 @@ struct StyleSectionView: View {
 
     private func presetGrid(title: String, presets: [StylePreset]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption).foregroundStyle(.secondary).textCase(.uppercase)
+            Text(title).font(.caption).foregroundStyle(Theme.textSecondary).textCase(.uppercase)
             LazyVGrid(columns: Self.cellColumns, alignment: .leading, spacing: 10) {
                 ForEach(presets) { preset in chip(id: preset.id, name: preset.name) }
             }
@@ -150,7 +150,7 @@ struct StyleSectionView: View {
             Text(name).font(.callout).lineLimit(1).frame(maxWidth: .infinity).padding(.vertical, 5)
         }
         .buttonStyle(.plain)
-        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Color(white: 0.32) : Color.primary.opacity(0.08)))
+        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.strongFill : Color.primary.opacity(0.08)))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Theme.selectedOutline : Color.clear, lineWidth: 1))
         .fontWeight(selected ? .semibold : .regular)
         .accessibilityLabel(label)

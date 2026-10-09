@@ -31,7 +31,7 @@ struct HistogramBars: View {
 
             // Luminance first, as the base layer — normal (non-additive)
             // compositing, same gray fill this view has always used.
-            draw(data.luminance, into: context, size: size, barWidth: barWidth, color: .secondary)
+            draw(data.luminance, into: context, size: size, barWidth: barWidth, color: Theme.textSecondary)
 
             guard channels != .luminanceOnly else { return }
 

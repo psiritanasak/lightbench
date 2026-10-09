@@ -17,7 +17,7 @@ struct DuplicatesSheetView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Find Duplicates").font(.headline)
             Text("Compares the photos in the current view. Files are never deleted or changed — \"keep best\" only flags the others as Rejected, which you can undo.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(Theme.textSecondary)
 
             Toggle("Include similar shots (same scene, different frame — may be a burst you want to keep)", isOn: $model.includeSimilarShots)
                 .disabled(model.isScanning)
@@ -35,13 +35,13 @@ struct DuplicatesSheetView: View {
                 }
             }
 
-            if let summary = model.summary { Text(summary).font(.caption).foregroundStyle(.secondary) }
+            if let summary = model.summary { Text(summary).font(.caption).foregroundStyle(Theme.textSecondary) }
             if let message = model.statusMessage { Text(message).font(.caption).foregroundStyle(Theme.warning) }
 
             if model.hasScanned && !model.isScanning {
                 if model.groups.isEmpty {
                     Text(model.includeSimilarShots ? "No duplicates or similar shots found." : "No duplicates found.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 14) {
@@ -50,7 +50,7 @@ struct DuplicatesSheetView: View {
                     }
                     .frame(minHeight: 220, maxHeight: 420)
                     HStack {
-                        Text("\(model.groups.count) group\(model.groups.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
+                        Text("\(model.groups.count) group\(model.groups.count == 1 ? "" : "s")").font(.caption).foregroundStyle(Theme.textSecondary)
                         Spacer()
                         Button("Reject All But Best (\(rejectCount))") { confirmAll = true }
                             .buttonStyle(.flat)
@@ -86,7 +86,7 @@ struct DuplicatesSheetView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(label(group.kind)).font(.subheadline.bold())
-                Text("\(group.photoIDs.count) photos").font(.caption).foregroundStyle(.secondary)
+                Text("\(group.photoIDs.count) photos").font(.caption).foregroundStyle(Theme.textSecondary)
                 Spacer()
                 Button("Keep best, reject others") { reject(group.othersIDs) }
                     .buttonStyle(FlatButtonStyle(compact: true))
@@ -148,7 +148,7 @@ private struct DuplicateThumbnail: View {
             }
             Text(photo.filename).font(.caption2).lineLimit(1).frame(width: 96)
             Text(photo.flagStatus == .rejected ? "Rejected" : (photo.rating > 0 ? String(repeating: "★", count: photo.rating) : " "))
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(Theme.textSecondary)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(photo.filename)\(isBest ? ", best" : "")\(photo.flagStatus == .rejected ? ", rejected" : "")\(photo.flagStatus == .picked ? ", picked" : "")")

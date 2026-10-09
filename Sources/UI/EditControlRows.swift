@@ -73,7 +73,7 @@ struct EditSliderRow: View {
                 } else {
                     Text(format(value))
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                         .contentShape(Rectangle())
                         .onTapGesture { beginEditingText() }
                         // D6 (IMPROVEMENTS.md): this is a plain `Text` with
@@ -98,7 +98,7 @@ struct EditSliderRow: View {
                     Image(systemName: "arrow.uturn.backward")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .disabled(value == identity)
                 .accessibilityLabel("Reset \(label)")
             }

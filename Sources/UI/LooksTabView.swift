@@ -29,7 +29,7 @@ struct LooksTabView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Looks")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .textCase(.uppercase)
             looksSectionContainer
             styleSectionContainer
@@ -160,7 +160,7 @@ struct LooksTabView: View {
                 ForEach(items.filter { !$0.isImportedLook }) { item in lookCell(item, userLooks: userLooks) }
             }
             if !userLooks.isEmpty {
-                Text("Imported").font(.caption).foregroundStyle(.secondary)
+                Text("Imported").font(.caption).foregroundStyle(Theme.textSecondary)
                 LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 10) {
                     ForEach(items.filter(\.isImportedLook)) { item in lookCell(item, userLooks: userLooks) }
                 }
@@ -246,7 +246,7 @@ struct LooksTabView: View {
             if catalog.presets.isEmpty {
                 Text("No saved presets yet")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.textSecondary)
             } else {
                 ForEach(catalog.presets) { preset in
                     HStack {

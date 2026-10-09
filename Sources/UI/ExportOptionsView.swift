@@ -71,13 +71,13 @@ struct ExportOptionsView: View {
                 if exportModel.settings.metadata == .all {
                     Text("Includes the location (GPS) if the photo has one.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                 }
                 Toggle("Add Library keywords", isOn: $exportModel.settings.includeKeywords)
                     .disabled(exportModel.settings.metadata == .none)
                 Text(keywordCaption)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.textSecondary)
             }
 
             if exportModel.settings.format == .jpeg {
@@ -104,13 +104,13 @@ struct ExportOptionsView: View {
                 case .example(let name):
                     Text("Example: \(name)")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                 case .waitingForDate, nil:
                     EmptyView()
                 }
                 Text("Tokens: {name} {seq} {seq:4} {date} {datetime} {rating} {label} {flag}")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.textTertiary)
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -137,7 +137,7 @@ struct ExportOptionsView: View {
                     if !exportModel.settings.watermark.isActive {
                         Text("Type some text to add the mark.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.textSecondary)
                     }
                 }
             }

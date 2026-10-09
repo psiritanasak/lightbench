@@ -47,7 +47,7 @@ struct KeywordSheetView: View {
                     .font(.caption).foregroundStyle(Theme.warning)
             }
             Text("Keywords are stored in the catalog only — your original files are never changed. Exports can embed them (see the export options).")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(Theme.textSecondary)
 
             HStack {
                 TextField("Add keywords, separated by commas", text: $input)
@@ -62,7 +62,7 @@ struct KeywordSheetView: View {
 
             Text("On the selected photos").font(.subheadline)
             if onSelection.isEmpty {
-                Text("None yet").font(.caption).foregroundStyle(.secondary)
+                Text("None yet").font(.caption).foregroundStyle(Theme.textSecondary)
             } else {
                 FlowRow(spacing: 6) {
                     ForEach(onSelection) { keyword in
@@ -99,7 +99,7 @@ struct KeywordSheetView: View {
                             HStack {
                                 Text(keyword.name)
                                 Text("\(allCounts[keyword.id ?? -1, default: 0])")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.caption).foregroundStyle(Theme.textSecondary)
                                 Spacer()
                                 Button(role: .destructive) { pendingDelete = keyword } label: {
                                     Image(systemName: "trash")

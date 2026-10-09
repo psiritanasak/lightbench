@@ -123,13 +123,13 @@ struct MaskDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Adjustments").font(.caption).foregroundStyle(.secondary)
+            Text("Adjustments").font(.caption).foregroundStyle(Theme.textSecondary)
             toneRows
             colorRows
-            Text(shapeSectionTitle).font(.caption).foregroundStyle(.secondary)
+            Text(shapeSectionTitle).font(.caption).foregroundStyle(Theme.textSecondary)
             shapeRows
             if !combineTargets.isEmpty {
-                Text("Combine").font(.caption).foregroundStyle(.secondary)
+                Text("Combine").font(.caption).foregroundStyle(Theme.textSecondary)
                 combineRows
             }
         }
@@ -210,7 +210,7 @@ struct MaskDetailView: View {
                 range: 0...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             if mask.subjectInstancePNGs.count > 1 {
-                Text("Subjects").font(.caption).foregroundStyle(.secondary)
+                Text("Subjects").font(.caption).foregroundStyle(Theme.textSecondary)
                 ForEach(Array(mask.subjectInstancePNGs.enumerated()), id: \.offset) { index, png in
                     HStack {
                         SubjectSilhouetteThumbnail(png: png)
@@ -226,7 +226,7 @@ struct MaskDetailView: View {
                     .accessibilityLabel(isPickingSubjects ? "Finish Picking Subjects" : "Pick Subjects on the Photo")
                 if isPickingSubjects {
                     Text("Click a subject in the photo to include or exclude it. Red marks the subjects you have chosen. Esc or Done to finish.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(Theme.textSecondary)
                 }
             }
             Toggle("Invert (select background)", isOn: $mask.invertSelection)
@@ -237,7 +237,7 @@ struct MaskDetailView: View {
             .buttonStyle(FlatButtonStyle(fullWidth: true))
             .disabled(isRecomputingSubject)
             if !mask.hasStoredSubject {
-                Text("No subject stored for this mask.").font(.caption).foregroundStyle(.secondary)
+                Text("No subject stored for this mask.").font(.caption).foregroundStyle(Theme.textSecondary)
             }
         }
     }
@@ -331,7 +331,7 @@ struct MaskDetailView: View {
             .buttonStyle(FlatButtonStyle(fullWidth: true))
             Text(mask.brushPoints.isEmpty ? "No stroke painted yet" : "\(mask.brushPoints.count) points painted")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
             // Range cites `BrushMaskGeometry` directly, never a literal —
             // the same "keep the two in sync" discipline `MaskGeometry`'s
             // own doc comments already state for Radial/Linear's ranges.
@@ -414,17 +414,17 @@ struct MaskDetailView: View {
                     Circle()
                         .fill(Color(red: swatch.r, green: swatch.g, blue: swatch.b))
                         .frame(width: 20, height: 20)
-                        .overlay(Circle().stroke(Color.secondary.opacity(0.5), lineWidth: 1))
+                        .overlay(Circle().stroke(Theme.textSecondary.opacity(0.5), lineWidth: 1))
                         .accessibilityHidden(true)
                     Text(String(
                         format: "Hue %.0f°  Sat %.0f%%  Lum %ld%%",
                         mask.colorRangeTargetHue, mask.colorRangeTargetSaturation * 100, tonePercent
                     ))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.textSecondary)
                 }
             } else {
-                Text("No color picked yet").font(.caption).foregroundStyle(.secondary)
+                Text("No color picked yet").font(.caption).foregroundStyle(Theme.textSecondary)
             }
             // Cites `ColorRangeSelection.minimumTolerance/maximumTolerance`
             // directly, never literals — the same single-source-of-truth

@@ -19,7 +19,7 @@ struct HistoryPopoverView: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("History")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .textCase(.uppercase)
                 .padding(.horizontal, 14)
                 .padding(.top, 10)
@@ -58,7 +58,7 @@ struct HistoryPopoverView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .fontWeight(row.isCurrent ? .semibold : .regular)
-                    .foregroundStyle(row.position == .undone ? .secondary : .primary)
+                    .foregroundStyle(row.position == .undone ? Theme.textSecondary : Color.primary)
                 Spacer()
                 if row.isCurrent { Image(systemName: "checkmark").font(.caption).foregroundStyle(.white) }
             }

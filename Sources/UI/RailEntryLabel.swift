@@ -27,12 +27,12 @@ struct RailEntryLabel: View {
 
     static let height: CGFloat = 48
     /// The cell height without a caption.
-    static let iconOnlyHeight: CGFloat = 36
+    static let iconOnlyHeight: CGFloat = Theme.Metrics.barHeight
 
     /// Dimmed through the COLOUR (a disabled `Menu` label ignores `.opacity`). Enabled entries use plain white (on) /
-    /// `Color.secondary` values; only a disabled entry gets a dimmed copy.
+    /// `Theme.textSecondary` values; only a disabled entry gets a dimmed copy.
     static func color(isOn: Bool, isEnabled: Bool) -> Color {
-        let base = isOn ? Color.white : Color.secondary
+        let base = isOn ? Color.white : Theme.textSecondary
         return isEnabled ? base : base.opacity(0.35)
     }
 }

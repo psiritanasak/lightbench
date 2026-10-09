@@ -43,7 +43,7 @@ struct CollectionSidebarView: View {
 
     /// A section header in the Adjust panel's quiet style (small, uppercase, secondary).
     private static func header(_ title: String) -> some View {
-        Text(title).font(.caption).textCase(.uppercase).foregroundStyle(.secondary)
+        Text(title).font(.caption).textCase(.uppercase).foregroundStyle(Theme.textSecondary)
     }
 
     /// Folders whose children are shown. Collapsed by default, like the old `OutlineGroup`.
@@ -184,7 +184,7 @@ struct CollectionSidebarView: View {
         case .action:
             Button(row.title) { perform(row.action) }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -218,7 +218,7 @@ struct CollectionSidebarView: View {
                 if row.hasChildren, let id = row.folderID {
                     Image(systemName: row.isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                         .frame(width: 12, height: 16)
                         .contentShape(Rectangle())
                         .onTapGesture { isFocused = true; toggle(id) }

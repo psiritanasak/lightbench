@@ -268,7 +268,7 @@ struct AdjustTabView: View {
         let saturation = colorGradingSaturationBinding(for: range).wrappedValue
         return Text(String(format: "H %+.0f° / S %.0f%%", hue, saturation * 100))
             .font(.caption2)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.textSecondary)
             .frame(maxWidth: .infinity, alignment: .center)
     }
 
@@ -276,7 +276,7 @@ struct AdjustTabView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Adjust")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .textCase(.uppercase)
             AdjustSectionContainer(title: "Light", isExpanded: $panel.isLightSectionExpanded) {
                 lightSection
@@ -378,7 +378,7 @@ struct AdjustTabView: View {
                 label: "Black Point", value: $document.editState.blackPoint,
                 range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
-            Text("Levels").font(.caption).foregroundStyle(.secondary)
+            Text("Levels").font(.caption).foregroundStyle(Theme.textSecondary)
             Picker("", selection: $panel.histogramDisplayMode) {
                 ForEach(HistogramDisplayMode.allCases) { mode in
                     Text(mode.rawValue).tag(mode)
@@ -417,7 +417,7 @@ struct AdjustTabView: View {
         Group {
             Text("Applies on top of the Light sliders.")
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
             // Curves v2 slice 3: which of the four curves the canvas below
             // shows/edits. A segmented `Picker`, matching `lightSection`'s
             // own `histogramDisplayMode` picker one section above — NOT
@@ -470,7 +470,7 @@ struct AdjustTabView: View {
             .id(panel.selectedToneCurveChannel)
             Text(curvePointReadoutText)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
             HStack(spacing: 8) {
                 Button("Add Point") {
                     let binding = toneCurvePointsBinding(for: panel.selectedToneCurveChannel)
@@ -616,7 +616,7 @@ struct AdjustTabView: View {
         Group {
             Text("Applies after Black & White — a colored tint here survives forced desaturation.")
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
             Picker("", selection: $panel.selectedColorGradingRange) {
                 ForEach(ColorGradingRange.allCases) { range in
                     // Plain, CONSTANT text — see `colorGradingEditedRangesSummary`'s
@@ -732,7 +732,7 @@ struct AdjustTabView: View {
             if !edited.isEmpty {
                 Text("Edited: \(edited.map(\.rawValue).joined(separator: ", "))")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.textSecondary)
             }
         }
     }
@@ -958,7 +958,7 @@ struct AdjustTabView: View {
             }
             .disabled(document.currentImage == nil)
             if document.editState.masks.isEmpty {
-                Text("No masks yet").font(.caption).foregroundStyle(.secondary)
+                Text("No masks yet").font(.caption).foregroundStyle(Theme.textSecondary)
             } else {
                 maskListRows
             }
@@ -1234,7 +1234,7 @@ struct AdjustTabView: View {
             .buttonStyle(FlatButtonStyle(fullWidth: true))
             .disabled(document.currentImage == nil)
             if document.editState.pointColors.isEmpty {
-                Text("No point colors yet").font(.caption).foregroundStyle(.secondary)
+                Text("No point colors yet").font(.caption).foregroundStyle(Theme.textSecondary)
             } else {
                 pointColorListRows
             }
@@ -1515,7 +1515,7 @@ struct AdjustTabView: View {
             .accessibilityAddTraits(interactionMode.isPlacingRetouchSpot ? [.isSelected] : [])
             if interactionMode.isPlacingRetouchSpot {
                 Text("Click the photo to add a spot; drag to size it. Click a spot to select it. Delete removes the selected spot; Esc stops.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
             }
             Button {
                 if let id = document.addRetouchSpot() { selectRetouchSpot(id) }
@@ -1535,7 +1535,7 @@ struct AdjustTabView: View {
             }
             if spots.isEmpty {
                 Text("No spots yet. Press Place Spots and click each blemish (drag to size it), or Add Spot and drag it into place. Drag the dashed circle to choose where to copy from.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
             } else {
                 ForEach(Array(spots.enumerated()), id: \.element.id) { index, spot in
                     retouchSpotRow(number: index + 1, spot: spot)

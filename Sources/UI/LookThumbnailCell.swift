@@ -33,7 +33,7 @@ struct LookThumbnailCell: View {
                     .font(.caption2)
                     .lineLimit(1)
                     .fontWeight(isSelected ? .semibold : .regular)
-                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                    .foregroundStyle(isSelected ? Color.primary : Theme.textSecondary)
             }
             .contentShape(Rectangle())
         }

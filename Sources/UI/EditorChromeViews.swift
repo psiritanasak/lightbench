@@ -64,7 +64,7 @@ struct PlaceholderTab: View {
 
     var body: some View {
         Text(message)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.textSecondary)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, 40)
     }

@@ -85,7 +85,7 @@ struct CropTabView: View {
                         Spacer()
                         if preset == selectedAspect {
                             Image(systemName: "checkmark")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.textSecondary)
                                 // D6 (IMPROVEMENTS.md): the row's own
                                 // `.isSelected` trait below already conveys
                                 // this; without hiding it too, VoiceOver

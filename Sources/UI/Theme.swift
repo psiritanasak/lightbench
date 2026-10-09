@@ -1,9 +1,19 @@
 import SwiftUI
 
-/// The app's flat look, one place to retune it. Neutral greys for every surface, ONE accent for "selected / active", colour
-/// otherwise only where it carries meaning (reject, colour labels, on-image indicators). The grey levels and the accent hue are taste
+/// The app's flat look, one place to retune it. Neutral greys for every surface and every selected / current mark; the one blue accent
+/// only for a primary action; colour otherwise only where it carries meaning (reject, colour labels, on-image indicators). The grey levels and the accent hue are taste
 /// calls (conventions, not measurements): change them here.
 enum Theme {
+    /// Layout constants that more than one place must agree on (or that carry a long explanation at their one use).
+    enum Metrics {
+        /// The Library's collection sidebar.
+        static let sidebarMinWidth: CGFloat = 160, sidebarIdealWidth: CGFloat = 200, sidebarMaxWidth: CGFloat = 260
+        /// The Editor's Adjust panel (`ContentView` explains why the minimum is 360).
+        static let adjustPanelMinWidth: CGFloat = 360, adjustPanelMaxWidth: CGFloat = 420
+        /// The bar under the Editor photo (rating / flag / label); also the height of an icon-only rail cell.
+        static let barHeight: CGFloat = 36
+    }
+
     /// The solid dark panel behind sidebars: the Editor's Adjust panel, the tool rail, the rating bar, the filmstrip and the Library's
     /// collection sidebar.
     static let panel = Color(white: 0.11)
@@ -22,6 +32,14 @@ enum Theme {
     static let hoverFill = Color(white: 1, opacity: 0.05)
     /// A "set" mark that carries no meaning of its own: a filled star, a Picked flag. Plain light grey, never yellow.
     static let markOn = Color(white: 0.85)
+    /// Text greys (the app is dark-only): body-level, secondary captions, hints / disabled. Replace the system `.secondary` / `.tertiary`.
+    static let textPrimary = Color(white: 0.90)
+    static let textSecondary = Color(white: 0.62)
+    static let textTertiary = Color(white: 0.45)
+    /// Button chip fills (`FlatButtonStyle`) and the selected style / texture chip: one step per state above `raised` (0.17).
+    static let pressedFill = Color(white: 0.23)
+    static let armedFill = Color(white: 0.27)
+    static let strongFill = Color(white: 0.32)
     /// The one caution colour (amber): missing files, notes that something will not behave as expected. Reject keeps red.
     static let warning = Color(red: 0.89, green: 0.66, blue: 0.24)
 }

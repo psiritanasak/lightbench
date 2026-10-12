@@ -166,6 +166,44 @@ final class GrayMixTests: XCTestCase {
         XCTAssertEqual(plain.r, plain.b, accuracy: 0.0001)
     }
 
+    func testEachBandSliderDarkensItsOwnHueMostOfAllEight() {
+        // The UI sliders and Reset share `SelectiveColorBand.grayMixKeyPath`. For each band, build a pixel whose PERCEPTUAL
+        // (sRGB-encoded) HSL hue is exactly the kernel's band centre (red 0, orange 30, yellow 60, green 120, aqua 180,
+        // blue 240, purple 280, magenta 320 degrees, S = 1, L = 0.5; the kernel measures hue after encodeToPerceptual), then
+        // render all 8 single-slider variants: the band's OWN slider must darken it strictly the most, which catches any
+        // permutation of the mapping, not just some swaps.
+        let centres: [SelectiveColorBand: Double] = [
+            .red: 0, .orange: 30, .yellow: 60, .green: 120, .aqua: 180, .blue: 240, .purple: 280, .magenta: 320
+        ]
+        func hsl(_ h: Double) -> (Double, Double, Double) {   // S = 1, L = 0.5
+            let x = 1 - abs((h / 60).truncatingRemainder(dividingBy: 2) - 1)
+            switch h {
+            case ..<60: return (1, x, 0)
+            case ..<120: return (x, 1, 0)
+            case ..<180: return (0, 1, x)
+            case ..<240: return (0, x, 1)
+            case ..<300: return (x, 0, 1)
+            default: return (1, 0, x)
+            }
+        }
+        func decode(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        var seen = Set<String>()
+        for band in SelectiveColorBand.allCases {
+            var only = EditState()
+            only[keyPath: band.grayMixKeyPath] = 0.5
+            XCTAssertTrue(seen.insert("\(only)").inserted, "\(band) must map to its own field")
+            let c = hsl(centres[band]!)
+            let input = solid(decode(c.0), decode(c.1), decode(c.2))
+            let base = Double(render(bw(), input).r)
+            let drops = SelectiveColorBand.allCases.map { other -> (SelectiveColorBand, Double) in
+                (other, base - Double(render(bw { $0[keyPath: other.grayMixKeyPath] = -1 }, input).r))
+            }
+            let ranked = drops.sorted { $0.1 > $1.1 }
+            XCTAssertEqual(ranked[0].0, band, "\(band.label) slider must darken a \(band.label)-hue pixel the most")
+            XCTAssertGreaterThan(ranked[0].1, ranked[1].1 * 1.5, "\(band.label): own slider must win by a clear (relative) margin")
+        }
+    }
+
     func testCodableRoundTripAndMissingKeyDecode() throws {
         var s = EditState()
         s.grayMixRed = 0.25; s.grayMixMagenta = -0.5

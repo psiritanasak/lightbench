@@ -37,4 +37,18 @@ enum SelectiveColorBand: CaseIterable {
         case .magenta: return Color(red: 1, green: 0, blue: 0.667)
         }
     }
+
+    /// The B&W Mix field for this band (`EditState.grayMix<Band>`), so the UI and its Reset share one mapping.
+    var grayMixKeyPath: WritableKeyPath<EditState, Double> {
+        switch self {
+        case .red: return \.grayMixRed
+        case .orange: return \.grayMixOrange
+        case .yellow: return \.grayMixYellow
+        case .green: return \.grayMixGreen
+        case .aqua: return \.grayMixAqua
+        case .blue: return \.grayMixBlue
+        case .purple: return \.grayMixPurple
+        case .magenta: return \.grayMixMagenta
+        }
+    }
 }

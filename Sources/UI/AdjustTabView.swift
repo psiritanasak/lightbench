@@ -609,12 +609,28 @@ struct AdjustTabView: View {
         }
     }
 
-    /// Just the monochrome-mode toggle, given its own small section —
-    /// matches Apple Photos giving Black & White its own distinct panel
-    /// entry rather than lumping a mode toggle in with continuous sliders.
-    /// Just the row — see `lightSection`'s comment.
+    private func grayMixBinding(for band: SelectiveColorBand) -> Binding<Double> {
+        Binding(
+            get: { document.editState[keyPath: band.grayMixKeyPath] },
+            set: { document.editState[keyPath: band.grayMixKeyPath] = $0 }
+        )
+    }
+
+    /// The monochrome-mode toggle plus, while it is on, the B&W Mix sliders (one per Selective Color hue band) — its own
+    /// small section, matching Apple Photos giving Black & White its own panel entry. Just the rows — see `lightSection`'s comment.
     private var blackAndWhiteSection: some View {
-        EditToggleRow(label: "Black & White", value: $document.editState.blackAndWhite)
+        Group {
+            EditToggleRow(label: "Black & White", value: $document.editState.blackAndWhite)
+            // B&W Mix: how bright each colour becomes in the grey. Only meaningful (and only rendered) while B&W is on.
+            if document.editState.blackAndWhite {
+                ForEach(SelectiveColorBand.allCases, id: \.self) { band in
+                    EditSliderRow(
+                        label: band.label, value: grayMixBinding(for: band),
+                        range: -1...1, identity: 0, displayMultiplier: 100
+                    ) { String(format: "%+.0f%%", $0 * 100) }
+                }
+            }
+        }
     }
 
     /// Color Grading Slice B — 3-way Shadows/Midtones/Highlights color
@@ -1708,6 +1724,7 @@ struct AdjustTabView: View {
                     && selectiveColorLuminanceBinding(for: band).wrappedValue == 0
             }
             && !state.blackAndWhite
+            && SelectiveColorBand.allCases.allSatisfy { state[keyPath: $0.grayMixKeyPath] == 0 }
             // Color Grading's Hue fields are rendering-irrelevant at
             // Saturation 0 (see `EditState.shadowHue`'s own doc comment),
             // but are still checked/reset here for the same reason
@@ -1766,6 +1783,7 @@ struct AdjustTabView: View {
                 selectiveColorLuminanceBinding(for: band).wrappedValue = 0
             }
             document.editState.blackAndWhite = false
+            for band in SelectiveColorBand.allCases { document.editState[keyPath: band.grayMixKeyPath] = 0 }
             document.editState.shadowHue = 0
             document.editState.shadowSaturation = 0
             document.editState.shadowLuminance = 0

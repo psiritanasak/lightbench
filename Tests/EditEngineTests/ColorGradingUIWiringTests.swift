@@ -46,3 +46,16 @@ final class ColorGradingUIWiringTests: XCTestCase {
         XCTAssertFalse(String(buttonBody[..<closing.lowerBound]).contains("colorGradingBalance"))
     }
 }
+
+/// Vignette Softness wiring (same source-pinning approach).
+final class VignetteSoftnessWiringTests: XCTestCase {
+    func testTheRowTheIdentityCheckAndResetAllKnowTheField() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/UI/AdjustTabView.swift")
+        let view = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(view.contains("label: \"Vignette Softness\", value: $document.editState.vignetteSoftness"))
+        XCTAssertTrue(view.contains("state.vignetteSoftness == 0"))
+        XCTAssertTrue(view.contains("document.editState.vignetteSoftness = 0"))
+    }
+}

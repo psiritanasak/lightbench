@@ -39,6 +39,7 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.defringeGreen, 0)
         XCTAssertEqual(state.levelsWhitePoint, 1)
         XCTAssertEqual(state.vignetteRadius, 0.5)
+        XCTAssertEqual(state.vignetteSoftness, 0, "a missing key must read as the original look")
         XCTAssertEqual(state.redEyeStrength, 0.7)
         XCTAssertEqual(state.masks, [])
         XCTAssertEqual(state.boostAmount, 1.0)

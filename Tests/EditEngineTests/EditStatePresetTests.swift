@@ -58,6 +58,7 @@ final class EditStatePresetTests: XCTestCase {
         s.colorGradingBlending = 0.4; s.colorGradingBalance = -0.6
         s.vignetteStrength = 0.5
         s.vignetteRadius = 0.7
+        s.vignetteSoftness = -0.4
         s.clarity = 0.4
         s.sharpness = 0.6
         s.noiseReduction = 0.3
@@ -152,6 +153,7 @@ final class EditStatePresetTests: XCTestCase {
         XCTAssertEqual(result.colorGradingBalance, preset.colorGradingBalance)
         XCTAssertEqual(result.vignetteStrength, preset.vignetteStrength)
         XCTAssertEqual(result.vignetteRadius, preset.vignetteRadius)
+        XCTAssertEqual(result.vignetteSoftness, preset.vignetteSoftness)
         XCTAssertEqual(result.clarity, preset.clarity)
         XCTAssertEqual(result.sharpness, preset.sharpness)
         XCTAssertEqual(result.noiseReduction, preset.noiseReduction)

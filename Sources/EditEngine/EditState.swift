@@ -619,6 +619,11 @@ struct EditState: Equatable, Codable {
     /// is guarded off on strength), so its non-zero default is intentional
     /// and not an identity violation.
     var vignetteRadius: Double = 0.5
+    /// Vignette Softness, -1...1, 0 is identity (the original look): how far the darkening reaches in from the edge. Negative =
+    /// harder (confined to the edge), positive = softer (reaches further in). Mapped to `CIVignetteEffect.falloff` by
+    /// `VignetteMath` (0.1 ... 0.5 ... 0.6, limits MEASURED so the centre loses at most 0.0011). Identity 0 on purpose (an offset
+    /// rather than a 0.5 default). No effect while `vignetteStrength` is 0.
+    var vignetteSoftness: Double = 0
 
     // MARK: - Texture & Clarity (Lightroom "Presence")
 
@@ -1550,6 +1555,7 @@ struct EditState: Equatable, Codable {
         s.colorGradingBlending = 0; s.colorGradingBalance = 0
         s.vignetteStrength = 0
         s.vignetteRadius = 0.5
+        s.vignetteSoftness = 0
         s.texture = 0
         s.clarity = 0
         s.dehaze = 0
@@ -1661,6 +1667,7 @@ struct EditState: Equatable, Codable {
         result.colorGradingBlending = colorGradingBlending; result.colorGradingBalance = colorGradingBalance
         result.vignetteStrength = vignetteStrength
         result.vignetteRadius = vignetteRadius
+        result.vignetteSoftness = vignetteSoftness
         result.texture = texture
         result.clarity = clarity
         result.dehaze = dehaze
@@ -1778,7 +1785,7 @@ extension EditState {
         case retouchSpots
         case masks
         case pointColors
-        case vignetteStrength, vignetteRadius
+        case vignetteStrength, vignetteRadius, vignetteSoftness
         case texture, clarity, dehaze
         case noiseReduction
         case sharpness
@@ -1925,6 +1932,7 @@ extension EditState {
         pointColors = try container.decodeIfPresent([PointColor].self, forKey: .pointColors) ?? []
         vignetteStrength = try container.decodeIfPresent(Double.self, forKey: .vignetteStrength) ?? 0
         vignetteRadius = try container.decodeIfPresent(Double.self, forKey: .vignetteRadius) ?? 0.5
+        vignetteSoftness = try container.decodeIfPresent(Double.self, forKey: .vignetteSoftness) ?? 0
         texture = try container.decodeIfPresent(Double.self, forKey: .texture) ?? 0
         // `clarity` falls back to the pre-split `definition` key — see
         // `LegacyCodingKeys`. Positive `definition` at value X and `clarity`

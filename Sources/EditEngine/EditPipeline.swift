@@ -3307,10 +3307,10 @@ enum EditPipeline {
     /// 0.130), 1→1.3 (wide, corner 0.254) — all measured on solid 0.5.
     /// Falloff 0.5 is a measured sweet spot: 0.0 confines darkening to the
     /// extreme corners, 1.0 begins darkening the CENTER itself (0.458 —
-    /// wrong). Softness (a falloff slider) is deferred future work.
+    /// wrong). The Softness slider (`vignetteSoftness`) now varies it between 0.1 and 0.6, mapped and measured in
+    /// `VignetteMath`; 0.5 stays the default.
     private static let kVignetteRadiusMin: Double = 0.7
     private static let kVignetteRadiusMax: Double = 1.3
-    private static let kVignetteFalloff: Double = 0.5
 
     private static func vignetteActive(_ state: EditState) -> Bool {
         state.vignetteStrength != 0
@@ -3349,7 +3349,7 @@ enum EditPipeline {
         filter.center = CGPoint(x: extent.midX, y: extent.midY)
         filter.radius = Float(0.5 * hypot(extent.width, extent.height) * radiusScale)
         filter.intensity = Float(intensity)
-        filter.falloff = Float(kVignetteFalloff)
+        filter.falloff = Float(VignetteMath.falloff(softness: state.vignetteSoftness))
         return filter.outputImage ?? image
     }
 

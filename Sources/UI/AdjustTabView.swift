@@ -799,6 +799,10 @@ struct AdjustTabView: View {
                 range: 0...1, identity: 0.5, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
             EditSliderRow(
+                label: "Vignette Softness", value: $document.editState.vignetteSoftness,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
                 label: "Texture", value: $document.editState.texture,
                 range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
@@ -1755,6 +1759,7 @@ struct AdjustTabView: View {
             && state.colorGradingBalance == 0
             && state.vignetteStrength == 0
             && state.vignetteRadius == 0.5
+            && state.vignetteSoftness == 0
             && state.texture == 0
             && state.clarity == 0
             && state.dehaze == 0
@@ -1809,6 +1814,7 @@ struct AdjustTabView: View {
             document.editState.colorGradingBalance = 0
             document.editState.vignetteStrength = 0
             document.editState.vignetteRadius = 0.5
+            document.editState.vignetteSoftness = 0
             document.editState.texture = 0
             document.editState.clarity = 0
             document.editState.dehaze = 0

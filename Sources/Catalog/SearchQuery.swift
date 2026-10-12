@@ -313,3 +313,29 @@ struct SearchQuery: Equatable {
         }
     }
 }
+
+/// The search help popover's content (kept as data so a test can check it against the parser).
+enum SearchHelp {
+    struct Row: Equatable {
+        var field: String
+        var meaning: String
+        var example: String
+    }
+
+    static let rows: [Row] = [
+        Row(field: "iso", meaning: "ISO speed", example: "iso:>800"),
+        Row(field: "camera", meaning: "Camera make or model", example: "camera:d610"),
+        Row(field: "lens", meaning: "Lens", example: "lens:50mm"),
+        Row(field: "focal", meaning: "Focal length (mm)", example: "focal:24..70"),
+        Row(field: "aperture", meaning: "F-number", example: "aperture:<=f2.8"),
+        Row(field: "shutter", meaning: "Exposure time", example: "shutter:<1/250"),
+        Row(field: "date", meaning: "Capture date (year, month or day)", example: "date:2023-03"),
+        Row(field: "rating", meaning: "Star rating", example: "rating:>=4"),
+        Row(field: "flag", meaning: "pick, reject or none", example: "flag:pick"),
+        Row(field: "label", meaning: "Colour label", example: "label:red"),
+        Row(field: "keyword", meaning: "Keyword", example: "keyword:mountains"),
+        Row(field: "name", meaning: "File name", example: "name:IMG_6")
+    ]
+
+    static let note = "Combine terms with spaces; all must match. Use > >= < <= or a..b for numbers and dates, and quotes for phrases."
+}

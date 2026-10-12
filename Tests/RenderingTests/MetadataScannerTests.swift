@@ -83,16 +83,31 @@ final class MetadataScannerTests: XCTestCase {
         XCTAssertNil(rows[photos[0].id!], "a skipped photo is retried next time, not stored as empty")
     }
 
-    func testAFileImageIOCannotOpenGetsAnAllNilRowSoItIsNotReReadEveryLaunch() async throws {
+    func testAFileImageIOCannotOpenIsSkippedAndRetriedNotRememberedAsEmpty() async throws {
+        // A sandbox/permission failure looks exactly like this (stat works, the open fails): it must be retried later.
         let (db, photos) = try await makeDatabase(photos: 1)
-        let env = MetadataScanner.Environment(stat: { _ in (100, 1) }, read: { _ in nil })
+        let unreadable = MetadataScanner.Environment(stat: { _ in (100, 1) }, read: { _ in nil })
+        let first = try await MetadataScanner.scan(photos: photos, database: db, environment: unreadable)
+        XCTAssertEqual(first.skipped, 1)
+        XCTAssertEqual(first.scanned, 0)
+        let none = try await db.allMetadata()
+        XCTAssertTrue(none.isEmpty, "nothing is stored for a file that could not be opened")
+        let reads = Counter()
+        let readable = MetadataScanner.Environment(stat: { _ in (100, 1) }, read: { _ in reads.bump(); return .empty })
+        let second = try await MetadataScanner.scan(photos: photos, database: db, environment: readable)
+        XCTAssertEqual(second.scanned, 1, "once it opens, it is read")
+        XCTAssertEqual(reads.value, 1)
+    }
+
+    func testAnImageWithNoEXIFGetsAnAllNilRowAndIsNotReReadEveryLaunch() async throws {
+        let (db, photos) = try await makeDatabase(photos: 1)
+        let env = MetadataScanner.Environment(stat: { _ in (100, 1) }, read: { _ in .empty })
         _ = try await MetadataScanner.scan(photos: photos, database: db, environment: env)
         let stored = try await db.allMetadata()
         let row = try XCTUnwrap(stored[photos[0].id!])
         XCTAssertNil(row.iso)
-        XCTAssertEqual(row.fileSize, 100)
         let reads = Counter()
-        let again = try await MetadataScanner.scan(photos: photos, database: db, environment: .init(stat: { _ in (100, 1) }, read: { _ in reads.bump(); return nil }))
+        let again = try await MetadataScanner.scan(photos: photos, database: db, environment: .init(stat: { _ in (100, 1) }, read: { _ in reads.bump(); return .empty }))
         XCTAssertEqual(again.reused, 1)
         XCTAssertEqual(reads.value, 0)
     }

@@ -72,6 +72,32 @@ final class LibraryFilterBarTests: XCTestCase {
         XCTAssertEqual(LibraryLabelFilter.purple.colorLabel, .purple)
     }
 
+    // MARK: Search hint
+
+    func testAnUnreadableSearchTermShowsAWarningHintAndTheIdleBarDoesNot() throws {
+        let idle = try makeCatalog()
+        let bad = try makeCatalog()
+        bad.searchText = "iso:abc"
+        let idleRep = render(idle)
+        XCTAssertGreaterThan(differing(idleRep, render(bad)), 100, "the warning text appears")
+    }
+
+    func testHintRules() {
+        let scanning = "Reading camera data… 5/10"
+        let warn = LibraryFilterBar.hint(forSearch: "iso:abc", scanStatus: scanning, hasAnyMetadata: true)
+        XCTAssertEqual(warn?.text, "Can't read \"iso:abc\"")
+        XCTAssertEqual(warn?.isWarning, true, "an unreadable term wins over the scan status")
+        XCTAssertNil(LibraryFilterBar.hint(forSearch: "iso:>800", scanStatus: nil, hasAnyMetadata: true), "readable and idle: no hint")
+        XCTAssertEqual(LibraryFilterBar.hint(forSearch: "iso:>800", scanStatus: scanning, hasAnyMetadata: true)?.text, scanning,
+                       "a camera-data query shows the scan progress")
+        XCTAssertEqual(LibraryFilterBar.hint(forSearch: "iso:>800", scanStatus: scanning, hasAnyMetadata: true)?.isWarning, false)
+        XCTAssertNil(LibraryFilterBar.hint(forSearch: "sunset rating:>3", scanStatus: scanning, hasAnyMetadata: true),
+                     "a query that needs no camera data is not nagged about the scan")
+        XCTAssertEqual(LibraryFilterBar.hint(forSearch: "", scanStatus: scanning, hasAnyMetadata: false)?.text, scanning,
+                       "before any data exists the progress shows even with no query")
+        XCTAssertNil(LibraryFilterBar.hint(forSearch: "", scanStatus: scanning, hasAnyMetadata: true))
+    }
+
     // MARK: Active cue + clear button
 
     func testActiveFiltersChangeTheBarAndIdleDoesNotMatchIt() throws {

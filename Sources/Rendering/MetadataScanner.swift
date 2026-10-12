@@ -5,9 +5,10 @@ import Foundation
 /// (`Task.isCancelled` between photos; rows read before a cancel are saved first so the next scan resumes from the cache),
 /// and meant to run from a detached task because it blocks on file I/O.
 ///
-/// A photo whose file cannot be stat'ed (missing, unreadable, offline volume) is SKIPPED and never stored, so it is retried
-/// next time. A file that stats fine but ImageIO cannot open, or that carries no EXIF, gets an all-nil row, so it is not
-/// re-read on every launch.
+/// A photo whose file cannot be stat'ed OR that ImageIO cannot open (missing, unreadable, offline volume, a folder this
+/// sandbox has no access to right now, or simply not an image) is SKIPPED and never stored, so it is retried next time: a
+/// permission failure must never be remembered as "this photo has no camera data". An image that opens but carries no EXIF
+/// gets an all-nil row, so it is not re-read on every launch.
 enum MetadataScanner {
     struct Environment: Sendable {
         var stat: @Sendable (_ path: String) -> (size: Int64, mtime: Double)?
@@ -35,7 +36,7 @@ enum MetadataScanner {
         var scanned: Int
         /// Photos whose cache row was already current.
         var reused: Int
-        /// Photos whose file could not be stat'ed.
+        /// Photos whose file could not be stat'ed or opened by ImageIO (retried on a later scan, never stored).
         var skipped: Int
         var wasCancelled: Bool
     }
@@ -92,7 +93,12 @@ enum MetadataScanner {
             if let row = cached[item.id], row.isCurrent(fileSize: stat.size, mtime: stat.mtime) {
                 reused += 1
             } else {
-                let fields = environment.read(item.path) ?? .empty
+                guard let fields = environment.read(item.path) else {
+                    skipped += 1
+                    completed += 1
+                    progress(Progress(completed: completed, total: scannable.count))
+                    continue
+                }
                 pending.append(PhotoMetadata(
                     photoId: item.id, fileSize: stat.size, mtime: stat.mtime,
                     readerRevision: PhotoMetadata.currentReaderRevision,

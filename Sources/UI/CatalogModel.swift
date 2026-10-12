@@ -125,6 +125,17 @@ final class CatalogModel: ObservableObject {
     /// Faces and people (see `FacesModel`): the people list, which photos each person is in, and the Library's Person filter.
     @Published private(set) var people: [PersonSummary] = []
     @Published private(set) var personIDsByPhotoID: [Int64: Set<Int64>] = [:]
+    /// The cached camera data (EXIF) the Library search's `iso:`/`camera:`/`date:`… fields read; see `CatalogModel+Metadata.swift`.
+    @Published private(set) var metadataByPhotoID: [Int64: PhotoMetadata] = [:]
+    /// Non-nil while the background metadata scan runs ("Reading camera data… 120/1097").
+    @Published private(set) var metadataScanProgress: MetadataScanner.Progress?
+    var metadataScanTask: Task<Void, Never>?
+    var metadataScanWanted = false
+    var didFullMetadataPass = false
+    var metadataCheckedPhotoCount: Int?
+    var metadataRetryRequested = false
+    /// Identifies the current scan so a late progress update from an earlier one is dropped.
+    var metadataScanGeneration = 0
     @Published var personFilterID: Int64?
     @Published var peopleSheetRequested = false
     @Published var peopleSheetPresented = false
@@ -154,7 +165,8 @@ final class CatalogModel: ObservableObject {
             keywordIDsByPhotoID: keywordIDsByPhotoID,
             keywordNamesByPhotoID: keywordNamesForSearch,
             personFilter: personFilterID,
-            personIDsByPhotoID: personIDsByPhotoID
+            personIDsByPhotoID: personIDsByPhotoID,
+            metadataByPhotoID: metadataByPhotoID
         )
     }
 
@@ -493,6 +505,9 @@ final class CatalogModel: ObservableObject {
             case .collection(let collectionID):
                 photos = try await database.photos(inCollection: collectionID)
             }
+            // Its own do/catch like the face read: a failed camera-data read keeps the previous map.
+            if let loaded = try? await database.allMetadata() { metadataByPhotoID = loaded }
+            startMetadataScanIfNeeded()
         } catch {
             // Best-effort — a transient read failure shouldn't blank out
             // an otherwise-valid, already-displayed library.
@@ -1098,6 +1113,7 @@ final class CatalogModel: ObservableObject {
         membershipsByPhotoID.removeValue(forKey: id)
         keywordIDsByPhotoID.removeValue(forKey: id)
         personIDsByPhotoID.removeValue(forKey: id)
+        metadataByPhotoID.removeValue(forKey: id)
         invalidateThumbnail(for: URL(fileURLWithPath: photo.path))
         Task.detached { [weak self] in
             do { try await database.deletePhoto(id: id) } catch { await self?.refresh() }
@@ -1734,6 +1750,9 @@ final class CatalogModel: ObservableObject {
     /// that a future relaunch won't see them.
     @discardableResult
     private func activateFolderAccess(for folder: URL) -> String? {
+        // Every import/relocate/grant passes through here, including a re-import that adds no rows: a photo the camera-data scan
+        // skipped for lack of access gets another chance at the next refresh.
+        requestMetadataRetry()
         guard !activeFolders.contains(folder.path) else { return nil }
 
         var warning: String?
@@ -1787,5 +1806,91 @@ final class CatalogModel: ObservableObject {
         let importedPart = "Imported \(result.inserted) photo\(result.inserted == 1 ? "" : "s")"
         guard result.skipped > 0 else { return "\(importedPart)." }
         return "\(importedPart) (\(result.skipped) already in catalog)."
+    }
+}
+
+// MARK: - Camera-data scan (field-based search)
+
+/// The background camera-data scan behind field-based search (`MetadataScanner`). It never blocks the main thread, never
+/// touches a photo file beyond reading its header, and runs without any user action: once per app session over the whole
+/// library (the scan's own stat pass catches files edited elsewhere and is cheap when nothing changed), and again whenever
+/// the library's photo count changes (an import, an Enhance/merge output, a removal).
+extension CatalogModel {
+    /// "Reading camera data… 120/1097" while a scan runs, else nil.
+    var metadataScanStatusText: String? {
+        guard let progress = metadataScanProgress else { return nil }
+        return "Reading camera data… \(progress.completed)/\(progress.total)"
+    }
+
+    /// Asks the next `refresh()` to scan the photos that have no camera-data row yet (including ones an earlier scan had to
+    /// skip). Called whenever folder access is (re)activated.
+    func requestMetadataRetry() { metadataRetryRequested = true }
+
+    /// Starts a scan when none is running and the library needs one; a request that arrives mid-scan is remembered and
+    /// runs once the current scan ends. Called at the end of every `refresh()`.
+    func startMetadataScanIfNeeded() {
+        guard database != nil else { return }
+        let countChanged = metadataCheckedPhotoCount != photoCount
+        guard !didFullMetadataPass || countChanged || metadataRetryRequested else { return }
+        if metadataScanTask != nil {
+            metadataScanWanted = true
+            return
+        }
+        guard let database else { return }
+        let fullPass = !didFullMetadataPass
+        metadataCheckedPhotoCount = photoCount
+        didFullMetadataPass = true
+        metadataRetryRequested = false
+        metadataScanGeneration += 1
+        let generation = metadataScanGeneration
+        let owner = WeakCatalogModel(self)
+        metadataScanTask = Task {
+            let everything = (try? await database.allPhotos()) ?? []
+            let cached = (try? await database.allMetadata()) ?? [:]
+            // Photos with no row include the ones a previous scan SKIPPED (no access, unreadable), so a retry is just this.
+            let targets = fullPass ? everything : MetadataScanner.photosNeedingScan(everything, cached: cached)
+            if !targets.isEmpty {
+                let sink = MetadataProgressSink { progress in
+                    Task { @MainActor in
+                        // Only while THIS scan is still the current one: a late update must not resurrect the status or
+                        // show an earlier scan's count under the next scan.
+                        guard let model = owner.model, model.metadataScanTask != nil, model.metadataScanGeneration == generation
+                        else { return }
+                        model.metadataScanProgress = progress
+                    }
+                }
+                _ = try? await Task.detached(priority: .utility) {
+                    try await MetadataScanner.scan(photos: targets, database: database, progress: { sink.report($0) })
+                }.value
+            }
+            await owner.model?.finishMetadataScan(database: database)
+        }
+    }
+
+    private func finishMetadataScan(database: CatalogDatabase) async {
+        if let loaded = try? await database.allMetadata() { metadataByPhotoID = loaded }
+        metadataScanProgress = nil
+        metadataScanTask = nil
+        if metadataScanWanted {
+            metadataScanWanted = false
+            startMetadataScanIfNeeded()
+        }
+    }
+}
+
+/// A weak reference that can cross into a `Sendable` closure (the scan task must not keep the model alive).
+final class WeakCatalogModel: @unchecked Sendable {
+    weak var model: CatalogModel?
+    init(_ model: CatalogModel) { self.model = model }
+}
+
+/// Hands scan progress to the main actor, at most once per 10 photos (and for the last one), so a big library does not
+/// flood the UI with one update per file.
+final class MetadataProgressSink: @unchecked Sendable {
+    private let deliver: @Sendable (MetadataScanner.Progress) -> Void
+    init(_ deliver: @escaping @Sendable (MetadataScanner.Progress) -> Void) { self.deliver = deliver }
+
+    func report(_ progress: MetadataScanner.Progress) {
+        if progress.completed % 10 == 0 || progress.completed == progress.total { deliver(progress) }
     }
 }

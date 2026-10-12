@@ -5,6 +5,21 @@ import SwiftUI
 /// filter is active (sort alone never counts). Extracted from `LibraryGridView` so it can be rendered in tests.
 struct LibraryFilterBar: View {
     @ObservedObject var catalog: CatalogModel
+    @State private var showingSearchHelp = false
+
+    /// The one-line status next to the search field: an unreadable term wins over the scan progress, and the progress only
+    /// shows when it matters (the query needs camera data, or none has been read yet).
+    static func hint(forSearch text: String, scanStatus: String?, hasAnyMetadata: Bool) -> (text: String, isWarning: Bool)? {
+        let query = SearchQuery(parsing: text)
+        if let bad = query.invalidTerms.first { return ("Can't read \"\(bad)\"", true) }
+        if let status = scanStatus, query.usesCameraData || !hasAnyMetadata { return (status, false) }
+        return nil
+    }
+
+    private var searchHint: (text: String, isWarning: Bool)? {
+        Self.hint(forSearch: catalog.searchText, scanStatus: catalog.metadataScanStatusText,
+                  hasAnyMetadata: !catalog.metadataByPhotoID.isEmpty)
+    }
 
     private func chip(_ isActive: Bool) -> some View {
         RoundedRectangle(cornerRadius: 6).fill(isActive ? Theme.selectedFill : Color.clear)
@@ -98,11 +113,51 @@ struct LibraryFilterBar: View {
 
             Spacer(minLength: 12)
 
-            TextField("Search filename or keyword…", text: $catalog.searchText)
+            // Scan progress, or why the query shows nothing (an unreadable field value).
+            if let hint = searchHint {
+                Text(hint.text)
+                    .font(.caption)
+                    .foregroundStyle(hint.isWarning ? Theme.warning : Theme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(-1)
+                    .accessibilityLabel(hint.text)
+            }
+
+            TextField("Search name, keyword or iso:>800 camera:d610…", text: $catalog.searchText)
                 .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 220)
+                .frame(maxWidth: 260)
+                .accessibilityLabel("Search")
+
+            Button { showingSearchHelp.toggle() } label: {
+                Image(systemName: "questionmark.circle")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.textSecondary)
+            .help("Search syntax")
+            .accessibilityLabel("Search syntax help")
+            .popover(isPresented: $showingSearchHelp, arrowEdge: .bottom) { SearchHelpView() }
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
+    }
+}
+
+/// The search syntax popover.
+struct SearchHelpView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Search").font(.headline).foregroundStyle(Theme.textPrimary)
+            ForEach(SearchHelp.rows, id: \.field) { row in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(row.example).font(.system(.caption, design: .monospaced)).foregroundStyle(Theme.textPrimary)
+                        .frame(width: 150, alignment: .leading)
+                    Text(row.meaning).font(.caption).foregroundStyle(Theme.textSecondary)
+                }
+            }
+            Text(SearchHelp.note).font(.caption).foregroundStyle(Theme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true).frame(width: 340, alignment: .leading).padding(.top, 4)
+        }
+        .padding(14)
     }
 }

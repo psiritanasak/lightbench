@@ -27,119 +27,121 @@ struct LibraryFilterBar: View {
 
     var body: some View {
         let state = catalog.libraryFilterState
-        HStack(spacing: 12) {
-            Picker("Sort", selection: $catalog.sortOption) {
-                ForEach(LibrarySortOption.allCases) { option in
-                    Text(option.label).tag(option)
-                }
-            }
-            .labelsHidden()
-            .accessibilityLabel("Sort")
-            .frame(maxWidth: 140)
-
-            Picker("Rating", selection: $catalog.minimumRating) {
-                Text("Any Rating").tag(0)
-                ForEach(1...5, id: \.self) { stars in
-                    Text(String(repeating: "★", count: stars) + "+").tag(stars)
-                }
-            }
-            .labelsHidden()
-            .accessibilityLabel("Rating")
-            .frame(maxWidth: 110)
-            .background(chip(state.isRatingActive))
-
-            Picker("Flag", selection: $catalog.flagFilter) {
-                ForEach(LibraryFlagFilter.allCases) { option in
-                    Text(option.label).tag(option)
-                }
-            }
-            .labelsHidden()
-            .accessibilityLabel("Flag")
-            .frame(maxWidth: 130)
-            .background(chip(state.isFlagActive))
-
-            Picker("Label", selection: $catalog.labelFilter) {
-                ForEach(LibraryLabelFilter.allCases) { option in
-                    if let label = option.colorLabel, let swatch = LabelSwatch.image(for: label) {
-                        Label { Text(option.label) } icon: { Image(nsImage: swatch) }.tag(option)
-                    } else {
+        VStack(alignment: .trailing, spacing: 0) {
+            HStack(spacing: 12) {
+                Picker("Sort", selection: $catalog.sortOption) {
+                    ForEach(LibrarySortOption.allCases) { option in
                         Text(option.label).tag(option)
                     }
                 }
-            }
-            .labelsHidden()
-            .accessibilityLabel("Label")
-            .frame(maxWidth: 130)
-            .background(chip(state.isLabelActive))
+                .labelsHidden()
+                .accessibilityLabel("Sort")
+                .frame(maxWidth: 140)
 
-            Picker("Keyword", selection: $catalog.keywordFilterID) {
-                Text("All Keywords").tag(Int64?.none)
-                let counts = catalog.keywordPhotoCounts
-                ForEach(catalog.keywords) { keyword in
-                    Text("\(keyword.name) (\(counts[keyword.id ?? -1, default: 0]))").tag(keyword.id)
-                }
-            }
-            .labelsHidden()
-            .accessibilityLabel("Keyword")
-            .frame(maxWidth: 150)
-            .background(chip(state.isKeywordActive))
-
-            // Only when the catalog has people (the People sheet makes them); a hidden person is left out, unless it is the active filter.
-            let visiblePeople = catalog.people.filter { !$0.isHidden || $0.id == catalog.personFilterID }
-            if !visiblePeople.isEmpty {
-                Picker("Person", selection: $catalog.personFilterID) {
-                    Text("All People").tag(Int64?.none)
-                    ForEach(visiblePeople) { person in
-                        Text("\(person.displayName) (\(person.photoCount))").tag(Int64?.some(person.id))
+                Picker("Rating", selection: $catalog.minimumRating) {
+                    Text("Any Rating").tag(0)
+                    ForEach(1...5, id: \.self) { stars in
+                        Text(String(repeating: "★", count: stars) + "+").tag(stars)
                     }
                 }
                 .labelsHidden()
-                .accessibilityLabel("Person")
-                .frame(maxWidth: 140)
-                .background(chip(state.isPersonActive))
-            }
+                .accessibilityLabel("Rating")
+                .frame(maxWidth: 110)
+                .background(chip(state.isRatingActive))
 
-            if state.isActive {
-                Button {
-                    catalog.clearFiltersKeepingSort()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
+                Picker("Flag", selection: $catalog.flagFilter) {
+                    ForEach(LibraryFlagFilter.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .labelsHidden()
+                .accessibilityLabel("Flag")
+                .frame(maxWidth: 130)
+                .background(chip(state.isFlagActive))
+
+                Picker("Label", selection: $catalog.labelFilter) {
+                    ForEach(LibraryLabelFilter.allCases) { option in
+                        if let label = option.colorLabel, let swatch = LabelSwatch.image(for: label) {
+                            Label { Text(option.label) } icon: { Image(nsImage: swatch) }.tag(option)
+                        } else {
+                            Text(option.label).tag(option)
+                        }
+                    }
+                }
+                .labelsHidden()
+                .accessibilityLabel("Label")
+                .frame(maxWidth: 130)
+                .background(chip(state.isLabelActive))
+
+                Picker("Keyword", selection: $catalog.keywordFilterID) {
+                    Text("All Keywords").tag(Int64?.none)
+                    let counts = catalog.keywordPhotoCounts
+                    ForEach(catalog.keywords) { keyword in
+                        Text("\(keyword.name) (\(counts[keyword.id ?? -1, default: 0]))").tag(keyword.id)
+                    }
+                }
+                .labelsHidden()
+                .accessibilityLabel("Keyword")
+                .frame(maxWidth: 150)
+                .background(chip(state.isKeywordActive))
+
+                // Only when the catalog has people (the People sheet makes them); a hidden person is left out, unless it is the active filter.
+                let visiblePeople = catalog.people.filter { !$0.isHidden || $0.id == catalog.personFilterID }
+                if !visiblePeople.isEmpty {
+                    Picker("Person", selection: $catalog.personFilterID) {
+                        Text("All People").tag(Int64?.none)
+                        ForEach(visiblePeople) { person in
+                            Text("\(person.displayName) (\(person.photoCount))").tag(Int64?.some(person.id))
+                        }
+                    }
+                    .labelsHidden()
+                    .accessibilityLabel("Person")
+                    .frame(maxWidth: 140)
+                    .background(chip(state.isPersonActive))
+                }
+
+                if state.isActive {
+                    Button {
+                        catalog.clearFiltersKeepingSort()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.textSecondary)
+                    .help("Clear filters")
+                    .accessibilityLabel("Clear filters")
+                }
+
+                Spacer(minLength: 12)
+
+                TextField("Search name, keyword or iso:>800 camera:d610…", text: $catalog.searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 260)
+                    .accessibilityLabel("Search")
+
+                Button { showingSearchHelp.toggle() } label: {
+                    Image(systemName: "questionmark.circle")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.textSecondary)
-                .help("Clear filters")
-                .accessibilityLabel("Clear filters")
+                .help("Search syntax")
+                .accessibilityLabel("Search syntax help")
+                .popover(isPresented: $showingSearchHelp, arrowEdge: .bottom) { SearchHelpView() }
             }
-
-            Spacer(minLength: 12)
-
-            // Scan progress, or why the query shows nothing (an unreadable field value).
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            // Scan progress, or why the query shows nothing (an unreadable field value). Its own line: the picker row is too tight
+            // to share (measured live: inline it was squeezed to zero width).
             if let hint = searchHint {
                 Text(hint.text)
                     .font(.caption)
                     .foregroundStyle(hint.isWarning ? Theme.warning : Theme.textSecondary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
-                    .layoutPriority(-1)
+                    .padding(.horizontal)
+                    .padding(.bottom, 6)
                     .accessibilityLabel(hint.text)
             }
-
-            TextField("Search name, keyword or iso:>800 camera:d610…", text: $catalog.searchText)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 260)
-                .accessibilityLabel("Search")
-
-            Button { showingSearchHelp.toggle() } label: {
-                Image(systemName: "questionmark.circle")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.textSecondary)
-            .help("Search syntax")
-            .accessibilityLabel("Search syntax help")
-            .popover(isPresented: $showingSearchHelp, arrowEdge: .bottom) { SearchHelpView() }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
     }
 }
 

@@ -1340,7 +1340,7 @@ Commits af72012 (pure geometry), ed9d669 (overlays), 476d31b (wiring + Space pan
 
 ### D57. LightCraft feature-gap list (researched 2026-10-08) — open, each its own session
 Source: the README, ROADMAP and screenshots of github.com/storytold/lightcraft (an open-source pure-Rust Lightroom clone, same non-destructive concept). README only — NOT its source or `docs/parity.md`; its claims are unverified. Where we are AHEAD (don't regress): CIRAWFilter camera colour for ~784 bodies (LightCraft uses a neutral matrix for non-DNG RAW), Vision subject masks with per-subject picking, Enhance/Super Resolution, Looks/Styles with live thumbnails, skin protection. Not pursued: pure Rust/WASM/own RAW decoders (would discard CIRAWFilter), cloud generative models (ArtCraft, same org — breaks the on-device rule). Priority order (value / effort):
-1. **Field-based search** — `rating:>3 flag:pick iso:>800 camera:x2 date:2026-04 keyword:mountains`. Needs EXIF fields (ISO, camera, lens, date) in the catalog first — check what `Photo` stores; extends `LibraryFilterSort`.
+1. ~~**Field-based search**~~ ✅ SHIPPED 2026-10-12 (see docs/ROADMAP_HISTORY.md; open gaps below in D63) — — `rating:>3 flag:pick iso:>800 camera:x2 date:2026-04 keyword:mountains`. Needs EXIF fields (ISO, camera, lens, date) in the catalog first — check what `Photo` stores; extends `LibraryFilterSort`.
 2. ~~**B&W Mix**~~ ✅ SHIPPED 2026-10-12 (see docs/ROADMAP_HISTORY.md; still open: Intensity/Neutrals/Tone/Grain, Auto mix, live tuning of kGrayMixStops) — 8-band darken/lighten per colour (skies/foliage). We only have the on/off toggle. Reuses the Selective Color band machinery; own design pass for where it sits relative to B&W's forced desaturation. Also from D35 item 1: B&W Intensity/Neutrals/Tone/Grain.
 3. **Whites / Blacks sliders and per-mask extras** — they list 15 local adjustments per mask (Temp, Tint, Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Texture, Clarity, Dehaze, Hue, Saturation, Sharpness, Noise) plus an overall Amount. Check overlap with our Levels/Curves and the existing mask fields before adding anything.
 4. **Standard XMP `crs:` read/write** — edits round-trip with Lightroom/Camera Raw (they read `crs:` develop settings and auto-write XMP). Ours is proprietary `.photoapp.json` (D35 item 4). Risky: our pipeline is not Adobe's, so start with a SPIKE measuring how close the mapped render is. Also `.lcpreset`/XMP preset import.
@@ -1417,3 +1417,12 @@ Takeaway for us: the part worth copying is not any single control but that the r
 7. `MLModel.load(contentsOf:configuration:) async` would avoid holding a cooperative-pool thread during the 7 s load (optional).
 
 - D61 live note (2026-10-12): the first merge into a folder prompts for folder access ("Allow access to <folder> so the merged photo can be saved...") even right after importing that folder; the import's grant is not reused for merge output (Enhance reuses the sidecar grant). Harmless but a surprise; consider reusing `SidecarFolderAccess`.
+
+### D63. Field-based search — open gaps (2026-10-12)
+1. Search text and fields are not saved in Smart Collections (the criteria JSON could take a query string without a migration).
+2. A catalogued file that ImageIO cannot open (not an image, or no access) is re-read on every needs-scan pass (count change / retry): one stat + one failed header read each, cannot loop.
+3. The scan hint line appears under the filter bar while a scan runs, which shifts the grid down one caption line; reserve the height if it bothers.
+4. No autocomplete / query builder; no GPS/place fields; ISO beyond 65535 relies on `ISOSpeed` (`RecommendedExposureIndex` is not read).
+5. Capture sort puts undated photos last in BOTH directions (not by import date).
+6. Photos in folders this sandbox has no library access to are skipped by the scan (and by thumbnails); fixing the access fixes both.
+7. Multi-word plain search is now an AND of words (was one substring): results only broaden.

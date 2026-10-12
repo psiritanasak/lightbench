@@ -9,9 +9,10 @@ import XCTest
 final class LibraryFilterBarTests: XCTestCase {
     private let size = CGSize(width: 900, height: 44)
 
-    private func render(_ catalog: CatalogModel) -> NSBitmapImageRep {
+    private func render(_ catalog: CatalogModel, height: CGFloat? = nil) -> NSBitmapImageRep {
+        let size = CGSize(width: self.size.width, height: height ?? self.size.height)
         let view = LibraryFilterBar(catalog: catalog).environment(\.colorScheme, .dark).environment(\.controlActiveState, .key)
-            .frame(width: size.width, height: size.height).background(Theme.panel)
+            .frame(width: size.width, height: size.height, alignment: .top).background(Theme.panel)
         let hosting = NSHostingView(rootView: view)
         hosting.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -78,8 +79,23 @@ final class LibraryFilterBarTests: XCTestCase {
         let idle = try makeCatalog()
         let bad = try makeCatalog()
         bad.searchText = "iso:abc"
-        let idleRep = render(idle)
-        XCTAssertGreaterThan(differing(idleRep, render(bad)), 100, "the warning text appears")
+        // The hint has its own line UNDER the bar: render taller and compare only that strip (the search field's own text
+        // differs between the two catalogs, so comparing the whole picture would pass even with no hint at all).
+        let idleRep = render(idle, height: 70)
+        let badRep = render(bad, height: 70)
+        let scale = idleRep.pixelsWide / Int(size.width)
+        func stripDifference(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> Int {
+            var n = 0
+            for y in (50 * scale)..<a.pixelsHigh {
+                for x in 0..<a.pixelsWide {
+                    guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    if abs(p.redComponent - q.redComponent) + abs(p.greenComponent - q.greenComponent) > 0.1 { n += 1 }
+                }
+            }
+            return n
+        }
+        XCTAssertGreaterThan(stripDifference(idleRep, badRep), 40, "the warning text appears under the bar")
+        XCTAssertEqual(stripDifference(idleRep, render(try makeCatalog(), height: 70)), 0, "an idle bar has nothing under it")
     }
 
     func testHintRules() {

@@ -1415,3 +1415,5 @@ Takeaway for us: the part worth copying is not any single control but that the r
 5. A combine mode is not reflected in Show Selection (window + Invert only). Holes in an embedded map (NaN/inf) become "far", so a window reaching nearness 0 or Invert selects them.
 6. The model is not in git: a checkout without `scripts/fetch_depth_model.sh` only offers embedded depth (the UI says so). First use after launch pays a ~7 s model load (compile / Neural Engine specialisation); it runs on a background task but there is only a "Reading…" label.
 7. `MLModel.load(contentsOf:configuration:) async` would avoid holding a cooperative-pool thread during the 7 s load (optional).
+
+- D61 live note (2026-10-12): the first merge into a folder prompts for folder access ("Allow access to <folder> so the merged photo can be saved...") even right after importing that folder; the import's grant is not reused for merge output (Enhance reuses the sidecar grant). Harmless but a surprise; consider reusing `SidecarFolderAccess`.

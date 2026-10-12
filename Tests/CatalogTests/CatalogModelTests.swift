@@ -406,16 +406,57 @@ final class CatalogModelTests: XCTestCase {
         XCTAssertEqual(model.photos.count, Self.paths.count)
     }
 
-    func testSavingKeepsTheUsersSortOrderAndSearchText() async throws {
+    func testSavingKeepsTheUsersSortOrderSavesTheSearchAndClearsTheBar() async throws {
         let model = await makeModel()
         model.sortOption = .nameAZ
         model.searchText = "zzz"
         model.minimumRating = 2
         let saved = await model.saveFiltersAsSmartCollection(name: "KeepsSort")
         XCTAssertTrue(saved)
-        XCTAssertEqual(model.sortOption, .nameAZ)
-        XCTAssertEqual(model.searchText, "zzz")
+        XCTAssertEqual(model.sortOption, .nameAZ, "the sort order is not part of a smart collection")
+        XCTAssertEqual(model.searchText, "", "the search is saved with the collection, so the bar no longer ANDs it on top")
         XCTAssertEqual(model.minimumRating, 0)
+        XCTAssertEqual(model.smartCollections.first?.criteria.searchQuery, "zzz")
+    }
+
+    func testASearchOnlyQueryCanBeSavedAndAPaddedOrNoOpQueryIsNot() async throws {
+        let model = await makeModel()
+        model.searchText = "   "
+        XCTAssertFalse(model.hasSaveableFilterCriteria, "whitespace restricts nothing")
+        model.searchText = "iso:"
+        XCTAssertFalse(model.hasSaveableFilterCriteria, "a field with no value yet restricts nothing")
+        model.searchText = "  iso:>800  "
+        XCTAssertTrue(model.hasSaveableFilterCriteria)
+        XCTAssertEqual(model.currentFilterCriteria.searchQuery, "iso:>800", "trimmed")
+        let saved = await model.saveFiltersAsSmartCollection(name: "HighISO")
+        XCTAssertTrue(saved)
+        XCTAssertEqual(model.smartCollections.first?.criteria.searchQuery, "iso:>800")
+    }
+
+    func testAnUnreadableSearchIsRefusedForSaveAndUpdate() async throws {
+        let model = await makeModel()
+        model.searchText = "iso:abc"
+        XCTAssertFalse(model.hasSaveableFilterCriteria)
+        XCTAssertEqual(model.saveBlockedBySearch, "Can't read \"iso:abc\" in the search box: fix it before saving.")
+        let saved = await model.saveFiltersAsSmartCollection(name: "Bad")
+        XCTAssertFalse(saved)
+        XCTAssertEqual(model.importStatusMessage, model.saveBlockedBySearch)
+        XCTAssertTrue(model.smartCollections.isEmpty, "nothing was saved")
+        let (m2, smart) = try await makeSmartModel(SmartCollectionCriteria(minimumRating: 1))
+        m2.searchText = "iso:abc"
+        m2.minimumRating = 4
+        await m2.updateSmartCollectionFromFilters(smart)
+        XCTAssertEqual(m2.smartCollections.first?.criteria.minimumRating, 1, "an unreadable search blocks the update too")
+        XCTAssertEqual(m2.searchText, "iso:abc", "and leaves the bar as the user typed it")
+    }
+
+    func testUpdateFromFiltersReplacesTheSavedQueryAndClearsTheBar() async throws {
+        let (model, smart) = try await makeSmartModel(SmartCollectionCriteria(minimumRating: 1, searchQuery: "old"))
+        model.searchText = "camera:d610"
+        await model.updateSmartCollectionFromFilters(smart)
+        XCTAssertEqual(model.smartCollections.first?.criteria.searchQuery, "camera:d610")
+        XCTAssertEqual(model.searchText, "")
+        XCTAssertEqual(model.selectedSmartCollectionQuery, "camera:d610")
     }
 
     func testDeletingTheSelectedSmartCollectionFallsBackToAllPhotos() async throws {

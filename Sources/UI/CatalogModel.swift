@@ -180,7 +180,18 @@ final class CatalogModel: ObservableObject {
     var smartCollectionSourcePhotos: [Photo] {
         guard case .smartCollection(let id) = selectedFilter else { return photos }
         guard let smart = smartCollections.first(where: { $0.id == id }) else { return [] }
-        return smart.criteria.apply(to: photos, keywords: keywords, keywordIDsByPhotoID: keywordIDsByPhotoID)
+        return smart.criteria.apply(
+            to: photos, keywords: keywords, keywordIDsByPhotoID: keywordIDsByPhotoID,
+            // Only built when the collection has a saved search (the only reader).
+            keywordNamesByPhotoID: smart.criteria.searchQuery.isEmpty ? [:] : keywordNamesByPhoto(),
+            metadataByPhotoID: metadataByPhotoID
+        )
+    }
+
+    /// The selected smart collection's saved search text ("" when none is selected or it has none).
+    var selectedSmartCollectionQuery: String {
+        guard case .smartCollection(let id) = selectedFilter else { return "" }
+        return smartCollections.first(where: { $0.id == id })?.criteria.searchQuery ?? ""
     }
 
     /// keyword id → display name (ids are primary keys, so unique).
@@ -188,11 +199,16 @@ final class CatalogModel: ObservableObject {
         Dictionary(uniqueKeysWithValues: keywords.compactMap { keyword in keyword.id.map { ($0, keyword.name) } })
     }
 
+    /// photoID → keyword names (for a text search over keywords).
+    private func keywordNamesByPhoto() -> [Int64: [String]] {
+        let namesByID = keywordNamesByID
+        return keywordIDsByPhotoID.mapValues { $0.compactMap { namesByID[$0] } }
+    }
+
     /// photoID → keyword names, built only while a search is active (the only reader).
     private var keywordNamesForSearch: [Int64: [String]] {
         guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
-        let namesByID = keywordNamesByID
-        return keywordIDsByPhotoID.mapValues { $0.compactMap { namesByID[$0] } }
+        return keywordNamesByPhoto()
     }
 
     /// The current filter fields as a value (sort excluded): what the filter bar checks for its "active" cue.
@@ -1122,35 +1138,44 @@ final class CatalogModel: ObservableObject {
 
     // MARK: - Smart collections
 
-    /// The filter bar's current criteria in saveable form. Search text is deliberately not part of a smart collection
-    /// (v1); the sort order is not either.
+    /// The filter bar's current criteria in saveable form: the four filter fields AND the search text (normalised: text that
+    /// restricts nothing, like `iso:`, is dropped). The sort order is not part of a smart collection.
     var currentFilterCriteria: SmartCollectionCriteria {
         SmartCollectionCriteria(
             minimumRating: minimumRating, flag: flagFilter, label: labelFilter,
-            keywordKey: keywordFilterID.flatMap { id in keywords.first { $0.id == id }?.nameKey }
+            keywordKey: keywordFilterID.flatMap { id in keywords.first { $0.id == id }?.nameKey },
+            searchQuery: SmartCollectionCriteria.normalizedQuery(searchText)
         )
     }
 
-    /// Resets ONLY the four fields a smart collection saves; the sort order and search text are not part of one and are
-    /// left as the user set them.
+    /// Why the search box cannot be saved right now (an unreadable field value would save a collection that matches nothing).
+    var saveBlockedBySearch: String? {
+        SearchQuery(parsing: searchText).invalidTerms.first.map { "Can't read \"\($0)\" in the search box: fix it before saving." }
+    }
+
+    /// Resets the fields a smart collection saves, search text included (a search left in the box would be ANDed on top of
+    /// the saved one and the grid would no longer show exactly what was saved). The sort order is left as the user set it. The
+    /// person filter is neither saved nor cleared here (a smart collection has no person criterion yet).
     private func clearSavedFilterCriteria() {
         minimumRating = 0
         flagFilter = .all
         labelFilter = .all
         keywordFilterID = nil
+        searchText = ""
     }
 
     /// Whether there is anything in the filter bar worth saving.
-    var hasSaveableFilterCriteria: Bool { !currentFilterCriteria.isEmpty }
+    var hasSaveableFilterCriteria: Bool { !currentFilterCriteria.isEmpty && saveBlockedBySearch == nil }
 
     /// Saves the filter bar as a new smart collection, then resets the bar and selects the new row so the grid shows
     /// exactly what was saved. Failures (empty/duplicate name) are reported via `importStatusMessage`.
     @discardableResult
     func saveFiltersAsSmartCollection(name: String) async -> Bool {
         guard let database else { return false }
+        if let blocked = saveBlockedBySearch { importStatusMessage = blocked; return false }
         let criteria = currentFilterCriteria
         guard !criteria.isEmpty else {
-            importStatusMessage = "Set a rating, flag, label or keyword filter first, then save it."
+            importStatusMessage = "Set a rating, flag, label or keyword filter, or type a search, first, then save it."
             return false
         }
         do {
@@ -1180,9 +1205,10 @@ final class CatalogModel: ObservableObject {
     /// being viewed; the bar is reset so the grid shows exactly what was saved.
     func updateSmartCollectionFromFilters(_ smart: SmartCollection) async {
         guard let database, let id = smart.id else { return }
+        if let blocked = saveBlockedBySearch { importStatusMessage = blocked; return }
         let criteria = currentFilterCriteria
         guard !criteria.isEmpty else {
-            importStatusMessage = "Set a rating, flag, label or keyword filter first, then update the smart collection from it."
+            importStatusMessage = "Set a rating, flag, label or keyword filter, or type a search, first, then update the smart collection from it."
             return
         }
         do {

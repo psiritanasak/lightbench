@@ -9,16 +9,19 @@ struct LibraryFilterBar: View {
 
     /// The one-line status next to the search field: an unreadable term wins over the scan progress, and the progress only
     /// shows when it matters (the query needs camera data, or none has been read yet).
-    static func hint(forSearch text: String, scanStatus: String?, hasAnyMetadata: Bool) -> (text: String, isWarning: Bool)? {
+    /// `savedQuery` is the selected smart collection's own search: its camera-data terms also need the scan to be done.
+    static func hint(forSearch text: String, scanStatus: String?, hasAnyMetadata: Bool, savedQuery: String = "") -> (text: String, isWarning: Bool)? {
         let query = SearchQuery(parsing: text)
         if let bad = query.invalidTerms.first { return ("Can't read \"\(bad)\"", true) }
-        if let status = scanStatus, query.usesCameraData || !hasAnyMetadata { return (status, false) }
+        let needsCameraData = query.usesCameraData || SearchQuery(parsing: savedQuery).usesCameraData
+        if let status = scanStatus, needsCameraData || !hasAnyMetadata { return (status, false) }
         return nil
     }
 
     private var searchHint: (text: String, isWarning: Bool)? {
         Self.hint(forSearch: catalog.searchText, scanStatus: catalog.metadataScanStatusText,
-                  hasAnyMetadata: !catalog.metadataByPhotoID.isEmpty)
+                  hasAnyMetadata: !catalog.metadataByPhotoID.isEmpty,
+                  savedQuery: catalog.selectedSmartCollectionQuery)
     }
 
     private func chip(_ isActive: Bool) -> some View {

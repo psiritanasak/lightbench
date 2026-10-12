@@ -13,6 +13,12 @@ struct SidebarRow: Identifiable, Equatable {
     let title: String
     var filter: LibraryFilter?
     var source: Source?
+
+    /// The hover text of a row: a smart collection describes its criteria; nothing else has one.
+    var tooltip: String? {
+        if case .smart(let smart)? = source { return smart.criteria.summary }
+        return nil
+    }
     var action: Action?
     /// Folder rows only: nesting depth (0 = a root), whether it has sub-folders, and whether they are shown.
     var depth = 0

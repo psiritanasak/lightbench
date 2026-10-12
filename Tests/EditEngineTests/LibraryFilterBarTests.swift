@@ -98,6 +98,15 @@ final class LibraryFilterBarTests: XCTestCase {
         XCTAssertEqual(stripDifference(idleRep, render(try makeCatalog(), height: 70)), 0, "an idle bar has nothing under it")
     }
 
+    func testTheSavedQueryOfASelectedSmartCollectionAlsoShowsTheScanProgress() {
+        let scanning = "Reading camera data… 5/10"
+        XCTAssertNil(LibraryFilterBar.hint(forSearch: "", scanStatus: scanning, hasAnyMetadata: true), "no saved query")
+        XCTAssertEqual(LibraryFilterBar.hint(forSearch: "", scanStatus: scanning, hasAnyMetadata: true, savedQuery: "iso:>800")?.text, scanning)
+        XCTAssertNil(LibraryFilterBar.hint(forSearch: "", scanStatus: scanning, hasAnyMetadata: true, savedQuery: "sunset"),
+                     "a saved query without camera terms is not nagged about the scan")
+        XCTAssertEqual(LibraryFilterBar.hint(forSearch: "iso:abc", scanStatus: scanning, hasAnyMetadata: true, savedQuery: "iso:>800")?.isWarning, true)
+    }
+
     func testHintRules() {
         let scanning = "Reading camera data… 5/10"
         let warn = LibraryFilterBar.hint(forSearch: "iso:abc", scanStatus: scanning, hasAnyMetadata: true)

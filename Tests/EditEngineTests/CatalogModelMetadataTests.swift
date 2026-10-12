@@ -160,6 +160,33 @@ final class CatalogModelMetadataTests: XCTestCase {
         XCTAssertTrue(catalog.metadataByPhotoID.isEmpty)
     }
 
+    func testASavedQueryCollectionShowsExactlyWhatTheSearchShowed() async throws {
+        let (catalog, db) = try makeCatalog()
+        _ = try await db.importPhotos(at: [
+            try writeJPEG("a.jpg", iso: 200, model: "NIKON D610", date: "2023:03:14 09:30:15"),
+            try writeJPEG("b.jpg", iso: 3200, model: "NIKON D610", date: "2023:03:15 09:30:15"),
+            try writeJPEG("c.jpg", iso: 3200, model: "Canon EOS R5", date: "2024:07:01 18:00:00")
+        ])
+        await catalog.refresh()
+        await settle(catalog)
+        catalog.searchText = "camera:d610 iso:>800"
+        let shown = catalog.displayedPhotos.map(\.filename)
+        XCTAssertEqual(shown, ["b.jpg"])
+        let saved = await catalog.saveFiltersAsSmartCollection(name: "D610 high ISO")
+        XCTAssertTrue(saved)
+        XCTAssertEqual(catalog.searchText, "")
+        XCTAssertEqual(catalog.displayedPhotos.map(\.filename), shown, "the collection shows what the search showed")
+        XCTAssertEqual(catalog.selectedSmartCollectionQuery, "camera:d610 iso:>800")
+        // The bar's own search still narrows INSIDE the collection.
+        catalog.searchText = "zzz"
+        XCTAssertTrue(catalog.displayedPhotos.isEmpty)
+        catalog.searchText = ""
+        // Back to All Photos: the query no longer applies.
+        catalog.selectedFilter = .allPhotos
+        XCTAssertEqual(catalog.displayedPhotos.count, 3)
+        XCTAssertEqual(catalog.selectedSmartCollectionQuery, "")
+    }
+
     func testTheSearchHelpCoversEveryFieldAndEveryExampleParses() {
         XCTAssertEqual(Set(SearchHelp.rows.map(\.field)), Set(SearchQuery.Field.allCases.map(\.rawValue)))
         for row in SearchHelp.rows {

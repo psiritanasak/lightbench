@@ -104,7 +104,7 @@ struct CollectionSidebarView: View {
             }
             Button("Cancel", role: .cancel) { newSmartName = "" }
         } message: {
-            Text("Saves the current rating, flag, label and keyword filters. It covers the whole catalog, whichever collection is open. Search text is not saved.")
+            Text("Saves the current rating, flag, label and keyword filters and the search box (for example iso:>1600 camera:d610). It covers the whole catalog, whichever collection is open.")
         }
         .alert(
             "Rename Smart Collection",
@@ -190,7 +190,7 @@ struct CollectionSidebarView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .disabled(row.action == .saveFilters && !catalog.hasSaveableFilterCriteria)
                 .help(row.action == .saveFilters
-                      ? "Save the rating, flag, label and keyword filters as a smart collection over the whole catalog (search text is not saved)"
+                      ? "Save the rating, flag, label and keyword filters and the search text as a smart collection over the whole catalog"
                       : "")
         case .item:
             itemRow(row)
@@ -236,6 +236,7 @@ struct CollectionSidebarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .selectionChip(isSelected: isSelected, isHovered: hoveredRowID == row.id)
         .contentShape(Rectangle())
+        .help(row.tooltip ?? "")
         .onHover { inside in
             if inside { hoveredRowID = row.id } else if hoveredRowID == row.id { hoveredRowID = nil }
         }

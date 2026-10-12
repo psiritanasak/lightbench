@@ -28,6 +28,18 @@ final class SidebarRowsTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.id == "action-save-filters" }?.action, .saveFilters)
     }
 
+    func testOnlySmartCollectionRowsHaveATooltipDescribingTheirCriteria() {
+        var criteria = SmartCollectionCriteria(minimumRating: 3, flag: .picked)
+        criteria.searchQuery = "iso:>1600"
+        let described = SmartCollection(id: 6, name: "High ISO", criteria: criteria, createdAt: Date(timeIntervalSince1970: 0))
+        let rows = SidebarRows.rows(collections: sample.collections, smartCollections: [described], expandedFolders: [])
+        XCTAssertEqual(rows.first { $0.id == "smart-6" }?.tooltip, "3+ stars · Picked · Search: iso:>1600")
+        XCTAssertNil(rows.first { $0.id == "collection-1" }?.tooltip)
+        XCTAssertNil(rows.first { $0.id == "all" }?.tooltip)
+        XCTAssertNil(rows.first { $0.id == "folder-10" }?.tooltip)
+        XCTAssertNil(rows.first { $0.id == "action-save-filters" }?.tooltip)
+    }
+
     func testNoFoldersMeansNoFoldersSection() {
         let rows = SidebarRows.rows(collections: [collection(1, "Trips")], smartCollections: [], expandedFolders: [])
         XCTAssertFalse(rows.contains { $0.id == "header-folders" })

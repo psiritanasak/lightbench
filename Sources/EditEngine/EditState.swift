@@ -385,6 +385,13 @@ struct EditState: Equatable, Codable {
     var highlightHue: Double = 0
     var highlightSaturation: Double = 0
     var highlightLuminance: Double = 0
+    /// Color Grading Blending (-1...1, 0 = the original look): how much the three ranges overlap (falloff width 0.33 ... 0.8
+    /// around the original 0.4, see `ColorGradingZones`; a narrower limit would leave tones between the ranges ungraded). Global, not per range. Identity is 0 on purpose (a 0.5-style
+    /// default would silently narrow old sidecars on a missing key). Does nothing while every tint/luminance is zero.
+    var colorGradingBlending: Double = 0
+    /// Color Grading Balance (-1...1, 0 = centred): positive favours the Highlights range, negative the Shadows (the
+    /// midpoint of the tonal scale moves by up to ±0.25 while black and white stay fixed). Global; see `ColorGradingZones`.
+    var colorGradingBalance: Double = 0
 
     // MARK: - Straighten
 
@@ -1540,6 +1547,7 @@ struct EditState: Equatable, Codable {
         s.shadowHue = 0; s.shadowSaturation = 0; s.shadowLuminance = 0
         s.midtoneHue = 0; s.midtoneSaturation = 0; s.midtoneLuminance = 0
         s.highlightHue = 0; s.highlightSaturation = 0; s.highlightLuminance = 0
+        s.colorGradingBlending = 0; s.colorGradingBalance = 0
         s.vignetteStrength = 0
         s.vignetteRadius = 0.5
         s.texture = 0
@@ -1650,6 +1658,7 @@ struct EditState: Equatable, Codable {
         result.shadowHue = shadowHue; result.shadowSaturation = shadowSaturation; result.shadowLuminance = shadowLuminance
         result.midtoneHue = midtoneHue; result.midtoneSaturation = midtoneSaturation; result.midtoneLuminance = midtoneLuminance
         result.highlightHue = highlightHue; result.highlightSaturation = highlightSaturation; result.highlightLuminance = highlightLuminance
+        result.colorGradingBlending = colorGradingBlending; result.colorGradingBalance = colorGradingBalance
         result.vignetteStrength = vignetteStrength
         result.vignetteRadius = vignetteRadius
         result.texture = texture
@@ -1759,6 +1768,7 @@ extension EditState {
         case shadowHue, shadowSaturation, shadowLuminance
         case midtoneHue, midtoneSaturation, midtoneLuminance
         case highlightHue, highlightSaturation, highlightLuminance
+        case colorGradingBlending, colorGradingBalance
         case straightenAngle
         case verticalPerspective, horizontalPerspective
         case transformScale, transformAspect
@@ -1886,6 +1896,8 @@ extension EditState {
         highlightHue = try container.decodeIfPresent(Double.self, forKey: .highlightHue) ?? 0
         highlightSaturation = try container.decodeIfPresent(Double.self, forKey: .highlightSaturation) ?? 0
         highlightLuminance = try container.decodeIfPresent(Double.self, forKey: .highlightLuminance) ?? 0
+        colorGradingBlending = try container.decodeIfPresent(Double.self, forKey: .colorGradingBlending) ?? 0
+        colorGradingBalance = try container.decodeIfPresent(Double.self, forKey: .colorGradingBalance) ?? 0
         straightenAngle = try container.decodeIfPresent(Double.self, forKey: .straightenAngle) ?? 0
         verticalPerspective = try container.decodeIfPresent(Double.self, forKey: .verticalPerspective) ?? 0
         horizontalPerspective = try container.decodeIfPresent(Double.self, forKey: .horizontalPerspective) ?? 0

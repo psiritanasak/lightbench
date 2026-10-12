@@ -1383,7 +1383,11 @@ enum EditPipeline {
             let d = ColorGradingTint.rgbDelta(hue: tint.hue, saturation: min(max(tint.saturation, 0), 1))
             return CIVector(x: d.r, y: d.g, z: d.b, w: 0)
         }
-        let arguments: [Any] = [image, vector(nudges.shadowTint), vector(nudges.midTint), vector(nudges.highlightTint)]
+        // ALWAYS the original width and no shift: a style's tint must not depend on how the user set Blending/Balance.
+        let arguments: [Any] = [
+            image, vector(nudges.shadowTint), vector(nudges.midTint), vector(nudges.highlightTint),
+            NSNumber(value: ColorGradingZones.baseWidth), NSNumber(value: 0.0)
+        ]
         return kernel.apply(extent: image.extent, arguments: arguments) ?? image
     }
 
@@ -1404,14 +1408,12 @@ enum EditPipeline {
     /// `rgb2hsl`/`hsl2rgb` at all, a real simplification over
     /// `SelectiveColor.cikernel`.
     ///
-    /// `kColorGradingWidth`/`kColorGradingTintStrength`/
-    /// `kColorGradingLumStrength` are v1's PRINCIPLED DEFAULTS for what
-    /// Lightroom exposes as an adjustable "Blending" control (deferred to a
-    /// future slice, along with "Balance" and the 4th "Global" wheel) — not
-    /// a claimed reproduction of Lightroom's own undisclosed algorithm,
-    /// same disclaimer precedent as Brilliance. MEASURED (a temporary
-    /// spike swept each in turn against solid patches, then deleted before
-    /// this comment was written):
+    /// The falloff width and the luminance shift are Lightroom's adjustable "Blending" and "Balance" (`colorGradingBlending`/
+    /// `colorGradingBalance`, mapped by `ColorGradingZones` and passed to the kernel as arguments; the 4th "Global" wheel is
+    /// still deferred). The tint strength (0.8) and luminance strength (0.5) remain fixed kernel-local constants. None of it is
+    /// a claimed reproduction of Lightroom's own undisclosed algorithm, same disclaimer precedent as Brilliance. The numbers
+    /// below were MEASURED (a temporary spike swept each in turn against solid patches, then deleted before this comment was
+    /// written) when the width was still fixed, so they describe the DEFAULT, Blending 0 (width 0.4):
     /// - Width 0.4 (raised-cosine half-window, on the PERCEPTUAL/gamma-
     ///   encoded luma this stage actually operates on, since it runs
     ///   inside `applyPerceptualAdjustments`'s sandwich): gives a clean
@@ -1433,9 +1435,8 @@ enum EditPipeline {
     ///   meaningfully strong without blowing a midtone past 1.0 the way
     ///   1.0 does (r reaches 1.238, a highlight already fully clipped
     ///   for what should be a mid-strength nudge).
-    /// Not user-adjustable yet, so hardcoded inside the kernel as local
-    /// constants rather than passed as arguments — same convention as
-    /// `SelectiveColor.cikernel`'s own `Wmin`/`Wmax`/`kHue`/`kLum`.
+    /// The two strengths are hardcoded inside the kernel as local constants rather than passed as arguments — same convention
+    /// as `SelectiveColor.cikernel`'s own `Wmin`/`Wmax`/`kHue`/`kLum`.
 
     private static let colorGradingKernel: CIColorKernel? = {
         guard let url = Bundle.main.url(forResource: "ColorGrading", withExtension: "cikernel"),
@@ -1461,10 +1462,8 @@ enum EditPipeline {
     private static func applyColorGrading(_ state: EditState, to image: CIImage) -> CIImage {
         guard let kernel = colorGradingKernel else { return image }
 
-        // Clamped here, not just trusted: this slice has no UI yet, so a
-        // hand-edited sidecar or preset is the ONLY input path, and unlike
-        // every slider-backed field there is no UI range enforcement to
-        // rely on until Slice B ships.
+        // Clamped here, not just trusted: a hand-edited sidecar or preset can carry any value, and the pipeline is the
+        // last place that can enforce the ranges the UI sliders normally guarantee.
         func clampedSaturation(_ value: Double) -> Double { min(max(value, 0), 1) }
         func clampedLuminance(_ value: Double) -> Double { min(max(value, -1), 1) }
 
@@ -1484,7 +1483,11 @@ enum EditPipeline {
             x: highlightDelta.r, y: highlightDelta.g, z: highlightDelta.b, w: clampedLuminance(state.highlightLuminance)
         )
 
-        let arguments: [Any] = [image, shadowTint, midtoneTint, highlightTint]
+        // Blending/Balance (global): exactly 0.4 / 0 at their defaults (the render then matches the pre-Blending one to within
+        // 1-2 ulp, see the kernel's comment on its weight normalisation).
+        let width = ColorGradingZones.width(blending: state.colorGradingBlending)
+        let shift = ColorGradingZones.shift(balance: state.colorGradingBalance)
+        let arguments: [Any] = [image, shadowTint, midtoneTint, highlightTint, NSNumber(value: width), NSNumber(value: shift)]
         return kernel.apply(extent: image.extent, arguments: arguments) ?? image
     }
 

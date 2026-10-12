@@ -864,6 +864,12 @@ enum EditPipeline {
     /// to give a strong-but-plausible Levels-style black-clip/lift range.
     private static let kBlackPointSpan: Double = 0.20
 
+    /// Whites (per-mask only): how far the curve's top control point moves, at +/-1. MEASURED on the white-end curve alone
+    /// (`ToneCurveSpline.value(at:)`, the pipeline's perceptual domain): at span 0.10 white 1.0 goes to 1.243 (+1) / 0.787 (-1) while perceptual
+    /// 0.25 and 0.5 move by 0.007 or less, so it is a control for the bright end; 0.15 pulled white to 0.692 and 0.20 to
+    /// 0.604 (too strong, flattening everything above 0.9), so 0.10 was chosen.
+    private static let kWhitesSpan: Double = 0.10
+
     private static func curvesActive(_ effective: EffectiveTone, _ blackPoint: Double) -> Bool {
         effective.shadows != 0 || effective.highlights != 0 || blackPoint != 0
     }
@@ -919,19 +925,20 @@ enum EditPipeline {
     /// The control points `applyCurves` drives, in the spline's own
     /// sRGB-encoded space. Split out from the render call so the spline maths
     /// can be tested directly against `ToneCurveSpline` without a CIContext.
-    private static func curveControlPoints(_ effective: EffectiveTone, _ blackPoint: Double) -> [CGPoint] {
+    private static func curveControlPoints(_ effective: EffectiveTone, _ blackPoint: Double, whitePoint: Double = 0) -> [CGPoint] {
         [
             CGPoint(x: max(0, -blackPoint) * kBlackPointSpan, y: max(0, blackPoint) * kBlackPointSpan),
             CGPoint(x: 0.25, y: 0.25 + effective.shadows * kCurvePointSpan),
             CGPoint(x: 0.5, y: 0.5),
             CGPoint(x: 0.75, y: 0.75 + effective.highlights * kCurvePointSpan),
-            CGPoint(x: 1, y: 1)
+            CGPoint(x: 1, y: 1 + whitePoint * kWhitesSpan)
         ]
     }
 
-    private static func applyCurves(_ effective: EffectiveTone, _ blackPoint: Double, to image: CIImage) -> CIImage {
+    /// `whitePoint` (per-mask Whites) defaults to 0, which leaves every global call exactly as before (`1 + 0 * span` is 1).
+    private static func applyCurves(_ effective: EffectiveTone, _ blackPoint: Double, whitePoint: Double = 0, to image: CIImage) -> CIImage {
         guard let kernel = toneCurveKernel,
-              let spline = ToneCurveSpline(points: curveControlPoints(effective, blackPoint))
+              let spline = ToneCurveSpline(points: curveControlPoints(effective, blackPoint, whitePoint: whitePoint))
         else { return image }
 
         let points = spline.points
@@ -2167,7 +2174,7 @@ enum EditPipeline {
     /// sandwich, mirroring the shape of `applyPerceptualAdjustments`
     /// itself: White Balance and Exposure reuse the global scene-linear
     /// stages verbatim (`whiteBalanced`/`applyExposure`); Contrast/
-    /// Shadows/Highlights/Saturation/Clarity are folded into ONE shared
+    /// Shadows/Highlights/Blacks/Whites/Saturation/Clarity are folded into ONE shared
     /// `encodeToPerceptual`/`decodeToLinear` round-trip rather than each
     /// stage opening its own. This is a measured, documented requirement,
     /// not a style choice: `applyPerceptualAdjustments`'s own doc comment
@@ -2177,7 +2184,8 @@ enum EditPipeline {
     /// global slider — the same "two mechanisms, numerically
     /// incompatible" trap Phase 6 slice 4's write-up documents. Shadows/
     /// Highlights reuse `applyCurves`'s SAME `EffectiveTone`/
-    /// `kCurvePointSpan` machinery (not `CIHighlightShadowAdjust` —
+    /// `kCurvePointSpan` machinery, and Blacks uses the SAME `blackPoint` slot as the global Black Point; Whites (no global
+    /// counterpart) is its own white-end curve applied after (not `CIHighlightShadowAdjust` —
     /// `EditState.clarity`'s own doc comment already records that
     /// filter as measured to be an ASYMMETRIC tone-mapper, rejected for
     /// exactly this reason). `localContrast` (Clarity) is the ONE
@@ -2306,6 +2314,8 @@ enum EditPipeline {
             let contrast = clamped(mask.contrast)
             let shadows = clamped(mask.shadows)
             let highlights = clamped(mask.highlights)
+            let blacks = clamped(mask.blacks)
+            let whites = clamped(mask.whites)
             let saturation = clamped(mask.saturation)
             // `whiteBalanced`'s `tint` term (`targetNeutral.y = -(tint/100)
             // * kTintSpan`) has no internal guard either — same clamp,
@@ -2333,14 +2343,23 @@ enum EditPipeline {
             }
             corrected = applyExposure(mask.exposureEV, to: corrected)
 
-            if contrast != 0 || shadows != 0 || highlights != 0 || saturation != 0 || mask.clarity != 0 {
+            if contrast != 0 || shadows != 0 || highlights != 0 || blacks != 0 || whites != 0 || saturation != 0 || mask.clarity != 0 {
                 var perceptual = encodeToPerceptual(corrected)
                 if contrast != 0 {
                     perceptual = applyContrast(contrast, to: perceptual)
                 }
-                if shadows != 0 || highlights != 0 {
+                if shadows != 0 || highlights != 0 || blacks != 0 {
                     let effective = EffectiveTone(contrast: 0, shadows: shadows, highlights: highlights, saturation: 0, vibrance: 0)
-                    perceptual = applyCurves(effective, 0, to: perceptual)
+                    perceptual = applyCurves(effective, blacks, to: perceptual)
+                }
+                if whites != 0 {
+                    // Whites is its OWN curve, applied after the Shadows/Highlights/Blacks one — NOT a moved top control point of
+                    // that curve: with Highlights at +1 (control point 4 at y 0.90) a whites of -1 put the end point at 0.90 too,
+                    // the natural cubic overshot and the curve turned DOWN (reviewer-measured: brighter input gave darker output,
+                    // extreme headroom went negative). Alone, the white-end curve is monotone, and two monotone curves compose
+                    // to a monotone one.
+                    let identityTone = EffectiveTone(contrast: 0, shadows: 0, highlights: 0, saturation: 0, vibrance: 0)
+                    perceptual = applyCurves(identityTone, 0, whitePoint: whites, to: perceptual)
                 }
                 if saturation != 0 {
                     perceptual = applySaturation(saturation, to: perceptual)

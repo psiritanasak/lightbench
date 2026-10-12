@@ -162,6 +162,14 @@ struct MaskDetailView: View {
                 label: "Shadows", value: $mask.shadows,
                 range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Whites", value: $mask.whites,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Blacks", value: $mask.blacks,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
         }
     }
 

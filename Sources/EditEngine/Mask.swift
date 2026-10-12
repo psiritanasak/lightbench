@@ -326,7 +326,8 @@ struct Mask: Identifiable, Equatable, Codable {
 
     // MARK: - Adjustments
 
-    /// The curated 8-parameter set (CLAUDE.md Phase 7 roadmap: "a small
+    /// The curated 10-parameter set (8 originally; Blacks and Whites were added later — Blacks reuses the global Black Point, Whites
+    /// has no global counterpart) (CLAUDE.md Phase 7 roadmap: "a small
     /// curated subset... pick the actual set deliberately, don't default to
     /// all of them"), each reusing the SAME filter technique as its global
     /// counterpart so a mask's value of X reads the same as the identically
@@ -342,6 +343,15 @@ struct Mask: Identifiable, Equatable, Codable {
     var contrast: Double = 0            // matches EditState.contrast's -1...1
     var highlights: Double = 0          // matches EditState.curvesHighlights's -1...1
     var shadows: Double = 0             // matches EditState.curvesShadows's -1...1
+    /// -1...1, the global Black Point's own control (`EditState.blackPoint`) applied inside the mask: positive lifts the black
+    /// floor, negative clips the shadows to black — the same curve control point, so a fully covering mask at blacks b renders
+    /// like the global field at b. Identity 0.
+    var blacks: Double = 0
+    /// -1...1, moves the curve's WHITE end (the brightest tones) inside the mask: positive pushes whites brighter (into
+    /// headroom), negative pulls the white point down. Has no global counterpart. MEASURED on the white-end curve alone
+    /// (`ToneCurveSpline.value(at:)`, the pipeline's perceptual domain): at +/-1 white 1.0 goes to 1.243 / 0.787 while perceptual 0.25 and 0.5 (linear 0.05 and
+    /// 0.214) move by 0.007 or less; tones above about perceptual 0.6 (linear 0.32) follow the white end. Identity 0.
+    var whites: Double = 0
     /// -1...1, BIPOLAR, matching `EditState.clarity`'s own range and using
     /// the identical `EditPipeline.localContrast` construction at the same
     /// `kClarityRadiusFraction`/`kClarityAmountSpan` — a mask's Clarity at
@@ -526,7 +536,7 @@ struct Mask: Identifiable, Equatable, Codable {
     /// is still fully resolvable when another mask names it via
     /// `combineWithMaskID`.
     var isIdentity: Bool {
-        exposureEV == 0 && contrast == 0 && highlights == 0 && shadows == 0
+        exposureEV == 0 && contrast == 0 && highlights == 0 && shadows == 0 && blacks == 0 && whites == 0
             && clarity == 0 && saturation == 0 && temperature == 0 && tint == 0
     }
 }
@@ -549,7 +559,7 @@ extension Mask {
         case luminanceTarget, luminanceRange
         case colorRangeTargetHue, colorRangeTargetSaturation, colorRangeTargetLuminance
         case colorRangeTolerance, colorRangeHasTarget
-        case exposureEV, contrast, highlights, shadows
+        case exposureEV, contrast, highlights, shadows, blacks, whites
         case clarity, saturation, temperature, tint
         case combineMode, combineWithMaskID
         case subjectMaskPNG, subjectMaskRevision, invertSelection
@@ -624,6 +634,8 @@ extension Mask {
         contrast = try container.decodeIfPresent(Double.self, forKey: .contrast) ?? 0
         highlights = try container.decodeIfPresent(Double.self, forKey: .highlights) ?? 0
         shadows = try container.decodeIfPresent(Double.self, forKey: .shadows) ?? 0
+        blacks = try container.decodeIfPresent(Double.self, forKey: .blacks) ?? 0
+        whites = try container.decodeIfPresent(Double.self, forKey: .whites) ?? 0
         clarity = try container.decodeIfPresent(Double.self, forKey: .clarity) ?? 0
         saturation = try container.decodeIfPresent(Double.self, forKey: .saturation) ?? 0
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0
@@ -682,7 +694,7 @@ extension Mask {
                 colorRangeTargetHue: colorRangeTargetHue, colorRangeTargetSaturation: colorRangeTargetSaturation,
                 colorRangeTargetLuminance: colorRangeTargetLuminance, colorRangeTolerance: colorRangeTolerance,
                 colorRangeHasTarget: colorRangeHasTarget,
-                exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows,
+                exposureEV: exposureEV, contrast: contrast, highlights: highlights, shadows: shadows, blacks: blacks, whites: whites,
                 clarity: clarity, saturation: saturation, temperature: temperature, tint: tint,
                 combineMode: combineMode, combineWithMaskID: combineWithMaskID,
                 subjectMaskPNG: subjectMaskPNG, subjectMaskRevision: subjectMaskRevision,
@@ -776,7 +788,7 @@ extension Mask {
         brushPoints: [BrushPoint], luminanceTarget: Double, luminanceRange: Double,
         colorRangeTargetHue: Double, colorRangeTargetSaturation: Double,
         colorRangeTargetLuminance: Double, colorRangeTolerance: Double, colorRangeHasTarget: Bool,
-        exposureEV: Double, contrast: Double, highlights: Double, shadows: Double,
+        exposureEV: Double, contrast: Double, highlights: Double, shadows: Double, blacks: Double, whites: Double,
         clarity: Double, saturation: Double, temperature: Double, tint: Double,
         combineMode: MaskCombineMode, combineWithMaskID: UUID?,
         subjectMaskPNG: Data?, subjectMaskRevision: Int?, invertSelection: Bool,
@@ -796,7 +808,7 @@ extension Mask {
             colorRangeHasTarget ? 1 : 0,
             exposureEV, contrast, highlights, shadows, clarity, saturation, temperature, tint,
             combineModeSeed
-        ]
+        ] + (blacks != 0 || whites != 0 ? [blacks, whites] : [])   // appended only when used: ids of existing masks never change
         let kindSeed: UInt64
         switch kind {
         case .radial: kindSeed = 0x9e3779b97f4a7c15

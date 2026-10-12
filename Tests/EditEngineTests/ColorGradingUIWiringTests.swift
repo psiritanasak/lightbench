@@ -96,3 +96,17 @@ final class GlobalWheelWiringTests: XCTestCase {
         XCTAssertTrue(button.contains("colorGradingHueBinding(for: panel.selectedColorGradingRange)"), "it resets through the shared dispatch, so Global resets itself")
     }
 }
+
+/// Per-mask Whites/Blacks rows (same source-pinning approach).
+final class MaskWhitesBlacksWiringTests: XCTestCase {
+    func testTheMaskDetailViewHasBothRowsAfterShadows() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/UI/MaskDetailView.swift")
+        let view = try String(contentsOf: url, encoding: .utf8)
+        let shadows = try XCTUnwrap(view.range(of: "label: \"Shadows\", value: $mask.shadows"))
+        let whites = try XCTUnwrap(view.range(of: "label: \"Whites\", value: $mask.whites"))
+        let blacks = try XCTUnwrap(view.range(of: "label: \"Blacks\", value: $mask.blacks"))
+        XCTAssertTrue(shadows.lowerBound < whites.lowerBound && whites.lowerBound < blacks.lowerBound)
+    }
+}

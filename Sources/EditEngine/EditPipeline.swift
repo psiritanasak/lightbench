@@ -623,7 +623,11 @@ enum EditPipeline {
         // colored filter), not that they have no effect at all.
         let saturationOverride = state.blackAndWhite ? -1.0 : effective.saturation
         if state.blackAndWhite || effective.saturation != 0 {
+            let beforeGray = img
             img = applySaturation(saturationOverride, to: img)
+            // B&W Mix reads the colour as it stood just before the desaturation (so Hue/Selective Color/Point Color/Vibrance
+            // above feed it, like shooting through a colour filter) and rescales the grey that desaturation produced.
+            if state.blackAndWhite, grayMixActive(state) { img = applyGrayMix(state, colour: beforeGray, gray: img) }
         }
         // Color Grading is the LAST OF THE USER'S OWN stages in this sandwich (the style's own tint pass follows it) — see
         // EditState.shadowHue's own doc comment and applyColorGrading's
@@ -1103,6 +1107,36 @@ enum EditPipeline {
         // verified against the real compiled kernel before shipping.
         let arguments: [Any] = [image, hueA, hueB, satA, satB, lumA, lumB, NSNumber(value: state.selectiveColorRange)]
         return kernel.apply(extent: image.extent, arguments: arguments) ?? image
+    }
+
+    // MARK: - B&W Mix
+
+    /// Exponent of the multiplier 2^(k * Σ weight * mix) applied to the PERCEPTUAL (sRGB-encoded) B&W grey at a full +/-1
+    /// slider on a pixel sitting at a band centre: 1.0 halves / doubles the encoded grey. NOT linear-light stops (that would
+    /// be roughly 2.2-2.4 linear stops). A v1 convention, live-tunable; baked into the renderer, not stored per photo, so
+    /// retuning restyles old edits.
+    static let kGrayMixStops: Double = 1.0
+
+    /// A custom Core Image kernel: scales the B&W grey by per-hue-band multipliers (see GrayMix.cikernel).
+    private static let grayMixKernel: CIColorKernel? = {
+        guard let url = Bundle.main.url(forResource: "GrayMix", withExtension: "cikernel"),
+              let source = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        return CIColorKernel(source: source)
+    }()
+
+    private static func grayMixActive(_ state: EditState) -> Bool {
+        state.grayMixRed != 0 || state.grayMixOrange != 0 || state.grayMixYellow != 0 || state.grayMixGreen != 0
+            || state.grayMixAqua != 0 || state.grayMixBlue != 0 || state.grayMixPurple != 0 || state.grayMixMagenta != 0
+    }
+
+    /// Argument layout matches the kernel: mixA = (Red, Orange, Yellow, Green), mixB = (Aqua, Blue, Purple, Magenta).
+    private static func applyGrayMix(_ state: EditState, colour: CIImage, gray: CIImage) -> CIImage {
+        guard let kernel = grayMixKernel else { return gray }
+        let mixA = CIVector(x: state.grayMixRed, y: state.grayMixOrange, z: state.grayMixYellow, w: state.grayMixGreen)
+        let mixB = CIVector(x: state.grayMixAqua, y: state.grayMixBlue, z: state.grayMixPurple, w: state.grayMixMagenta)
+        let arguments: [Any] = [colour, gray, mixA, mixB, NSNumber(value: kGrayMixStops)]
+        return kernel.apply(extent: gray.extent, arguments: arguments) ?? gray
     }
 
     // MARK: - Point Color (per-color eyedropper refinement)

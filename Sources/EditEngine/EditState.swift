@@ -332,6 +332,18 @@ struct EditState: Equatable, Codable {
     /// pattern as every other v1 feature in this project).
     var blackAndWhite: Bool = false
 
+    /// B&W Mix: per-colour darken/lighten of the grey a colour becomes under `blackAndWhite` (-1...1, 0 = identity), the 8
+    /// Selective Color hue bands. No effect while `blackAndWhite` is off. Rendered by `GrayMix.cikernel` as a multiplier on the
+    /// PERCEPTUAL (sRGB-encoded) B&W grey (see `EditPipeline.kGrayMixStops`; not linear-light stops), so all-zero is exactly today's B&W. See `EditPipeline.applyGrayMix`.
+    var grayMixRed: Double = 0
+    var grayMixOrange: Double = 0
+    var grayMixYellow: Double = 0
+    var grayMixGreen: Double = 0
+    var grayMixAqua: Double = 0
+    var grayMixBlue: Double = 0
+    var grayMixPurple: Double = 0
+    var grayMixMagenta: Double = 0
+
     // MARK: - Color Grading (3-way shadows/midtones/highlights)
 
     /// 3 tonal ranges (Shadows/Midtones/Highlights) × Hue/Saturation/
@@ -1517,6 +1529,14 @@ struct EditState: Equatable, Codable {
         s.magentaHue = 0; s.magentaSaturation = 0; s.magentaLuminance = 0
         // black & white + effects
         s.blackAndWhite = false
+        s.grayMixRed = 0
+        s.grayMixOrange = 0
+        s.grayMixYellow = 0
+        s.grayMixGreen = 0
+        s.grayMixAqua = 0
+        s.grayMixBlue = 0
+        s.grayMixPurple = 0
+        s.grayMixMagenta = 0
         s.shadowHue = 0; s.shadowSaturation = 0; s.shadowLuminance = 0
         s.midtoneHue = 0; s.midtoneSaturation = 0; s.midtoneLuminance = 0
         s.highlightHue = 0; s.highlightSaturation = 0; s.highlightLuminance = 0
@@ -1619,6 +1639,14 @@ struct EditState: Equatable, Codable {
         result.magentaHue = magentaHue; result.magentaSaturation = magentaSaturation; result.magentaLuminance = magentaLuminance
         // black & white + effects
         result.blackAndWhite = blackAndWhite
+        result.grayMixRed = grayMixRed
+        result.grayMixOrange = grayMixOrange
+        result.grayMixYellow = grayMixYellow
+        result.grayMixGreen = grayMixGreen
+        result.grayMixAqua = grayMixAqua
+        result.grayMixBlue = grayMixBlue
+        result.grayMixPurple = grayMixPurple
+        result.grayMixMagenta = grayMixMagenta
         result.shadowHue = shadowHue; result.shadowSaturation = shadowSaturation; result.shadowLuminance = shadowLuminance
         result.midtoneHue = midtoneHue; result.midtoneSaturation = midtoneSaturation; result.midtoneLuminance = midtoneLuminance
         result.highlightHue = highlightHue; result.highlightSaturation = highlightSaturation; result.highlightLuminance = highlightLuminance
@@ -1720,6 +1748,14 @@ extension EditState {
         case selectiveColorRange
         case vibrance
         case blackAndWhite
+        case grayMixRed
+        case grayMixOrange
+        case grayMixYellow
+        case grayMixGreen
+        case grayMixAqua
+        case grayMixBlue
+        case grayMixPurple
+        case grayMixMagenta
         case shadowHue, shadowSaturation, shadowLuminance
         case midtoneHue, midtoneSaturation, midtoneLuminance
         case highlightHue, highlightSaturation, highlightLuminance
@@ -1833,6 +1869,14 @@ extension EditState {
         selectiveColorRange = try container.decodeIfPresent(Double.self, forKey: .selectiveColorRange) ?? 0.5
         vibrance = try container.decodeIfPresent(Double.self, forKey: .vibrance) ?? 0
         blackAndWhite = try container.decodeIfPresent(Bool.self, forKey: .blackAndWhite) ?? false
+        grayMixRed = try container.decodeIfPresent(Double.self, forKey: .grayMixRed) ?? 0
+        grayMixOrange = try container.decodeIfPresent(Double.self, forKey: .grayMixOrange) ?? 0
+        grayMixYellow = try container.decodeIfPresent(Double.self, forKey: .grayMixYellow) ?? 0
+        grayMixGreen = try container.decodeIfPresent(Double.self, forKey: .grayMixGreen) ?? 0
+        grayMixAqua = try container.decodeIfPresent(Double.self, forKey: .grayMixAqua) ?? 0
+        grayMixBlue = try container.decodeIfPresent(Double.self, forKey: .grayMixBlue) ?? 0
+        grayMixPurple = try container.decodeIfPresent(Double.self, forKey: .grayMixPurple) ?? 0
+        grayMixMagenta = try container.decodeIfPresent(Double.self, forKey: .grayMixMagenta) ?? 0
         shadowHue = try container.decodeIfPresent(Double.self, forKey: .shadowHue) ?? 0
         shadowSaturation = try container.decodeIfPresent(Double.self, forKey: .shadowSaturation) ?? 0
         shadowLuminance = try container.decodeIfPresent(Double.self, forKey: .shadowLuminance) ?? 0

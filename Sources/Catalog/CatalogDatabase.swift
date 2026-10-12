@@ -116,6 +116,7 @@ final class CatalogDatabase: Sendable {
         Migration011SmartCollections.register(in: &migrator)
         Migration012PhotoFingerprint.register(in: &migrator)
         Migration013Faces.register(in: &migrator)
+        Migration014PhotoMetadata.register(in: &migrator)
         try migrator.migrate(dbQueue)
     }
 

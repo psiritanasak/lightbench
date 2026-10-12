@@ -80,6 +80,12 @@ enum CaptureDate {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
         else { return nil }
+        return exifDate(inProperties: props)
+    }
+
+    /// The EXIF/TIFF capture date found in an ImageIO properties dictionary (`DateTimeOriginal`, then `DateTimeDigitized`,
+    /// then TIFF `DateTime`), or nil — NO file-date fallback. Shared with `PhotoMetadataReader`.
+    static func exifDate(inProperties props: [CFString: Any]) -> Date? {
         let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any]
         let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
         let candidates: [String?] = [

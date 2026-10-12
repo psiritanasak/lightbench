@@ -118,6 +118,7 @@ struct MaskDetailView: View {
         case .luminanceRange: return "Luminance Range"
         case .colorRange: return "Color Range"
         case .subject: return "Subject"
+        case .depthRange: return "Depth Range"
         }
     }
 
@@ -198,7 +199,15 @@ struct MaskDetailView: View {
         case .luminanceRange: luminanceRangeShapeRows
         case .colorRange: colorRangeShapeRows
         case .subject: subjectShapeRows
+        case .depthRange: depthRangeShapeRows
         }
+    }
+
+    /// Placeholder until Stage 4 of the Depth Range plan adds the real controls (source, Generate, Near/Far, Feather, Invert, Show depth).
+    private var depthRangeShapeRows: some View {
+        Text("Depth Range controls are coming next.")
+            .font(.caption)
+            .foregroundStyle(Theme.textSecondary)
     }
 
     /// Everything the subject kind has: Feather, a Subjects list (2+ detected), Invert and Recompute. The

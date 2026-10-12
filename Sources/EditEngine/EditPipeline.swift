@@ -107,7 +107,7 @@ enum EditPipeline {
         // here — just not yet re-measured for a non-identity case.
         guard truncation == nil else { return image }
         image = applyRedEye(state, to: image)                 // localized, scene-linear
-        image = applyMasks(state, to: image, subjectImages: masksActive(state) ? subjectMaskImages(state, source: input) : [:])  // local adjustments, own perceptual sandwich
+        image = applyMasks(state, to: image, subjectImages: masksActive(state) ? subjectMaskImages(state, source: input).merging(depthMaskImages(state, source: input)) { first, _ in first } : [:])  // local adjustments, own perceptual sandwich
         image = applyDehaze(state, to: image)                 // scene restoration, scene-linear, before vignette/local contrast
         image = applyVignette(state, to: image)               // radial, scene-linear
         image = applyClarity(state, to: image)                // wide local contrast, perceptual, before detail pair
@@ -143,6 +143,7 @@ enum EditPipeline {
     private static let retouchHealCombineKernel: CIColorKernel? = loadColorKernel("RetouchHealCombine")
     private static let retouchCloneKernel: CIColorKernel? = loadColorKernel("RetouchClone")
     private static let retouchMergeKernel: CIColorKernel? = loadColorKernel("RetouchMerge")
+    private static let depthWindowKernel: CIColorKernel? = loadColorKernel("DepthWindow")
 
     private static func loadKernel(_ name: String) -> CIKernel? {
         guard let url = Bundle.main.url(forResource: name, withExtension: "cikernel"),
@@ -2447,7 +2448,8 @@ enum EditPipeline {
                 feather: mask.feather, extent: extent
             ) else { return nil }
             return .colorRange(sel)
-        case .subject:
+        case .subject, .depthRange:
+            // (`.depthRange` shares this branch: its raster-derived selection image lives in the same dictionary, built by `depthMaskImages`.)
             // No raster (never computed, or undecodable) selects NOTHING whether or not
             // `invertSelection` is set — see `Mask.invertSelection`.
             guard let selection = subjectImages[mask.id] else { return nil }
@@ -2799,6 +2801,49 @@ enum EditPipeline {
             result[mask.id] = applyGeometry(state, to: fit)
         }
         return result
+    }
+
+    /// Every active `.depthRange` mask's SELECTION image: the stored nearness raster run through `DepthWindow.cikernel` (the near/far window with its
+    /// soft edge, in RASTER space so the 8-bit values are windowed exactly), stretched over `source`'s extent and carried through the photo's own
+    /// `applyGeometry` — the same recipe as `subjectMaskImages`, so the selection follows crop/flip/straighten and is proxy/export invariant. No
+    /// raster (never generated, or undecodable) selects nothing and has no entry (`resolveMaskGeometry` treats a missing entry as "selects nothing",
+    /// also when `invertSelection` is set).
+    private static func depthMaskImages(_ state: EditState, source: CIImage) -> [UUID: CIImage] {
+        var result: [UUID: CIImage] = [:]
+        let sourceExtent = source.extent
+        guard !sourceExtent.isEmpty, !sourceExtent.isInfinite, let kernel = depthWindowKernel else { return result }
+        let depthMasks = state.masks.filter { $0.kind == .depthRange && $0.depthRasterPNG != nil }
+        guard !depthMasks.isEmpty else { return result }
+        // The cache must hold EVERY raster one render visits: the subject masks' (reserved by `subjectMaskImages`, called first) plus these. Reserving
+        // only this count would leave the capacity at max(S, D), and with S + D beyond it every frame would miss on every lookup (LRU, same order).
+        let subjectRasterCount = state.masks.reduce(0) { $0 + ($1.kind == .subject ? $1.subjectRasters.count : 0) }
+        subjectRasterCache.reserve(subjectRasterCount + depthMasks.count)
+        for mask in depthMasks {
+            guard let png = mask.depthRasterPNG, let raster = decodedSubjectRaster(png) else { continue }
+            let rect = raster.extent
+            let window = DepthRangeSelection.window(farLimit: mask.depthFarLimit, nearLimit: mask.depthNearLimit, feather: mask.depthFeather)
+            // The window runs on the raster's own pixels, BEFORE the stretch to the photo's size — deliberately: stretching the NEARNESS first would
+            // invent in-between depths along every object boundary (near 255 next to far 0 blends through every value, so a mid-range window would
+            // select a ring around each boundary). Windowing first interpolates the SELECTION weights instead. The cost: with `depthFeather == 0` a
+            // hard window shows the raster's pixel grid (a 768 px raster on a 6016 px photo steps about 8 photo pixels); the default feather hides it.
+            // Do not "fix" the order. (The clamp keeps the kernel's region of interest inside the raster.)
+            guard let windowed = kernel.apply(extent: rect, arguments: [raster.clampedToExtent(), window.low, window.high, window.edge]) else { continue }
+            let fit = windowed
+                .clampedToExtent()
+                .transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+                .transformed(by: CGAffineTransform(scaleX: sourceExtent.width / rect.width, y: sourceExtent.height / rect.height))
+                .transformed(by: CGAffineTransform(translationX: sourceExtent.minX, y: sourceExtent.minY))
+                .samplingLinear()
+                .cropped(to: sourceExtent)
+            result[mask.id] = applyGeometry(state, to: fit)
+        }
+        return result
+    }
+
+    /// The selection image the pipeline builds for one `.depthRange` mask (windowed, geometry-carried), or nil when it selects nothing. For the
+    /// on-image "show depth" overlay, so it displays exactly what the pipeline uses.
+    static func depthMaskPreviewImage(_ state: EditState, maskID: UUID, source: CIImage) -> CIImage? {
+        depthMaskImages(state, source: source)[maskID]
     }
 
     /// The geometry-carried image the pipeline builds for one `.subject` mask (union of its ENABLED instances, feathered),

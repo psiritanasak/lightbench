@@ -984,6 +984,7 @@ struct AdjustTabView: View {
         case .luminanceRange: return "circle.lefthalf.filled"
         case .colorRange: return "eyedropper"
         case .subject: return "person.crop.rectangle"
+        case .depthRange: return "square.3.layers.3d.down.right"
         }
     }
 
@@ -1001,6 +1002,7 @@ struct AdjustTabView: View {
         case .luminanceRange: return "Luminance Range"
         case .colorRange: return "Color Range"
         case .subject: return "Subject"
+        case .depthRange: return "Depth Range"
         }
     }
 
@@ -1030,7 +1032,7 @@ struct AdjustTabView: View {
     private func hasOnImageOverlay(_ kind: MaskKind) -> Bool {
         switch kind {
         case .radial, .linear, .brush: return true
-        case .luminanceRange, .colorRange, .subject: return false
+        case .luminanceRange, .colorRange, .subject, .depthRange: return false
         }
     }
 
@@ -1113,7 +1115,7 @@ struct AdjustTabView: View {
             beginBrushStroke(for: mask.id)
         case .colorRange:
             beginColorPick(for: mask.id)
-        case .radial, .linear, .luminanceRange, .subject:
+        case .radial, .linear, .luminanceRange, .subject, .depthRange:
             break
         }
     }

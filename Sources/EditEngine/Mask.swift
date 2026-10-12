@@ -35,6 +35,11 @@ enum MaskKind: String, Codable {
     /// read for old masks but no longer written), not parameters. See `docs/ROADMAP_HISTORY.md`'s
     /// Vision spike entry.
     case subject
+    /// Select by distance (docs/ROADMAP_HISTORY.md "Depth Range spike"): a persisted 8-bit NEARNESS raster
+    /// (`Mask.depthRasterPNG`: 0 = farthest, 255 = nearest) from an iPhone's embedded disparity or a bundled
+    /// monocular depth model, windowed by `depthFarLimit...depthNearLimit` with a soft edge. Like `.subject` the
+    /// raster is a model/camera OUTPUT, persisted rather than recomputed, and follows crop/flip/straighten.
+    case depthRange
 }
 
 /// Phase 7 slice 6: whether — and how — a `Mask`'s own selection is
@@ -412,6 +417,25 @@ struct Mask: Identifiable, Equatable, Codable {
     /// so it scales with the photo exactly like every other extent-relative parameter.
     var subjectFeather: Double = 0
 
+    /// `.depthRange` only — inert on every other kind. 8-bit gray NEARNESS raster (0 = farthest ... 255 = nearest, row 0 = top), in the frame of the
+    /// UNEDITED, oriented source photo (BEFORE straighten/perspective/scale/flip/crop, which the pipeline re-applies), normalised per image by
+    /// `DepthNormalizer`. `nil` = no depth computed yet; such a mask selects nothing (also when `invertSelection` is set).
+    var depthRasterPNG: Data? = nil
+
+    /// `.depthRange` only. Where the raster came from: `DepthSourceTag.embedded` or `DepthSourceTag.model(id:revision:)`; "" = none. Provenance
+    /// (the Regenerate UI and a future model upgrade read it); nothing in the render branches on it.
+    var depthSource: String = ""
+
+    /// `.depthRange` only, 0...1. The FARTHEST nearness the selection includes (0 = the far background). With `depthNearLimit` this is the window
+    /// `DepthRangeSelection.window` builds; the default `0.5...1` selects the nearer half.
+    var depthFarLimit: Double = 0.5
+
+    /// `.depthRange` only, 0...1. The NEAREST nearness the selection includes (1 = the closest thing).
+    var depthNearLimit: Double = 1
+
+    /// `.depthRange` only, 0...1. Soft-edge width of the window, as a fraction of `DepthRangeSelection.maxFeatherSpan`.
+    var depthFeather: Double = 0.1
+
     /// The raster PNGs that make up the selection: the ENABLED per-person rasters when any exist, else
     /// the single legacy `subjectMaskPNG` if present, else none. ZERO rasters selects nothing, even
     /// when `invertSelection` is set (inverting "nothing known" must not light up the whole photo).
@@ -530,6 +554,7 @@ extension Mask {
         case combineMode, combineWithMaskID
         case subjectMaskPNG, subjectMaskRevision, invertSelection
         case subjectInstancePNGs, subjectInstanceEnabled, subjectFeather
+        case depthRasterPNG, depthSource, depthFarLimit, depthNearLimit, depthFeather
     }
 
     init(from decoder: Decoder) throws {
@@ -631,6 +656,13 @@ extension Mask {
         subjectInstancePNGs = (try? container.decodeIfPresent([Data].self, forKey: .subjectInstancePNGs)) ?? nil ?? []
         subjectInstanceEnabled = (try? container.decodeIfPresent([Bool].self, forKey: .subjectInstanceEnabled)) ?? nil ?? []
         subjectFeather = (try? container.decodeIfPresent(Double.self, forKey: .subjectFeather)) ?? nil ?? 0
+        // Depth Range fields: the raster is `Data` (base64; a corrupt blob must lose only the raster, never the sidecar — same `try?` reasoning as the
+        // subject blobs), the rest are plain scalars with defaults, `try?` for the same discard-the-sidecar reason on a type mismatch.
+        depthRasterPNG = (try? container.decodeIfPresent(Data.self, forKey: .depthRasterPNG)) ?? nil
+        depthSource = (try? container.decodeIfPresent(String.self, forKey: .depthSource)) ?? nil ?? ""
+        depthFarLimit = (try? container.decodeIfPresent(Double.self, forKey: .depthFarLimit)) ?? nil ?? 0.5
+        depthNearLimit = (try? container.decodeIfPresent(Double.self, forKey: .depthNearLimit)) ?? nil ?? 1
+        depthFeather = (try? container.decodeIfPresent(Double.self, forKey: .depthFeather)) ?? nil ?? 0.1
         // Reviewer-corrected (Phase 7 slice 2): falls back to a DETERMINISTIC
         // id derived from every other decoded field, not a fresh random
         // UUID — unreachable via this app's own round-trip (every mask it
@@ -656,7 +688,9 @@ extension Mask {
                 subjectMaskPNG: subjectMaskPNG, subjectMaskRevision: subjectMaskRevision,
                 invertSelection: invertSelection,
                 subjectInstancePNGs: subjectInstancePNGs, subjectInstanceEnabled: subjectInstanceEnabled,
-                subjectFeather: subjectFeather
+                subjectFeather: subjectFeather,
+                depthRasterPNG: depthRasterPNG, depthSource: depthSource,
+                depthFarLimit: depthFarLimit, depthNearLimit: depthNearLimit, depthFeather: depthFeather
             )
         }
     }
@@ -713,6 +747,8 @@ extension Mask {
     /// Subject refinement note: `subjectFeather`, the instance count, each instance PNG (length then
     /// bytes) and the enabled flags are mixed in after the Subject pass below (variable length: count first).
     ///
+    /// Depth Range note: `depthFarLimit`/`depthNearLimit`/`depthFeather`, the source string and the raster are mixed in as a final pass (counts first).
+    ///
     /// Subject note (AI Subject mask): `invertSelection`, the revision (presence flag + value) and the
     /// PNG (presence flag, length, bytes) are mixed in as a final pass after `combineWithMaskID`'s.
     ///
@@ -744,7 +780,8 @@ extension Mask {
         clarity: Double, saturation: Double, temperature: Double, tint: Double,
         combineMode: MaskCombineMode, combineWithMaskID: UUID?,
         subjectMaskPNG: Data?, subjectMaskRevision: Int?, invertSelection: Bool,
-        subjectInstancePNGs: [Data], subjectInstanceEnabled: [Bool], subjectFeather: Double
+        subjectInstancePNGs: [Data], subjectInstanceEnabled: [Bool], subjectFeather: Double,
+        depthRasterPNG: Data?, depthSource: String, depthFarLimit: Double, depthNearLimit: Double, depthFeather: Double
     ) -> UUID {
         let combineModeSeed: Double
         switch combineMode {
@@ -768,6 +805,7 @@ extension Mask {
         case .luminanceRange: kindSeed = 0xbf58476d1ce4e5b9
         case .colorRange: kindSeed = 0x1b873593cc9e2d51
         case .subject: kindSeed = 0x6a09e667f3bcc909
+        case .depthRange: kindSeed = 0x3c6ef372fe94f82b
         }
         let prime: UInt64 = 0x100000001b3
         var laneA: UInt64 = (0xcbf29ce484222325 ^ kindSeed) &* prime
@@ -820,6 +858,17 @@ extension Mask {
         refinement.append(UInt64(subjectInstanceEnabled.count))
         refinement.append(contentsOf: subjectInstanceEnabled.map { $0 ? 1 : 0 })
         for scalar in refinement {
+            laneA = (laneA ^ scalar) &* prime
+            laneB = (laneB ^ scalar.byteSwapped) &* prime
+        }
+        // Depth Range pass: the three scalars' bits, then the source string and the raster (presence flag, length, bytes) — counts before data.
+        let depthRasterBytes = [UInt8](depthRasterPNG ?? Data())
+        let depthSourceBytes = Array(depthSource.utf8)
+        var depthPass: [UInt64] = [depthFarLimit.bitPattern, depthNearLimit.bitPattern, depthFeather.bitPattern,
+                                   UInt64(depthSourceBytes.count), depthRasterPNG == nil ? 0 : 1, UInt64(depthRasterBytes.count)]
+        depthPass.append(contentsOf: depthSourceBytes.map { UInt64($0) })
+        depthPass.append(contentsOf: depthRasterBytes.map { UInt64($0) })
+        for scalar in depthPass {
             laneA = (laneA ^ scalar) &* prime
             laneB = (laneB ^ scalar.byteSwapped) &* prime
         }

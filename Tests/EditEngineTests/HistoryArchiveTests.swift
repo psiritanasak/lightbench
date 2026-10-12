@@ -145,6 +145,25 @@ final class HistoryArchiveTests: XCTestCase {
         XCTAssertEqual(archive.entries.last?.state, h.entries.last?.state)
     }
 
+    /// A Depth Range mask's raster is listed in `interned` too (its own field, not the subject ones): restored entries must share one buffer, and the
+    /// archive must store the blob once.
+    func testDepthRasterIsStoredOnceAndRestoredEntriesShareOneBuffer() throws {
+        var mask = Mask(); mask.kind = .depthRange
+        mask.depthRasterPNG = Data((0..<60_000).map { UInt8(truncatingIfNeeded: $0 &* 2654435761 >> 7) })
+        mask.depthSource = DepthSourceTag.embedded
+        var h = EditHistory(state { $0.masks = [mask] }, initialSummary: "Opened")
+        for i in 1...20 { var next = h.current; next.masks[0].depthNearLimit = 0.5 + Double(i) / 100; h.commit(next, summary: "n\(i)") }
+        let object = try XCTUnwrap(HistoryArchive(h).jsonObject())
+        XCTAssertEqual((object["blobs"] as? [String: String])?.count, 1, "21 entries sharing one raster store it once")
+        let archive = try XCTUnwrap(try roundTrip(h))
+        let addresses = archive.entries.map { entry in
+            entry.state.masks[0].depthRasterPNG?.withUnsafeBytes { UInt(bitPattern: $0.baseAddress) } ?? 0
+        }
+        XCTAssertEqual(Set(addresses).count, 1, "all entries should point at the same Data storage")
+        XCTAssertNotEqual(addresses.first, 0)
+        XCTAssertEqual(archive.entries.last?.state, h.entries.last?.state)
+    }
+
     /// The style's skin raster is a top-level `Data` field (not inside a `Mask`): `interned` lists it separately.
     func testRestoredEntriesShareOneBufferForTheStyleSkinRaster() throws {
         let png = Data((0..<50_000).map { UInt8(truncatingIfNeeded: $0 &* 2654435761 >> 7) })

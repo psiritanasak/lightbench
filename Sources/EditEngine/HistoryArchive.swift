@@ -142,11 +142,11 @@ struct HistoryArchive {
 
     /// Makes equal mask blobs share ONE `Data` buffer across the restored entries (the live `EditHistory` shares them
     /// through copy-on-write; decoding each entry separately would give every entry its own copy — ~100 MB for a 1 MB mask
-    /// over 101 entries). This is the one place that lists the `Data`-bearing `EditState` fields (the masks' PNGs and the Style's
+    /// over 101 entries). This is the one place that lists the `Data`-bearing `EditState` fields (the masks' subject and depth PNGs and the Style's
     /// `styleSkinMaskPNG`); a new
     /// blob field added later would still round-trip correctly, only without the memory sharing.
     fileprivate static func interned(_ state: EditState, _ table: inout [Data: Data]) -> EditState {
-        guard state.styleSkinMaskPNG != nil || state.masks.contains(where: { $0.subjectMaskPNG != nil || !$0.subjectInstancePNGs.isEmpty }) else { return state }
+        guard state.styleSkinMaskPNG != nil || state.masks.contains(where: { $0.subjectMaskPNG != nil || !$0.subjectInstancePNGs.isEmpty || $0.depthRasterPNG != nil }) else { return state }
         func share(_ data: Data) -> Data {
             if let existing = table[data] { return existing }
             table[data] = data
@@ -157,6 +157,7 @@ struct HistoryArchive {
         for index in copy.masks.indices {
             copy.masks[index].subjectMaskPNG = copy.masks[index].subjectMaskPNG.map(share)
             copy.masks[index].subjectInstancePNGs = copy.masks[index].subjectInstancePNGs.map(share)
+            copy.masks[index].depthRasterPNG = copy.masks[index].depthRasterPNG.map(share)
         }
         return copy
     }

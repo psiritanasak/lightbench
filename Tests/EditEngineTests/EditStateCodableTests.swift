@@ -377,10 +377,9 @@ final class EditStateCodableTests: XCTestCase {
     /// `try?`, so an uncaught throw here wouldn't just skip this one
     /// mask — it would discard the ENTIRE sidecar, every global edit on
     /// the photo included. Assert the fix directly: a sidecar with an
-    /// unrecognized future kind string (`"depthRange"`, standing in for a
-    /// still-unbuilt future mask kind — CLAUDE.md's Phase 7 roadmap names
-    /// Depth Range as explicitly out of scope, needing its own research
-    /// spike first; `"brush"`, `"luminanceRange"`, and now `"colorRange"`
+    /// unrecognized future kind string (`"cloudRange"`, standing in for a
+    /// still-unbuilt future mask kind — `"depthRange"` stood in until the Depth
+    /// Range mask became a real kind (2026-10-12); `"brush"`, `"luminanceRange"`, and now `"colorRange"`
     /// all became REAL, recognized kinds in slices 4/5, so none of them
     /// can stand in for "unrecognized" anymore — repointed off `"colorRange"`
     /// specifically when that slice shipped, per this test's own original
@@ -391,7 +390,7 @@ final class EditStateCodableTests: XCTestCase {
         let json = """
         {
             "exposureEV": 1.5,
-            "masks": [{ "kind": "depthRange", "centerX": 0.6 }]
+            "masks": [{ "kind": "cloudRange", "centerX": 0.6 }]
         }
         """
         let state = try decode(json)

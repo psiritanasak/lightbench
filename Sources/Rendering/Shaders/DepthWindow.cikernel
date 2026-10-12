@@ -1,0 +1,23 @@
+// Depth Range mask — turns a NEARNESS raster into the selection weight of a near/far window with soft edges.
+//
+// Input: the stored depth raster as an unmanaged `RGB == alpha == gray` image (premultiplied; gray = nearness, 0 = farthest ... 1 = nearest — see
+// `EditPipeline.decodedSubjectRaster`). Output: the same `RGB == alpha == weight` shape every mask kind produces, so it composes through
+// `applyMasks` unchanged. Mirrors `DepthRangeSelection.weight(nearness:window:)` exactly (that file is the tested source of truth):
+//
+//     weight = 1                                  for low <= n <= high
+//            = smoothstep(1 - d / edge)           outside, d = distance to the window, only when edge > 0 (t > 0)
+//            = 0                                  otherwise
+//
+// `s.r` IS the nearness because the raster's alpha equals its gray, so premultiplication leaves the colour channels at gray.
+kernel vec4 depthWindow(__sample s, float low, float high, float edge) {
+    float n = clamp(s.r, 0.0, 1.0);
+    float w = 0.0;
+    if (n >= low && n <= high) {
+        w = 1.0;
+    } else if (edge > 0.0) {
+        float d = (n < low) ? (low - n) : (n - high);
+        float t = 1.0 - d / edge;
+        if (t > 0.0) { w = t * t * (3.0 - 2.0 * t); }
+    }
+    return vec4(w, w, w, w);
+}

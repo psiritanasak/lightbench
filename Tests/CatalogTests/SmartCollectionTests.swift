@@ -73,7 +73,7 @@ final class SmartCollectionCriteriaTests: XCTestCase {
 
     /// A PRESENT but not understood criterion (renamed case, newer build) must match nothing, never everything.
     func testAnUnrecognizedStoredCriterionMatchesNothing() throws {
-        for json in [#"{"flag":"bogus"}"#, #"{"label":"mauve"}"#, #"{"minimumRating":"high"}"#, #"{"keywordKey":7}"#] {
+        for json in [#"{"flag":"bogus"}"#, #"{"label":"mauve"}"#, #"{"minimumRating":"high"}"#, #"{"keywordKey":7}"#, #"{"searchQuery":7}"#] {
             let decoded = try JSONDecoder().decode(SmartCollectionCriteria.self, from: Data(json.utf8))
             XCTAssertTrue(decoded.hasUnrecognizedCriterion, json)
             XCTAssertFalse(decoded.isEmpty, json)
@@ -85,6 +85,95 @@ final class SmartCollectionCriteriaTests: XCTestCase {
     func testStoredRawValuesArePinned() {
         XCTAssertEqual(LibraryFlagFilter.allCases.map(\.rawValue), ["all", "picked", "unflagged", "rejected", "notRejected"])
         XCTAssertEqual(LibraryLabelFilter.allCases.map(\.rawValue), ["all", "unlabeled", "red", "yellow", "green", "blue", "purple"])
+    }
+
+    // MARK: - Saved search query
+
+    private func meta(_ id: Int64, iso: Int? = nil, model: String? = nil, date: String? = nil) -> PhotoMetadata {
+        PhotoMetadata(photoId: id, fileSize: 1, mtime: 1, readerRevision: PhotoMetadata.currentReaderRevision,
+                      captureDate: date.flatMap { CaptureDate.parseEXIFDate($0)?.timeIntervalSince1970 }, iso: iso,
+                      cameraMake: nil, cameraModel: model, lens: nil, focalLength: nil, aperture: nil, shutter: nil,
+                      pixelWidth: nil, pixelHeight: nil, scannedAt: Date())
+    }
+
+    func testASavedQueryFiltersByCameraDataAndNeedsTheMetadata() {
+        let photos = [photo(1), photo(2), photo(3), photo(4)]
+        let metadata: [Int64: PhotoMetadata] = [
+            1: meta(1, iso: 3200, model: "NIKON D610", date: "2023:03:14 09:30:15"),
+            2: meta(2, iso: 100, model: "NIKON D610", date: "2023:05:01 10:00:00"),
+            3: meta(3, iso: 3200, model: "Canon EOS R5", date: "2023:03:20 10:00:00")
+        ]   // photo 4 has no camera data yet (scan not finished)
+        var criteria = SmartCollectionCriteria()
+        criteria.searchQuery = "camera:d610 iso:>1600"
+        XCTAssertFalse(criteria.isEmpty)
+        XCTAssertEqual(ids(criteria.apply(to: photos, keywords: [], keywordIDsByPhotoID: [:], metadataByPhotoID: metadata)), [1])
+        XCTAssertEqual(ids(criteria.apply(to: photos, keywords: [], keywordIDsByPhotoID: [:])), [], "no metadata: camera terms match nothing")
+        criteria.searchQuery = "date:2023-03"
+        XCTAssertEqual(ids(criteria.apply(to: photos, keywords: [], keywordIDsByPhotoID: [:], metadataByPhotoID: metadata)), [1, 3])
+    }
+
+    func testASavedQueryCombinesWithTheOtherCriteriaAndKeywordText() {
+        let photos = [photo(1, rating: 5), photo(2, rating: 1), photo(3, rating: 5)]
+        let metadata: [Int64: PhotoMetadata] = [1: meta(1, iso: 800), 2: meta(2, iso: 800), 3: meta(3, iso: 100)]
+        var criteria = SmartCollectionCriteria()
+        criteria.minimumRating = 4
+        criteria.searchQuery = "iso:>=800"
+        XCTAssertEqual(ids(criteria.apply(to: photos, keywords: [], keywordIDsByPhotoID: [:], metadataByPhotoID: metadata)), [1])
+        criteria.searchQuery = "keyword:moun"
+        XCTAssertEqual(ids(criteria.apply(to: photos, keywords: [], keywordIDsByPhotoID: [:], keywordNamesByPhotoID: [3: ["Mountains"]])), [3])
+    }
+
+    func testAnUnreadableSavedTermMatchesNothing() {
+        var criteria = SmartCollectionCriteria()
+        criteria.searchQuery = "iso:abc"
+        XCTAssertFalse(criteria.isEmpty)
+        XCTAssertEqual(ids(criteria.apply(to: [photo(1)], keywords: [], keywordIDsByPhotoID: [:], metadataByPhotoID: [1: meta(1, iso: 100)])), [])
+    }
+
+    func testNormalizedQueryDropsTextThatRestrictsNothing() {
+        XCTAssertEqual(SmartCollectionCriteria.normalizedQuery("  iso:>800  "), "iso:>800")
+        for noOp in ["", "   ", "iso:", "iso:>", "date:>=", "\n"] {
+            XCTAssertEqual(SmartCollectionCriteria.normalizedQuery(noOp), "", noOp)
+        }
+        XCTAssertEqual(SmartCollectionCriteria.normalizedQuery("sunset"), "sunset", "plain words are a real restriction")
+    }
+
+    func testQueryStorageIsTolerantAndOmittedWhenEmpty() throws {
+        let decode = { (json: String) in try JSONDecoder().decode(SmartCollectionCriteria.self, from: Data(json.utf8)) }
+        XCTAssertEqual(try decode("{}"), .empty)
+        XCTAssertEqual(try decode(#"{"searchQuery":null}"#), .empty, "null = absent")
+        XCTAssertEqual(try decode(#"{"searchQuery":"   "}"#), .empty, "blank text is normalised away on decode")
+        XCTAssertEqual(try decode(#"{"searchQuery":" iso:>800 "}"#).searchQuery, "iso:>800")
+        let wrong = try decode(#"{"searchQuery":7}"#)
+        XCTAssertTrue(wrong.hasUnrecognizedCriterion, "a wrongly typed value is a criterion we do not understand")
+        XCTAssertEqual(ids(wrong.apply(to: [photo(1)], keywords: [], keywordIDsByPhotoID: [:])), [])
+        // Empty query: the JSON is byte-identical to what builds before queries wrote (no new key). Pinned as literal bytes.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let old = SmartCollectionCriteria(minimumRating: 3, flag: .picked, label: .blue, keywordKey: "sky")
+        XCTAssertEqual(String(decoding: try encoder.encode(old), as: UTF8.self),
+                       #"{"flag":"picked","keywordKey":"sky","label":"blue","minimumRating":3}"#)
+        let noKeyword = SmartCollectionCriteria(minimumRating: 0, flag: .all, label: .all, keywordKey: nil)
+        XCTAssertEqual(String(decoding: try encoder.encode(noKeyword), as: UTF8.self),
+                       #"{"flag":"all","label":"all","minimumRating":0}"#, "a nil keyword is omitted, as before")
+        var withQuery = old
+        withQuery.searchQuery = "iso:>800"
+        let newJSON = String(decoding: try encoder.encode(withQuery), as: UTF8.self)
+        XCTAssertEqual(newJSON, #"{"flag":"picked","keywordKey":"sky","label":"blue","minimumRating":3,"searchQuery":"iso:>800"}"#)
+        XCTAssertEqual(try decode(newJSON), withQuery)
+    }
+
+    func testSummaryDescribesEveryCriterion() {
+        XCTAssertEqual(SmartCollectionCriteria.empty.summary, "No restrictions")
+        var criteria = SmartCollectionCriteria(minimumRating: 3, flag: .picked, label: .blue, keywordKey: "sky")
+        criteria.searchQuery = "iso:>1600"
+        XCTAssertEqual(criteria.summary, "3+ stars · Picked · Blue · Keyword: sky · Search: iso:>1600")
+        var search = SmartCollectionCriteria()
+        search.searchQuery = "camera:d610"
+        XCTAssertEqual(search.summary, "Search: camera:d610")
+        var bad = SmartCollectionCriteria()
+        bad.hasUnrecognizedCriterion = true
+        XCTAssertTrue(bad.summary.contains("does not understand"))
     }
 
     func testRoundTrip() throws {

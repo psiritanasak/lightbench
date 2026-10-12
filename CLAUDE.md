@@ -86,6 +86,7 @@ measured-but-counterintuitive behavior that isn't repeated here.
    - Deferred: `lensCorrectionEnabled` (measured unsupported on this camera — don't re-add without re-measuring), full inverse-geometry for the WB eyedropper beyond identity geometry
 7. Local Adjustments (Masking) — ✅ FULLY COMPLETE (2026-09-15)
    - 5 mask kinds: `.radial`, `.linear`, `.brush`, `.luminanceRange`, `.colorRange` — `Sources/EditEngine/Mask.swift`, `EditPipeline.applyMasks`
+   - Per-mask Whites/Blacks SHIPPED 2026-10-12 (`Mask.whites/blacks`; Blacks = the global Black Point slot, Whites = its own white-end curve after the Shadows/Highlights curve — NOT a moved control point of the same curve, which reversed the top tones; see the ROADMAP_HISTORY entry)
    - Multiple independently-compounding masks per photo + intersect/subtract combining (`Mask.combineMode`/`combineWithMaskID`)
    - Geometry helpers: `RadialMaskGeometry.swift`, `LinearMaskGeometry.swift`, `BrushMaskGeometry.swift`, `MaskGeometry.swift` (UI-side inverse), `ColorRangeSelection.swift`, `LuminanceRangeSelection.swift`
    - Second custom Core Image kernel in this area: `ColorRange.cikernel`

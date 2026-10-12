@@ -7,6 +7,8 @@ archived at its end under "Archived from PROGRESS.md on 2026-09-30". Shipped
 improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
+**PER-MASK WHITES/BLACKS — SHIPPED (2026-10-12), offscreen-tested only.** EXACT NEXT STEP: none required; candidates in IMPROVEMENTS.md D57/D63/D64 (global Whites slider, B&W Mix extras, culling Compare/Survey, XMP interop spike).
+
 **COLOR GRADING GLOBAL WHEEL — SHIPPED (2026-10-12), offscreen-tested only.** Colour Grading is now complete (3 ranges + Global + Blending/Balance). EXACT NEXT STEP: none required; candidates in IMPROVEMENTS.md D57/D63 (B&W Mix extras, per-mask Whites/Blacks, culling Compare/Survey, XMP interop spike).
 
 **VIGNETTE SOFTNESS — SHIPPED (2026-10-12, 4b618fa), offscreen-tested only.** Color Grading Blending/Balance is user-confirmed working. EXACT NEXT STEP: none required; candidates in IMPROVEMENTS.md D57/D63 (B&W Mix extras, per-mask Whites/Blacks, culling Compare/Survey, XMP interop spike, Global wheel).

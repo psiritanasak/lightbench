@@ -689,6 +689,16 @@ struct AdjustTabView: View {
             }
             .buttonStyle(FlatButtonStyle(fullWidth: true))
             .disabled(isSelectedColorGradingRangeAtIdentity)
+            // Global, not per range: how much the three ranges overlap, and which end the split favours. They change nothing
+            // until a wheel is set, so they neither light the per-range "edited" caption nor belong to the per-range Reset.
+            EditSliderRow(
+                label: "Blending", value: $document.editState.colorGradingBlending,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
+                label: "Balance", value: $document.editState.colorGradingBalance,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
         }
     }
 
@@ -1741,6 +1751,8 @@ struct AdjustTabView: View {
             && state.highlightHue == 0
             && state.highlightSaturation == 0
             && state.highlightLuminance == 0
+            && state.colorGradingBlending == 0
+            && state.colorGradingBalance == 0
             && state.vignetteStrength == 0
             && state.vignetteRadius == 0.5
             && state.texture == 0
@@ -1793,6 +1805,8 @@ struct AdjustTabView: View {
             document.editState.highlightHue = 0
             document.editState.highlightSaturation = 0
             document.editState.highlightLuminance = 0
+            document.editState.colorGradingBlending = 0
+            document.editState.colorGradingBalance = 0
             document.editState.vignetteStrength = 0
             document.editState.vignetteRadius = 0.5
             document.editState.texture = 0

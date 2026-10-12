@@ -20,6 +20,28 @@ final class DepthGenerationTests: XCTestCase {
         return (bytes, image.width, image.height)
     }
 
+    // MARK: Half-float readback
+
+    /// The model's output is read as raw binary16 words (Swift's `Float16` is unavailable on Intel macOS, so a Release build would not compile with it).
+    func testHalfToFloatIsExact() {
+        let f = DepthModelRunner.float(fromHalf:)
+        XCTAssertEqual(f(0x0000), 0); XCTAssertEqual(f(0x8000).sign, .minus); XCTAssertEqual(f(0x8000), 0)
+        XCTAssertEqual(f(0x3C00), 1); XCTAssertEqual(f(0xBC00), -1); XCTAssertEqual(f(0x4000), 2); XCTAssertEqual(f(0xC000), -2)
+        XCTAssertEqual(f(0x3800), 0.5); XCTAssertEqual(f(0x4900), 10); XCTAssertEqual(f(0x7BFF), 65504)
+        XCTAssertEqual(f(0x3555), 0.333251953125, "the nearest half to 1/3")
+        XCTAssertEqual(f(0x0400), 6.103515625e-05, "the smallest normal half")
+        XCTAssertEqual(f(0x0001), 5.960464477539063e-08, "the smallest subnormal half")
+        XCTAssertEqual(f(0x83FF), -6.097555160522461e-05, "the largest negative subnormal")
+        XCTAssertEqual(f(0x7C00), .infinity); XCTAssertEqual(f(0xFC00), -.infinity)
+        XCTAssertTrue(f(0x7E00).isNaN); XCTAssertTrue(f(0x7C01).isNaN)
+        // Round trip against the CoreGraphics/Accelerate-independent reference for every finite half: converting back through Float -> bits must match.
+        for bits in UInt16.min...UInt16.max where (bits >> 10) & 0x1F != 0x1F {
+            let value = f(bits)
+            XCTAssertTrue(value.isFinite)
+            if bits & 0x7FFF != 0 { XCTAssertEqual(value.sign == .minus, bits >> 15 == 1, "sign of \(bits)") }
+        }
+    }
+
     // MARK: Normalise + encode (no model, no files)
 
     func testEncodeProducesAnEightBitNearnessPNGOfTheSameSize() throws {

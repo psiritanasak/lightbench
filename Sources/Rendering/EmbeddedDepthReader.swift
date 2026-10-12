@@ -5,7 +5,7 @@ import ImageIO
 /// Reads the depth an iPhone embeds in a photo (an ImageIO auxiliary DISPARITY map: larger = nearer) and returns it UPRIGHT, in the frame
 /// `RawDecoder.decode` produces (EXIF orientation applied), as plain Float32 — the form `DepthNormalizer` takes.
 ///
-/// Measured in the Depth Range spike (`EmbeddedDepthProbeTests`): every sample map is `hdis` (DisparityFloat16), 576x768 or 768x576, finite, and has
+/// Measured in the Depth Range spike (docs/ROADMAP_HISTORY.md): every sample map is `hdis` (DisparityFloat16), 576x768 or 768x576, finite, and has
 /// the oriented image's aspect after `applyingExifOrientation`. Disparity is stereo-derived: usable for close subjects, noisy beyond a few metres.
 /// Pure file reading; no UI, safe off the main thread.
 enum EmbeddedDepthReader {

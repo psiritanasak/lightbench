@@ -51,6 +51,24 @@ enum DepthModelRunner {
     }
     private static let loader = Loader()
 
+    /// IEEE 754 binary16 -> Float, exactly (zero, subnormals, normals, infinities, NaN).
+    static func float(fromHalf bits: UInt16) -> Float {
+        let sign: UInt32 = UInt32(bits >> 15) << 31
+        let exponent = UInt32((bits >> 10) & 0x1F)
+        let mantissa = UInt32(bits & 0x3FF)
+        switch exponent {
+        case 0:
+            if mantissa == 0 { return Float(bitPattern: sign) } // +-0
+            // Subnormal half: mantissa * 2^-24, exactly representable as a normal Float.
+            let value = Float(mantissa) * Float(sign: .plus, exponent: -24, significand: 1)
+            return sign == 0 ? value : -value
+        case 0x1F:
+            return Float(bitPattern: sign | 0x7F80_0000 | (mantissa << 13)) // infinity, or NaN with the payload kept
+        default:
+            return Float(bitPattern: sign | ((exponent + 112) << 23) | (mantissa << 13)) // rebias 15 -> 127
+        }
+    }
+
     struct Output {
         /// Row-major, row 0 = top, UPRIGHT (the input's orientation), larger = nearer.
         let depth: [Float]
@@ -86,10 +104,11 @@ enum DepthModelRunner {
               CVPixelBufferGetPixelFormatType(depthBuffer) == kCVPixelFormatType_OneComponent16Half else { throw RunError.predictionFailed("unexpected model output") }
         CVPixelBufferLockBaseAddress(depthBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(depthBuffer, .readOnly) }
-        let w = CVPixelBufferGetWidth(depthBuffer), h = CVPixelBufferGetHeight(depthBuffer), stride = CVPixelBufferGetBytesPerRow(depthBuffer) / MemoryLayout<Float16>.size
-        guard let base = CVPixelBufferGetBaseAddress(depthBuffer)?.assumingMemoryBound(to: Float16.self) else { throw RunError.predictionFailed("no output data") }
+        let w = CVPixelBufferGetWidth(depthBuffer), h = CVPixelBufferGetHeight(depthBuffer), stride = CVPixelBufferGetBytesPerRow(depthBuffer) / MemoryLayout<UInt16>.size
+        // Read the half floats as raw 16-bit words: Swift's `Float16` does not exist on Intel macOS, and the Release build is universal.
+        guard let base = CVPixelBufferGetBaseAddress(depthBuffer)?.assumingMemoryBound(to: UInt16.self) else { throw RunError.predictionFailed("no output data") }
         var values = [Float](repeating: 0, count: w * h)
-        for y in 0..<h { for x in 0..<w { values[y * w + x] = Float(base[y * stride + x]) } }
+        for y in 0..<h { for x in 0..<w { values[y * w + x] = float(fromHalf: base[y * stride + x]) } }
         guard portrait else { return Output(depth: values, width: w, height: h) }
         // Rotate back: the landscape map (w x h) becomes portrait (h x w); pixel (x, y) goes to (y, w - 1 - x).
         var upright = [Float](repeating: 0, count: w * h)

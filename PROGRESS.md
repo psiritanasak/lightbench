@@ -7,6 +7,8 @@ archived at its end under "Archived from PROGRESS.md on 2026-09-30". Shipped
 improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
+**VIGNETTE SOFTNESS — SHIPPED (2026-10-12, 4b618fa), offscreen-tested only.** Color Grading Blending/Balance is user-confirmed working. EXACT NEXT STEP: none required; candidates in IMPROVEMENTS.md D57/D63 (B&W Mix extras, per-mask Whites/Blacks, culling Compare/Survey, XMP interop spike, Global wheel).
+
 **COLOR GRADING BLENDING/BALANCE — SHIPPED (2026-10-12), NO LIVE CHECK.** Engine f20368c + UI commit; details in docs/ROADMAP_HISTORY.md. EXACT NEXT STEP: live-check in the Release app with a photo open (drag Blending/Balance, undo, sidecar round trip); the earlier pass failed only because no photo would open via `open -a` (use the "+" menu Open panel or import a scratch folder).
 
 **SMART COLLECTIONS SAVE THE SEARCH QUERY — SHIPPED (2026-10-12), live-verified.** 2 reviewer-approved commits (00d9dbf, 8fd8389) + docs; details in docs/ROADMAP_HISTORY.md. Live: a saved `camera:d610` collection showed the same 9 photos as the search; the temporary collection was deleted afterwards (catalog at baseline). EXACT NEXT STEP: none required; candidates in IMPROVEMENTS.md D57/D63.

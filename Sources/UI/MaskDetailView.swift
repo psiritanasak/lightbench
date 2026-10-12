@@ -101,6 +101,14 @@ struct MaskDetailView: View {
     var isPickingSubjects = false
     /// A Vision pass is in flight (any mask): the recompute button waits.
     var isRecomputingSubject = false
+    /// `.depthRange` only — (re)generates this mask's depth raster from the chosen source. `nil` for every other kind.
+    var onGenerateDepth: ((DepthSourceResolver.Preference) -> Void)?
+    var isGeneratingDepth = false
+    /// Which depth sources exist for the open photo (decides which source buttons are enabled).
+    var depthAvailability = DepthMapGenerator.Availability(embedded: false, model: false)
+    /// "Show Selection": tint what the window selects over the photo.
+    var showsDepthSelection = false
+    var onToggleDepthSelection: (() -> Void)?
     /// Phase 7 slice 6, Session B — every OTHER mask on this photo,
     /// pre-labeled, that `mask` could combine against. Empty (the
     /// default) on a photo with only this one mask, which is what makes
@@ -203,11 +211,70 @@ struct MaskDetailView: View {
         }
     }
 
-    /// Placeholder until Stage 4 of the Depth Range plan adds the real controls (source, Generate, Near/Far, Feather, Invert, Show depth).
+    /// The Depth Range kind: where the depth came from (iPhone depth / the model, each a button that (re)generates), the near/far window with its
+    /// soft edge, Invert, and "Show Selection". The depth itself is a persisted raster, so there is no geometry to adjust.
     private var depthRangeShapeRows: some View {
-        Text("Depth Range controls are coming next.")
-            .font(.caption)
-            .foregroundStyle(Theme.textSecondary)
+        Group {
+            depthSourceRows
+            if mask.depthRasterPNG != nil {
+                EditSliderRow(
+                    label: "Near limit", value: depthBinding(\.depthNearLimit, fallback: 1),
+                    range: 0...1, identity: 1, displayMultiplier: 100
+                ) { String(format: "%.0f%%", $0 * 100) }
+                EditSliderRow(
+                    label: "Far limit", value: depthBinding(\.depthFarLimit, fallback: 0.5),
+                    range: 0...1, identity: 0.5, displayMultiplier: 100
+                ) { String(format: "%.0f%%", $0 * 100) }
+                EditSliderRow(
+                    label: "Feather", value: depthBinding(\.depthFeather, fallback: 0.1),
+                    range: 0...1, identity: 0.1, displayMultiplier: 100
+                ) { String(format: "%.0f%%", $0 * 100) }
+                Toggle("Invert (select the rest)", isOn: $mask.invertSelection)
+                    .accessibilityLabel("Invert Depth Selection")
+                if let onToggleDepthSelection {
+                    Button(showsDepthSelection ? "Hide Selection" : "Show Selection") { onToggleDepthSelection() }
+                        .buttonStyle(FlatButtonStyle(isOn: showsDepthSelection, fullWidth: true))
+                        .accessibilityAddTraits(showsDepthSelection ? [.isSelected] : [])
+                        .accessibilityLabel(showsDepthSelection ? "Hide Depth Selection" : "Show Depth Selection")
+                }
+                Text("0% is the farthest part of the photo, 100% the nearest. The window between Far and Near is selected.")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
+            }
+        }
+    }
+
+    private var depthSourceRows: some View {
+        let current = mask.depthSource
+        let hasRaster = mask.depthRasterPNG != nil
+        return Group {
+            Text(hasRaster ? "Depth source: \(DepthSourceTag.displayName(current))" : "No depth generated yet.")
+                .font(.caption).foregroundStyle(Theme.textSecondary)
+            HStack {
+                Button(isGeneratingDepth ? "Reading…" : "iPhone Depth") { onGenerateDepth?(.embedded) }
+                    .buttonStyle(FlatButtonStyle(isOn: hasRaster && DepthSourceTag.isEmbedded(current), fullWidth: true))
+                    .disabled(isGeneratingDepth || !depthAvailability.embedded)
+                    .accessibilityLabel("Use iPhone Depth")
+                Button(isGeneratingDepth ? "Reading…" : "Depth Model") { onGenerateDepth?(.model) }
+                    .buttonStyle(FlatButtonStyle(isOn: hasRaster && DepthSourceTag.isModel(current), fullWidth: true))
+                    .disabled(isGeneratingDepth || !depthAvailability.model)
+                    .accessibilityLabel("Use Depth Model")
+            }
+            if !depthAvailability.embedded && !depthAvailability.model {
+                Text(DepthSourceResolver.noDepthAnywhere).font(.caption).foregroundStyle(Theme.textSecondary)
+            } else if !depthAvailability.embedded {
+                Text("This photo has no embedded iPhone depth.").font(.caption).foregroundStyle(Theme.textSecondary)
+            } else if !depthAvailability.model {
+                Text("The depth model is not installed (scripts/fetch_depth_model.sh).").font(.caption).foregroundStyle(Theme.textSecondary)
+            }
+        }
+    }
+
+    /// Guarded like `subjectFeatherBinding`: a NaN/infinite value stored in `EditState` would make every sidecar write throw.
+    private func depthBinding(_ keyPath: WritableKeyPath<Mask, Double>, fallback: Double) -> Binding<Double> {
+        Binding(
+            get: { mask[keyPath: keyPath] },
+            set: { mask[keyPath: keyPath] = $0.isFinite ? min(max($0, 0), 1) : fallback }
+        )
     }
 
     /// Everything the subject kind has: Feather, a Subjects list (2+ detected), Invert and Recompute. The

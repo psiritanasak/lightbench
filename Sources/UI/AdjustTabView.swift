@@ -83,6 +83,10 @@ struct AdjustPanelState {
     /// one is not "the panel's private business."
     var selectedMaskID: UUID?
 
+    /// Which Depth Range mask (if any) has "Show Selection" switched on: a tint of what it selects (window and Invert, not a combine mode), drawn over the photo by `ContentView`.
+    /// Presentation-only; it only draws while that mask is also the selected one.
+    var depthSelectionMaskID: UUID?
+
     /// Point Color Slice B: whether the "Point Color" section is expanded.
     /// Same reasoning as every other section bool above.
     var isPointColorSectionExpanded = false
@@ -937,6 +941,29 @@ struct AdjustTabView: View {
                         Text(document.subjectMaskMessage ?? "")
                     }
                 }
+                // Depth Range: a fourth row — the new button plus an explicit empty cell, the same shape as the "Color" row (see that comment).
+                HStack {
+                    Button(document.isGeneratingDepth ? "Reading…" : "Depth") {
+                        addDepthMask()
+                    }
+                    .buttonStyle(FlatButtonStyle(fullWidth: true))
+                    .disabled(document.isGeneratingDepth)
+                    .accessibilityLabel("Add Depth Range Mask")
+                    .accessibilityValue(document.isGeneratingDepth ? "Reading depth" : "")
+                    // Same placement reason as the Subject alert above; the message is set by `ImageDocumentModel.generateDepth`.
+                    .alert(
+                        "Depth Range Mask",
+                        isPresented: Binding(
+                            get: { document.depthMaskMessage != nil },
+                            set: { if !$0 { document.depthMaskMessage = nil } }
+                        )
+                    ) {
+                        Button("OK") {}
+                    } message: {
+                        Text(document.depthMaskMessage ?? "")
+                    }
+                    Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
+                }
             }
             .disabled(document.currentImage == nil)
             if document.editState.masks.isEmpty {
@@ -1022,6 +1049,19 @@ struct AdjustTabView: View {
         }
     }
 
+    /// `.depthRange` is added like `.subject`: the mask only exists once a depth map has been read or computed, so there is no useful empty mask
+    /// to create and select up front, and selecting it afterwards happens only if nothing else changed in the meantime.
+    private func addDepthMask() {
+        let modeAtClick = interactionMode
+        let selectionAtClick = panel.selectedMaskID
+        document.generateDepth { id in
+            guard let id, let mask = document.editState.masks.first(where: { $0.id == id }),
+                  isTabCurrent(), interactionMode == modeAtClick,
+                  panel.selectedMaskID == selectionAtClick else { return }
+            select(mask)
+        }
+    }
+
     /// Whether `kind` draws an on-image overlay positioned against
     /// `currentFitRect`. Exhaustive on purpose — a future kind must fail
     /// to COMPILE here rather than silently inherit either answer (the
@@ -1075,6 +1115,11 @@ struct AdjustTabView: View {
                 onTogglePickSubjects: binding.wrappedValue.kind == .subject ? { togglePickSubjects(for: id) } : nil,
                 isPickingSubjects: interactionMode.subjectPickingMaskID == id,
                 isRecomputingSubject: document.isSelectingSubject,
+                onGenerateDepth: binding.wrappedValue.kind == .depthRange ? { preference in document.generateDepth(replacing: id, preference: preference) } : nil,
+                isGeneratingDepth: document.isGeneratingDepth,
+                depthAvailability: document.depthAvailability,
+                showsDepthSelection: panel.depthSelectionMaskID == id,
+                onToggleDepthSelection: binding.wrappedValue.kind == .depthRange ? { panel.depthSelectionMaskID = panel.depthSelectionMaskID == id ? nil : id } : nil,
                 // Recomputed on every body evaluation from the live
                 // masks array (Phase 7 slice 6, Session B) — adding or
                 // deleting a mask refreshes the combine-target picker for

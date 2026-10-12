@@ -136,6 +136,24 @@ final class DepthRangeMaskPipelineTests: XCTestCase {
         for (x, y) in [(0, 50), (99, 50), (50, 0), (50, 99)] { XCTAssertEqual(red(out, x: x, y: y), 0.8, accuracy: 0.005, "edge (\(x), \(y))") }
     }
 
+    /// "Show Selection" must show what the mask will EDIT: with Invert on, the preview is the complement (and matches what the pipeline adjusts).
+    func testPreviewAppliesInvertSoTheTintShowsWhatWillBeEdited() throws {
+        var m = mask(try rampPNG(), far: 0.0, near: 0.3) // selects the far (left) part
+        let plain = EditState(masks: [m])
+        let previewPlain = try XCTUnwrap(EditPipeline.depthMaskPreviewImage(plain, maskID: m.id, source: gray(width: 256)))
+        XCTAssertEqual(red(previewPlain, x: 20, y: 4), 1, accuracy: 0.01)
+        XCTAssertEqual(red(previewPlain, x: 240, y: 4), 0, accuracy: 0.01)
+        m.invertSelection = true
+        let inverted = EditState(masks: [m])
+        let preview = try XCTUnwrap(EditPipeline.depthMaskPreviewImage(inverted, maskID: m.id, source: gray(width: 256)))
+        XCTAssertEqual(red(preview, x: 20, y: 4), 0, accuracy: 0.01, "inverted: the far part is no longer selected")
+        XCTAssertEqual(red(preview, x: 240, y: 4), 1, accuracy: 0.01)
+        // And it agrees with the pixels the pipeline actually adjusts.
+        let out = EditPipeline.apply(inverted, to: gray(width: 256))
+        XCTAssertEqual(red(out, x: 20, y: 4), 0.2, accuracy: 0.01)
+        XCTAssertEqual(red(out, x: 240, y: 4), 0.8, accuracy: 0.01)
+    }
+
     func testMaskImageIsAbsentForNoRasterAndPreviewMatchesThePipelineSelection() throws {
         let m = mask(try rampPNG(), far: 0.0, near: 0.3)
         let state = EditState(masks: [m])

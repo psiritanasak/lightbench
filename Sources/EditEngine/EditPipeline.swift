@@ -2840,10 +2840,16 @@ enum EditPipeline {
         return result
     }
 
-    /// The selection image the pipeline builds for one `.depthRange` mask (windowed, geometry-carried), or nil when it selects nothing. For the
-    /// on-image "show depth" overlay, so it displays exactly what the pipeline uses.
+    /// The selection image for one `.depthRange` mask as the pipeline uses it — the window, geometry-carried, WITH `invertSelection` applied (a combine mode is
+    /// not reflected) — or nil when it selects nothing. For the on-image "Show Selection" tint, so it shows what the mask will edit.
     static func depthMaskPreviewImage(_ state: EditState, maskID: UUID, source: CIImage) -> CIImage? {
-        depthMaskImages(state, source: source)[maskID]
+        guard let selection = depthMaskImages(state, source: source)[maskID] else { return nil }
+        guard state.masks.first(where: { $0.id == maskID })?.invertSelection == true else { return selection }
+        let extent = selection.extent
+        guard extent.width > 0, extent.height > 0, !extent.isInfinite else { return nil }
+        // The same complement `resolveMaskGeometry` builds: areas geometry revealed outside the photo (alpha 0) become selected too.
+        let white = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1)).cropped(to: extent)
+        return invertedMaskImage(selection, opaqueWhite: white, extent: extent)
     }
 
     /// The geometry-carried image the pipeline builds for one `.subject` mask (union of its ENABLED instances, feathered),

@@ -136,6 +136,12 @@ final class ImageDocumentModel: ObservableObject {
     @Published var subjectMaskMessage: String?
     /// True while a Vision subject pass is running (disables the Subject buttons: single-flight).
     @Published private(set) var isSelectingSubject = false
+    /// Shown by its own alert — `generateDepth` outcomes (Depth Range mask).
+    @Published var depthMaskMessage: String?
+    /// True while a depth map is being read or computed (single-flight: disables the Depth buttons).
+    @Published private(set) var isGeneratingDepth = false
+    /// Which depth sources exist for the open photo (embedded iPhone depth in its file; the bundled model). Refreshed when a photo loads.
+    @Published private(set) var depthAvailability = DepthMapGenerator.Availability(embedded: false, model: DepthModelRunner.isInstalled)
 
     private var histogramWorkItem: DispatchWorkItem?
     /// Guards against an out-of-order background histogram result (an OLDER
@@ -427,6 +433,7 @@ final class ImageDocumentModel: ObservableObject {
         currentImage = resolvedImage
         currentFileName = url.lastPathComponent
         currentURL = url
+        refreshDepthAvailability()
         currentRawOrientationIsUp = isRawOrientationUp
         currentRawAdjustmentSupport = rawAdjustmentSupport
         isLoadingPhoto = true
@@ -1317,6 +1324,76 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    // MARK: - Depth Range mask
+
+    /// Re-reads which depth sources the open photo offers. Cheap metadata read, done off the main thread; a result for a photo that is no longer open is dropped.
+    func refreshDepthAvailability() {
+        let url = currentURL
+        Task { @MainActor [weak self] in
+            let availability = await Task.detached(priority: .utility) { DepthMapGenerator.availability(forFileAt: url) }.value
+            guard let self, self.currentURL == url else { return }
+            self.depthAvailability = availability
+        }
+    }
+
+    /// Reads or computes the depth map of the UNEDITED current photo and commits ONE undo step: appends a new `.depthRange` mask (adjustments 0 — the
+    /// user dials them in), or, when `maskID` names an existing depth mask, replaces that mask's raster ("Regenerate Depth"; its window, feather, invert
+    /// and adjustments are kept). `preference` defaults to the mask's own current source when regenerating, else automatic. `completion` gets the
+    /// affected mask's id on success, `nil` otherwise. Same shape as `selectSubject`: detached work, single-flight, `analysisGeneration` stale guard.
+    func generateDepth(replacing maskID: UUID? = nil, preference: DepthSourceResolver.Preference? = nil, completion: ((UUID?) -> Void)? = nil) {
+        guard !isGeneratingDepth else { completion?(nil); return }
+        guard let currentImage, !isLoadInFlight else {
+            depthMaskMessage = "Wait for the photo to finish loading, then try again."
+            completion?(nil)
+            return
+        }
+        let existing = maskID.flatMap { id in editState.masks.first(where: { $0.id == id && $0.kind == .depthRange }) }
+        let chosen = preference ?? existing.map { DepthSourceResolver.preference(forTag: $0.depthSource) } ?? .automatic
+        isGeneratingDepth = true
+        let myGeneration = analysisGeneration
+        let url = currentURL
+        Task { @MainActor [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                await DepthMapGenerator.generate(from: currentImage, fileURL: url, preference: chosen)
+            }.value
+            do { // (scope only: keeps the `self` unwrap local to the main-actor continuation)
+                guard let self else { return }
+                self.isGeneratingDepth = false
+                // The photo changed while the depth was being computed: drop the result rather than land it on another photo.
+                guard self.analysisGeneration == myGeneration else { completion?(nil); return }
+                switch outcome {
+                case .failed(let reason):
+                    self.depthMaskMessage = reason
+                    completion?(nil)
+                case .generated(let generated):
+                    self.finalizePendingCommit()
+                    var next = self.editState
+                    var affected: UUID?
+                    if let maskID, let index = next.masks.firstIndex(where: { $0.id == maskID && $0.kind == .depthRange }) {
+                        next.masks[index].depthRasterPNG = generated.png
+                        next.masks[index].depthSource = generated.sourceTag
+                        affected = maskID
+                    } else if maskID == nil {
+                        var mask = Mask()
+                        mask.kind = .depthRange
+                        mask.depthRasterPNG = generated.png
+                        mask.depthSource = generated.sourceTag
+                        next.masks.append(mask)
+                        affected = mask.id
+                    }
+                    guard let affected else { // the mask being regenerated was deleted while the depth was computed
+                        self.depthMaskMessage = "That mask was deleted before its depth was ready."
+                        completion?(nil)
+                        return
+                    }
+                    self.history.commit(next, summary: maskID == nil ? "Generate Depth" : "Regenerate Depth")
+                    self.applyHistoryState(self.history.current)
+                    completion?(affected)
+                }
+            }
+        }
+    }
+
     // MARK: - Undo/Redo
 
     /// Called from `editState`'s `didSet` for every write that ISN'T an
@@ -1401,6 +1478,7 @@ final class ImageDocumentModel: ObservableObject {
         refreshHistoryState()
         analysisGeneration += 1
         subjectMaskMessage = nil // a late "no subject" must not pop up about the NEXT photo
+        depthMaskMessage = nil // likewise a late depth message
         retouchMessage = nil // likewise a late "no good source"
         skinProtectionMessage = nil // and a late "no people found"
     }

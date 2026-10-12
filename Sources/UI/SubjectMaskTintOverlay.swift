@@ -10,6 +10,9 @@ struct SubjectMaskTintOverlay: View {
     @ObservedObject var document: ImageDocumentModel
     let maskID: UUID
     let fitRect: CGRect
+    /// Builds the selection image to tint (default: the `.subject` mask's; the Depth Range overlay passes its own).
+    var preview: @Sendable (EditState, UUID, CIImage) -> CIImage? = { EditPipeline.subjectMaskPreviewImage($0, maskID: $1, source: $2) }
+    var color = CIColor(red: 1, green: 0.1, blue: 0.1, alpha: 1)
 
     @State private var tint: CGImage?
 
@@ -39,15 +42,15 @@ struct SubjectMaskTintOverlay: View {
             guard !Task.isCancelled else { return }
             guard let source = document.currentImage else { tint = nil; return }
             let state = document.editState
-            let id = maskID
-            let image = await Task.detached(priority: .userInitiated) { Self.render(state: state, maskID: id, source: source) }.value
+            let id = maskID, build = preview, tintColor = color
+            let image = await Task.detached(priority: .userInitiated) { Self.render(state: state, maskID: id, source: source, preview: build, color: tintColor) }.value
             if !Task.isCancelled { tint = image }
         }
     }
 
     /// Red where the mask selects (premultiplied alpha = coverage), transparent elsewhere. nil when nothing is selected.
-    nonisolated private static func render(state: EditState, maskID: UUID, source: CIImage) -> CGImage? {
-        guard let mask = EditPipeline.subjectMaskPreviewImage(state, maskID: maskID, source: source) else { return nil }
+    nonisolated private static func render(state: EditState, maskID: UUID, source: CIImage, preview: @Sendable (EditState, UUID, CIImage) -> CIImage?, color: CIColor) -> CGImage? {
+        guard let mask = preview(state, maskID, source) else { return nil }
         let extent = mask.extent
         guard extent.width > 0, extent.height > 0, !extent.isInfinite else { return nil }
         let scale = min(1, maxSide / max(extent.width, extent.height))
@@ -55,7 +58,7 @@ struct SubjectMaskTintOverlay: View {
             .transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
             .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         let rect = CGRect(x: 0, y: 0, width: (extent.width * scale).rounded(), height: (extent.height * scale).rounded())
-        let red = CIImage(color: CIColor(red: 1, green: 0.1, blue: 0.1, alpha: 1)).cropped(to: rect)
+        let red = CIImage(color: color).cropped(to: rect)
         let blend = CIFilter(name: "CIBlendWithAlphaMask")
         blend?.setValue(red, forKey: kCIInputImageKey)
         blend?.setValue(CIImage(color: .clear).cropped(to: rect), forKey: kCIInputBackgroundImageKey)

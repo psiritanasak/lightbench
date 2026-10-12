@@ -15,8 +15,13 @@ targets:
     platform: macOS
     sources:
       - path: Sources
+      # The optional depth model (scripts/fetch_depth_model.sh). Absent on a fresh checkout: the build still works and the Depth Range mask
+      # offers only embedded iPhone depth. Xcode compiles the .mlpackage into the bundle as DepthAnythingV2SmallF16.mlmodelc.
+      - path: Models
+        optional: true
     settings:
       base:
+        COREML_CODEGEN_LANGUAGE: None # the app loads the compiled model dynamically; no generated class
         PRODUCT_NAME: PhotoApp
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         SWIFT_VERSION: "6.0"

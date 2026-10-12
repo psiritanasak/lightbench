@@ -347,6 +347,28 @@ struct ContentView: View {
     private var colorPickingMaskID: UUID? { interactionMode.colorPickingMaskID }
     private var isPickingColorRange: Bool { colorPickingMaskID != nil }
 
+    /// Depth Range "Show Selection": a blue tint of what the selected depth mask selects — its window with Invert applied (via
+    /// `EditPipeline.depthMaskPreviewImage`; a combine mode is NOT reflected). Positioned where the picture is actually DISPLAYED (zoomed and panned), only
+    /// while that mask is the selected one, on the Masks tab, not cropping (`currentFitRect` assumes the un-cropped frame there) and not comparing (the
+    /// fit rect would span both halves of a side-by-side, or tint the original half of a split). Its own property: `pointAndZoomOverlays` is near the
+    /// type-checker's limit.
+    @ViewBuilder private var depthSelectionOverlay: some View {
+        if let maskID = adjustPanel.depthSelectionMaskID, adjustPanel.selectedMaskID == maskID, selectedTab == .masks, !isCroppingActive, compareMode == .off,
+           document.editState.masks.contains(where: { $0.id == maskID && $0.kind == .depthRange }), let fitRect = currentFitRect {
+            SubjectMaskTintOverlay(
+                document: document, maskID: maskID,
+                fitRect: ZoomPanGeometry.displayedRect(fitRect: fitRect, zoom: zoomScale, pan: panOffset),
+                preview: { EditPipeline.depthMaskPreviewImage($0, maskID: $1, source: $2) },
+                color: CIColor(red: 0.1, green: 0.45, blue: 1, alpha: 1)
+            )
+            .id(maskID)
+            // Zoomed in, the displayed rect is larger than the pane: clip the tint to the pane (nothing above this view does), like `RetouchSpotsOverlay`.
+            .frame(width: containerSize.width, height: containerSize.height)
+            .clipped()
+            .allowsHitTesting(false)
+        }
+    }
+
     /// Click-on-image subject picking: which `.subject` mask is armed. Persistent (stays armed across clicks, like
     /// Red-Eye placement); draws a red tint of the included subjects and gates `canZoom` (its tap/overlay math
     /// assumes an un-zoomed `currentFitRect`).
@@ -1422,7 +1444,7 @@ struct ContentView: View {
             if effects.clearsRetouchSelection { adjustPanel.selectedRetouchSpotID = nil }
             // The Masks tab's subject-mask alert lives inside that tab: a message a slow Vision run sets after the user left must not pop
             // up when they come back (the old Masks collapse binding cleared it).
-            if newTab != .masks { document.subjectMaskMessage = nil }
+            if newTab != .masks { document.subjectMaskMessage = nil; document.depthMaskMessage = nil }
             if !newTab.keepsCompareAndZoom {
                 compareMode = .off
                 zoomScale = 1
@@ -2263,6 +2285,7 @@ struct ContentView: View {
                 )
                 .accessibilityHidden(true)
         }
+        depthSelectionOverlay
         // Point Color Slice B: this eyedropper's tap-capture layer —
         // mirrors the WB eyedropper's own capture layer above almost
         // exactly (same `Color.clear`/crosshair-cursor/`SpatialTapGesture`

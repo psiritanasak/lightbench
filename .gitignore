@@ -10,3 +10,6 @@ xcuserdata/
 *.xcuserstate
 
 .DS_Store
+
+# Optional depth model (scripts/fetch_depth_model.sh); ~50 MB, never committed
+Models/

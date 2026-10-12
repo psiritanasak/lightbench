@@ -385,9 +385,17 @@ struct EditState: Equatable, Codable {
     var highlightHue: Double = 0
     var highlightSaturation: Double = 0
     var highlightLuminance: Double = 0
+    /// Color Grading's 4th "Global" wheel: Hue (-180...180), Saturation (0...1) and Luminance (-1...1), all 0 = identity. Unlike
+    /// the three luminance-selected ranges its weight is exactly 1 at EVERY pixel (a uniform wash), added after the
+    /// Shadows/Midtones/Highlights sum, so `colorGradingBlending`/`colorGradingBalance` never reshape it. Hue alone does
+    /// nothing at Saturation 0 (same rule as the other wheels). Named `global*` to stay distinct from `hslHue`, the older
+    /// whole-image hue rotation.
+    var globalHue: Double = 0
+    var globalSaturation: Double = 0
+    var globalLuminance: Double = 0
     /// Color Grading Blending (-1...1, 0 = the original look): how much the three ranges overlap (falloff width 0.33 ... 0.8
     /// around the original 0.4, see `ColorGradingZones`; a narrower limit would leave tones between the ranges ungraded). Global, not per range. Identity is 0 on purpose (a 0.5-style
-    /// default would silently narrow old sidecars on a missing key). Does nothing while every tint/luminance is zero.
+    /// default would silently narrow old sidecars on a missing key). Does nothing while every Shadows/Midtones/Highlights tint/luminance is zero (the Global wheel ignores it).
     var colorGradingBlending: Double = 0
     /// Color Grading Balance (-1...1, 0 = centred): positive favours the Highlights range, negative the Shadows (the
     /// midpoint of the tonal scale moves by up to ±0.25 while black and white stay fixed). Global; see `ColorGradingZones`.
@@ -1553,6 +1561,7 @@ struct EditState: Equatable, Codable {
         s.midtoneHue = 0; s.midtoneSaturation = 0; s.midtoneLuminance = 0
         s.highlightHue = 0; s.highlightSaturation = 0; s.highlightLuminance = 0
         s.colorGradingBlending = 0; s.colorGradingBalance = 0
+        s.globalHue = 0; s.globalSaturation = 0; s.globalLuminance = 0
         s.vignetteStrength = 0
         s.vignetteRadius = 0.5
         s.vignetteSoftness = 0
@@ -1665,6 +1674,7 @@ struct EditState: Equatable, Codable {
         result.midtoneHue = midtoneHue; result.midtoneSaturation = midtoneSaturation; result.midtoneLuminance = midtoneLuminance
         result.highlightHue = highlightHue; result.highlightSaturation = highlightSaturation; result.highlightLuminance = highlightLuminance
         result.colorGradingBlending = colorGradingBlending; result.colorGradingBalance = colorGradingBalance
+        result.globalHue = globalHue; result.globalSaturation = globalSaturation; result.globalLuminance = globalLuminance
         result.vignetteStrength = vignetteStrength
         result.vignetteRadius = vignetteRadius
         result.vignetteSoftness = vignetteSoftness
@@ -1776,6 +1786,7 @@ extension EditState {
         case midtoneHue, midtoneSaturation, midtoneLuminance
         case highlightHue, highlightSaturation, highlightLuminance
         case colorGradingBlending, colorGradingBalance
+        case globalHue, globalSaturation, globalLuminance
         case straightenAngle
         case verticalPerspective, horizontalPerspective
         case transformScale, transformAspect
@@ -1905,6 +1916,9 @@ extension EditState {
         highlightLuminance = try container.decodeIfPresent(Double.self, forKey: .highlightLuminance) ?? 0
         colorGradingBlending = try container.decodeIfPresent(Double.self, forKey: .colorGradingBlending) ?? 0
         colorGradingBalance = try container.decodeIfPresent(Double.self, forKey: .colorGradingBalance) ?? 0
+        globalHue = try container.decodeIfPresent(Double.self, forKey: .globalHue) ?? 0
+        globalSaturation = try container.decodeIfPresent(Double.self, forKey: .globalSaturation) ?? 0
+        globalLuminance = try container.decodeIfPresent(Double.self, forKey: .globalLuminance) ?? 0
         straightenAngle = try container.decodeIfPresent(Double.self, forKey: .straightenAngle) ?? 0
         verticalPerspective = try container.decodeIfPresent(Double.self, forKey: .verticalPerspective) ?? 0
         horizontalPerspective = try container.decodeIfPresent(Double.self, forKey: .horizontalPerspective) ?? 0

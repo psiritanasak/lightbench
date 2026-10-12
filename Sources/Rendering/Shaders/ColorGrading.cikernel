@@ -1,4 +1,4 @@
-// Color Grading — 3-way Shadows/Midtones/Highlights color wheels
+// Color Grading — 3-way Shadows/Midtones/Highlights color wheels plus a uniform Global wheel
 // (Lightroom's successor to Split Toning). The 8th custom Core Image
 // kernel in this codebase.
 //
@@ -11,7 +11,7 @@
 // SelectiveColor's `bandWeights` (which uses raised cosine over CIRCULAR
 // hue distance) applied to a different axis and domain.
 //
-// Each of the first 3 arguments is a vec4 for ONE tonal range: .rgb is that
+// Each of the first 4 arguments (Shadows, Midtones, Highlights, Global) is a vec4 for ONE tonal range: .rgb is that
 // range's tint delta (already converted from the wheel's Hue/Saturation by
 // ColorGradingTint.rgbDelta, Swift-side, ONCE per render — not per pixel),
 // .w is that range's Luminance slider value. This kernel therefore needs
@@ -42,7 +42,7 @@ float rangeWeight(float L, float center, float width) {
 //   stronger. At the original width the sum never exceeds exactly 1.0 (at an anchor), so the division is by exactly 1.0
 //   (the render still differs from the pre-Blending kernel by 1-2 ulp, see the comment at the division).
 // The style tint pass (applyStyleTint) always passes the defaults (width 0.4, shift 0.0).
-kernel vec4 colorGrading(__sample s, vec4 shadowTint, vec4 midtoneTint, vec4 highlightTint, float width, float shift) {
+kernel vec4 colorGrading(__sample s, vec4 shadowTint, vec4 midtoneTint, vec4 highlightTint, vec4 globalTint, float width, float shift) {
     // The tint and luminance strengths stay fixed v1 defaults. MEASURED via a temporary spike (see
     // EditPipeline.applyColorGrading's doc comment for the real numbers and why each value was chosen), not guessed.
     float tintStrength = 0.8;
@@ -81,8 +81,10 @@ kernel vec4 colorGrading(__sample s, vec4 shadowTint, vec4 midtoneTint, vec4 hig
     // pre-Blending kernel by 1-2 ulp (reviewer-measured on a 12.6M-float sweep: 324,643 floats differ, max 2.4e-7, i.e. far
     // below 8-bit quantisation; every other layout tried that kept the normalisation drifted as much or more).
     float norm = max(wShadow + wMid + wHighlight, 1.0);
-    vec3 tint = (wShadow * shadowTint.rgb + wMid * midtoneTint.rgb + wHighlight * highlightTint.rgb) / norm;
-    float lum = (wShadow * shadowTint.w + wMid * midtoneTint.w + wHighlight * highlightTint.w) / norm;
+    // The Global wheel (`globalTint`, same layout: rgb = tint delta, w = luminance) has weight exactly 1 at every pixel and is
+    // added AFTER the normalised three-range sum, so Blending/Balance never reshape it. A zero vector adds exactly 0 in the SOURCE, but the compiled render still drifts 1-2 ulp from the pre-Global kernel (reviewer-measured on a 1024x1024 random image: 93,908 of 4,194,304 floats differ, max 2.4e-7), including the Style tint pass; a state with no wheel set skips this kernel entirely and is bit-identical.
+    vec3 tint = (wShadow * shadowTint.rgb + wMid * midtoneTint.rgb + wHighlight * highlightTint.rgb) / norm + globalTint.rgb;
+    float lum = (wShadow * shadowTint.w + wMid * midtoneTint.w + wHighlight * highlightTint.w) / norm + globalTint.w;
 
     // Added directly to the RAW pixel, NOT to a headroom-normalized-then-
     // rescaled value. Reviewer-caught: an earlier draft normalized by

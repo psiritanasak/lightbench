@@ -119,7 +119,7 @@ struct AdjustPanelState {
     /// once; this only tracks which one the panel is currently editing.
     var selectedToneCurveChannel: ToneCurveChannel = .composite
 
-    /// Color Grading Slice B: which of the 3 tonal ranges the section's
+    /// Color Grading Slice B: which of the 4 wheels (3 tonal ranges + Global) the section's
     /// single shared `ColorGradingWheelView` currently shows/edits.
     /// Presentation-only, exactly like `selectedSelectiveColorBand`/
     /// `selectedToneCurveChannel` above — `EditState` holds all 3 ranges'
@@ -223,6 +223,7 @@ struct AdjustTabView: View {
         case .shadow: return $document.editState.shadowHue
         case .midtone: return $document.editState.midtoneHue
         case .highlight: return $document.editState.highlightHue
+        case .global: return $document.editState.globalHue
         }
     }
 
@@ -231,6 +232,7 @@ struct AdjustTabView: View {
         case .shadow: return $document.editState.shadowSaturation
         case .midtone: return $document.editState.midtoneSaturation
         case .highlight: return $document.editState.highlightSaturation
+        case .global: return $document.editState.globalSaturation
         }
     }
 
@@ -239,6 +241,7 @@ struct AdjustTabView: View {
         case .shadow: return $document.editState.shadowLuminance
         case .midtone: return $document.editState.midtoneLuminance
         case .highlight: return $document.editState.highlightLuminance
+        case .global: return $document.editState.globalLuminance
         }
     }
 
@@ -633,13 +636,13 @@ struct AdjustTabView: View {
         }
     }
 
-    /// Color Grading Slice B — 3-way Shadows/Midtones/Highlights color
+    /// Color Grading Slice B — Shadows/Midtones/Highlights/Global color
     /// wheels. Mirrors `curveSection`'s exact structure (segmented picker
     /// -> single shared editor -> per-target Reset button), the same
     /// "one control, several bindable targets" shape, for the same reason:
-    /// `EditState` has 9 flat named fields (3 ranges x Hue/Saturation/
+    /// `EditState` has 12 flat named fields (4 wheels x Hue/Saturation/
     /// Luminance), so the panel needs this dispatch to show one range's
-    /// trio at a time rather than 3 simultaneous wheels (a layout that
+    /// trio at a time rather than 4 simultaneous wheels (a layout that
     /// would need its own, unproven compact-wheel sizing — see the Slice B
     /// plan's own layout decision).
     private var colorGradingSection: some View {
@@ -690,7 +693,7 @@ struct AdjustTabView: View {
             .buttonStyle(FlatButtonStyle(fullWidth: true))
             .disabled(isSelectedColorGradingRangeAtIdentity)
             // Global, not per range: how much the three ranges overlap, and which end the split favours. They change nothing
-            // until a wheel is set, so they neither light the per-range "edited" caption nor belong to the per-range Reset.
+            // until a Shadows/Midtones/Highlights wheel is set (the Global wheel ignores them), so they neither light the per-range "edited" caption nor belong to the per-range Reset.
             EditSliderRow(
                 label: "Blending", value: $document.editState.colorGradingBlending,
                 range: -1...1, identity: 0, displayMultiplier: 100
@@ -1755,6 +1758,9 @@ struct AdjustTabView: View {
             && state.highlightHue == 0
             && state.highlightSaturation == 0
             && state.highlightLuminance == 0
+            && state.globalHue == 0
+            && state.globalSaturation == 0
+            && state.globalLuminance == 0
             && state.colorGradingBlending == 0
             && state.colorGradingBalance == 0
             && state.vignetteStrength == 0
@@ -1810,6 +1816,9 @@ struct AdjustTabView: View {
             document.editState.highlightHue = 0
             document.editState.highlightSaturation = 0
             document.editState.highlightLuminance = 0
+            document.editState.globalHue = 0
+            document.editState.globalSaturation = 0
+            document.editState.globalLuminance = 0
             document.editState.colorGradingBlending = 0
             document.editState.colorGradingBalance = 0
             document.editState.vignetteStrength = 0

@@ -1112,6 +1112,7 @@ final class EditStateCodableTests: XCTestCase {
         original.highlightLuminance = 0.1
         original.colorGradingBlending = 0.4
         original.colorGradingBalance = -0.6
+        original.globalHue = 70; original.globalSaturation = 0.3; original.globalLuminance = -0.2
         let roundTripped = try JSONDecoder().decode(EditState.self, from: JSONEncoder().encode(original))
 
         XCTAssertEqual(roundTripped.shadowHue, 210)
@@ -1125,6 +1126,9 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(roundTripped.highlightLuminance, 0.1)
         XCTAssertEqual(roundTripped.colorGradingBlending, 0.4)
         XCTAssertEqual(roundTripped.colorGradingBalance, -0.6)
+        XCTAssertEqual(roundTripped.globalHue, 70)
+        XCTAssertEqual(roundTripped.globalSaturation, 0.3)
+        XCTAssertEqual(roundTripped.globalLuminance, -0.2)
     }
 
     func testColorGradingAbsentFromAnOlderSidecarDefaultsToIdentity() throws {
@@ -1143,6 +1147,7 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(state.highlightLuminance, 0)
         XCTAssertEqual(state.colorGradingBlending, 0, "a missing key must decode to the original look, never to a narrower width")
         XCTAssertEqual(state.colorGradingBalance, 0)
+        XCTAssertEqual(state.globalHue, 0); XCTAssertEqual(state.globalSaturation, 0); XCTAssertEqual(state.globalLuminance, 0)
         XCTAssertEqual(state.sharpness, 0.3)
     }
 

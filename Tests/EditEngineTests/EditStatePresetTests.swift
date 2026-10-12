@@ -56,6 +56,7 @@ final class EditStatePresetTests: XCTestCase {
         s.midtoneHue = 30; s.midtoneSaturation = 0.4; s.midtoneLuminance = 0.2
         s.highlightHue = 50; s.highlightSaturation = 0.5; s.highlightLuminance = 0.1
         s.colorGradingBlending = 0.4; s.colorGradingBalance = -0.6
+        s.globalHue = 70; s.globalSaturation = 0.3; s.globalLuminance = -0.2
         s.vignetteStrength = 0.5
         s.vignetteRadius = 0.7
         s.vignetteSoftness = -0.4
@@ -151,6 +152,9 @@ final class EditStatePresetTests: XCTestCase {
         XCTAssertEqual(result.highlightLuminance, preset.highlightLuminance)
         XCTAssertEqual(result.colorGradingBlending, preset.colorGradingBlending)
         XCTAssertEqual(result.colorGradingBalance, preset.colorGradingBalance)
+        XCTAssertEqual(result.globalHue, preset.globalHue)
+        XCTAssertEqual(result.globalSaturation, preset.globalSaturation)
+        XCTAssertEqual(result.globalLuminance, preset.globalLuminance)
         XCTAssertEqual(result.vignetteStrength, preset.vignetteStrength)
         XCTAssertEqual(result.vignetteRadius, preset.vignetteRadius)
         XCTAssertEqual(result.vignetteSoftness, preset.vignetteSoftness)

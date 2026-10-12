@@ -4,7 +4,7 @@ import SwiftUI
 /// FIRST continuous-hue rendering UI (confirmed by a fresh grep before this
 /// slice: no `AngularGradient`/`RadialGradient`/hue-wheel exists anywhere
 /// else in `Sources/UI`). Lives inside `AdjustTabView`'s "Color Grading"
-/// section, one instance shared across all 3 tonal ranges via
+/// section, one instance shared across all 4 wheels (Shadows/Midtones/Highlights/Global) via
 /// `AdjustTabView.colorGradingSection`'s `.id(panel.selectedColorGradingRange)`
 /// — see that call site's own doc comment for why that's PRECAUTIONARY, not
 /// load-bearing, today (this view has no persistent `@State`/`@FocusState`

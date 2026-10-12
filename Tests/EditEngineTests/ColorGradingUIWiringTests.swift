@@ -59,3 +59,40 @@ final class VignetteSoftnessWiringTests: XCTestCase {
         XCTAssertTrue(view.contains("document.editState.vignetteSoftness = 0"))
     }
 }
+
+/// The Global wheel's UI wiring: the 4th segment, its three bindings, the identity check and Reset Adjustments.
+final class GlobalWheelWiringTests: XCTestCase {
+    private func view() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/UI/AdjustTabView.swift")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    func testTheSegmentedControlHasFourRangesInOrder() {
+        XCTAssertEqual(ColorGradingRange.allCases.map(\.rawValue), ["Shadows", "Midtones", "Highlights", "Global"])
+    }
+
+    func testEveryBindingDispatchAndTheResetKnowTheGlobalWheel() throws {
+        let text = try view()
+        for binding in ["$document.editState.globalHue", "$document.editState.globalSaturation", "$document.editState.globalLuminance"] {
+            XCTAssertTrue(text.contains("case .global: return \(binding)"), binding)
+        }
+        XCTAssertTrue(text.contains("state.globalHue == 0"))
+        XCTAssertTrue(text.contains("state.globalSaturation == 0"))
+        XCTAssertTrue(text.contains("state.globalLuminance == 0"))
+        XCTAssertTrue(text.contains("document.editState.globalHue = 0"))
+        XCTAssertTrue(text.contains("document.editState.globalSaturation = 0"))
+        XCTAssertTrue(text.contains("document.editState.globalLuminance = 0"))
+    }
+
+    func testThePerRangeResetStillTouchesOnlyTheSelectedRangeNotBlendingOrBalance() throws {
+        let text = try view()
+        let start = try XCTUnwrap(text.range(of: "Button(\"Reset \\(panel.selectedColorGradingRange.rawValue)\")"))
+        let body = String(text[start.upperBound...].prefix(600))
+        let end = try XCTUnwrap(body.range(of: ".buttonStyle("))
+        let button = String(body[..<end.lowerBound])
+        XCTAssertFalse(button.contains("colorGradingBlending") || button.contains("colorGradingBalance"))
+        XCTAssertTrue(button.contains("colorGradingHueBinding(for: panel.selectedColorGradingRange)"), "it resets through the shared dispatch, so Global resets itself")
+    }
+}

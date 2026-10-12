@@ -1385,17 +1385,17 @@ enum EditPipeline {
         }
         // ALWAYS the original width and no shift: a style's tint must not depend on how the user set Blending/Balance.
         let arguments: [Any] = [
-            image, vector(nudges.shadowTint), vector(nudges.midTint), vector(nudges.highlightTint),
+            image, vector(nudges.shadowTint), vector(nudges.midTint), vector(nudges.highlightTint), CIVector(x: 0, y: 0, z: 0, w: 0),
             NSNumber(value: ColorGradingZones.baseWidth), NSNumber(value: 0.0)
         ]
         return kernel.apply(extent: image.extent, arguments: arguments) ?? image
     }
 
-    // MARK: - Color Grading (3-way shadows/midtones/highlights)
+    // MARK: - Color Grading (3-way shadows/midtones/highlights + a uniform Global wheel)
 
     /// The 8th custom Core Image kernel in this codebase — Lightroom's
     /// successor to Split Toning: independent Hue/Saturation/Luminance for
-    /// each of 3 tonal ranges (Shadows/Midtones/Highlights), selected by
+    /// each of 3 tonal ranges (Shadows/Midtones/Highlights), plus a 4th uniform "Global" wheel with weight 1 at every pixel; the three are selected by
     /// each pixel's own LUMINANCE rather than SelectiveColor's per-hue
     /// targeting. See `Sources/Rendering/Shaders/ColorGrading.cikernel` for
     /// the per-pixel math (raised-cosine falloff over PERCEPTUAL/gamma-
@@ -1409,8 +1409,8 @@ enum EditPipeline {
     /// `SelectiveColor.cikernel`.
     ///
     /// The falloff width and the luminance shift are Lightroom's adjustable "Blending" and "Balance" (`colorGradingBlending`/
-    /// `colorGradingBalance`, mapped by `ColorGradingZones` and passed to the kernel as arguments; the 4th "Global" wheel is
-    /// still deferred). The tint strength (0.8) and luminance strength (0.5) remain fixed kernel-local constants. None of it is
+    /// `colorGradingBalance`, mapped by `ColorGradingZones` and passed to the kernel as arguments; the Global wheel is added
+    /// after, unaffected by them). The tint strength (0.8) and luminance strength (0.5) remain fixed kernel-local constants. None of it is
     /// a claimed reproduction of Lightroom's own undisclosed algorithm, same disclaimer precedent as Brilliance. The numbers
     /// below were MEASURED (a temporary spike swept each in turn against solid patches, then deleted before this comment was
     /// written) when the width was still fixed, so they describe the DEFAULT, Blending 0 (width 0.4):
@@ -1449,6 +1449,7 @@ enum EditPipeline {
         state.shadowSaturation != 0 || state.shadowLuminance != 0
             || state.midtoneSaturation != 0 || state.midtoneLuminance != 0
             || state.highlightSaturation != 0 || state.highlightLuminance != 0
+            || state.globalSaturation != 0 || state.globalLuminance != 0
     }
 
     /// MEASURED not to commute with Vibrance/Saturation (a temporary swap-
@@ -1483,11 +1484,14 @@ enum EditPipeline {
             x: highlightDelta.r, y: highlightDelta.g, z: highlightDelta.b, w: clampedLuminance(state.highlightLuminance)
         )
 
+        let globalDelta = ColorGradingTint.rgbDelta(hue: state.globalHue, saturation: clampedSaturation(state.globalSaturation))
+        let globalTint = CIVector(x: globalDelta.r, y: globalDelta.g, z: globalDelta.b, w: clampedLuminance(state.globalLuminance))
+
         // Blending/Balance (global): exactly 0.4 / 0 at their defaults (the render then matches the pre-Blending one to within
         // 1-2 ulp, see the kernel's comment on its weight normalisation).
         let width = ColorGradingZones.width(blending: state.colorGradingBlending)
         let shift = ColorGradingZones.shift(balance: state.colorGradingBalance)
-        let arguments: [Any] = [image, shadowTint, midtoneTint, highlightTint, NSNumber(value: width), NSNumber(value: shift)]
+        let arguments: [Any] = [image, shadowTint, midtoneTint, highlightTint, globalTint, NSNumber(value: width), NSNumber(value: shift)]
         return kernel.apply(extent: image.extent, arguments: arguments) ?? image
     }
 

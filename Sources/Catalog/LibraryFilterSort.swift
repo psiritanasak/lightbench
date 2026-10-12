@@ -6,7 +6,7 @@ import Foundation
 /// id` (ascending), so nothing changes for anyone not using the new sort
 /// picker; the other three are opt-in.
 enum LibrarySortOption: String, CaseIterable, Identifiable, Sendable {
-    case dateOldest, dateNewest, ratingHighToLow, nameAZ
+    case dateOldest, dateNewest, ratingHighToLow, nameAZ, captureNewest, captureOldest
 
     var id: String { rawValue }
 
@@ -16,6 +16,8 @@ enum LibrarySortOption: String, CaseIterable, Identifiable, Sendable {
         case .dateNewest: return "Newest First"
         case .ratingHighToLow: return "Highest Rated"
         case .nameAZ: return "Name (A–Z)"
+        case .captureNewest: return "Capture Date, Newest"
+        case .captureOldest: return "Capture Date, Oldest"
         }
     }
 }
@@ -113,7 +115,8 @@ enum LibraryFilterSort {
         keywordIDsByPhotoID: [Int64: Set<Int64>] = [:],
         keywordNamesByPhotoID: [Int64: [String]] = [:],
         personFilter: Int64? = nil,
-        personIDsByPhotoID: [Int64: Set<Int64>] = [:]
+        personIDsByPhotoID: [Int64: Set<Int64>] = [:],
+        metadataByPhotoID: [Int64: PhotoMetadata] = [:]
     ) -> [Photo] {
         var result = photos
         if let personFilter {
@@ -135,12 +138,14 @@ enum LibraryFilterSort {
         if minimumRating > 0 {
             result = result.filter { $0.rating >= minimumRating }
         }
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = SearchQuery(parsing: searchText)
         if !query.isEmpty {
             result = result.filter { photo in
-                if photo.filename.localizedCaseInsensitiveContains(query) { return true }
-                guard let id = photo.id else { return false }
-                return keywordNamesByPhotoID[id, default: []].contains { $0.localizedCaseInsensitiveContains(query) }
+                let id = photo.id
+                return query.matches(
+                    photo, metadata: id.flatMap { metadataByPhotoID[$0] },
+                    keywordNames: id.flatMap { keywordNamesByPhotoID[$0] } ?? []
+                )
             }
         }
         switch sort {
@@ -150,6 +155,18 @@ enum LibraryFilterSort {
             result.sort { $0.importedAt > $1.importedAt }
         case .ratingHighToLow:
             result.sort { $0.rating > $1.rating }
+        case .captureNewest, .captureOldest:
+            // Photos with no cached capture date go LAST in both directions (they have no place on the timeline).
+            let newestFirst = sort == .captureNewest
+            func capture(_ photo: Photo) -> Double? { photo.id.flatMap { metadataByPhotoID[$0]?.captureDate } }
+            result.sort { a, b in
+                switch (capture(a), capture(b)) {
+                case let (x?, y?): return x == y ? (a.id ?? 0) < (b.id ?? 0) : (newestFirst ? x > y : x < y)
+                case (_?, nil): return true
+                case (nil, _?): return false
+                case (nil, nil): return (a.id ?? 0) < (b.id ?? 0)
+                }
+            }
         case .nameAZ:
             // `localizedStandardCompare` (not `<`) so numeric runs sort
             // naturally — "Photo 2" before "Photo 10" — matching Finder's

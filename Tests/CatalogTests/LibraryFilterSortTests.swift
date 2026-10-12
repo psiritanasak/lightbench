@@ -229,3 +229,72 @@ final class LibraryFilterSortTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Field search and capture-date sort (field-based search step 3)
+
+final class LibraryFieldSearchTests: XCTestCase {
+    private func photo(_ id: Int64, _ name: String, rating: Int = 0) -> Photo {
+        var p = Photo(id: id, path: "/tmp/\(name)", filename: name, fileSize: 1, importedAt: Date(timeIntervalSince1970: Double(id)))
+        p.rating = rating
+        return p
+    }
+
+    private func meta(_ id: Int64, iso: Int? = nil, date: String? = nil) -> PhotoMetadata {
+        PhotoMetadata(photoId: id, fileSize: 1, mtime: 1, readerRevision: PhotoMetadata.currentReaderRevision,
+                      captureDate: date.flatMap { CaptureDate.parseEXIFDate($0)?.timeIntervalSince1970 }, iso: iso,
+                      cameraMake: nil, cameraModel: nil, lens: nil, focalLength: nil, aperture: nil, shutter: nil,
+                      pixelWidth: nil, pixelHeight: nil, scannedAt: Date())
+    }
+
+    private func apply(_ photos: [Photo], search: String, sort: LibrarySortOption = .dateOldest,
+                       metadata: [Int64: PhotoMetadata] = [:], keywords: [Int64: [String]] = [:], minimumRating: Int = 0) -> [Int64] {
+        LibraryFilterSort.apply(to: photos, sort: sort, minimumRating: minimumRating, flagFilter: .all, searchText: search,
+                                keywordNamesByPhotoID: keywords, metadataByPhotoID: metadata).compactMap(\.id)
+    }
+
+    func testFieldQueryUsesTheMetadataMap() {
+        let photos = [photo(1, "a.jpg"), photo(2, "b.jpg"), photo(3, "c.jpg")]
+        let metadata: [Int64: PhotoMetadata] = [1: meta(1, iso: 200), 2: meta(2, iso: 1600)]
+        XCTAssertEqual(apply(photos, search: "iso:>800", metadata: metadata), [2])
+        XCTAssertEqual(apply(photos, search: "iso:<=1600", metadata: metadata), [1, 2], "photo 3 has no camera data")
+        XCTAssertEqual(apply(photos, search: "iso:>800"), [], "no metadata at all: nothing matches a camera field")
+    }
+
+    func testFieldQueryCombinesWithTheOtherFiltersAndKeywordSearch() {
+        let photos = [photo(1, "a.jpg", rating: 5), photo(2, "b.jpg", rating: 1)]
+        let metadata: [Int64: PhotoMetadata] = [1: meta(1, iso: 1600), 2: meta(2, iso: 1600)]
+        XCTAssertEqual(apply(photos, search: "iso:>800", metadata: metadata, minimumRating: 3), [1])
+        XCTAssertEqual(apply(photos, search: "moun iso:>800", metadata: metadata, keywords: [2: ["Mountains"]]), [2])
+        XCTAssertEqual(apply(photos, search: "rating:>3 iso:>800", metadata: metadata), [1])
+    }
+
+    func testPlainSearchStillWorksWithoutAnyMetadata() {
+        let photos = [photo(1, "sunset.jpg"), photo(2, "IMG_1.jpg")]
+        XCTAssertEqual(apply(photos, search: "sun"), [1])
+        XCTAssertEqual(apply(photos, search: "  SUN  "), [1])
+    }
+
+    func testCaptureDateSortPutsPhotosWithoutADateLastInBothDirections() {
+        // The undated photos come FIRST in the input, so the sort has to move them.
+        let photos = [photo(3, "c.jpg"), photo(4, "d.jpg"), photo(1, "a.jpg"), photo(2, "b.jpg")]
+        let metadata: [Int64: PhotoMetadata] = [
+            1: meta(1, date: "2020:01:01 00:00:00"), 2: meta(2, date: "2024:01:01 00:00:00"), 3: meta(3)
+        ]
+        XCTAssertEqual(apply(photos, search: "", sort: .captureNewest, metadata: metadata), [2, 1, 3, 4])
+        XCTAssertEqual(apply(photos, search: "", sort: .captureOldest, metadata: metadata), [1, 2, 3, 4])
+    }
+
+    func testCaptureDateSortIsStableForEqualDates() {
+        let photos = [photo(5, "e.jpg"), photo(3, "c.jpg"), photo(4, "d.jpg")]
+        let same = "2022:06:06 06:06:06"
+        let metadata: [Int64: PhotoMetadata] = [3: meta(3, date: same), 4: meta(4, date: same), 5: meta(5, date: same)]
+        XCTAssertEqual(apply(photos, search: "", sort: .captureNewest, metadata: metadata), [3, 4, 5])
+        XCTAssertEqual(apply(photos, search: "", sort: .captureOldest, metadata: metadata), [3, 4, 5])
+    }
+
+    func testTheNewSortOptionsAreLabelledAndListed() {
+        XCTAssertTrue(LibrarySortOption.allCases.contains(.captureNewest))
+        XCTAssertEqual(LibrarySortOption.captureNewest.label, "Capture Date, Newest")
+        XCTAssertEqual(LibrarySortOption.captureOldest.label, "Capture Date, Oldest")
+    }
+}

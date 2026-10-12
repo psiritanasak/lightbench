@@ -1419,7 +1419,7 @@ Takeaway for us: the part worth copying is not any single control but that the r
 - D61 live note (2026-10-12): the first merge into a folder prompts for folder access ("Allow access to <folder> so the merged photo can be saved...") even right after importing that folder; the import's grant is not reused for merge output (Enhance reuses the sidecar grant). Harmless but a surprise; consider reusing `SidecarFolderAccess`.
 
 ### D63. Field-based search — open gaps (2026-10-12)
-1. Search text and fields are not saved in Smart Collections (the criteria JSON could take a query string without a migration).
+1. ~~Search text and fields are not saved in Smart Collections~~ ✅ SHIPPED 2026-10-12 (see docs/ROADMAP_HISTORY.md). Open from it: pre-change builds silently ignore the new `searchQuery` key and would show a BROADER collection (no version field to guard with); Export/duplicates/faces act on a query collection's current, possibly partial, set; the person filter is still not a smart-collection criterion.
 2. A catalogued file that ImageIO cannot open (not an image, or no access) is re-read on every needs-scan pass (count change / retry): one stat + one failed header read each, cannot loop.
 3. The scan hint line appears under the filter bar while a scan runs, which shifts the grid down one caption line; reserve the height if it bothers.
 4. No autocomplete / query builder; no GPS/place fields; ISO beyond 65535 relies on `ISOSpeed` (`RecommendedExposureIndex` is not read).

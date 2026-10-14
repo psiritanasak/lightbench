@@ -29,6 +29,9 @@ history file.
 - **#1 Global Whites — SHIPPED (018e871), reviewer APPROVE (1 round), suite green, not live-checked.** Manual: drag Whites on a bright photo, undo, relaunch (sidecar), Reset Adjustments clears it.
 - **#2 D64 curve — SKIPPED, needs your decision.** The monotone swap was built and measured: it moves renders by up to 0.265 (typical 0.02-0.07), not ~0.016, weakening Highlights/Black Point/Brilliance on every old edit; nothing committed. Numbers + options (a/b/c) in IMPROVEMENTS.md D64.
 
+- **#3 B&W extras — SHIPPED (b1ecfd5), reviewer 2 rounds APPROVE, not live-checked.** Intensity (scales the Mix; nothing to scale when every Mix slider is 0), Neutrals/Tone (one monotone grey curve), Grain (rides the Grain stage; `EditState.zeroingGrain()` now lists every grain source for Export + the eyedropper). Manual: B&W on, drag each slider, undo, Reset Adjustments.
+- **#5 Culling Compare + Survey — SHIPPED (commit after this line), reviewer 2 rounds APPROVE, suite 2926 green, not live-checked.** C = Compare (select left, candidate right; ←/→ candidate, ↑ swap, ↓ make-select), N = Survey (page of up to 12; ←/→ focus, `/` remove from page), Esc leaves the mode first, toolbar picker. Manual: run both on ~10 scratch photos, check the key gate (press P while a cell is still spinning: nothing should change), the picker does not eat arrow keys after a click, ⌘Z after a make-select.
+
 ## Open reviewer issues
 None. Every reviewer round on record ended in APPROVE before its commit.
 

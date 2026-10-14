@@ -21,7 +21,7 @@ final class CullKeyActionTests: XCTestCase {
     }
 
     func testOtherCharactersDoNothing() {
-        for c: Character in ["a", "z", "7x".first!, "-", "/"] where PhotoKeyCommand.command(for: c) == nil {
+        for c: Character in ["a", "z", "7x".first!, "-", "\\"] where PhotoKeyCommand.command(for: c) == nil {
             XCTAssertNil(CullKeyAction.action(for: .character(c)), String(c))
         }
         XCTAssertNil(CullKeyAction.action(for: .character("q")))

@@ -20,7 +20,7 @@ struct CullView: View {
             topBar(counts: counts)
             ZStack {
                 Color.black
-                photoLayer(photo)
+                content(photo, rows: rows)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(photoDescription(photo))
                     .accessibilityAction(named: "Next photo") { model.handle(.next) }
@@ -35,7 +35,7 @@ struct CullView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .overlay { SizeReporter { size in model.setViewSize(longEdge: Double(max(size.width, size.height)), scale: scale) } }
+            .overlay { SizeReporter { size in model.setViewArea(width: Double(size.width), height: Double(size.height), scale: scale) } }
             bottomBar(photo)
         }
         .background(Theme.panel)
@@ -60,6 +60,16 @@ struct CullView: View {
             Button { onExit() } label: { Label("Exit", systemImage: "xmark") }
                 .buttonStyle(.flat)
                 .help("Leave culling (Esc)")
+            Picker("View", selection: Binding(get: { model.session?.mode ?? .loupe }, set: { model.setMode($0) })) {
+                Text("Loupe").tag(CullViewMode.loupe)
+                Text("Compare").tag(CullViewMode.compare)
+                Text("Survey").tag(CullViewMode.survey)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .focusable(false) // a focused segmented control would take ← / → for itself instead of moving through the photos
+            .frame(width: 210)
+            .help("Loupe · Compare (C) · Survey (N)")
             Text(model.session?.positionText ?? "").monospacedDigit()
             Text("Unflagged \(counts.unflagged) · Picked \(counts.picked) · Rejected \(counts.rejected)")
                 .font(.caption).foregroundStyle(Theme.textSecondary).monospacedDigit()
@@ -73,6 +83,75 @@ struct CullView: View {
         .frame(height: Theme.Metrics.barHeight + 8)
         .background(Theme.panel)
         .overlay(alignment: .bottom) { Divider() }
+    }
+
+    /// The photo area for the current mode: the loupe's one big photo, Compare's select + candidate, or the survey grid.
+    @ViewBuilder
+    private func content(_ photo: Photo?, rows: [Int64: Photo]) -> some View {
+        switch model.session?.mode ?? .loupe {
+        case .loupe: photoLayer(photo)
+        case .compare:
+            HStack(spacing: 2) {
+                if let id = model.session?.selectID { cell(id: id, rows: rows, caption: "Select") }
+                if let id = model.session?.currentID { cell(id: id, rows: rows, caption: "Candidate") }
+            }
+        case .survey:
+            surveyGrid(rows: rows)
+        }
+    }
+
+    private func surveyGrid(rows: [Int64: Photo]) -> some View {
+        let ids = model.session?.surveyIDs ?? []
+        return GeometryReader { proxy in
+            let layout = CullLayout.grid(count: ids.count, area: proxy.size)
+            let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: layout.columns)
+            LazyVGrid(columns: columns, spacing: 2) {
+                ForEach(ids, id: \.self) { id in
+                    cell(id: id, rows: rows, caption: nil)
+                        .frame(height: max(40, (proxy.size.height - CGFloat(layout.rows - 1) * 2) / CGFloat(layout.rows)))
+                }
+            }
+        }
+    }
+
+    /// One Compare / Survey cell: the photo fitted into the cell, its flag, rating and name, and a ring on the one the keys act on.
+    private func cell(id: Int64, rows: [Int64: Photo], caption: String?) -> some View {
+        let photo = rows[id]
+        let focused = id == model.session?.currentID
+        let slot = model.slots[id]
+        return ZStack {
+            Color.black
+            if let image = slot?.image {
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .opacity(photo?.flagStatus == .rejected ? 0.45 : 1)
+            } else if slot?.failed == true {
+                Text("Can't be shown").font(.caption).foregroundStyle(Theme.textSecondary)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .overlay(alignment: .topLeading) { flagBadge(photo?.flagStatus ?? .none).scaleEffect(0.6, anchor: .topLeading) }
+        .overlay(alignment: .bottomLeading) {
+            HStack(spacing: 6) {
+                if let caption { Text(caption).font(.caption.weight(.semibold)) }
+                Text(photo?.filename ?? "").font(.caption).lineLimit(1)
+                if let rating = photo?.rating, rating > 0 { Text(String(repeating: "★", count: rating)).font(.caption) }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Color.black.opacity(0.55))
+            .foregroundStyle(.white)
+            .padding(6)
+        }
+        .overlay(alignment: .bottomTrailing) { if slot?.isPlaceholder == true { ProgressView().controlSize(.small).padding(8) } }
+        .overlay { if focused { Rectangle().stroke(Theme.selectedOutline, lineWidth: 3) } }
+        .clipped()
+        .contentShape(Rectangle())
+        .onTapGesture { model.focus(on: id) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(photoDescription(photo) + (caption.map { ", \($0)" } ?? "") + (focused ? ", focused" : ""))
+        .accessibilityAddTraits(focused ? [.isSelected] : [])
     }
 
     @ViewBuilder
@@ -123,13 +202,21 @@ struct CullView: View {
             flagButton(.rejected, current: photo?.flagStatus ?? .none)
             labelDots(current: photo?.colorLabel ?? .none)
             Spacer()
-            Text("← → move · P pick · X reject · U clear · 0–5 rate · 6–9 label · ⌘Z undo · Return opens in Editor")
+            Text(hint)
                 .font(.caption2).foregroundStyle(Theme.textTertiary).lineLimit(1)
         }
         .padding(.horizontal, 12)
         .frame(height: Theme.Metrics.barHeight)
         .background(Theme.panel)
         .overlay(alignment: .top) { Divider() }
+    }
+
+    private var hint: String {
+        switch model.session?.mode ?? .loupe {
+        case .loupe: return "← → move · P pick · X reject · U clear · 0–5 rate · 6–9 label · C compare · N survey · ⌘Z undo · Return opens in Editor"
+        case .compare: return "← → candidate · ↑ swap · ↓ make select · P X U 0–5 6–9 act on the candidate · C / Esc back · ⌘Z undo"
+        case .survey: return "← → focus · / remove from page · P X U 0–5 6–9 act on the focused photo · N / Esc back · ⌘Z undo"
+        }
     }
 
     private func flagButton(_ target: FlagStatus, current: FlagStatus) -> some View {
@@ -168,6 +255,8 @@ struct CullView: View {
         switch press.key {
         case .leftArrow: key = .leftArrow
         case .rightArrow: key = .rightArrow
+        case .upArrow: key = .upArrow
+        case .downArrow: key = .downArrow
         case .space: key = .space
         case .escape: key = .escape
         case .return: key = .returnKey

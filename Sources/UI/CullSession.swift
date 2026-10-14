@@ -20,6 +20,11 @@ struct CullChange: Equatable {
     var advanced = false
 }
 
+/// How the pass shows photos. `loupe` is the original single big photo. `compare` shows a fixed "select" next to the current photo (the
+/// candidate): arrows move the candidate and skip the select. `survey` shows a page of photos at once; arrows move the focus among them.
+/// Photo keys always act on `currentID` — the candidate in Compare, the focused cell in Survey.
+enum CullViewMode: Equatable { case loupe, compare, survey }
+
 /// The pure state of a culling pass: an ordered SNAPSHOT of photo ids taken when the pass starts (so a photo that leaves an "Unflagged"
 /// filter the moment it is flagged does not break next / previous), a position, the auto-advance rule and an undo stack. No UI, no
 /// catalog calls — the caller applies each `CullChange` through the usual catalog setters.
@@ -33,6 +38,15 @@ struct CullSession: Equatable {
     private(set) var index: Int
     var autoAdvance = true
     private(set) var undoStack: [CullAction] = []
+
+    /// Compare / Survey state (`mode == .loupe` leaves every original behaviour untouched).
+    private(set) var mode: CullViewMode = .loupe
+    /// Compare: the photo that stays on the left while the candidate (`currentID`) changes.
+    private(set) var selectID: Int64?
+    /// Survey: the photos on the page, in list order (a subset of `ids`). The focused one is `currentID`.
+    private(set) var surveyIDs: [Int64] = []
+    /// A survey page holds at most this many photos (the grid stays readable and the preview cache bounded).
+    static let surveyLimit = 12
 
     /// A session over `photos` (in the order given — pass `displayedPhotos`). `onlyUnflagged` keeps just the photos with no flag yet.
     /// Starts at `startingAt` if that photo is in the list, else at the first. `nil` when the list is empty.
@@ -50,15 +64,51 @@ struct CullSession: Equatable {
 
     var count: Int { ids.count }
     var currentID: Int64? { ids.indices.contains(index) ? ids[index] : nil }
-    var isAtStart: Bool { index == 0 }
-    var isAtEnd: Bool { index >= ids.count - 1 }
-    /// "37 of 412".
-    var positionText: String { "\(index + 1) of \(ids.count)" }
+    var isAtStart: Bool { !canStep(-1) }
+    var isAtEnd: Bool { !canStep(1) }
+    /// "37 of 412" in the loupe; "Candidate 37 of 412" in Compare; "Survey 3 of 12" (the focused cell) in Survey.
+    var positionText: String {
+        switch mode {
+        case .loupe: return "\(index + 1) of \(ids.count)"
+        case .compare: return "Candidate \(index + 1) of \(ids.count)"
+        case .survey: return "Survey \((currentID.flatMap { surveyIDs.firstIndex(of: $0) } ?? 0) + 1) of \(surveyIDs.count)"
+        }
+    }
+
+    /// The photos on screen: the one photo, the select and the candidate, or the survey page.
+    var visibleIDs: [Int64] {
+        switch mode {
+        case .loupe: return currentID.map { [$0] } ?? []
+        case .compare: return [selectID, currentID].compactMap { $0 }
+        case .survey: return surveyIDs
+        }
+    }
+
+    /// The list index `step` (+1 / -1) away from the current photo under the current mode's rule, or nil at the edge.
+    private func steppedIndex(_ step: Int) -> Int? {
+        switch mode {
+        case .loupe:
+            let target = index + step
+            return ids.indices.contains(target) ? target : nil
+        case .compare:
+            var target = index + step
+            while ids.indices.contains(target) {
+                if ids[target] != selectID { return target }
+                target += step
+            }
+            return nil
+        case .survey:
+            guard let current = currentID, let at = surveyIDs.firstIndex(of: current), surveyIDs.indices.contains(at + step) else { return nil }
+            return ids.firstIndex(of: surveyIDs[at + step])
+        }
+    }
+
+    private func canStep(_ step: Int) -> Bool { steppedIndex(step) != nil }
 
     /// The ids worth keeping decoded around the current photo, nearest first, next before previous at each distance.
     func neighborIDs(radius: Int) -> [Int64] {
         var result: [Int64] = []
-        guard radius > 0 else { return result }
+        guard radius > 0, mode == .loupe else { return result } // Compare / Survey load exactly their visible photos
         for distance in 1...radius {
             for target in [index + distance, index - distance] where ids.indices.contains(target) { result.append(ids[target]) }
         }
@@ -67,15 +117,15 @@ struct CullSession: Equatable {
 
     @discardableResult
     mutating func next() -> Bool {
-        guard !isAtEnd else { return false }
-        index += 1
+        guard let target = steppedIndex(1) else { return false }
+        index = target
         return true
     }
 
     @discardableResult
     mutating func previous() -> Bool {
-        guard !isAtStart else { return false }
-        index -= 1
+        guard let target = steppedIndex(-1) else { return false }
+        index = target
         return true
     }
 
@@ -83,6 +133,76 @@ struct CullSession: Equatable {
     mutating func jump(toID id: Int64) -> Bool {
         guard let target = ids.firstIndex(of: id) else { return false }
         index = target
+        return true
+    }
+
+    // MARK: View modes
+
+    /// Back to the single big photo (the current photo stays current).
+    mutating func enterLoupe() {
+        mode = .loupe
+        selectID = nil
+        surveyIDs = []
+    }
+
+    /// Compare: the current photo becomes the select and the candidate moves to the next photo (the previous one at the end of the list).
+    /// False (unchanged) when there is only one photo.
+    @discardableResult
+    mutating func enterCompare() -> Bool {
+        guard ids.count >= 2, let current = currentID else { return false }
+        enterLoupe()
+        let candidate = index + 1 < ids.count ? index + 1 : index - 1
+        mode = .compare
+        selectID = current
+        index = candidate
+        return true
+    }
+
+    /// Survey: a page of up to `surveyLimit` photos containing the current one (starting at it, shifted back so the page is full near the end
+    /// of the list). False (unchanged) when there is only one photo.
+    @discardableResult
+    mutating func enterSurvey() -> Bool {
+        guard ids.count >= 2 else { return false }
+        enterLoupe()
+        let size = min(Self.surveyLimit, ids.count)
+        let start = min(index, ids.count - size)
+        surveyIDs = Array(ids[start..<(start + size)])
+        mode = .survey
+        return true
+    }
+
+    /// Compare: the candidate and the select trade places (the old select becomes the candidate).
+    @discardableResult
+    mutating func swapCompare() -> Bool {
+        guard mode == .compare, let select = selectID, let current = currentID, let target = ids.firstIndex(of: select) else { return false }
+        selectID = current
+        index = target
+        return true
+    }
+
+    /// Compare: the candidate becomes the select, and a new candidate (the next photo, else the previous) takes its place.
+    /// False (unchanged) when there is no other photo to compare against.
+    @discardableResult
+    mutating func makeSelect() -> Bool {
+        guard mode == .compare, let current = currentID else { return false }
+        let previousSelect = selectID
+        selectID = current
+        if let target = steppedIndex(1) ?? steppedIndex(-1) {
+            index = target
+            return true
+        }
+        selectID = previousSelect
+        return false
+    }
+
+    /// Survey: takes the focused photo off the page (it stays in the pass); focus moves to the next one on the page, else the previous.
+    /// Refuses to empty the page. Not undoable: N twice rebuilds the page.
+    @discardableResult
+    mutating func removeFromSurvey() -> Bool {
+        guard mode == .survey, surveyIDs.count > 1, let current = currentID, let at = surveyIDs.firstIndex(of: current) else { return false }
+        let nextFocus = surveyIDs.indices.contains(at + 1) ? surveyIDs[at + 1] : surveyIDs[at - 1]
+        surveyIDs.remove(at: at)
+        if let target = ids.firstIndex(of: nextFocus) { index = target }
         return true
     }
 
@@ -141,7 +261,15 @@ struct CullSession: Equatable {
     /// then stays where it is); the caller writes the recorded previous values back. `nil` when there is nothing to undo.
     mutating func undo() -> CullAction? {
         guard let action = undoStack.popLast() else { return nil }
-        if let target = ids.firstIndex(of: action.photoID) { index = target }
+        // Undo returns to the photo it changed; if Compare / Survey is not showing it, fall back to the loupe so it is on screen.
+        if mode != .loupe, !visibleIDs.contains(action.photoID) { enterLoupe() }
+        if mode == .compare, action.photoID == selectID {
+            // The undone photo is the select: trade places so the candidate never becomes the SAME photo as the select (both cells would show it
+            // and keys would act on the select).
+            swapCompare()
+        } else if let target = ids.firstIndex(of: action.photoID) {
+            index = target
+        }
         return action
     }
 

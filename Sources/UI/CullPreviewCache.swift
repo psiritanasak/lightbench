@@ -43,6 +43,9 @@ actor CullPreviewCache {
     private var keysByPath: [String: Set<String>] = [:]
     private var prefetchWorker: Task<Void, Never>?
 
+    /// Compare / Survey keep several previews resident at once (one per visible cell, plus slack); the loupe's default is `countLimit`.
+    func setCountLimit(_ limit: Int) { cache.countLimit = max(Self.countLimit, limit) }
+
     private static func key(_ path: String, _ pixelSize: Int) -> String { "\(pixelSize)|\(path)" }
 
     /// The cached preview for `photo` at `pixelSize`, without decoding anything.

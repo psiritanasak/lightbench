@@ -7,7 +7,7 @@ archived at its end under "Archived from PROGRESS.md on 2026-09-30". Shipped
 improvement entries live in `docs/IMPROVEMENTS_HISTORY.md`. When a slice ships,
 add a 2-4 line summary here, and move older entries to the history file.
 
-**USER LIVE PASS DONE (2026-10-14): Global wheel, per-mask Whites/Blacks, Vignette Softness, B&W Mix, save/restore all confirmed working by the user; full suite 2797 green; Bolivia raw_files access granted (camera data 1086 rows).** Open: `Open…` did not show a photo in the editor (Import Folder works; undiagnosed). EXACT NEXT STEP: none required; candidates: global Whites slider, diagnose Open…, B&W Mix extras, culling Compare/Survey, XMP interop spike.
+**USER LIVE PASS DONE (2026-10-14): Global wheel, per-mask Whites/Blacks, Vignette Softness, B&W Mix, save/restore all confirmed working by the user; full suite 2797 green; Bolivia raw_files access granted (camera data 1086 rows).** `Open…` bug FIXED 2026-10-14 (0aa676e): it is only in the Library toolbar and loaded the photo into the hidden Editor while the Library stayed on screen; it now switches to the Editor before the load. Opening a file from Finder / `open -a` is still unsupported (no onOpenURL). EXACT NEXT STEP: none required; candidates: global Whites slider, diagnose Open…, B&W Mix extras, culling Compare/Survey, XMP interop spike.
 
 **PER-MASK WHITES/BLACKS — SHIPPED (2026-10-12), offscreen-tested only.** EXACT NEXT STEP: none required; candidates in IMPROVEMENTS.md D57/D63/D64 (global Whites slider, B&W Mix extras, culling Compare/Survey, XMP interop spike).
 

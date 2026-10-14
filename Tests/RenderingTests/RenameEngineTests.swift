@@ -181,6 +181,190 @@ final class RenameEngineTests: XCTestCase {
         }
     }
 
+    // MARK: XMP sidecars
+
+    private func writeXMP(_ base: String, _ content: String) throws {
+        try Data(content.utf8).write(to: dir.appendingPathComponent(base + ".xmp"))
+    }
+
+    func testAPhotoThatOwnsItsXMPMovesItAlong() throws {
+        try write("a.jpg", "A")
+        try writeXMP("a", "xmp-A")
+        try RenameEngine.apply([move("a.jpg", "new.jpg")])
+        XCTAssertEqual(try listing(), ["new.jpg", "new.jpg.photoapp.json", "new.xmp"])
+        XCTAssertEqual(read("new.xmp"), "xmp-A")
+    }
+
+    func testARawOwnsTheSharedXMPAndTheJpgLeavesItBehind() throws {
+        try write("IMG_1.cr2", "RAW", sidecar: false)
+        try write("IMG_1.jpg", "JPG", sidecar: false)
+        try writeXMP("IMG_1", "shared")
+        // Rename ONLY the jpg: the xmp belongs to the RAW and must stay.
+        try RenameEngine.apply([move("IMG_1.jpg", "other.jpg")])
+        XCTAssertEqual(try listing(), ["IMG_1.cr2", "IMG_1.xmp", "other.jpg"])
+        // Now rename the RAW: it owns the xmp and takes it along.
+        try RenameEngine.apply([move("IMG_1.cr2", "new.cr2")])
+        XCTAssertEqual(try listing(), ["new.cr2", "new.xmp", "other.jpg"])
+        XCTAssertEqual(read("new.xmp"), "shared")
+    }
+
+    func testUndoDecidesTheSameWayFromTheFolderAlone() throws {
+        try write("a.cr2", "RAW", sidecar: false)
+        try writeXMP("a", "xmp")
+        let forward = move("a.cr2", "b.cr2")
+        try RenameEngine.apply([forward])
+        try RenameEngine.apply([forward.inverse])
+        XCTAssertEqual(try listing(), ["a.cr2", "a.xmp"])
+    }
+
+    func testAnOrphanXMPAtTheDestinationIsRefusedAndNothingChanges() throws {
+        try write("a.jpg", "A", sidecar: false)
+        try writeXMP("taken", "someone else's")
+        let before = try listing()
+        XCTAssertThrowsError(try RenameEngine.apply([move("a.jpg", "taken.jpg")]))
+        XCTAssertEqual(try listing(), before)
+        XCTAssertEqual(read("a.jpg"), "A")
+        XCTAssertEqual(read("taken.xmp"), "someone else's")
+    }
+
+    func testANonOwnerMayJoinARawsSharedXMPAtTheDestination() throws {
+        try write("a.jpg", "A", sidecar: false)
+        try write("T.cr2", "RAW", sidecar: false)
+        try writeXMP("T", "raw's")
+        try RenameEngine.apply([move("a.jpg", "T.jpg")])
+        XCTAssertEqual(try listing(), ["T.cr2", "T.jpg", "T.xmp"])
+    }
+
+    func testEveryFailurePointWithAnXMPRestoresTheFolder() throws {
+        for failAt in 1...6 {
+            for file in try listing() { try? FileManager.default.removeItem(at: dir.appendingPathComponent(file)) }
+            try write("a.jpg", "A")
+            try writeXMP("a", "xmp-A")
+            let before = try listing()
+            var calls = 0
+            let failing: RenameEngine.MoveFunction = { from, to in
+                calls += 1
+                if calls == failAt { throw Boom() }
+                try RenameEngine.exclusiveMove(from, to)
+            }
+            XCTAssertThrowsError(try RenameEngine.apply([move("a.jpg", "b.jpg")], move: failing), "failAt \(failAt)")
+            XCTAssertEqual(try listing(), before, "failAt \(failAt)")
+            XCTAssertEqual(read("a.xmp"), "xmp-A", "failAt \(failAt)")
+        }
+    }
+
+    func testAPhotoWithoutAnXMPIsUnaffected() throws {
+        try write("a.jpg", "A", sidecar: false)
+        try RenameEngine.apply([move("a.jpg", "b.jpg")])
+        XCTAssertEqual(try listing(), ["b.jpg"])
+    }
+
+    func testARawJpgPairRenamedTogetherSucceedsInEitherOrderAndUndoes() throws {
+        for rawFirst in [true, false] {
+            for file in try listing() { try? FileManager.default.removeItem(at: dir.appendingPathComponent(file)) }
+            try write("IMG.nef", "RAW", sidecar: false)
+            try write("IMG.jpg", "JPG", sidecar: false)
+            try writeXMP("IMG", "pair-xmp")
+            let raw = move("IMG.nef", "NEW.nef", id: 1), jpg = move("IMG.jpg", "NEW.jpg", id: 2)
+            let batch = rawFirst ? [raw, jpg] : [jpg, raw]
+            try RenameEngine.apply(batch)
+            XCTAssertEqual(try listing(), ["NEW.jpg", "NEW.nef", "NEW.xmp"], "rawFirst \(rawFirst)")
+            XCTAssertEqual(read("NEW.xmp"), "pair-xmp")
+            try RenameEngine.apply(batch.map(\.inverse))
+            XCTAssertEqual(try listing(), ["IMG.jpg", "IMG.nef", "IMG.xmp"], "undo, rawFirst \(rawFirst)")
+            XCTAssertEqual(read("IMG.xmp"), "pair-xmp")
+        }
+    }
+
+    func testAPairWithNoXMPRenamedOntoAnOrphanXMPIsRefusedInEitherOrder() throws {
+        for jpgFirst in [true, false] {
+            for file in try listing() { try? FileManager.default.removeItem(at: dir.appendingPathComponent(file)) }
+            try write("x.jpg", "X", sidecar: false)
+            try write("y.png", "Y", sidecar: false)
+            try writeXMP("c", "foreign")
+            let before = try listing()
+            let a = move("x.jpg", "c.jpg", id: 1), b = move("y.png", "c.png", id: 2)
+            XCTAssertThrowsError(try RenameEngine.apply(jpgFirst ? [a, b] : [b, a]), "jpgFirst \(jpgFirst)")
+            XCTAssertEqual(try listing(), before, "jpgFirst \(jpgFirst)")
+            XCTAssertEqual(read("c.xmp"), "foreign")
+        }
+    }
+
+    func testARawArrivingNextToAJpgsXMPCannotTakeItOver() throws {
+        try write("T.jpg", "J", sidecar: false)
+        try writeXMP("T", "jpg-owns")
+        try write("a.nef", "R", sidecar: false)
+        let before = try listing()
+        XCTAssertThrowsError(try RenameEngine.apply([move("a.nef", "T.nef")]))
+        XCTAssertEqual(try listing(), before)
+        XCTAssertEqual(read("T.xmp"), "jpg-owns")
+    }
+
+    func testAnXMPOwnerCannotHandItsMetadataToARawItLandsBeside() throws {
+        try write("a.jpg", "J", sidecar: false)
+        try writeXMP("a", "a-owns")
+        try write("T.nef", "R", sidecar: false)
+        let before = try listing()
+        XCTAssertThrowsError(try RenameEngine.apply([move("a.jpg", "T.jpg")]))
+        XCTAssertEqual(try listing(), before)
+    }
+
+    func testBatchVersionWhereTheEventualOwnerBroughtNoXMPIsRefused() throws {
+        try write("a.jpg", "J", sidecar: false)
+        try writeXMP("a", "a-owns")
+        try write("b.nef", "R", sidecar: false)
+        let before = try listing()
+        XCTAssertThrowsError(try RenameEngine.apply([move("a.jpg", "c.jpg", id: 1), move("b.nef", "c.nef", id: 2)]))
+        XCTAssertEqual(try listing(), before)
+    }
+
+    func testANonPhotoCompanionNeverOwnsTheXMP() throws {
+        try write("IMG_1.heic", "H", sidecar: false)
+        try Data("aae".utf8).write(to: dir.appendingPathComponent("IMG_1.AAE"))
+        try Data("mov".utf8).write(to: dir.appendingPathComponent("IMG_1.MOV"))
+        try writeXMP("IMG_1", "heic-xmp")
+        try RenameEngine.apply([move("IMG_1.heic", "B.heic")])
+        XCTAssertEqual(try listing(), ["B.heic", "B.xmp", "IMG_1.AAE", "IMG_1.MOV"])
+    }
+
+    func testADarktableStyleSidecarTravelsWithItsPhotoAndAnOrphanOneAtTheDestinationIsRefused() throws {
+        try write("a.jpg", "A", sidecar: false)
+        try Data("alt".utf8).write(to: dir.appendingPathComponent("a.jpg.xmp"))
+        try RenameEngine.apply([move("a.jpg", "b.jpg")])
+        XCTAssertEqual(try listing(), ["b.jpg", "b.jpg.xmp"])
+        XCTAssertEqual(read("b.jpg.xmp"), "alt")
+
+        try write("c.jpg", "C", sidecar: false)
+        try Data("foreign".utf8).write(to: dir.appendingPathComponent("d.jpg.xmp"))
+        let before = try listing()
+        XCTAssertThrowsError(try RenameEngine.apply([move("c.jpg", "d.jpg")]))
+        XCTAssertEqual(try listing(), before)
+    }
+
+    func testASwapAndACaseOnlyRenameKeepEveryXMPWithItsPhoto() throws {
+        try write("x.jpg", "X", sidecar: false)
+        try write("y.jpg", "Y", sidecar: false)
+        try writeXMP("x", "xmp-X")
+        try writeXMP("y", "xmp-Y")
+        try RenameEngine.apply([move("x.jpg", "y.jpg", id: 1), move("y.jpg", "x.jpg", id: 2)])
+        XCTAssertEqual(read("y.jpg"), "X")
+        XCTAssertEqual(read("y.xmp"), "xmp-X")
+        XCTAssertEqual(read("x.xmp"), "xmp-Y")
+
+        try RenameEngine.apply([move("x.jpg", "X.jpg")])
+        XCTAssertEqual(try listing().filter { $0.lowercased().hasPrefix("x.") }.sorted(), ["X.jpg", "X.xmp"])
+        XCTAssertEqual(read("X.xmp"), "xmp-Y")
+    }
+
+    func testAVeryLongNameStillMovesItsXMP() throws {
+        let long = String(repeating: "n", count: 215) + ".jpg" // 219 bytes: the old reserve was too small for the xmp temp suffix
+        try write(long, "L", sidecar: false)
+        try writeXMP(String(long.dropLast(4)), "long-xmp")
+        let newName = String(repeating: "m", count: 100) + ".jpg"
+        try RenameEngine.apply([move(long, newName)])
+        XCTAssertEqual(read(String(newName.dropLast(4)) + ".xmp"), "long-xmp")
+    }
+
     func testARollbackThatItselfFailsNamesTheStuckFileAndLosesNothing() throws {
         try write("a.jpg", "A", sidecar: false)
         try write("b.jpg", "B", sidecar: false)

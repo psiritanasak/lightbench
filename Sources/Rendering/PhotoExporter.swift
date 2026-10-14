@@ -445,8 +445,14 @@ enum PhotoExporter {
     static func uniqueFileURL(baseName: String, fileExtension: String, in folder: URL) -> URL {
         var candidate = folder.appendingPathComponent(baseName).appendingPathExtension(fileExtension)
         var suffix = 2
+        // An ORPHAN `<base>.xmp` (no photo shares that base name) is also refused: the new file would silently inherit someone else's metadata.
+        func orphanXMPExists(at url: URL) -> Bool {
+            FileManager.default.fileExists(atPath: XMPSidecarStore.sidecarURL(for: url).path)
+                && RenameEngine.siblingPhotos(sharingBaseNameWith: url).isEmpty
+        }
         while FileManager.default.fileExists(atPath: candidate.path)
-            || FileManager.default.fileExists(atPath: SidecarStore.sidecarURL(for: candidate).path) {
+            || FileManager.default.fileExists(atPath: SidecarStore.sidecarURL(for: candidate).path)
+            || orphanXMPExists(at: candidate) {
             candidate = folder
                 .appendingPathComponent(baseNameFitting(baseName, suffix: " (\(suffix))", fileExtension: fileExtension))
                 .appendingPathExtension(fileExtension)

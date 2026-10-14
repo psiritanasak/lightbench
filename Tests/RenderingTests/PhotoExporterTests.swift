@@ -138,6 +138,17 @@ final class PhotoExporterTests: XCTestCase {
         XCTAssertEqual(url.lastPathComponent, "IMG_0001 (2).jpg")
     }
 
+    /// An orphan `<base>.xmp` (no photo with that base name next to it) would be inherited by the new file, so the name counts as taken;
+    /// but an `.xmp` that a RAW sibling legitimately owns does not make the name taken.
+    func testUniqueFileURLSkipsAnOrphanXMPButNotOneASiblingPhotoOwns() throws {
+        try Data("<x/>".utf8).write(to: tempDir.appendingPathComponent("orphan.xmp"))
+        XCTAssertEqual(PhotoExporter.uniqueFileURL(baseName: "orphan", fileExtension: "jpg", in: tempDir).lastPathComponent, "orphan (2).jpg")
+
+        try Data("<x/>".utf8).write(to: tempDir.appendingPathComponent("pair.xmp"))
+        try Data("raw".utf8).write(to: tempDir.appendingPathComponent("pair.cr2"))
+        XCTAssertEqual(PhotoExporter.uniqueFileURL(baseName: "pair", fileExtension: "jpg", in: tempDir).lastPathComponent, "pair.jpg")
+    }
+
     // MARK: - loadEditState
 
     func testLoadEditStateReturnsIdentityWhenNoSidecarExists() {

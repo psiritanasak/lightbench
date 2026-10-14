@@ -724,6 +724,9 @@ final class CatalogModel: ObservableObject {
         // a different file, which may have failed for another reason (corrupt, chmod) while this one really is sandbox-denied.
         while let inFlight = thumbnailRecoveryTasks[root] {
             await inFlight.value
+            // The finished task's entry is cleared by its creator only when that creator resumes; clear it here too, or this loop would spin on a
+            // finished task (awaiting it does not yield) and the creator, on this same actor, would never get to run.
+            if thumbnailRecoveryTasks[root] == inFlight { thumbnailRecoveryTasks[root] = nil }
             guard !silentRecoveryTried.contains(root), !thumbnailFailureNotSandbox.contains(path) else { return }
         }
         let probe = readabilityProbe
@@ -741,7 +744,7 @@ final class CatalogModel: ObservableObject {
         }
         thumbnailRecoveryTasks[root] = task
         await task.value
-        thumbnailRecoveryTasks[root] = nil
+        if thumbnailRecoveryTasks[root] == task { thumbnailRecoveryTasks[root] = nil } // never clear a NEWER task's entry
     }
 
     /// True only if `photo`'s file is confirmed genuinely missing — used by

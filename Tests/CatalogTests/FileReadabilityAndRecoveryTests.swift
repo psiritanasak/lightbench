@@ -121,6 +121,23 @@ final class CatalogAccessRecoveryTests: XCTestCase {
         XCTAssertGreaterThan(model.thumbnailRevisions[b.path] ?? 0, 0, "b's own probe ran and its grant was restored")
     }
 
+    /// Regression for a livelock: a waiter that kept re-awaiting an already-finished recovery task never yielded, so the task's creator (on the same
+    /// actor) could not clear its entry. Many concurrent failing cells over a root whose first probe is NOT a sandbox problem exercise exactly that loop.
+    func testManyConcurrentFailuresNeverSpinAndAllFinish() async throws {
+        model.readabilityProbe = { path in path.hasSuffix("/a.jpg") ? .posixDenied : .sandboxDenied }
+        let photos = [try photo("a.jpg"), try photo("b.jpg"), try photo("c.jpg"), try photo("d.jpg")]
+        let target: CatalogModel = model
+        var tasks: [Task<Void, Never>] = []
+        for index in 0..<200 {
+            let p = photos[index % photos.count]
+            tasks.append(Task { @MainActor in _ = await target.thumbnail(for: p) })
+        }
+        let finished = expectation(description: "all 200 finished")
+        Task { for t in tasks { await t.value }; finished.fulfill() }
+        await fulfillment(of: [finished], timeout: 20)
+        XCTAssertEqual(promptCalls, 0)
+    }
+
     func testAWholeScreenOfFailingThumbnailsSharesOneProbeAndOneBump() async throws {
         final class Counter: @unchecked Sendable { private let lock = NSLock(); private var n = 0
             func bump() { lock.lock(); n += 1; lock.unlock() }; var value: Int { lock.lock(); defer { lock.unlock() }; return n } }

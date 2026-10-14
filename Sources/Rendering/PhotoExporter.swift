@@ -281,10 +281,9 @@ enum PhotoExporter {
         // Grain is the pipeline's last stage because sharpening grain amplifies it (measured: +14%/+35% noise std with
         // output sharpening). Output sharpening runs after the pipeline, so when both are on, hold the grain back and
         // add it after the sharpen, at the output size — the same order the Editor uses. Every other export is unchanged.
-        // `effectiveGrain`, not `editState.grain`: the Style's Grain toggle is grain too and must be held back the same way.
+        // `effectiveGrain`, not `editState.grain`: the Style's Grain toggle and B&W Grain are grain too and must be held back the same way (`zeroingGrain()` lists every source).
         let deferGrain = settings.sharpening != .none && EditPipeline.effectiveGrain(editState) != 0
-        var pipelineState = editState
-        if deferGrain { pipelineState.grain = 0; pipelineState.styleGrain = false }
+        let pipelineState = deferGrain ? editState.zeroingGrain() : editState
         let edited = EditPipeline.apply(pipelineState, to: oriented)
         // Sharpen the image AT OUTPUT SIZE (after the resize). A CONVENTION, not a measured requirement: the radius is
         // a fraction of the extent, so before/after landed within 0.0043 of each other on a step edge (see

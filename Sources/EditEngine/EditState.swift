@@ -350,6 +350,29 @@ struct EditState: Equatable, Codable {
     var grayMixPurple: Double = 0
     var grayMixMagenta: Double = 0
 
+    /// B&W extras (2026-10-14), all identity 0 and rendered ONLY while `blackAndWhite` is on:
+    /// - `bwIntensity` (-1...1): scales the B&W Mix — the mix's stop strength becomes `kGrayMixStops * (1 + intensity)`, so -1 switches the mix off and +1 doubles it.
+    ///   With all Mix sliders at 0 it has nothing to scale (documented in the UI hint), because the Mix is the only "colour filter" in this pipeline.
+    /// - `bwNeutrals` (-1...1): lightens / darkens the mid-greys (a mid-point move of a monotone curve on the grey).
+    /// - `bwTone` (-1...1): a B&W contrast S-curve on the grey (darkens the shadow quarter-point, lightens the highlight quarter-point); one curve pass with Neutrals.
+    /// - `bwGrain` (0...1): film grain added through the existing Grain stage (`EditPipeline.effectiveDetail`), so Export's deferred grain follows it.
+    /// The curve constants are by-eye conventions the RENDERER owns (`EditPipeline.kBWToneSpan`/`kBWNeutralsSpan`): retuning restyles old edits.
+    var bwIntensity: Double = 0
+    var bwNeutrals: Double = 0
+    var bwTone: Double = 0
+    var bwGrain: Double = 0
+
+    /// A copy with EVERY grain source switched off: the Grain slider, the Style's Grain toggle and B&W Grain. The one place that lists them, used
+    /// by Export (which holds grain back to add it after output sharpening) and the Color Range eyedropper (which must not sample noise), so a
+    /// fourth grain source cannot be missed at one call site and not the other.
+    func zeroingGrain() -> EditState {
+        var s = self
+        s.grain = 0
+        s.styleGrain = false
+        s.bwGrain = 0
+        return s
+    }
+
     // MARK: - Color Grading (3-way shadows/midtones/highlights)
 
     /// 3 tonal ranges (Shadows/Midtones/Highlights) × Hue/Saturation/
@@ -1564,6 +1587,7 @@ struct EditState: Equatable, Codable {
         s.grayMixBlue = 0
         s.grayMixPurple = 0
         s.grayMixMagenta = 0
+        s.bwIntensity = 0; s.bwNeutrals = 0; s.bwTone = 0; s.bwGrain = 0
         s.shadowHue = 0; s.shadowSaturation = 0; s.shadowLuminance = 0
         s.midtoneHue = 0; s.midtoneSaturation = 0; s.midtoneLuminance = 0
         s.highlightHue = 0; s.highlightSaturation = 0; s.highlightLuminance = 0
@@ -1678,6 +1702,7 @@ struct EditState: Equatable, Codable {
         result.grayMixBlue = grayMixBlue
         result.grayMixPurple = grayMixPurple
         result.grayMixMagenta = grayMixMagenta
+        result.bwIntensity = bwIntensity; result.bwNeutrals = bwNeutrals; result.bwTone = bwTone; result.bwGrain = bwGrain
         result.shadowHue = shadowHue; result.shadowSaturation = shadowSaturation; result.shadowLuminance = shadowLuminance
         result.midtoneHue = midtoneHue; result.midtoneSaturation = midtoneSaturation; result.midtoneLuminance = midtoneLuminance
         result.highlightHue = highlightHue; result.highlightSaturation = highlightSaturation; result.highlightLuminance = highlightLuminance
@@ -1790,6 +1815,7 @@ extension EditState {
         case grayMixBlue
         case grayMixPurple
         case grayMixMagenta
+        case bwIntensity, bwNeutrals, bwTone, bwGrain
         case shadowHue, shadowSaturation, shadowLuminance
         case midtoneHue, midtoneSaturation, midtoneLuminance
         case highlightHue, highlightSaturation, highlightLuminance
@@ -1914,6 +1940,10 @@ extension EditState {
         grayMixBlue = try container.decodeIfPresent(Double.self, forKey: .grayMixBlue) ?? 0
         grayMixPurple = try container.decodeIfPresent(Double.self, forKey: .grayMixPurple) ?? 0
         grayMixMagenta = try container.decodeIfPresent(Double.self, forKey: .grayMixMagenta) ?? 0
+        bwIntensity = try container.decodeIfPresent(Double.self, forKey: .bwIntensity) ?? 0
+        bwNeutrals = try container.decodeIfPresent(Double.self, forKey: .bwNeutrals) ?? 0
+        bwTone = try container.decodeIfPresent(Double.self, forKey: .bwTone) ?? 0
+        bwGrain = try container.decodeIfPresent(Double.self, forKey: .bwGrain) ?? 0
         shadowHue = try container.decodeIfPresent(Double.self, forKey: .shadowHue) ?? 0
         shadowSaturation = try container.decodeIfPresent(Double.self, forKey: .shadowSaturation) ?? 0
         shadowLuminance = try container.decodeIfPresent(Double.self, forKey: .shadowLuminance) ?? 0

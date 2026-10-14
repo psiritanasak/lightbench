@@ -634,6 +634,9 @@ enum EditPipeline {
             // B&W Mix reads the colour as it stood just before the desaturation (so Hue/Selective Color/Point Color/Vibrance
             // above feed it, like shooting through a colour filter) and rescales the grey that desaturation produced.
             if state.blackAndWhite, grayMixActive(state) { img = applyGrayMix(state, colour: beforeGray, gray: img) }
+            // Neutrals / Tone: one monotone curve on the grey, after the Mix (a CONVENTION: the Mix reads colour, the curve shapes the
+            // grey it produced; the reverse order was not measured) and before Color Grading so a sepia tint still survives.
+            if state.blackAndWhite, bwToneActive(state) { img = applyBWTone(state, to: img) }
         }
         // Color Grading is the LAST OF THE USER'S OWN stages in this sandwich (the style's own tint pass follows it) — see
         // EditState.shadowHue's own doc comment and applyColorGrading's
@@ -812,7 +815,7 @@ enum EditPipeline {
     }
 
     /// The detail-stage values actually used for rendering: the user's own Texture/Clarity/Sharpen/Grain plus the Style's
-    /// texture nudges (`StyleMath.detailNudges`); Sharpen, Grain and Glow are clamped to 0...1, Texture/Clarity are not. Like `effectiveTone`, the style is ADDED here and never written
+    /// texture nudges (`StyleMath.detailNudges`) and, for Grain, `bwGrain` while Black & White is on; Sharpen, Grain and Glow are clamped to 0...1, Texture/Clarity are not. Like `effectiveTone`, the style is ADDED here and never written
     /// back to the user's fields. Every detail stage and its active-guard reads THIS, and so must any caller that decides
     /// "is there grain" outside `apply` (`effectiveGrain`, used by Export's deferred grain).
     struct EffectiveDetail {
@@ -835,12 +838,13 @@ enum EditPipeline {
             texture: state.texture + n.texture,
             clarity: state.clarity + n.clarity,
             sharpness: clamped(state.sharpness + n.sharpness, to: 0...1),
-            grain: clamped(state.grain + n.grain, to: 0...1),
+            // B&W Grain is grain too (only while B&W is on), so `grainActive` and Export's deferred grain follow it automatically.
+            grain: clamped(state.grain + n.grain + (state.blackAndWhite ? clamped(state.bwGrain, to: 0...1) : 0), to: 0...1),
             glow: clamped(n.glow, to: 0...1)
         )
     }
 
-    /// The grain amount the renderer will use (user slider + the style's Grain toggle).
+    /// The grain amount the renderer will use (user slider + the style's Grain toggle + B&W Grain while B&W is on).
     static func effectiveGrain(_ state: EditState) -> Double { effectiveDetail(state).grain }
 
     private static func clamped(_ value: Double, to range: ClosedRange<Double> = -1...1) -> Double {
@@ -1144,12 +1148,39 @@ enum EditPipeline {
             || state.grayMixAqua != 0 || state.grayMixBlue != 0 || state.grayMixPurple != 0 || state.grayMixMagenta != 0
     }
 
+    /// How far Tone moves the shadow / highlight quarter-points of the B&W grey curve at +/-1, and how far Neutrals moves the mid-point. By-eye
+    /// conventions, not measurements (chosen so +/-1 is clearly visible without crushing: the curve's data stay increasing at every combination).
+    static let kBWToneSpan: Double = 0.10
+    static let kBWNeutralsSpan: Double = 0.12
+
+    private static func bwToneActive(_ state: EditState) -> Bool { state.bwNeutrals != 0 || state.bwTone != 0 }
+
+    /// One monotone curve through (0,0), (0.25, 0.25 - tone*span), (0.5, 0.5 + neutrals*span), (0.75, 0.75 + tone*span), (1,1) in the PERCEPTUAL
+    /// domain this block works in, applied equally to R, G, B so a neutral grey stays neutral. The point-curve kernel encodes its input AGAIN
+    /// internally (the convention `applyCurves` shares), so each control point is passed through `srgbEncode` first: that makes the numbers above
+    /// mean what they say about the picture's perceptual tones instead of landing in the deep shadows. Above white the curve continues along its end
+    /// slope (the same behaviour as the user's point curve), so Tone +1 mildly compresses headroom and Tone -1 expands it.
+    private static func applyBWTone(_ state: EditState, to image: CIImage) -> CIImage {
+        let t = clamped(state.bwTone), n = clamped(state.bwNeutrals)
+        func point(_ x: Double, _ y: Double) -> ToneCurvePoint {
+            ToneCurvePoint(x: ToneCurveSpline.srgbEncode(x), y: ToneCurveSpline.srgbEncode(y))
+        }
+        let points = [
+            point(0, 0),
+            point(0.25, 0.25 - t * kBWToneSpan),
+            point(0.5, 0.5 + n * kBWNeutralsSpan),
+            point(0.75, 0.75 + t * kBWToneSpan),
+            point(1, 1)
+        ]
+        return applyPointCurve(points, channelMask: PointCurveChannelMask.all, to: image)
+    }
+
     /// Argument layout matches the kernel: mixA = (Red, Orange, Yellow, Green), mixB = (Aqua, Blue, Purple, Magenta).
     private static func applyGrayMix(_ state: EditState, colour: CIImage, gray: CIImage) -> CIImage {
         guard let kernel = grayMixKernel else { return gray }
         let mixA = CIVector(x: state.grayMixRed, y: state.grayMixOrange, z: state.grayMixYellow, w: state.grayMixGreen)
         let mixB = CIVector(x: state.grayMixAqua, y: state.grayMixBlue, z: state.grayMixPurple, w: state.grayMixMagenta)
-        let arguments: [Any] = [colour, gray, mixA, mixB, NSNumber(value: kGrayMixStops)]
+        let arguments: [Any] = [colour, gray, mixA, mixB, NSNumber(value: kGrayMixStops * (1 + clamped(state.bwIntensity)))]
         return kernel.apply(extent: gray.extent, arguments: arguments) ?? gray
     }
 

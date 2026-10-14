@@ -636,6 +636,19 @@ struct AdjustTabView: View {
                         range: -1...1, identity: 0, displayMultiplier: 100
                     ) { String(format: "%+.0f%%", $0 * 100) }
                 }
+                // Extras: Intensity scales the colour Mix above (it does nothing while every Mix slider is 0).
+                EditSliderRow(label: "Intensity", value: $document.editState.bwIntensity, range: -1...1, identity: 0, displayMultiplier: 100) {
+                    String(format: "%+.0f%%", $0 * 100)
+                }
+                EditSliderRow(label: "Neutrals", value: $document.editState.bwNeutrals, range: -1...1, identity: 0, displayMultiplier: 100) {
+                    String(format: "%+.0f%%", $0 * 100)
+                }
+                EditSliderRow(label: "Tone", value: $document.editState.bwTone, range: -1...1, identity: 0, displayMultiplier: 100) {
+                    String(format: "%+.0f%%", $0 * 100)
+                }
+                EditSliderRow(label: "Grain", value: $document.editState.bwGrain, range: 0...1, identity: 0, displayMultiplier: 100) {
+                    String(format: "%.0f%%", $0 * 100)
+                }
             }
         }
     }
@@ -1747,6 +1760,7 @@ struct AdjustTabView: View {
             }
             && !state.blackAndWhite
             && SelectiveColorBand.allCases.allSatisfy { state[keyPath: $0.grayMixKeyPath] == 0 }
+            && state.bwIntensity == 0 && state.bwNeutrals == 0 && state.bwTone == 0 && state.bwGrain == 0
             // Color Grading's Hue fields are rendering-irrelevant at
             // Saturation 0 (see `EditState.shadowHue`'s own doc comment),
             // but are still checked/reset here for the same reason
@@ -1813,6 +1827,8 @@ struct AdjustTabView: View {
             }
             document.editState.blackAndWhite = false
             for band in SelectiveColorBand.allCases { document.editState[keyPath: band.grayMixKeyPath] = 0 }
+            document.editState.bwIntensity = 0; document.editState.bwNeutrals = 0
+            document.editState.bwTone = 0; document.editState.bwGrain = 0
             document.editState.shadowHue = 0
             document.editState.shadowSaturation = 0
             document.editState.shadowLuminance = 0

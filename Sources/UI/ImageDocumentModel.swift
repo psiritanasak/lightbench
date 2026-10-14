@@ -871,10 +871,9 @@ final class ImageDocumentModel: ObservableObject {
         samplingState.sharpness = 0
         samplingState.defringePurple = 0
         samplingState.defringeGreen = 0
-        samplingState.grain = 0
         // The Style's texture/grain are detail stages too: left on they would put noise/blur into the eyedropper sample.
         samplingState.styleTexture = ""
-        samplingState.styleGrain = false
+        samplingState = samplingState.zeroingGrain() // the Grain slider, the Style's Grain toggle and B&W Grain
         samplingState.masks = Array(editState.masks[..<maskIndex])
 
         let sampled = EditPipeline.apply(samplingState, to: currentImage)

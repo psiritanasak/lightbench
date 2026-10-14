@@ -1658,7 +1658,7 @@ struct ContentView: View {
         }
         .toolbar(cull.isActive ? .hidden : .automatic, for: .windowToolbar)
         .onAppear { configureCull() }
-        .navigationTitle(cull.isActive ? "Culling" : (showLibrary ? "Library" : (document.currentFileName ?? "PhotoApp")))
+        .navigationTitle(cull.isActive ? "Culling" : (showLibrary ? "Library" : (document.currentFileName ?? AppInfo.name)))
     }
 
     /// Library-mode toggle + file-import + export/selection items, split

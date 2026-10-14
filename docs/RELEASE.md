@@ -1,4 +1,4 @@
-# Releasing PhotoApp (direct distribution)
+# Releasing Lightbench (direct distribution)
 
 How to turn this repo into a signed, notarized app other people can open. The App Store route is at the end. Everything the repo can do
 without your Apple account is already done and checked by `scripts/release.sh --check`.
@@ -8,20 +8,35 @@ without your Apple account is already done and checked by `scripts/release.sh --
 - Version: `MARKETING_VERSION` (1.0.0) and `CURRENT_PROJECT_VERSION` (1) in `project.yml`. Bump the build number for every notarized build.
 - Category (`public.app-category.photography`), hardened runtime, App Sandbox + user-selected read-write file access.
 - `ThirdPartyNotices.md` (GRDB MIT, Depth Anything V2 Small Apache-2.0 with its full text) is bundled in the app.
-- `scripts/release.sh`: `--check` (preflight, no account needed) and the full archive → sign → notarize → staple → zip run.
+- `scripts/release.sh`: `--check` (preflight, no account needed), `--unsigned` (shareable zip, no account), and the full archive → sign → notarize → staple → zip run.
 
-## Decisions only you can make (the preflight fails until the first is done)
-1. **Copyright string.** `NSHumanReadableCopyright` in `project.yml` is empty. Put your name or company, e.g. `"Copyright © 2026 Your Name"`.
-2. **Final name and bundle ID.** Both are still placeholders (`PhotoApp`, `com.photoapp.PhotoApp`). Changing the bundle ID changes the sandbox
-   container, so the catalog and folder grants of any existing install do NOT carry over — decide before anyone else installs it. (Even with the
-   same bundle ID, moving from a development/ad-hoc build to a Developer ID build changes the code signature; macOS 14+ may ask once before the app
-   opens its existing container on a machine that already ran a dev build.)
-   Change `bundleIdPrefix` / `PRODUCT_NAME` / `CFBundleDisplayName` in `project.yml`, regenerate, rebuild.
-3. **Ship the depth model or not.** Run `scripts/fetch_depth_model.sh && xcodegen generate` to include it (adds ~50 MB). Without it the Depth Range
-   mask only works with iPhone depth data.
-4. **Direct download vs Mac App Store** (see the end).
+## Decisions (made 2026-10-14)
+1. **Copyright:** "Copyright © 2026 Praween Siritanasak" (`project.yml`). Done.
+2. **Name: Lightbench** (`CFBundleDisplayName` / `CFBundleName` in `project.yml`; user-facing prompts read it through `Sources/App/AppInfo.swift`).
+   A quick web search found no existing app by that name; that is NOT a trademark search — check before you promote it widely.
+   The module name, `PhotoAppApp` and the **bundle identifier `com.photoapp.PhotoApp` are deliberately unchanged**: the bundle ID owns the sandbox container
+   (the catalog, preferences and folder grants), so changing it would orphan an existing library and its folder permissions. Users never see the bundle ID.
+   If you ever do change it, the catalog (`catalog.sqlite`) can be copied across, but every folder must be re-granted. (Even with the same ID, moving from a
+   development/ad-hoc build to a Developer ID build changes the code signature; macOS 14+ may ask once before opening an existing container.)
+3. **Depth model: shipped** (~50 MB; `scripts/fetch_depth_model.sh && xcodegen generate` before building a release).
+4. **Mac App Store: not planned.** Distribution is direct download.
 
-## One-time Apple setup
+> Skipping the App Store does NOT remove the need for an Apple Developer ID if you want people to open the app without scary warnings: notarization
+> (the thing that satisfies Gatekeeper) requires a paid Developer Program membership even for direct downloads. Without one, see the next section.
+
+## Without a paid Apple account (`scripts/release.sh --unsigned`)
+Builds the app ad-hoc signed and zips it as `build/unsigned/Lightbench-<version>-unsigned.zip` (a separate folder, so it never deletes a notarized zip).
+It runs fine on your own Mac. On someone else's Mac Gatekeeper blocks it (macOS 15: "Apple could not verify 'Lightbench' is free of malware…"; older
+versions: "cannot be opened because the developer cannot be verified"), and the person must approve it once:
+- macOS 14: Control-click (right-click) the app → Open → Open.
+- macOS 15 and later: try to open it, then System Settings → Privacy & Security → scroll to "Lightbench was blocked" → **Open Anyway**.
+- Or in Terminal, after moving the app to /Applications: `xattr -dr com.apple.quarantine /Applications/Lightbench.app`.
+- Heads-up (not verified here): an ad-hoc build is identified by its code hash, so each NEW unsigned build — and later the Developer ID build — may make
+  macOS 14+ ask "allow Lightbench to access data from other apps?" for its own container. Testers must allow it or the app cannot reach its library.
+- This zip is the local ad-hoc build and may still carry the debug entitlement `get-task-allow`; harmless for testers, never notarizable.
+That is acceptable for friends and testers, not for a public download. It also cannot be stapled or notarized later without the account.
+
+## One-time Apple setup (only for the notarized route)
 1. Join the Apple Developer Program (paid).
 2. In Xcode → Settings → Accounts, add your Apple ID, then create a **Developer ID Application** certificate. Check with
    `security find-identity -v -p codesigning` (it must list "Developer ID Application: …").
@@ -34,7 +49,7 @@ without your Apple account is already done and checked by `scripts/release.sh --
 2. Full test suite green: `xcodebuild -scheme PhotoApp test`.
 3. Preflight: `scripts/release.sh --check` (must end with PREFLIGHT PASSED).
 4. `TEAM_ID=XXXXXXXXXX scripts/release.sh` — archives with your Developer ID, exports, re-checks the bundle (including that `get-task-allow` is absent),
-   submits to Apple and waits, staples the ticket, verifies with `spctl`, and writes `build/release/PhotoApp-<version>.zip`.
+   submits to Apple and waits, staples the ticket, verifies with `spctl`, and writes `build/release/Lightbench-<version>.zip`.
 5. Do the clean-machine test below on THAT zip.
 6. Tag the commit (`git tag v1.0.0`) and publish the zip (a GitHub release, your site, …) with the release notes below.
 
@@ -42,7 +57,7 @@ If notarization is rejected, `xcrun notarytool log <submission-id> --keychain-pr
 missing hardened runtime or secure timestamp (both set by the script) or an unsigned nested binary.
 
 ## Clean-machine test (never skip)
-On a Mac (or a fresh macOS user account) that has never run PhotoApp, with the downloaded zip (so Gatekeeper quarantines it as a user would see):
+On a Mac (or a fresh macOS user account) that has never run Lightbench, with the downloaded zip (so Gatekeeper quarantines it as a user would see):
 - Unzip, drag to Applications, open. There must be no "damaged" or "unidentified developer" dialog.
 - First launch: the empty Library opens without a crash; Import Folder… works on a folder of JPEGs and a folder with your camera's RAW files.
 - Quit and relaunch: the library and thumbnails are still there and a previously imported folder still opens (folder bookmarks survived).

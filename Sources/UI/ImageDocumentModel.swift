@@ -1784,10 +1784,9 @@ final class ImageDocumentModel: ObservableObject {
 
     /// The exact panel message `SidecarFolderAccess.resolveOrRequest`
     /// shows on behalf of a save triggered from THIS type — unchanged
-    /// text from before the extraction, since live-verification of the
-    /// refactor depends on it staying byte-identical.
+    /// text from before the extraction (apart from the app name, which now comes from `AppInfo.name`).
     private static let sidecarFolderAccessMessage =
-        "PhotoApp would like to save your edits for photos in this folder. Choose the folder to grant access."
+        "\(AppInfo.name) would like to save your edits for photos in this folder. Choose the folder to grant access."
 
     /// Folders (by path) where the user CANCELLED a folder-access prompt
     /// this session — in-memory only, deliberately NOT persisted. Without

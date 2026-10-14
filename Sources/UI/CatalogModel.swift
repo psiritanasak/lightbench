@@ -1678,7 +1678,7 @@ final class CatalogModel: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.directoryURL = folder
         panel.message =
-            "PhotoApp lost access to \"\(folder.lastPathComponent)\". Choose this folder again to open its photos."
+            "\(AppInfo.name) lost access to \"\(folder.lastPathComponent)\". Choose this folder again to open its photos."
         panel.prompt = "Grant Access"
         guard panel.runModal() == .OK else { return nil }
         return panel.url

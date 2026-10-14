@@ -1,6 +1,6 @@
 # Third-party notices
 
-PhotoApp includes or loads the following third-party material. The code and weights are unchanged (Xcode compiles the Core ML package into its
+Lightbench includes or loads the following third-party material. The code and weights are unchanged (Xcode compiles the Core ML package into its
 runtime format when building the app).
 
 ## GRDB.swift (SQLite toolkit for the photo catalog)

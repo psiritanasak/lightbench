@@ -36,13 +36,14 @@ targets:
     info:
       path: Sources/App/Info.plist
       properties:
-        CFBundleDisplayName: PhotoApp
+        CFBundleDisplayName: Lightbench # the product name people see (menu bar, Finder, prompts). Module / bundle id stay PhotoApp: see Sources/App/AppInfo.swift
+        CFBundleName: Lightbench
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.photography
         LSMinimumSystemVersion: "14.0"
         NSPrincipalClass: NSApplication
-        NSHumanReadableCopyright: ""
+        NSHumanReadableCopyright: "Copyright © 2026 Praween Siritanasak"
         # Opts out of the system "Liquid Glass" restyling that the macOS 26+ SDK applies to toolbars and controls (the user confirmed the
         # flatter look by eye on 2026-10-08). Apple has called this key temporary. If it stops working, the app's own pieces keep PART of
         # the look: the solid `Theme` panels, `withoutToolbarBackground()` on the Library toolbar items and the custom window buttons;

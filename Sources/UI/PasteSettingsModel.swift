@@ -127,7 +127,7 @@ final class PasteSettingsModel: ObservableObject {
     private let folderAccess = SidecarFolderAccess()
 
     private static let sidecarFolderAccessMessage =
-        "PhotoApp would like to save pasted edit settings for photos in this folder. Choose the folder to grant access."
+        "\(AppInfo.name) would like to save pasted edit settings for photos in this folder. Choose the folder to grant access."
 
     func copy(_ state: EditState, fileName: String) {
         copied = CopiedEditSettings(state: state, sourceFileName: fileName)

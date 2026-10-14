@@ -109,7 +109,7 @@ final class RenameModel: ObservableObject {
     var acquireWriteAccess: ((Set<URL>) -> WriteAccess?)?
 
     private static let accessMessage =
-        "PhotoApp needs permission to rename photos in this folder. Choose the folder to grant access."
+        "\(AppInfo.name) needs permission to rename photos in this folder. Choose the folder to grant access."
 
     var photoCount: Int { targets.count }
 

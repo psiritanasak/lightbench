@@ -1,9 +1,12 @@
 #!/bin/bash
-# Release helper for PhotoApp (direct distribution: Developer ID signing + Apple notarization).
+# Release helper for Lightbench (internal target name: PhotoApp; direct distribution: Developer ID signing + Apple notarization).
 #
 #   scripts/release.sh --check     Preflight that needs NO Apple account: builds Release (ad-hoc signed) and verifies what a shippable bundle
 #                                  must contain (icon, notices, version, hardened runtime, sandbox entitlements, depth model). Run it any time.
-#   scripts/release.sh             Archive, sign with your Developer ID, notarize, staple, verify, and write build/release/PhotoApp-<version>.zip.
+#   scripts/release.sh --unsigned  NO paid account: runs the preflight, then zips the ad-hoc-signed app as build/unsigned/<Name>-<version>-unsigned.zip.
+#                                  Gatekeeper blocks it on other Macs until the user approves it once (macOS 15+: System Settings → Privacy &
+#                                  Security → Open Anyway; see docs/RELEASE.md). Written to build/unsigned/ so it never deletes a notarized zip.
+#   scripts/release.sh             Archive, sign with your Developer ID, notarize, staple, verify, and write build/release/<Name>-<version>.zip.
 #
 # Needs for the full run (see docs/RELEASE.md): an Apple Developer Program membership, a "Developer ID Application" certificate in your login
 # keychain, and a notarytool keychain profile created once with
@@ -18,6 +21,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 MODE="release"
 [ "${1:-}" = "--check" ] && MODE="check"
+[ "${1:-}" = "--unsigned" ] && MODE="unsigned"
 NOTARY_PROFILE="${NOTARY_PROFILE:-photoapp-notary}"
 SIGN_IDENTITY="${SIGN_IDENTITY:-Developer ID Application}"
 OUT="build/release"
@@ -65,7 +69,7 @@ verify_bundle() {
 say "Generating the Xcode project"
 xcodegen generate >/dev/null
 
-if [ "$MODE" = "check" ]; then
+if [ "$MODE" = "check" ] || [ "$MODE" = "unsigned" ]; then
     say "Building Release (ad-hoc signed; no Apple account needed)"
     APP="build/check/Build/Products/Release/PhotoApp.app"
     rm -rf "$APP" # a failed build must not be able to pass by checking an app left over from an earlier run
@@ -75,7 +79,19 @@ if [ "$MODE" = "check" ]; then
     say "Signing"
     SIG="$(codesign -dv "$APP" 2>&1 | grep -E "^Signature" || true)"
     echo "   $SIG   (expected 'adhoc' here; the full run signs with Developer ID)"
-    [ "$FAILED" = 0 ] && { say "PREFLIGHT PASSED"; exit 0; } || { say "PREFLIGHT FOUND PROBLEMS (above)"; exit 1; }
+    [ "$FAILED" = 0 ] || { say "PREFLIGHT FOUND PROBLEMS (above)"; exit 1; }
+    say "PREFLIGHT PASSED"
+    if [ "$MODE" = "unsigned" ]; then
+        NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP/Contents/Info.plist")"
+        VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+        UOUT="build/unsigned"
+        rm -rf "$UOUT"; mkdir -p "$UOUT/stage"
+        ditto "$APP" "$UOUT/stage/$NAME.app"         # the bundle folder name is not part of the signature, so renaming the copy is safe
+        ditto -c -k --keepParent "$UOUT/stage/$NAME.app" "$UOUT/$NAME-$VERSION-unsigned.zip"
+        rm -rf "$UOUT/stage"
+        say "DONE: $UOUT/$NAME-$VERSION-unsigned.zip (NOT notarized — see docs/RELEASE.md, 'Without a paid Apple account')"
+    fi
+    exit 0
 fi
 
 # --- full release ------------------------------------------------------------------------------------------------------------------------
@@ -107,7 +123,8 @@ verify_bundle "$APP" yes
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
-ZIP="$OUT/PhotoApp-$VERSION.zip"
+NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP/Contents/Info.plist")"
+ZIP="$OUT/$NAME-$VERSION.zip"
 say "Notarizing (this waits for Apple, usually a few minutes)"
 ditto -c -k --keepParent "$APP" "$OUT/notarize-upload.zip"
 NOTARY_OUT="$(xcrun notarytool submit "$OUT/notarize-upload.zip" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1)" || true
@@ -122,7 +139,10 @@ say "Stapling"
 xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
 spctl -a -t exec -vv "$APP"
-ditto -c -k --keepParent "$APP" "$ZIP"
+FINAL="$OUT/$NAME.app"
+ditto "$APP" "$FINAL"                                  # ship it under the product name (the stapled ticket and signature are unaffected)
+spctl -a -t exec -vv "$FINAL"
+ditto -c -k --keepParent "$FINAL" "$ZIP"
 rm -f "$OUT/notarize-upload.zip"
 say "DONE: $ZIP"
 echo "Next: test it on a Mac that has never run the app (docs/RELEASE.md, 'Clean-machine test')."

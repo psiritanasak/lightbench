@@ -165,4 +165,16 @@ final class LibraryFilterBarTests: XCTestCase {
         }
         XCTAssertEqual(blue, 0)
     }
+
+    // MARK: Search help popover
+
+    func testTheSearchHelpHasASolidBackgroundNotATranslucentOne() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/UI/LibraryFilterBar.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "struct SearchHelpView: View {"))
+        let body = String(source[start.upperBound...])
+        XCTAssertTrue(body.contains(".background(Theme.panel)"), "the popover content must sit on a solid panel (readability over a busy grid)")
+    }
 }

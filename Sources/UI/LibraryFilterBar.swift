@@ -164,5 +164,8 @@ struct SearchHelpView: View {
                 .fixedSize(horizontal: false, vertical: true).frame(width: 340, alignment: .leading).padding(.top, 4)
         }
         .padding(14)
+        // A system popover is translucent: on a busy grid the grey caption text became hard to read (seen live). A solid panel
+        // behind the content, like the app's other overlays.
+        .background(Theme.panel)
     }
 }

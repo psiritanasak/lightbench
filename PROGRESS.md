@@ -26,6 +26,9 @@ history file.
 - **#4 XMP interop — SHIPPED in code (commits 84b0c84, 9b811ec, e5b14ed, 2ebff69 + docs), full suite 2871 green, NOT live-verified.** Photo ▸ Write / Read Metadata to XMP… (rating, reject, label, keywords; write only on request; merge keeps foreign tags), fill-defaults read after import, rename moves an owned `.xmp`. Reviewer: engine 3 rounds, UI/rename 5 rounds (the last blockers-only APPROVE); every fix mutation-checked. Limits: IMPROVEMENTS.md D65. MANUAL CHECKLIST: Write on 3 scratch photos incl. a CR2+JPG pair, open the `.xmp` text; hand-made `.xmp` with `crs:Exposure2012` keeps it after a write; Read on a fresh import restores values; Rename + Undo Rename move the `.xmp`; originals byte-identical.
 - Test-suite note: the first full run after a rebuild twice showed 2 failures of unknown identity (a rerun of the same tree was green both times); cold-start flake suspected, not investigated.
 
+- **#1 Global Whites — SHIPPED (018e871), reviewer APPROVE (1 round), suite green, not live-checked.** Manual: drag Whites on a bright photo, undo, relaunch (sidecar), Reset Adjustments clears it.
+- **#2 D64 curve — SKIPPED, needs your decision.** The monotone swap was built and measured: it moves renders by up to 0.265 (typical 0.02-0.07), not ~0.016, weakening Highlights/Black Point/Brilliance on every old edit; nothing committed. Numbers + options (a/b/c) in IMPROVEMENTS.md D64.
+
 ## Open reviewer issues
 None. Every reviewer round on record ended in APPROVE before its commit.
 

@@ -23,17 +23,22 @@ final class XMPModelTests: XCTestCase {
     private var catalog: CatalogModel!
     private var access: StubAccess!
     private var model: XMPModel!
+    private var suiteName = ""
 
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("XMPModelTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         db = try CatalogDatabase(inMemory: true)
-        catalog = CatalogModel(database: db, defaults: UserDefaults(suiteName: "XMPModelTests-\(UUID().uuidString)")!)
+        suiteName = "XMPModelTests-\(UUID().uuidString)"
+        catalog = CatalogModel(database: db, defaults: UserDefaults(suiteName: suiteName)!)
         access = StubAccess()
         model = XMPModel(folderAccess: access)
     }
 
-    override func tearDown() async throws { try? FileManager.default.removeItem(at: dir) }
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: dir)
+        UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+    }
 
     private func makePhotos(_ names: [String]) async throws -> [Photo] {
         let urls = names.map { dir.appendingPathComponent($0) }

@@ -55,6 +55,7 @@ final class CatalogAccessRecoveryTests: XCTestCase {
     private var db: CatalogDatabase!
     private var model: CatalogModel!
     private var promptCalls = 0
+    private var suiteName = ""
 
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("CatalogAccessRecoveryTests-\(UUID().uuidString)")
@@ -63,7 +64,8 @@ final class CatalogAccessRecoveryTests: XCTestCase {
         var stale = false
         scopedFolder = try URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale)
         db = try CatalogDatabase(inMemory: true)
-        model = CatalogModel(database: db, defaults: UserDefaults(suiteName: "CatalogAccessRecoveryTests-\(UUID().uuidString)")!)
+        suiteName = "CatalogAccessRecoveryTests-\(UUID().uuidString)"
+        model = CatalogModel(database: db, defaults: UserDefaults(suiteName: suiteName)!)
         promptCalls = 0
         model.folderReGrantPrompt = { _ in self.promptCalls += 1; return nil }
         // Two files that are NOT images, so their thumbnails fail.
@@ -74,7 +76,10 @@ final class CatalogAccessRecoveryTests: XCTestCase {
         model.folderBookmarks = [dir.path: try dir.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)]
     }
 
-    override func tearDown() async throws { try? FileManager.default.removeItem(at: dir) }
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: dir)
+        UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+    }
 
     private func photo(_ name: String) throws -> Photo {
         try XCTUnwrap(model.photos.first { $0.filename == name })

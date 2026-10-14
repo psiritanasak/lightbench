@@ -155,6 +155,12 @@ struct EditState: Equatable, Codable {
     /// `curvesHighlights`.
     var blackPoint: Double = 0
 
+    /// The white end of the tone range, -1...1, identity 0 (2026-10-14): the global twin of per-mask Whites (`Mask.whites`). Its own curve pass
+    /// right after the parametric curve (`EditPipeline.applyCurves(... whitePoint:)`, the same call the mask path makes), NOT a moved control
+    /// point of the Shadows/Highlights curve — that reversed the top tones (see the per-mask Whites entry in docs/ROADMAP_HISTORY.md). Brilliance
+    /// and Styles do not feed it. Decodes `?? 0`.
+    var whites: Double = 0
+
     // MARK: - Point Curve (Curves v2)
 
     /// The user's own freely-placed tone curve — Curves v2's point curve,
@@ -1518,6 +1524,7 @@ struct EditState: Equatable, Codable {
         s.curvesHighlights = 0
         s.curvesShadows = 0
         s.blackPoint = 0
+        s.whites = 0
         // Cleared: Compare's "original" means zero tone edits, and a
         // surviving point curve would show tone shaping on the BEFORE side.
         // Safe for this method's pixel-alignment guarantee — the point
@@ -1630,6 +1637,7 @@ struct EditState: Equatable, Codable {
         result.curvesHighlights = curvesHighlights
         result.curvesShadows = curvesShadows
         result.blackPoint = blackPoint
+        result.whites = whites
         // COPIED, unlike `redEyePoints`/`masks`. A tone curve is the
         // archetypal reusable look, and this is the first variable-length
         // field the preset path copies — so the rule is not "arrays are
@@ -1758,7 +1766,7 @@ extension EditState {
         case levelsBlackPoint, levelsWhitePoint, levelsGamma
         case brightness
         case contrast
-        case curvesShadows, curvesHighlights, blackPoint
+        case curvesShadows, curvesHighlights, blackPoint, whites
         case toneCurvePoints
         case toneCurvePointsRed, toneCurvePointsGreen, toneCurvePointsBlue
         case brilliance
@@ -1843,6 +1851,7 @@ extension EditState {
         curvesShadows = try container.decodeIfPresent(Double.self, forKey: .curvesShadows) ?? 0
         curvesHighlights = try container.decodeIfPresent(Double.self, forKey: .curvesHighlights) ?? 0
         blackPoint = try container.decodeIfPresent(Double.self, forKey: .blackPoint) ?? 0
+        whites = try container.decodeIfPresent(Double.self, forKey: .whites) ?? 0
         // `try?`, DELIBERATELY DIFFERENT from the bare `try` that
         // `redEyePoints`/`masks`/`rawWhiteBalanceNeutralPoints` use below.
         // Every sidecar read wraps the whole decode in `try?`

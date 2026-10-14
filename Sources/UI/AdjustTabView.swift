@@ -392,6 +392,10 @@ struct AdjustTabView: View {
                 range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
+                label: "Whites", value: $document.editState.whites,
+                range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            EditSliderRow(
                 label: "Black Point", value: $document.editState.blackPoint,
                 range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
@@ -1714,6 +1718,7 @@ struct AdjustTabView: View {
             && state.curvesHighlights == 0
             && state.curvesShadows == 0
             && state.blackPoint == 0
+            && state.whites == 0
             // A non-empty but identity-SHAPED curve reads as non-identity
             // here, so Reset Adjustments stays enabled and clicking it
             // deletes the points — consistent with how this button treats
@@ -1787,6 +1792,7 @@ struct AdjustTabView: View {
             document.editState.curvesHighlights = 0
             document.editState.curvesShadows = 0
             document.editState.blackPoint = 0
+            document.editState.whites = 0
             document.editState.toneCurvePoints = []
             document.editState.toneCurvePointsRed = []
             document.editState.toneCurvePointsGreen = []

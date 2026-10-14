@@ -478,6 +478,7 @@ enum EditPipeline {
             || state.brightness != 0
             || effective.contrast != 0
             || curvesActive(effective, state.blackPoint)
+            || state.whites != 0
             || pointCurveActive(state)
             || state.hslHue != 0
             || selectiveColorActive(state)
@@ -507,6 +508,11 @@ enum EditPipeline {
         if state.brightness != 0 { img = applyBrightness(state.brightness, to: img) }
         if effective.contrast != 0 { img = applyContrast(effective.contrast, to: img) }
         if curvesActive(effective, state.blackPoint) { img = applyCurves(effective, state.blackPoint, to: img) }
+        // Global Whites: its own white-end pass right after the parametric curve, the same call the per-mask path makes.
+        if state.whites != 0 {
+            let identityTone = EffectiveTone(contrast: 0, shadows: 0, highlights: 0, saturation: 0, vibrance: 0)
+            img = applyCurves(identityTone, 0, whitePoint: clamped(state.whites), to: img)
+        }
         // The user's point curve(s) run immediately AFTER the parametric
         // one, keeping CLAUDE.md's fixed …→contrast→curves→HSL→… order with
         // "curves" as one contiguous multi-stage block. Parametric first
@@ -864,7 +870,7 @@ enum EditPipeline {
     /// to give a strong-but-plausible Levels-style black-clip/lift range.
     private static let kBlackPointSpan: Double = 0.20
 
-    /// Whites (per-mask only): how far the curve's top control point moves, at +/-1. MEASURED on the white-end curve alone
+    /// Whites (per-mask and, since 2026-10-14, global `EditState.whites`): how far the curve's top control point moves, at +/-1. MEASURED on the white-end curve alone
     /// (`ToneCurveSpline.value(at:)`, the pipeline's perceptual domain): at span 0.10 white 1.0 goes to 1.243 (+1) / 0.787 (-1) while perceptual
     /// 0.25 and 0.5 move by 0.007 or less, so it is a control for the bright end; 0.15 pulled white to 0.692 and 0.20 to
     /// 0.604 (too strong, flattening everything above 0.9), so 0.10 was chosen.
@@ -935,7 +941,8 @@ enum EditPipeline {
         ]
     }
 
-    /// `whitePoint` (per-mask Whites) defaults to 0, which leaves every global call exactly as before (`1 + 0 * span` is 1).
+    /// `whitePoint` (Whites — per-mask, and the separate global Whites pass) defaults to 0, which leaves the Shadows/Highlights/Black Point call exactly as before (`1 + 0 * span` is 1).
+    /// Global Whites' position (after this parametric curve, before the point curves) is a CONVENTION copied from the mask path, not a measured requirement.
     private static func applyCurves(_ effective: EffectiveTone, _ blackPoint: Double, whitePoint: Double = 0, to image: CIImage) -> CIImage {
         guard let kernel = toneCurveKernel,
               let spline = ToneCurveSpline(points: curveControlPoints(effective, blackPoint, whitePoint: whitePoint))

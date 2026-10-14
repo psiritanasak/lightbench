@@ -16,6 +16,8 @@ Edits are stored as parameter sets and rendered live on the GPU.
   next step, open reviewer issues. Read first when resuming after a cutoff.
 - **`IMPROVEMENTS.md`**: OPEN non-blocking gaps/nits logged during review,
   not yet worth their own session, plus a one-line index of shipped ones.
+- **`docs/RELEASE.md`** + **`scripts/release.sh`**: how to ship (icon, version, Developer ID signing, notarization, clean-machine test, what
+  still needs the owner's decision). `scripts/release.sh --check` is a no-account preflight; run it before any release.
 - **`docs/PROGRESS_HISTORY.md`** / **`docs/IMPROVEMENTS_HISTORY.md`**: archived
   full text of shipped work moved out of the two files above. When an item
   ships, move its detail there and leave a short summary/index line behind.

@@ -13,3 +13,6 @@ xcuserdata/
 
 # Optional depth model (scripts/fetch_depth_model.sh); ~50 MB, never committed
 Models/
+
+# R session history (stray)
+.Rhistory

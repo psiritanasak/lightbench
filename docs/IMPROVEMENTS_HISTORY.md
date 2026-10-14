@@ -1159,3 +1159,19 @@ Known, accepted: a JPEG/PNG with COMPLETE pixel data but no final EOI/IEND is
 also refused (indistinguishable from a cut without decoding every MCU) —
 pinned by a test, absent from the real library. Not atomic with the decode
 that follows. Other formats (HEIC/WebP/GIF/BMP/TIFF/RAW) are unchecked.
+
+
+---
+
+# Archived from IMPROVEMENTS.md on 2026-10-14
+
+### D39. A collision suffix " (N)" can push a file name past 255 bytes (found reviewing Export naming, 2026-09-30) — FIXED in batch-rename commit 3 (`PhotoExporter.baseNameFitting`: trims whole characters off the base so `base + " (N)" + ext` fits; shared by Export and Enhance via `uniqueFileURL`)
+
+`PhotoExporter.uniqueFileURL` (shared by Export and Enhance) appends " (2)", " (3)"…
+to a base name that already passed the 255-byte check WITHOUT the suffix. A base within a few
+bytes of the limit then produces a path `fileExists` can't resolve (ENAMETOOLONG reads as "no
+such file"), the loop returns that candidate, and the write fails with a generic Cocoa error;
+nothing is overwritten and the temp file is cleaned up, so it is safe but the message is poor.
+Pre-existing (the old default naming had it too). Cleanest fix: trim the base to fit BEFORE adding
+the suffix, in the one shared function.
+

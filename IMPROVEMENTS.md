@@ -27,6 +27,7 @@ performance items, MEASURE before and after.
 - **D7** — Code design: split ContentView.swift (1352 lines) — SHIPPED 2026-08-28
 - **D34** — `xcodebuild test` ran migrations against the user's REAL catalog (found 2026-09-30, Pick/Reject live check) — SHIPPED 2026-09-30
 - **D37** — A truncated JPEG/PNG exported or enhanced without any warning (Phase 8 audit, 2026-09-30) — SHIPPED 2026-09-30
+- **D39** — A collision suffix " (N)" can push a file name past 255 bytes — FIXED 2026-09-30 (`PhotoExporter.baseNameFitting`)
 
 - **Open, from the LightCraft comparison (2026-10-08):** **D57** (feature gaps) and **D58** (UI/UX) — see the end of this file.
 
@@ -1132,16 +1133,6 @@ Seen only after the app had also become unresponsive behind an invisible "Open"
 panel, so heavy queued renders / GPU memory pressure on the 8GB machine are
 suspects, but nothing was verified. If it recurs: capture it, note zoom/pan state
 and pending edits, and check whether it clears after a re-render. Not investigated.
-
-### D39. A collision suffix " (N)" can push a file name past 255 bytes (found reviewing Export naming, 2026-09-30) — FIXED in batch-rename commit 3 (`PhotoExporter.baseNameFitting`: trims whole characters off the base so `base + " (N)" + ext` fits; shared by Export and Enhance via `uniqueFileURL`)
-
-`PhotoExporter.uniqueFileURL` (shared by Export and Enhance) appends " (2)", " (3)"…
-to a base name that already passed the 255-byte check WITHOUT the suffix. A base within a few
-bytes of the limit then produces a path `fileExists` can't resolve (ENAMETOOLONG reads as "no
-such file"), the loop returns that candidate, and the write fails with a generic Cocoa error;
-nothing is overwritten and the temp file is cleaned up, so it is safe but the message is poor.
-Pre-existing (the old default naming had it too). Cleanest fix: trim the base to fit BEFORE adding
-the suffix, in the one shared function.
 
 ### D40. A crash mid-rename can leave photos hidden or the catalog stale (batch-rename commit 3 review, 2026-09-30) — open, accepted for v1
 

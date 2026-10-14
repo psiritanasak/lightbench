@@ -787,9 +787,9 @@ struct ContentView: View {
     /// `brushPoints.isEmpty` is false the whole time.
     ///
     /// Reviewer-caught (real, not fixed this slice — see IMPROVEMENTS.md's
-    /// D13): switching PHOTOS while an unpainted brush mask is armed is
-    /// NOT actually covered, despite this doc comment previously claiming
-    /// otherwise. `ImageDocumentModel.load(from:)` sets `currentURL` and
+    /// D13, FIXED 2026-10-14 by `ImageDocumentModel.willSwitchPhoto` ->
+    /// `discardUnfinishedPlaceholders`): switching PHOTOS while an unpainted brush mask is armed WAS
+    /// not covered, despite this doc comment previously claiming otherwise (the history of that gap follows). `ImageDocumentModel.load(from:)` sets `currentURL` and
     /// `editState` to the INCOMING photo synchronously, in the same block
     /// — by the time `.onChange(of: document.currentURL)` below fires and
     /// clears `brushPaintingMaskID`, `document.editState.masks` is
@@ -801,6 +801,14 @@ struct ContentView: View {
     /// (filmstrip, Library grid, ⌘←/⌘→) or via a hook inside
     /// `ImageDocumentModel` itself — out of scope for this slice's own
     /// `ContentView`-only disarm mechanism.
+    /// Photo-switch cleanup (D13): the same three discards the disarm `.onChange`s run, but for whatever is armed RIGHT NOW and while the
+    /// document still holds the photo being left — `ImageDocumentModel.willSwitchPhoto` calls this before `load(from:)` flushes the sidecar.
+    private func discardUnfinishedPlaceholders() {
+        discardUnpaintedBrushMask(brushPaintingMaskID)
+        discardUnpickedColorRangeMask(colorPickingMaskID)
+        discardUnpickedPointColor(pointColorPickingID)
+    }
+
     private func discardUnpaintedBrushMask(_ id: UUID?) {
         guard let id, let mask = document.editState.masks.first(where: { $0.id == id }) else { return }
         guard mask.kind == .brush, mask.brushPoints.isEmpty, mask.isIdentity else { return }
@@ -1175,6 +1183,8 @@ struct ContentView: View {
             // it showing the original forever.
             .onAppear {
                 document.onSidecarSaved = { url in catalog.invalidateThumbnail(for: url) }
+                // D13: drop an armed-but-unfinished mask / Point Color from the OUTGOING photo before `load(from:)` flushes and swaps state.
+                document.willSwitchPhoto = { discardUnfinishedPlaceholders() }
             }
     }
 

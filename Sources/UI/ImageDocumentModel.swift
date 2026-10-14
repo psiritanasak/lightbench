@@ -72,6 +72,12 @@ final class ImageDocumentModel: ObservableObject {
     /// already bridges the opposite direction (Library selection →
     /// `document.load(from:)`).
     var onSidecarSaved: ((URL) -> Void)?
+
+    /// Called at the very start of `load(from:)`, BEFORE the outgoing photo's pending edits are flushed and before `editState` is replaced, so the
+    /// Editor can drop an unfinished placeholder (an armed, never-painted Brush mask, an unpicked Color Range mask or Point Color instance) from
+    /// the OUTGOING photo instead of leaving it in that photo's sidecar (IMPROVEMENTS.md D13). Every route that opens a photo goes through
+    /// `load(from:)` (grid, filmstrip, ⌘←/⌘→, Open…, culling), so this one hook covers them all.
+    var willSwitchPhoto: (() -> Void)?
     @Published var editState = EditState() {
         didSet {
             scheduleHistogramUpdate()
@@ -273,6 +279,7 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var isLoadInFlight = false
 
     func load(from url: URL) async {
+        willSwitchPhoto?()
         loadGeneration += 1
         let myGeneration = loadGeneration
         isLoadInFlight = true

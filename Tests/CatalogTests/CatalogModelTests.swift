@@ -859,6 +859,8 @@ final class CatalogModelTests: XCTestCase {
         defer { isolatedDefaults.removePersistentDomain(forName: suiteName) }
 
         let model = await makeModel(defaults: isolatedDefaults)
+        // chmod 000 stands in for a lost grant here; the real probe now calls it a plain permission failure (D32), so inject the sandbox verdict.
+        model.readabilityProbe = { _ in .sandboxDenied }
         model.activeFolders = [fixture.folder.path] // stale claim — no matching bookmark below
         var promptedFolder: URL?
         model.folderReGrantPrompt = { folder in
@@ -932,6 +934,8 @@ final class CatalogModelTests: XCTestCase {
         defer { isolatedDefaults.removePersistentDomain(forName: suiteName) }
 
         let model = await makeModel(defaults: isolatedDefaults) // `activeFolders` starts completely empty
+        // chmod 000 stands in for a lost grant here; the real probe calls it a plain permission failure (D32), so inject the sandbox verdict.
+        model.readabilityProbe = { _ in .sandboxDenied }
         var promptedFolder: URL?
         model.folderReGrantPrompt = { folder in
             promptedFolder = folder
@@ -956,6 +960,8 @@ final class CatalogModelTests: XCTestCase {
         defer { cleanupUnreadableFileFixture(fixture) }
 
         let model = await makeModel()
+        // chmod 000 stands in for a lost grant here; the real probe calls it a plain permission failure (D32), so inject the sandbox verdict.
+        model.readabilityProbe = { _ in .sandboxDenied }
         model.activeFolders = [fixture.folder.path]
         model.folderReGrantPrompt = { _ in nil } // simulates a Cancel click
 
@@ -975,6 +981,8 @@ final class CatalogModelTests: XCTestCase {
         defer { cleanupUnreadableFileFixture(fixture) }
 
         let model = await makeModel()
+        // chmod 000 stands in for a lost grant here; the real probe calls it a plain permission failure (D32), so inject the sandbox verdict.
+        model.readabilityProbe = { _ in .sandboxDenied }
         model.activeFolders = [fixture.folder.path]
         model.folderReGrantPrompt = { _ in URL(fileURLWithPath: "/tmp/cm-completely-unrelated-\(UUID().uuidString)") }
 
@@ -1001,6 +1009,8 @@ final class CatalogModelTests: XCTestCase {
         defer { isolatedDefaults.removePersistentDomain(forName: suiteName) }
 
         let model = await makeModel(defaults: isolatedDefaults)
+        // chmod 000 stands in for a lost grant here; the real probe now calls it a plain permission failure (D32), so inject the sandbox verdict.
+        model.readabilityProbe = { _ in .sandboxDenied }
         let root = fixture.folder.path
         model.activeFolders = [root]
         // Deliberately malformed — `URL(resolvingBookmarkData:)` fails to
@@ -1047,6 +1057,8 @@ final class CatalogModelTests: XCTestCase {
         }
 
         let model = await makeModel()
+        // chmod 000 stands in for a lost grant here; the real probe calls it a plain permission failure (D32), so inject the sandbox verdict.
+        model.readabilityProbe = { _ in .sandboxDenied }
         model.activeFolders = [folder.path]
         var promptCount = 0
         model.folderReGrantPrompt = { _ in

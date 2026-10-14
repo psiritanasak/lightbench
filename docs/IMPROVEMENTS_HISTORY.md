@@ -1175,3 +1175,148 @@ nothing is overwritten and the temp file is cleaned up, so it is safe but the me
 Pre-existing (the old default naming had it too). Cleanest fix: trim the base to fit BEFORE adding
 the suffix, in the one shared function.
 
+---
+
+# Archived from IMPROVEMENTS.md on 2026-10-14 (robustness session)
+
+**Status (D13): FIXED 2026-10-14: `ImageDocumentModel.willSwitchPhoto` runs at the start of `load(from:)` (before the flush and the state swap) and `ContentView.discardUnfinishedPlaceholders` drops an armed unpainted Brush mask / unpicked Color Range mask / unpicked Point Color from the OUTGOING photo; covers every route that opens a photo. Not covered: entering the Library with a tool armed (unchanged).**
+
+### D13. Switching photos with an unpainted Brush mask armed leaks a phantom mask (Phase 7 slice 4, reviewer-caught)
+
+`ContentView.discardUnpaintedBrushMask` is wired to fire on every
+disarm route EXCEPT photo switch, despite that function's own doc
+comment previously (wrongly) claiming full coverage — caught by the
+reviewer's second pass, not the first. Root cause:
+`ImageDocumentModel.load(from:)` sets `currentURL` and `editState` to
+the INCOMING photo synchronously, in the same block, so by the time
+`ContentView`'s `.onChange(of: document.currentURL)` fires and clears
+`brushPaintingMaskID`, `document.editState.masks` is already the NEW
+photo's array — `discardUnpaintedBrushMask` looks the OLD mask's id up
+in the wrong photo's masks and silently no-ops, while the OUTGOING
+photo's phantom empty `.brush` mask has already been flushed to its own
+sidecar by the pre-existing `flushPendingSidecarSave()` call in the same
+navigation path. User-visible effect: "Add Brush" on photo A, don't
+paint, switch to photo B — photo A's sidecar keeps a `Mask N` with no
+points and identity adjustments, and (since a placed-but-inert mask
+counts as a real edit, same as `redEyePoints`' own convention) "Revert
+to Original" reads as enabled on photo A even though nothing visibly
+changed.
+
+Properly fixing this needs the cleanup to run BEFORE `load(from:)` swaps
+state — either at every photo-switch call site (filmstrip, Library grid,
+⌘←/⌘→) or via a hook inside `ImageDocumentModel` itself — a genuinely
+different shape than `ContentView`'s existing single-`.onChange`
+mechanism, which only ever sees state AFTER it's already changed.
+Deliberately left as a documented gap rather than rushed:
+`ContentView.discardUnpaintedBrushMask`'s own doc comment and its
+`.onChange` call site's own comment (both in `ContentView.swift`) now
+say so explicitly instead of claiming coverage that doesn't exist.
+
+**Status (D28): CLOSED 2026-10-14: the (photo, edits, history) snapshot taken before the modal folder step (a8dd564) closes the hazard whether or not the interleave is reachable. Two cosmetic leftovers stay as nits: `pasteSettings` reads the live `currentURL` after its flush (its own path-match guard covers it) and a `.failed` result can show its error message while a different photo is open.**
+
+### D28. `ImageDocumentModel.saveSidecarNow` can write a load-during-save race onto the WRONG sidecar (reviewer-caught, Paste Settings review round 4, pre-existing — not introduced by that feature)
+
+**STATUS (2026-10-02): HARDENED, reachability UNDETERMINED.** `saveSidecarNow` now snapshots `(currentURL, editState)` together BEFORE the folder-access step and writes/reports exactly that snapshot (commit a8dd564; `SidecarFolderAccessing` protocol + `ImageDocumentModel.init(folderAccess:)` make the panel stubbable; `Tests/EditEngineTests/SaveSidecarRaceTests.swift`). The test pins the snapshot semantics by changing the live `editState` while a stubbed panel is up (mutation: write the live state -> fails). The full interleave this item describes — a whole `load(from:)` finishing inside the panel — was NEVER reproduced: probes (2026-10-02) showed a toy multi-hop main-actor Task completes inside a nested `RunLoop` spin when it starts from a run-loop TIMER callback but not from a main-queue block or a Swift job, while a REAL `load(from:)` queued before a timer-triggered save did not complete in 10s. So the original hazard may or may not be reachable from event-driven callers (ContentView's onChange flush, the paste confirmation); either way the snapshot closes it. No live check (needs a re-prompting bookmark and a photo switch inside a modal panel). Leftovers: `pasteSettings`' post-flush declined-folder check reads the live `currentURL` (the callers' `canProceed` path match covers it); a `.failed` access result would show `sidecarSaveErrorMessage` while another photo is open (cosmetic).
+
+Found while adversarially re-verifying Paste Settings' own load/batch race
+(4 review rounds on that one) — this is a SEPARATE, PRE-EXISTING hazard in
+`saveSidecarNow` itself, not something Paste Settings introduced, and it
+affects every ordinary debounced sidecar save, not just batch pastes.
+
+`saveSidecarNow()` captures `currentURL` at its own top, then — if the
+containing folder's bookmark needs re-resolving — can show an `NSOpenPanel`
+(`SidecarFolderAccess.resolveOrRequest`), which pumps the AppKit modal run
+loop. If a NEW photo's `load(from:)` starts and finishes DURING that panel
+(the same "a modal panel pumps the run loop, letting an unrelated async
+load interleave" mechanism Paste Settings' own `canProceed` guard was
+built to close), `saveSidecarNow` resumes afterward, reads the NOW-CURRENT
+`editState` (the newly-loaded photo's), but still writes it to the
+ORIGINALLY-captured `currentURL`'s sidecar path — silently writing the
+new photo's edit state into the OLD photo's sidecar file.
+
+Narrow in practice (needs a folder-access prompt to actually appear at
+the exact moment a photo switch is also in flight — most sessions never
+re-prompt after the first grant per folder), but a real, silent data-
+integrity hazard, not a theoretical one — the exact mechanism is proven
+correct by this same session's own `PasteSettingsModel.performPaste`
+finding. Not fixed here — out of scope for the Paste Settings feature
+that surfaced it. A fix would need `saveSidecarNow` to re-capture (or
+re-verify) `currentURL`/`editState` together, atomically, AFTER any
+panel-showing step completes, not just at its own top.
+
+**Specifically under Paste Settings**: this is the one documented residual
+exposure `PasteSettingsModel.performPaste`'s own `canProceed` guard (see
+that method's doc comment) doesn't close — reached only via the open-photo
+branch's own `applyToOpenPhoto` → `pasteSettings` → `saveSidecarNow` call,
+which runs LAST (after the entire batch loop, a deliberate ordering — see
+that same doc comment). If this exact race fires there, the sidecar that
+gets silently overwritten with a DIFFERENT (newly-loaded) photo's edit
+state is the photo that was JUST pasted onto — the paste is lost, and
+that photo's undo history is already gone too (the load reset it). Needs
+two rare conditions at once (a bookmark that goes stale on every resolve,
+right after the pre-flight just granted it, AND a photo switch that
+happens to finish while that repeat panel is up) — accepted as an
+extremely narrow residual, not worth a further guard layer in this
+feature on top of the general `saveSidecarNow` fix this item already
+describes.
+
+**Status (D31): FIXED 2026-10-14 (narrower form): a thumbnail decode that returns nil probes the file (`FileReadability`); on a SANDBOX denial the folder's stored bookmark is re-resolved silently (never a panel), once per root per session, and the grid's thumbnail revisions are bumped. Correction to the entry's wording: `isPhotoConfirmedMissing` is not affected (it reports Missing only when the file is absent); stale access shows as "not missing" plus a thumbnail that never appears.**
+
+### D31. Thumbnail decode and `isPhotoConfirmedMissing` share the same stale-security-scope gap `ensureAccessActive` just fixed for the Editor-open path — not fixed there
+
+Fixing the "Library-driven photo open sometimes fails" bug (see
+PROGRESS.md's own write-up and `CatalogModel.ensureAccessActive`'s doc
+comment) only covers `ImageDocumentModel.load(from:)`'s 3 catalog-driven
+call sites (Library grid, Editor filmstrip, ⌘←/⌘→). `ThumbnailCache`/
+`RawDecoder.decode` read the exact same bare file paths with no scope
+acquisition of their own, relying on the identical
+`CatalogModel.activeFolders`/`folderBookmarks` ambient state — so a
+folder whose security scope has gone stale (the same "membership alone
+proves nothing" gap `isPhotoConfirmedMissing`'s own doc comment already
+named) should, in principle, break thumbnail decode too. It just fails
+silently there (a spinner that never resolves, or a false "Missing"
+placeholder) instead of surfacing the visible "Couldn't open…" alert
+that made the Editor-open case noticeable in the first place.
+
+Not fixed this slice — `ensureAccessActive(forPhotoAt:)` could in
+principle be called from `CatalogModel.thumbnail(for:)` too, but that's a
+MUCH hotter path (every visible grid cell, not one explicit user action).
+Beyond the NSOpenPanel re-grant fallback (the obviously expensive branch,
+already flagged), even the CHEAP common-case probe would add one real
+`FileHandle(forReadingAtPath:)` open/close per thumbnail request — small,
+but paid on every grid scroll rather than one explicit open, so this
+needs its own measurement before treating that as free, not just an
+assumption that it is.
+
+**Status (D32): FIXED 2026-10-14: `FileReadability.classify/probe` separates a sandbox denial (open fails although the POSIX bits allow reading) from a plain chmod (bits forbid), a missing file and other failures; `ensureAccessActive` recovers only on `.sandboxDenied`, injectable via `CatalogModel.readabilityProbe`. LIMIT: a real sandbox denial could not be produced in the test host (it reads files outside its container), so the errno behaviour is by design/documentation; the verdict deliberately does not depend on EPERM vs EACCES.**
+
+### D32. `ensureAccessActive`'s readability probe can't tell a lost security scope from an ordinary POSIX-permissions failure (reviewer-caught, round 4)
+
+`CatalogModel.ensureAccessActive`'s recovery probe (`needsRecovery`)
+correctly distinguishes "file doesn't exist" (skip recovery — see D31's
+neighboring history and that method's own doc comment) from "file exists
+but `FileHandle(forReadingAtPath:)` fails" (recover). It does NOT further
+distinguish, within that second case, a genuinely lost security scope
+from an ordinary file the user (or something else) made unreadable via
+plain POSIX permissions (`chmod 000`, or similar) — both currently read
+as "needs recovery." Consequence, each time such a file is opened: the
+folder's root is evicted from `activeFolders` and its security scope
+re-started (one more unmatched start, same cost class this method
+already accepts for genuine recoveries — see `reacquireAccess`'s own doc
+comment), and if no bookmark resolves, a re-grant panel appears that
+cannot possibly fix an ordinary permissions problem.
+
+A precise fix would replace the `FileHandle`-based probe with a raw
+`open(2)` call and branch on `errno`: `ENOENT` → missing (already
+handled), a sandbox-specific denial (`EPERM`, per Apple's own sandboxing
+model) → recover, plain POSIX `EACCES` → leave alone, let `load(from:)`'s
+existing error surface normally. Not built this slice — genuinely rare
+in practice (a photo the user has independently chmod'd is an unusual
+scenario for a photo library), and the existing `chmod 000` unit-test
+fixtures (`CatalogModelTests`'s `makeUnreadableFileFixture`) would need
+to become sandbox-denial fixtures instead, which the current test
+suite has no way to construct deterministically (this project's own
+established boundary for anything panel/sandbox-adjacent — see
+`ensureAccessActive`'s own reviewer history for the same limitation
+applied elsewhere).
+

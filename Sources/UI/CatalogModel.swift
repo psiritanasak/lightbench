@@ -693,7 +693,55 @@ final class CatalogModel: ObservableObject {
     /// and true after a relaunch once `activateKnownFolders()` (run once
     /// at `init`) has resolved its stored bookmark.
     func thumbnail(for photo: Photo) async -> CGImage? {
-        await thumbnailCache.thumbnail(for: photo)
+        let result = await thumbnailCache.thumbnail(for: photo)
+        if result == nil { await recoverAccessAfterFailedThumbnail(photo) }
+        return result
+    }
+
+    /// Roots whose access a failed thumbnail already tried to restore this session (one silent attempt per root, so a folder that stays broken
+    /// is not re-resolved for every cell). Never cleared: a grant that goes stale a SECOND time in one session gets no silent recovery (the Editor-open path
+    /// still recovers it, with a prompt). Separate from `reactivationTasks`, so a thumbnail recovery and an Editor-open recovery of the same root can each start a
+    /// scope (at most one leaked extension per root).
+    private var silentRecoveryTried: Set<String> = []
+    /// Photos whose failure was already classified as NOT a sandbox problem (corrupt file, offline volume, chmod): not probed again every time a
+    /// cell asks for its thumbnail (a `open`+`stat` per cell per scroll could block on a stuck network mount).
+    private var thumbnailFailureNotSandbox: Set<String> = []
+    /// The recovery in flight per root: concurrent failing cells (a whole screen of them at once) share ONE probe and ONE re-resolve instead of each
+    /// starting their own (each unmatched `startAccessingSecurityScopedResource()` leaks a sandbox extension). Same shape as `reactivationTasks`.
+    private var thumbnailRecoveryTasks: [String: Task<Void, Never>] = [:]
+
+    /// D31: a thumbnail decode that returns nil is the one moment worth checking WHY (failed decodes are not cached, so this does not run for
+    /// every cell). If the file exists and its permission bits allow reading but `open` fails, the folder's security scope has gone stale: re-resolve
+    /// its stored bookmark silently — NEVER a panel from a scrolling grid — and ask the grid to request its thumbnails again.
+    private func recoverAccessAfterFailedThumbnail(_ photo: Photo) async {
+        let path = photo.path
+        guard !thumbnailFailureNotSandbox.contains(path),
+              let root = PhotoImporter.confirmedActiveFolderRoot(forPhotoAt: path, activeFolders: activeFolders)
+                ?? PhotoImporter.confirmedActiveFolderRoot(forPhotoAt: path, activeFolders: Set(folderBookmarks.keys)),
+              !silentRecoveryTried.contains(root) else { return }
+        // Everything from the checks above through the task assignment below has no suspension point, so a second cell cannot slip in between.
+        // A cell that waited on someone else's recovery returns only if that recovery settled the question for ITS photo too: the shared probe looked at
+        // a different file, which may have failed for another reason (corrupt, chmod) while this one really is sandbox-denied.
+        while let inFlight = thumbnailRecoveryTasks[root] {
+            await inFlight.value
+            guard !silentRecoveryTried.contains(root), !thumbnailFailureNotSandbox.contains(path) else { return }
+        }
+        let probe = readabilityProbe
+        let task = Task { [weak self] in
+            guard let self else { return }
+            guard await Task.detached(operation: { probe(path) }).value == .sandboxDenied else {
+                self.thumbnailFailureNotSandbox.insert(path)
+                return
+            }
+            self.silentRecoveryTried.insert(root)
+            guard await self.reacquireAccess(forStaleRoot: root, allowPrompt: false) else { return }
+            for candidate in self.photos where candidate.path.hasPrefix(root + "/") {
+                self.thumbnailRevisions[candidate.path, default: 0] += 1
+            }
+        }
+        thumbnailRecoveryTasks[root] = task
+        await task.value
+        thumbnailRecoveryTasks[root] = nil
     }
 
     /// True only if `photo`'s file is confirmed genuinely missing — used by
@@ -1617,6 +1665,9 @@ final class CatalogModel: ObservableObject {
     /// already established for a different real-race problem. Tests
     /// substitute a closure that returns a value directly, with no panel
     /// ever shown.
+    /// How `ensureAccessActive` and the thumbnail recovery classify an unreadable file (injectable: tests cannot produce a real sandbox denial).
+    var readabilityProbe: @Sendable (String) -> FileReadability = { FileReadability.probe($0) }
+
     var folderReGrantPrompt: (URL) -> URL? = { folder in
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -1742,12 +1793,10 @@ final class CatalogModel: ObservableObject {
             // that can't fix a deletion — `load(from:)`'s own existing
             // "may be missing" error already covers a genuinely-gone file
             // correctly on its own.
-            let needsRecovery = await Task.detached {
-                guard FileManager.default.fileExists(atPath: path) else { return false }
-                guard let handle = FileHandle(forReadingAtPath: path) else { return true }
-                try? handle.close()
-                return false
-            }.value
+            let probe = self.readabilityProbe
+            // Only a SANDBOX denial is evidence of a lost grant (D32): a missing file, a plain chmod and any other failure cannot be fixed by
+            // evicting the folder, starting another scope or showing a re-grant panel.
+            let needsRecovery = await Task.detached { probe(path) == .sandboxDenied }.value
             guard needsRecovery else { return } // the common case: access still holds, nothing to do
             await self.reacquireAccess(forStaleRoot: root)
         }
@@ -1764,7 +1813,8 @@ final class CatalogModel: ObservableObject {
     /// no matching `stop` anywhere in this file, by design) — acceptable
     /// because it only runs when a real problem was just confirmed, not on
     /// every ordinary open.
-    private func reacquireAccess(forStaleRoot root: String) async {
+    @discardableResult
+    private func reacquireAccess(forStaleRoot root: String, allowPrompt: Bool = true) async -> Bool {
         activeFolders.remove(root)
         if let data = folderBookmarks[root] {
             var isStale = false
@@ -1785,9 +1835,11 @@ final class CatalogModel: ObservableObject {
                 ) {
                     folderBookmarks[root] = refreshed
                 }
-                return
+                return true
             }
         }
+        // The silent variant (thumbnail recovery) never shows a panel: a failed re-resolve just reports false.
+        guard allowPrompt else { return false }
 
         // No bookmark, or it didn't resolve/start even after the retry
         // above. Deliberately does NOT delete `folderBookmarks[root]` here
@@ -1801,11 +1853,12 @@ final class CatalogModel: ObservableObject {
         let folder = URL(fileURLWithPath: root)
         guard let grantedURL = folderReGrantPrompt(folder), grantedURL.coversAccess(to: folder) else {
             importStatusMessage = "Couldn't restore access to \"\(folder.lastPathComponent)\" — this photo may not open."
-            return
+            return false
         }
         if let warning = activateFolderAccess(for: grantedURL) {
             importStatusMessage = warning
         }
+        return true
     }
 
     /// Captures a security-scoped bookmark for `folder` and activates it

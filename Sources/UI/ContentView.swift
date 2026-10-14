@@ -44,7 +44,8 @@ struct ContentView: View {
                     hasPendingPaste: pasteModel.pendingTargets != nil,
                     hasModalPanel: NSApp.modalWindow != nil,
                     isToolScanRunning: catalog.faces.isWorking || catalog.duplicates.isScanning,
-                    isMerging: catalog.mergeBusy
+                    isMerging: catalog.mergeBusy,
+                    isXMPBusy: catalog.xmpBusy
                 ).reason
             }
         )
@@ -1346,7 +1347,7 @@ struct ContentView: View {
     /// True while any other sheet/dialog a keyword sheet could collide with is up (or a long operation runs).
     private var otherSheetIsPresented: Bool {
         renameModel.isPresentingSheet || renameModel.isWorking || exportModel.isPresentingOptions
-            || exportModel.isExporting || pasteModel.pendingTargets != nil || catalog.mergeBusy
+            || exportModel.isExporting || pasteModel.pendingTargets != nil || catalog.mergeBusy || catalog.xmpBusy
     }
 
     private var mainContent: some View {
@@ -1760,18 +1761,28 @@ struct ContentView: View {
                         }
                         .disabled(catalog.selectedPhotosInDisplayedGrid.count < 2 || otherSheetIsPresented || catalog.mergeBusy || document.isLoadInFlight)
 
+                        Button("Write Metadata to XMP (\(catalog.selectedPhotosInDisplayedGrid.count))…") {
+                            catalog.xmpRequested = .write
+                        }
+                        .disabled(catalog.selectedPhotosInDisplayedGrid.isEmpty || otherSheetIsPresented || catalog.xmpBusy || catalog.mergeBusy || document.isLoadInFlight)
+
+                        Button("Read Metadata from XMP (\(catalog.selectedPhotosInDisplayedGrid.count))…") {
+                            catalog.xmpRequested = .read
+                        }
+                        .disabled(catalog.selectedPhotosInDisplayedGrid.isEmpty || otherSheetIsPresented || catalog.xmpBusy || catalog.mergeBusy || document.isLoadInFlight)
+
                         Button("Rename Files (\(selectedPhotosVisibleInGrid.count))…") {
                             renameModel.begin(photos: selectedPhotosVisibleInGrid, catalog: catalog, providers: renameProviders)
                         }
                         .disabled(
                             selectedPhotosVisibleInGrid.isEmpty || renameModel.isWorking || renameModel.isPresentingSheet
-                                || document.isLoadInFlight || catalog.mergeBusy
+                                || document.isLoadInFlight || catalog.mergeBusy || catalog.xmpBusy
                         )
 
                         Button("Undo Rename") {
                             renameModel.undo(catalog: catalog, providers: renameProviders)
                         }
-                        .disabled(!renameModel.canUndo || renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy)
+                        .disabled(!renameModel.canUndo || renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy || catalog.xmpBusy)
 
                         Button("Paste Settings (\(selectedPhotosVisibleInGrid.count))…") {
                             pasteModel.requestPaste(onto: selectedPhotosVisibleInGrid)

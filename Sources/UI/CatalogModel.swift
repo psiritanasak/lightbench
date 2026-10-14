@@ -145,6 +145,11 @@ final class CatalogModel: ObservableObject {
     @Published var mergeRequested: MergeModel.Kind?
     @Published var mergeBusy = false
     let merge = MergeModel()
+    /// XMP sidecar read/write (see `XMPModel`): menus set `xmpRequested`; `XMPDialogModifier` performs it. `xmpBusy` mirrors "a confirmation is
+    /// up or XMP files are being read/written".
+    @Published var xmpRequested: XMPModel.Kind?
+    @Published var xmpBusy = false
+    let xmp = XMPModel()
     @Published var searchText: String = ""
 
     /// What the Library grid actually renders — `photos` (the
@@ -392,8 +397,10 @@ final class CatalogModel: ObservableObject {
         Task.detached { [weak self] in
             let urls = PhotoImporter.imageFiles(in: folder)
             do {
+                let before = Set(try await database.allPhotos().compactMap(\.id))
                 let result = try await database.importPhotos(at: urls)
                 await self?.refresh()
+                await self?.autoReadXMP(newerThan: before)
                 await MainActor.run {
                     self?.importsInFlight -= 1
                     var message = Self.summary(for: result)
@@ -451,8 +458,10 @@ final class CatalogModel: ObservableObject {
                 return
             }
             do {
+                let before = Set(try await database.allPhotos().compactMap(\.id))
                 let result = try await database.importFolderTree(node)
                 await self?.refresh()
+                await self?.autoReadXMP(newerThan: before)
                 await MainActor.run {
                     self?.importsInFlight -= 1
                     var message = Self.summary(for: result)
@@ -586,6 +595,40 @@ final class CatalogModel: ObservableObject {
         invalidateThumbnail(for: url)
         await refresh()
         return photo
+    }
+
+    /// After an import: reads the `.xmp` sidecar (or embedded XMP) of every photo that was not in the catalog before and fills ONLY fields still at
+    /// their defaults, so a photo already rated/labelled/keyworded in another app arrives that way and a value the user set is never overwritten.
+    /// Read-only, silent; runs inside the import's `importsInFlight` window so a rename cannot start under it. A failure is ignored (the manual
+    /// "Read Metadata from XMP…" is the explicit path).
+    func autoReadXMP(newerThan before: Set<Int64>) async {
+        guard let database, let all = try? await database.allPhotos() else { return }
+        let fresh = all.filter { photo in photo.id.map { !before.contains($0) } ?? false }
+        guard !fresh.isEmpty else { return }
+        let allPaths = all.map(\.path)
+        let reads = await Task.detached { XMPModel.readAll(photos: fresh, allPaths: allPaths) }.value
+        _ = try? await applyXMPFields(reads.items, mode: .fillDefaults)
+    }
+
+    /// The CURRENT catalog rows for `ids` (after a refresh, so keyword names are current too), in the order given; ids that no longer exist are
+    /// dropped. XMP writes use this rather than the rows captured when the menu was clicked (a folder prompt and a background task sit between).
+    func freshPhotos(ids: [Int64]) async -> [Photo] {
+        guard let database, let all = try? await database.allPhotos() else { return [] }
+        await refresh()
+        let byID = Dictionary(all.compactMap { photo in photo.id.map { ($0, photo) } }, uniquingKeysWith: { first, _ in first })
+        return ids.compactMap { byID[$0] }
+    }
+
+    /// Applies fields read from XMP sidecars (`XMPImportPolicy` decides what changes), in chunks so one huge batch cannot hold the
+    /// database queue (which blocks reads too) for long, then refreshes the Library. Returns the ids that really changed.
+    func applyXMPFields(_ items: [(photoID: Int64, fields: XMPLibraryFields)], mode: XMPImportPolicy.Mode) async throws -> Set<Int64> {
+        guard let database else { throw CatalogDatabaseError(message: "The photo catalog isn't ready yet — try again in a moment.") }
+        var changed = Set<Int64>()
+        for start in stride(from: 0, to: items.count, by: 500) {
+            changed.formUnion(try await database.applyLibraryFields(Array(items[start..<min(start + 500, items.count)]), mode: mode))
+        }
+        if !changed.isEmpty { await refresh() }
+        return changed
     }
 
     // MARK: - Batch rename (Library "Rename Files…")
@@ -1083,7 +1126,7 @@ final class CatalogModel: ObservableObject {
 
     /// True while a Library tool sheet (keywords, duplicates, people) is up or one of their scans runs; batch rename must not start then.
     var toolSheetIsBusy: Bool {
-        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy
+        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy
     }
 
     /// The People sheet's scan: finds faces in the photos the Library is currently drawing from, then regroups ALL stored faces.

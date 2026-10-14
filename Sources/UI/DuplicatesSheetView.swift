@@ -187,12 +187,16 @@ struct LibraryToolSheetsModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .modifier(KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy))
-            .modifier(DuplicatesSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.peopleSheetPresented || catalog.mergeBusy))
-            .modifier(PeopleSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.mergeBusy))
+            .modifier(KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.xmpBusy))
+            .modifier(DuplicatesSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.xmpBusy))
+            .modifier(PeopleSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.mergeBusy || catalog.xmpBusy))
             .modifier(MergeDialogModifier(
                 catalog: catalog, model: catalog.merge,
-                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.xmpBusy
+            ))
+            .modifier(XMPDialogModifier(
+                catalog: catalog, model: catalog.xmp,
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy
             ))
     }
 }

@@ -30,6 +30,8 @@ struct RenameBusyState {
     var isToolScanRunning = false
     /// A Photo Merge confirmation is up or a merge is rendering: it reads the selected originals, so they must not be renamed under it.
     var isMerging = false
+    /// A Write/Read XMP confirmation is up or XMP files are being read/written (a rename moves the photos those `.xmp` files belong to).
+    var isXMPBusy = false
 
     var reason: String? {
         if hasModalPanel { return "Finish or cancel the open dialog first." }
@@ -37,6 +39,7 @@ struct RenameBusyState {
         if isExporting || isExportSheetOpen { return "An export is running or being set up — finish or cancel it first." }
         if isEnhancing { return "Enhance is running — wait for it to finish." }
         if isMerging { return "Photo Merge is in progress — wait for it to finish." }
+        if isXMPBusy { return "XMP metadata is being read or written — wait for it to finish." }
         if isImporting { return "An import is running — wait for it to finish." }
         if isToolScanRunning { return "A face or duplicate scan is still running — wait for it to finish." }
         if hasPendingPaste { return "Finish or cancel the Paste Settings prompt first." }

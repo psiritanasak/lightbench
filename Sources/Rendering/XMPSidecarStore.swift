@@ -92,6 +92,9 @@ enum XMPSidecarStore {
             try setValue(mutable, "xmp:Rating", text)
         } else if fields.isRejected == true {
             try setValue(mutable, "xmp:Rating", "-1")
+        } else if fields.isRejected == false, let existing = string(mutable, "xmp:Rating"), XMPLibraryFields.parseRating(existing)?.isRejected == true {
+            // Un-rejected in the Library with no stars to write: clear the file's Reject marker without inventing a rating.
+            try setValue(mutable, "xmp:Rating", "0")
         }
         if let label = fields.label {
             if let name = XMPLibraryFields.labelName(label) {

@@ -200,13 +200,23 @@ final class ImageDocumentModel: ObservableObject {
     /// of it once the burst settles.
     private var isBurstPending = false
 
-    func openImage() async {
+    /// Shows the file panel and returns the chosen photo, or nil on Cancel. Split from the load so the caller can switch to the
+    /// Editor BEFORE the (possibly slow, RAW) load starts and its loading indicator is visible: `Open…` lives in the Library
+    /// toolbar, and without that switch the photo opened into the hidden Editor while the Library grid stayed on screen, which
+    /// looked like nothing had happened.
+    func chooseImageURL() -> URL? {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.jpeg, .png, .tiff, .heic, .rawImage]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
 
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url
+    }
+
+    /// Chooses a photo and loads it (kept for callers that do not need to switch views first).
+    func openImage() async {
+        guard let url = chooseImageURL() else { return }
         await load(from: url)
     }
 

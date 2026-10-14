@@ -1673,7 +1673,10 @@ struct ContentView: View {
             Menu {
                 Button("Open…") {
                     guard !renameModel.isWorking else { return }
-                    Task { await document.openImage() }
+                    // Switch to the Editor BEFORE the load, so a RAW photo's loading indicator is visible (same order as a grid tap).
+                    guard let url = document.chooseImageURL() else { return }
+                    showLibrary = false
+                    Task { await document.load(from: url) }
                 }
                 .disabled(renameModel.isWorking)
                 Button("Import Folder…") {

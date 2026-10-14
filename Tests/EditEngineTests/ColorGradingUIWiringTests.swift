@@ -110,3 +110,20 @@ final class MaskWhitesBlacksWiringTests: XCTestCase {
         XCTAssertTrue(shadows.lowerBound < whites.lowerBound && whites.lowerBound < blacks.lowerBound)
     }
 }
+
+/// `Open…` must switch to the Editor BEFORE the load (found by the user: the photo opened into the hidden Editor while the
+/// Library stayed on screen; the reviewer added that a RAW decode must not delay the switch).
+final class OpenImageWiringTests: XCTestCase {
+    func testOpenSwitchesToTheEditorBeforeTheLoadAndOnlyWhenAPhotoWasChosen() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let content = try String(contentsOf: root.appendingPathComponent("Sources/UI/ContentView.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(content.range(of: "guard let url = document.chooseImageURL() else { return }"))
+        let after = String(content[start.upperBound...].prefix(400))
+        let switchAt = try XCTUnwrap(after.range(of: "showLibrary = false"))
+        let loadAt = try XCTUnwrap(after.range(of: "await document.load(from: url)"))
+        XCTAssertTrue(switchAt.lowerBound < loadAt.lowerBound, "the Editor must appear before the load starts")
+        let model = try String(contentsOf: root.appendingPathComponent("Sources/UI/ImageDocumentModel.swift"), encoding: .utf8)
+        let chooser = try XCTUnwrap(model.range(of: "func chooseImageURL() -> URL? {"))
+        XCTAssertTrue(String(model[chooser.upperBound...].prefix(500)).contains("else { return nil }"), "Cancel returns nil (no switch)")
+    }
+}

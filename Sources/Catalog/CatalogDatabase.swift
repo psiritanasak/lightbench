@@ -727,6 +727,33 @@ final class CatalogDatabase: Sendable {
         }
     }
 
+    // MARK: - XMP library fields
+
+    /// Applies fields read from XMP sidecars, ONE transaction for the whole batch. `XMPImportPolicy` decides, per photo,
+    /// what actually changes from the photo's current row and keywords. Ids that no longer exist are skipped. Returns the
+    /// ids whose rating / flag / label / keyword set really changed (so the caller refreshes only those).
+    func applyLibraryFields(_ items: [(photoID: Int64, fields: XMPLibraryFields)],
+                            mode: XMPImportPolicy.Mode) async throws -> Set<Int64> {
+        try await dbQueue.write { db in
+            var changed = Set<Int64>()
+            for item in items {
+                guard var photo = try Photo.fetchOne(db, key: item.photoID) else { continue }
+                let linkedIDs = try Int64.fetchAll(db, PhotoKeyword.filter(PhotoKeyword.Columns.photoId == item.photoID)
+                    .select(PhotoKeyword.Columns.keywordId))
+                let currentKeys = Set(try Keyword.filter(linkedIDs.contains(Keyword.Columns.id)).fetchAll(db).map(\.nameKey))
+                let change = XMPImportPolicy.change(current: photo, currentKeywordKeys: currentKeys, fields: item.fields, mode: mode)
+                if change.isEmpty { continue }
+                if let rating = change.rating { photo.rating = min(max(rating, 0), 5) }
+                if let flag = change.flag { photo.flagStatus = flag }
+                if let label = change.label { photo.colorLabel = label }
+                if change.rating != nil || change.flag != nil || change.label != nil { try photo.update(db) }
+                if !change.keywordsToAdd.isEmpty { _ = try Self.attachKeywords(db, change.keywordsToAdd, to: [item.photoID]) }
+                changed.insert(item.photoID)
+            }
+            return changed
+        }
+    }
+
     // MARK: - Keywords
 
     func allKeywords() async throws -> [Keyword] {
@@ -746,37 +773,40 @@ final class CatalogDatabase: Sendable {
     /// involved, in the order of `names`.
     @discardableResult
     func addKeywords(_ names: [String], to photoIDs: [Int64]) async throws -> [Keyword] {
-        try await dbQueue.write { db in
-            var seen = Set<String>()
-            var wanted: [String] = []
-            for raw in names {
-                guard let name = KeywordName.normalize(raw), seen.insert(KeywordName.key(for: name)).inserted else { continue }
-                wanted.append(name)
-            }
-            // Chunked: each id binds one SQL variable (SQLite's default limit is 32766).
-            var existingPhotoIDs = Set<Int64>()
-            for chunk in stride(from: 0, to: photoIDs.count, by: 500).map({ Array(photoIDs[$0..<min($0 + 500, photoIDs.count)]) }) {
-                existingPhotoIDs.formUnion(try Int64.fetchAll(db, Photo.filter(chunk.contains(Photo.Columns.id)).select(Photo.Columns.id)))
-            }
-            var result: [Keyword] = []
-            for name in wanted {
-                let key = KeywordName.key(for: name)
-                var keyword: Keyword
-                if let found = try Keyword.filter(Keyword.Columns.nameKey == key).fetchOne(db) {
-                    keyword = found
-                } else {
-                    keyword = Keyword(id: nil, name: name, nameKey: key, createdAt: Date())
-                    try keyword.insert(db)
-                }
-                if let keywordID = keyword.id {
-                    for photoID in photoIDs where existingPhotoIDs.contains(photoID) {
-                        try PhotoKeyword(keywordId: keywordID, photoId: photoID).insert(db, onConflict: .ignore)
-                    }
-                }
-                result.append(keyword)
-            }
-            return result
+        try await dbQueue.write { db in try Self.attachKeywords(db, names, to: photoIDs) }
+    }
+
+    /// The body of `addKeywords`, usable inside a caller's own write transaction (`applyLibraryFields`).
+    private static func attachKeywords(_ db: Database, _ names: [String], to photoIDs: [Int64]) throws -> [Keyword] {
+        var seen = Set<String>()
+        var wanted: [String] = []
+        for raw in names {
+            guard let name = KeywordName.normalize(raw), seen.insert(KeywordName.key(for: name)).inserted else { continue }
+            wanted.append(name)
         }
+        // Chunked: each id binds one SQL variable (SQLite's default limit is 32766).
+        var existingPhotoIDs = Set<Int64>()
+        for chunk in stride(from: 0, to: photoIDs.count, by: 500).map({ Array(photoIDs[$0..<min($0 + 500, photoIDs.count)]) }) {
+            existingPhotoIDs.formUnion(try Int64.fetchAll(db, Photo.filter(chunk.contains(Photo.Columns.id)).select(Photo.Columns.id)))
+        }
+        var result: [Keyword] = []
+        for name in wanted {
+            let key = KeywordName.key(for: name)
+            var keyword: Keyword
+            if let found = try Keyword.filter(Keyword.Columns.nameKey == key).fetchOne(db) {
+                keyword = found
+            } else {
+                keyword = Keyword(id: nil, name: name, nameKey: key, createdAt: Date())
+                try keyword.insert(db)
+            }
+            if let keywordID = keyword.id {
+                for photoID in photoIDs where existingPhotoIDs.contains(photoID) {
+                    try PhotoKeyword(keywordId: keywordID, photoId: photoID).insert(db, onConflict: .ignore)
+                }
+            }
+            result.append(keyword)
+        }
+        return result
     }
 
     /// Detaches keyword `id` from `photoIDs` (the keyword itself stays, even if no photo uses it any more).

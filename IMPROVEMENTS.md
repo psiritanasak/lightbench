@@ -1263,8 +1263,8 @@ Shipped: `_history` in the sidecar (commits 8805d76 format, c544ddf wiring). Ope
 
 ### D52. Keywords embedded in exports v1 follow-ups (2026-10-06)
 Shipped (d7dda03 engine, 695b120 plumbing + UI): `ExportSettings.includeKeywords` (default on, "Add Library keywords"), `KeywordEmbedding`. Open, none blocking:
-- No `.xmp` sidecar write-out next to the originals (deliberately cut: shared-basename collisions CR2+JPG, foreign-file merge/clobber, RenameEngine/Undo would have to move `.xmp`, folder-grant pre-flight). A Photo-menu "Write XMP Sidecars" is the next step if wanted.
-- No keyword READ-in from files on import (a photo already tagged in Lightroom shows no keywords in the Library until retagged).
+- ~~No `.xmp` sidecar write-out~~ — SHIPPED 2026-10-14 (D65). Original note: no `.xmp` sidecar write-out next to the originals (deliberately cut: shared-basename collisions CR2+JPG, foreign-file merge/clobber, RenameEngine/Undo would have to move `.xmp`, folder-grant pre-flight). A Photo-menu "Write XMP Sidecars" is the next step if wanted.
+- ~~No keyword READ-in from files on import~~ — SHIPPED 2026-10-14 (D65: silent fill-defaults pass after import + manual Read).
 - Flat `dc:subject` only: no `lr:hierarchicalSubject`/hierarchy (the catalog has none).
 - RAW sources: whether `CIRAWFilter`'s output carries the file's own IPTC/XMP keywords is UNVERIFIED (same caveat as `ExportMetadata`), so a RAW export may carry only the catalog's keywords.
 - Enhance (`PhotoEnhancer`) does not embed keywords or any metadata policy (pre-existing for metadata).
@@ -1420,3 +1420,16 @@ Takeaway for us: the part worth copying is not any single control but that the r
 
 ### D64. Parametric curve: Shadows +1 with Highlights +1 reverses the very top (pre-existing, found 2026-10-12)
 `curveControlPoints` builds a 5-point natural cubic; with both point1 and point3 raised to their maximum the end slope goes slightly negative (global path: -0.029 at sh+1 hi+1, -0.093 at hi+1 bp-1), so the brightest tones/headroom can come out marginally darker than slightly less bright ones. Not introduced by per-mask Whites/Blacks (which only scale it for a strong Whites boost). Fixing it would change the byte-exact curve pinned by ~70 assertions; a monotone-clamped variant would need those re-pinned deliberately.
+
+### D65. XMP sidecar interop v1 — shipped 2026-10-14, open limits
+Shipped: write/read of rating, reject, colour label and keywords to/from standard `.xmp` (see CLAUDE.md's XMP bullet and the history entry). Open, none blocking:
+1. **Pick is not exchanged** (no standard XMP field); picks stay catalog-only. Lightroom/Bridge read `-1` as Reject only.
+2. **Lightroom ignores a `<base>.xmp` next to a JPEG/TIFF/DNG** (it keeps XMP inside those files and never reads such a sidecar); the sidecar helps RAW workflows and darktable/digiKam-style tools. We never embed XMP into originals.
+3. **Keywords are half-synced**: `dc:subject` is replaced, a stale `lr:hierarchicalSubject` is kept (Lightroom prefers it). No hierarchical keywords in the catalog.
+4. **Empty Library values never erase** a rating/label/keywords already in the file (so removing a keyword here does not remove it from the file if the Library then has none left).
+5. The merge **re-serialises through ImageIO** (not byte-preserving: the `xpacket` wrapper is dropped, attributes may become elements); **not compare-and-swap** (a concurrent write by another app between our read and write is lost; `.atomic` replaces a symlinked/hard-linked `.xmp` with a plain file and normalises `.XMP` to `.xmp`).
+6. Ownership uses catalogued paths plus every supported image file found on disk in the selected photos' folders (a catalogued photo missing from disk can still own on the XMP side); a DNG counts as RAW (`RawDecoder.isRaw`) though Lightroom keeps XMP inside DNGs. An alternate-name `IMG_1.JPG.xmp` is read as a fallback and written only if it is the one that exists.
+7. **Rename**: the preview does not foresee an orphan `<newbase>.xmp` at a destination, nor a rename that would change WHICH photo owns a shared `.xmp` (a RAW arriving beside a JPG's xmp, an xmp owner landing beside a RAW): the engine refuses both at apply time, before anything moves, with a message. `Locate…` (relocate) does not move `.xmp`, the same as `.photoapp.json`.
+8. Cull mode does not check `xmpBusy` (a flag changed mid-run is covered by the fresh-row re-fetch after the folder prompt, not by a guard).
+9. The ownership rule is "a RAW wins, otherwise the first photo by name", so adding a file can take over a shared `.xmp` (e.g. exporting `a.jpeg` next to `a.png` + `a.xmp` makes `a.jpeg` the owner). Narrow; `RenameEngine.xmpPlans` also lists a folder per call (cached per batch, not across batches).
+10. Not built: automatic write on every change, `crs:` develop-setting mapping (D57 item 4), embedded-XMP write.

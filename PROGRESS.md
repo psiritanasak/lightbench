@@ -22,6 +22,10 @@ history file.
   Color Grading Blending/Balance/Global, Vignette Softness, per-mask Whites/Blacks,
   minimal-look pass, editor tool rail, tab memory.
 
+## UNATTENDED RUN (started 2026-10-14; plan: /Users/praween/.claude/plans/squishy-wandering-minsky.md) — order #4 XMP → #1 Whites → #2 D64 curve → #3 B&W extras → #5 Culling Compare/Survey → #6 robustness
+- **#4 XMP interop — SHIPPED in code (commits 84b0c84, 9b811ec, e5b14ed, 2ebff69 + docs), full suite 2871 green, NOT live-verified.** Photo ▸ Write / Read Metadata to XMP… (rating, reject, label, keywords; write only on request; merge keeps foreign tags), fill-defaults read after import, rename moves an owned `.xmp`. Reviewer: engine 3 rounds, UI/rename 5 rounds (the last blockers-only APPROVE); every fix mutation-checked. Limits: IMPROVEMENTS.md D65. MANUAL CHECKLIST: Write on 3 scratch photos incl. a CR2+JPG pair, open the `.xmp` text; hand-made `.xmp` with `crs:Exposure2012` keeps it after a write; Read on a fresh import restores values; Rename + Undo Rename move the `.xmp`; originals byte-identical.
+- Test-suite note: the first full run after a rebuild twice showed 2 failures of unknown identity (a rerun of the same tree was green both times); cold-start flake suspected, not investigated.
+
 ## Open reviewer issues
 None. Every reviewer round on record ended in APPROVE before its commit.
 

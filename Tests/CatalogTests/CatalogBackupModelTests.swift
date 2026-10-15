@@ -180,7 +180,7 @@ final class CatalogBackupModelTests: XCTestCase {
         let database = try source("Sources/Catalog/CatalogDatabase.swift")
         XCTAssertTrue(database.contains("if !Self.isRunningUnderXCTest {"), "launch backup/restore never run in the test host")
         XCTAssertTrue(database.contains("Self.applyPendingRestore(in: supportDir)"))
-        XCTAssertTrue(database.contains("Self.launchBackup(catalogURL: dbURL)"))
+        XCTAssertTrue(database.contains("Self.launchBackup(catalogURL: dbURL, keepNewest: AppPreferences.shared.backupsToKeep)"))
         XCTAssertLessThan(try XCTUnwrap(database.range(of: "Self.launchBackup")).lowerBound, try XCTUnwrap(database.range(of: "try self.init(path: dbURL.path)")).lowerBound,
                           "the backup is taken BEFORE the catalog is opened and migrated")
     }

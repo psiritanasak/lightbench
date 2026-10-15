@@ -8,9 +8,11 @@ struct CatalogFileInfo: Equatable, Sendable {
     var needsMigration: Bool
 }
 
-/// Which backup a file is, from its name: `catalog-<yyyyMMdd-HHmmss>[-pre-migration|-before-restore|-damaged].sqlite`.
+/// Which backup a file is, from its name: `catalog-<yyyyMMdd-HHmmss>[-manual|-pre-migration|-before-restore|-damaged].sqlite`.
 enum CatalogBackupKind: String, CaseIterable, Sendable {
     case automatic = ""
+    /// Preferences ▸ Back Up Now: its own pool, so repeated manual backups can never push the daily or safety backups out.
+    case manual = "-manual"
     /// Taken right before pending migrations run on the live file (a migration is the one thing that can change data in place).
     case preMigration = "-pre-migration"
     /// The catalog that a restore replaced.
@@ -177,20 +179,36 @@ extension CatalogDatabase {
         try await Task.detached { try Self.snapshot(from: self.dbQueue, to: destination) }.value
     }
 
+    /// A backup straight into the Backups folder (Preferences ▸ Back Up Now): no panel, kind `.manual`, then ONLY the manual pool is pruned to
+    /// `keepNewest` (daily and safety backups are never touched by it), and the file just written is never the one removed. Two clicks within
+    /// one second write the same name; the later copy replaces the earlier (same content).
+    func backUpIntoBackupsFolder(_ directory: URL, now: Date = Date(), keepNewest: Int) async throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent(Self.backupFileName(.manual, at: now))
+        try await backUp(to: destination)
+        Self.pruneBackups(in: directory, keepNewest: keepNewest, kinds: [.manual], protecting: destination.lastPathComponent)
+        return destination
+    }
+
     // MARK: Pruning
 
-    /// Keeps the newest `keepNewest` backups of EACH kind in `directory` (newest by the timestamp in the file name) and deletes the rest.
-    /// Files that are not ours are never touched.
+    /// Keeps the newest `keepNewest` backups of each kind in `kinds` (newest by the timestamp in the file name) and deletes the rest. The safety
+    /// kinds (`-pre-migration`, `-before-restore`, `-damaged`) keep at least `safetyKeepAtLeast`, so a small "keep" preference cannot thin out
+    /// the copies that exist to undo a migration or a restore. `protecting` names a file that is never removed. Files that are not ours are
+    /// never touched.
     @discardableResult
-    static func pruneBackups(in directory: URL, keepNewest: Int) -> [String] {
+    static func pruneBackups(in directory: URL, keepNewest: Int, kinds: Set<CatalogBackupKind> = Set(CatalogBackupKind.allCases),
+                             safetyKeepAtLeast: Int = 1, protecting: String? = nil) -> [String] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         var removed: [String] = []
-        for kind in CatalogBackupKind.allCases {
+        for kind in CatalogBackupKind.allCases where kinds.contains(kind) {
+            let isSafetyKind = kind == .preMigration || kind == .beforeRestore || kind == .damaged
+            let keep = max(1, isSafetyKind ? max(keepNewest, safetyKeepAtLeast) : keepNewest)
             let ours = names.compactMap { name -> (String, String)? in
                 guard let parsed = parseBackupFileName(name), parsed.kind == kind else { return nil }
                 return (name, parsed.stamp)
             }.sorted { $0.1 > $1.1 }
-            for (name, _) in ours.dropFirst(max(1, keepNewest)) {
+            for (name, _) in ours.dropFirst(keep) where name != protecting {
                 if (try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))) != nil { removed.append(name) }
             }
         }
@@ -236,7 +254,7 @@ extension CatalogDatabase {
                 kind = .automatic
             }
             try snapshot(from: source, to: directory.appendingPathComponent(backupFileName(kind, at: now)))
-            pruneBackups(in: directory, keepNewest: keepNewest)
+            pruneBackups(in: directory, keepNewest: keepNewest, safetyKeepAtLeast: defaultBackupsToKeep)
         } catch {
             // Deliberately silent: see above.
         }

@@ -76,6 +76,8 @@ final class CullModel: ObservableObject {
     @Published private(set) var note: String?
     @Published private(set) var endReached = false
     @Published private(set) var onlyUnflagged = true
+    /// The Preferences window's culling defaults, read when a pass begins (a test injects its own suite).
+    var preferences = AppPreferences.shared
 
     private(set) var environment = CullEnvironment()
     private let cache = CullPreviewCache()
@@ -120,13 +122,15 @@ final class CullModel: ObservableObject {
     func begin(startingAtPath path: String?) -> Bool {
         let photos = environment.photos()
         guard !photos.isEmpty else { return false }
-        let unflagged = photos.contains { $0.flagStatus == .none }
+        // "Unflagged only" starts on when there is anything unflagged AND the preference allows it.
+        let unflagged = preferences.cullStartUnflaggedOnly && photos.contains { $0.flagStatus == .none }
         var startID = path.flatMap { path in photos.first { $0.path == path }?.id }
         // Focused on a flagged photo while only unflagged ones are listed: start at the next unflagged photo after it.
         if unflagged, let id = startID, let at = photos.firstIndex(where: { $0.id == id }), photos[at].flagStatus != .none {
             startID = photos[at...].first { $0.flagStatus == .none }?.id ?? photos.first { $0.flagStatus == .none }?.id
         }
-        guard let fresh = CullSession(photos: photos, onlyUnflagged: unflagged, startingAt: startID) else { return false }
+        guard var fresh = CullSession(photos: photos, onlyUnflagged: unflagged, startingAt: startID) else { return false }
+        fresh.autoAdvance = preferences.cullAutoAdvance
         session = fresh
         slots = [:]
         onlyUnflagged = unflagged

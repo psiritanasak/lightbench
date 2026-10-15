@@ -35,7 +35,7 @@ final class CatalogBackupModel: ObservableObject {
     var isBusy: Bool { isWorking || pendingRestore != nil }
 
     private weak var catalog: CatalogModel?
-    private func publishBusy() { catalog?.backupBusy = isBusy }
+    private func publishBusy() { catalog?.backupBusy = isBusy || (catalog?.backUpNowRunning ?? false) }
 
     // MARK: Requests
 

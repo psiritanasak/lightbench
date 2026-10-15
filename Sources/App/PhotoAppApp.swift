@@ -41,6 +41,9 @@ struct PhotoAppApp: App {
     /// Scene-level command can't read a view's private state.
     @State private var showLibrary = false
 
+    /// The Preferences window's state (⌘,).
+    @StateObject private var preferences = PreferencesModel()
+
     init() {
         // User looks must be registered BEFORE any render (Editor, thumbnails, export): an unresolved look renders
         // as no look, which would silently disagree with the Editor. Synchronous on purpose.
@@ -205,6 +208,11 @@ struct PhotoAppApp: App {
                             || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
                     )
             }
+        }
+        Settings {
+            PreferencesView(model: preferences, isBackupBusy: catalog.backupBusy, backUpNow: { await catalog.backUpNow() },
+                            backupsFolder: { catalog.backupsFolderURL })
+                .tint(Theme.controlTint)
         }
     }
 

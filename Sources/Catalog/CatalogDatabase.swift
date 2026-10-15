@@ -41,7 +41,7 @@ final class CatalogDatabase: Sendable {
         // a bug in one) can never be the only copy of the data. Real user state only, never in the XCTest host.
         if !Self.isRunningUnderXCTest {
             if let report = Self.applyPendingRestore(in: supportDir) { CatalogRestoreReportStore.shared.set(report) }
-            Self.launchBackup(catalogURL: dbURL)
+            Self.launchBackup(catalogURL: dbURL, keepNewest: AppPreferences.shared.backupsToKeep)
         }
         try self.init(path: dbURL.path)
     }

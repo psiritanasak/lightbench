@@ -1337,3 +1337,10 @@ Shipped: write/read of rating, reject, colour label and keywords to/from standar
 4. The shortcut hint planned for the empty Library is not shown: the keyboard-shortcut list arrives with feature E (Help ▸ Keyboard Shortcuts).
 5. The Editor hint appears 0.4 s after the pane has been empty (opening from the Library switches to the Editor a moment BEFORE the load starts, because it awaits folder access first); an open that takes longer than that to start can still show it briefly.
 6. Not live-verified: how the screens look at real window sizes, VoiceOver reading order, and the failed-open screen (needs a catalog from a newer build — D66 describes how to make one).
+
+### D69. Preferences v1 — shipped 2026-10-15, limits
+1. Not live-verified: the window itself (⌘, opening it, its size, that checked toggles are grey rather than the system blue — an offscreen render cannot show this, a blue-tint mutation passed), Show Backups in Finder from the sandbox, Back Up Now's file landing in the real Backups folder.
+2. Settings take effect when their feature next looks: a culling pass already running keeps its values; the keep-N setting prunes at the next launch backup or Back Up Now, never immediately.
+3. Only four settings exist. Not included (nothing to wire yet, deliberately not invented): thumbnail size (already remembered by the grid), export defaults (remembered by the export sheet), appearance.
+4. Back Up Now and the File ▸ Back Up Catalog… menu share `catalog.backupBusy` (two writers: `CatalogBackupModel.publishBusy` ORs in `backUpNowRunning`, so neither can clear the other's claim); Back Up Now has no cull/rename gate (a backup is a read-only snapshot).
+5. Back Up Now writes kind `-manual` and prunes ONLY the manual pool to the "keep" setting (never the daily or safety backups, never the file it just wrote). The launch backup prunes every kind to N, except that the safety kinds (`-pre-migration`, `-before-restore`, `-damaged`) keep at least 5 whatever N is. So the folder can hold up to N manual + N daily + at least 5 of each safety kind. A manual backup counts as "recent" for the 20-hour daily-backup skip.

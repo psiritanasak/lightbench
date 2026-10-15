@@ -160,6 +160,9 @@ final class CatalogModel: ObservableObject {
     /// `backupBusy` mirrors "a restore confirmation is up or a backup is being written".
     @Published var backupRequested: CatalogBackupModel.Kind?
     @Published var backupBusy = false
+    /// Preferences ▸ Back Up Now is running. `backupBusy` has two writers (this and `CatalogBackupModel`); `publishBusy` ORs this in so one can
+    /// never clear the other's claim.
+    var backUpNowRunning = false
     let catalogBackup = CatalogBackupModel()
     @Published var searchText: String = ""
 
@@ -278,6 +281,9 @@ final class CatalogModel: ObservableObject {
     /// surfaces a message rather than silently no-op'ing.
     private var initError: Error?
 
+    /// The Preferences window's settings, read from the same defaults this model was given (a test injects an isolated suite).
+    let preferences: AppPreferences
+
     /// True once the launch-time open has finished — successfully or not (`initError` says which). Finder / Dock opens that arrive while the
     /// catalog is still opening wait for this instead of being refused (`DropAndOpenModifier`).
     @Published private(set) var openSettled = false
@@ -342,6 +348,7 @@ final class CatalogModel: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.preferences = AppPreferences(defaults: defaults)
         Task.detached { [weak self] in
             do {
                 let database = try CatalogDatabase()
@@ -387,6 +394,7 @@ final class CatalogModel: ObservableObject {
     init(database: CatalogDatabase, defaults: UserDefaults = .standard) {
         self.database = database
         self.defaults = defaults
+        self.preferences = AppPreferences(defaults: defaults)
         openSettled = true
         connectFaces()
     }
@@ -614,6 +622,7 @@ final class CatalogModel: ObservableObject {
     /// Read-only, silent; runs inside the import's `importsInFlight` window so a rename cannot start under it. A failure is ignored (the manual
     /// "Read Metadata from XMP…" is the explicit path).
     func autoReadXMP(newerThan before: Set<Int64>) async {
+        guard preferences.autoReadXMPOnImport else { return }
         guard let database, let all = try? await database.allPhotos() else { return }
         let fresh = all.filter { photo in photo.id.map { !before.contains($0) } ?? false }
         guard !fresh.isEmpty else { return }
@@ -629,6 +638,27 @@ final class CatalogModel: ObservableObject {
         await refresh()
         let byID = Dictionary(all.compactMap { photo in photo.id.map { ($0, photo) } }, uniquingKeysWith: { first, _ in first })
         return ids.compactMap { byID[$0] }
+    }
+
+    /// The Backups folder next to the catalog (only its parent, the catalog directory, is created if missing; the Backups folder itself is not).
+    var backupsFolderURL: URL? {
+        (try? CatalogDatabase.defaultCatalogDirectory()).map(CatalogDatabase.backupsDirectory(in:))
+    }
+
+    /// Preferences ▸ Back Up Now: a backup into the Backups folder, pruned to the "keep" preference. Returns what to tell the user. Shares
+    /// `backupBusy` with File ▸ Back Up Catalog… so the two never run at once.
+    func backUpNow(into directory: URL? = nil) async -> String {
+        guard !backupBusy, !backUpNowRunning else { return "A backup is already running." }
+        guard let database, let folder = directory ?? backupsFolderURL else { return "The photo catalog isn't ready yet — try again in a moment." }
+        backUpNowRunning = true
+        backupBusy = true
+        defer { backUpNowRunning = false; backupBusy = catalogBackup.isBusy }
+        do {
+            let file = try await database.backUpIntoBackupsFolder(folder, keepNewest: preferences.backupsToKeep)
+            return "Backed up as \(file.lastPathComponent)."
+        } catch {
+            return "Couldn't back up the catalog: \(error.localizedDescription)"
+        }
     }
 
     /// A consistent snapshot of the live catalog written to `destination` (the engine is `CatalogDatabase.backUp(to:)`).

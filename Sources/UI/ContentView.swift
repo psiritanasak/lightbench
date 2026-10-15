@@ -1939,6 +1939,14 @@ struct ContentView: View {
         }
     }
 
+    /// Shown over the empty image pane while no photo is open (and none is loading).
+    @ViewBuilder
+    private var noPhotoHint: some View {
+        if document.currentImage == nil, !document.isLoadingImage, !document.isLoadInFlight {
+            EditorNoPhotoView { showLibrary = true }
+        }
+    }
+
     /// The image pane and the control sidebar (the rail sits beside them, outside the split view).
     private var editorPanes: some View {
         HSplitView {
@@ -1960,6 +1968,7 @@ struct ContentView: View {
                                 .padding(24)
                                 .solidPanel(cornerRadius: 12)
                         }
+                        noPhotoHint
                         // D8 (IMPROVEMENTS.md): extracted out of this
                         // `ZStack` (Crop/WB/Red-Eye/CompareDivider/Pan×1-2,
                         // now plus the keyboard crosshair) specifically to

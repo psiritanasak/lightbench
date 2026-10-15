@@ -28,6 +28,12 @@ enum LibraryFilter: Hashable, Sendable {
 @MainActor
 final class CatalogModel: ObservableObject {
     @Published private(set) var photoCount: Int = 0
+    /// True once the first `refresh()` has finished (successfully or not), so an empty Library can be told apart from one that has not been
+    /// read yet — without it the "no photos" screen would flash at every launch while the catalog opens.
+    @Published private(set) var isLoaded = false
+    /// Why the catalog could not be opened at launch (a catalog from a newer build, a damaged file), nil otherwise. The Library shows it instead
+    /// of a blank grid — `refresh()` returns before `isLoaded` is set when there is no database.
+    @Published private(set) var openFailureMessage: String?
     @Published var importStatusMessage: String?
     @Published private(set) var photos: [Photo] = []
     @Published private(set) var collections: [PhotoCollection] = []
@@ -357,6 +363,7 @@ final class CatalogModel: ObservableObject {
             } catch {
                 await MainActor.run {
                     self?.initError = error
+                    self?.openFailureMessage = error.localizedDescription
                     self?.openSettled = true
                     // Shown at launch too (it used to surface only when the user tried to import): a catalog this build refuses to open
                     // (made by a newer version, damaged) must not just look like an empty library.
@@ -495,6 +502,7 @@ final class CatalogModel: ObservableObject {
     /// still-valid state in place rather than clearing it.
     func refresh() async {
         guard let database else { return }
+        defer { isLoaded = true }
         do {
             photoCount = try await database.photoCount()
             collections = try await database.allCollections()
@@ -1228,7 +1236,11 @@ final class CatalogModel: ObservableObject {
     func removePhoto(_ photo: Photo) {
         guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
         guard let database, let id = photo.id else { return }
+        let before = photos.count
         photos.removeAll { $0.id == id }
+        // Keep the empty-state decision honest: `photoCount` is only re-read by `refresh()`, which this path skips on success.
+        // Only when the list actually got shorter (a repeated Remove on the same cell must not under-count).
+        if photos.count < before { photoCount = max(0, photoCount - 1) }
         selectedPhotoIDs.remove(id)
         membershipsByPhotoID.removeValue(forKey: id)
         keywordIDsByPhotoID.removeValue(forKey: id)

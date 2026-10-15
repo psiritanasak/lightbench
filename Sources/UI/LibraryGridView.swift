@@ -178,8 +178,18 @@ struct LibraryGridView: View {
                 filterBar
             }
             Group {
-                if catalog.photos.isEmpty {
-                    emptyState
+                let emptyKind = LibraryEmptyKind.of(isLoaded: catalog.isLoaded, photoCount: catalog.photoCount, shownCount: catalog.photos.count,
+                                                      isCollectionSelected: Self.isCollection(catalog.selectedFilter),
+                                                      openFailed: catalog.openFailureMessage != nil)
+                if emptyKind == .openFailed {
+                    CatalogOpenFailedView(message: catalog.openFailureMessage ?? "")
+                } else if emptyKind == .loading {
+                    // The catalog is still being read: show nothing rather than flashing "no photos".
+                    Color.clear
+                } else if emptyKind == .emptyLibrary {
+                    LibraryEmptyLibraryView(catalog: catalog)
+                } else if emptyKind == .emptyCollection {
+                    LibraryEmptyCollectionView(isFolder: Self.isFolderCollection(catalog))
                 } else if catalog.displayedPhotos.isEmpty {
                     noMatchesState
                 } else {
@@ -497,22 +507,17 @@ struct LibraryGridView: View {
         .padding(.vertical, 8)
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 40))
-                .foregroundStyle(Theme.textSecondary)
-            Text("No photos imported yet")
-                .font(.headline)
-            Text("Use \u{201c}Import Folder\u{2026}\u{201d} in the toolbar to add photos to your library.")
-                .font(.subheadline)
-                .foregroundStyle(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    private static func isFolderCollection(_ catalog: CatalogModel) -> Bool {
+        guard case .collection(let id) = catalog.selectedFilter else { return false }
+        return catalog.collections.first { $0.id == id }?.isFolder ?? false
     }
 
-    /// Distinct from `emptyState` — photos EXIST for the current
+    private static func isCollection(_ filter: LibraryFilter) -> Bool {
+        if case .collection = filter { return true }
+        return false
+    }
+
+    /// Distinct from the empty-library / empty-collection screens (`EmptyStates.swift`) — photos EXIST for the current
     /// Collection/Folder selection, they just don't match the current
     /// sort/filter/search refinement. Without this distinction, a
     /// filtered-to-nothing grid would misleadingly look like an empty

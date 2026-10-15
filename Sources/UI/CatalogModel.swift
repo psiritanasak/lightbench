@@ -272,6 +272,10 @@ final class CatalogModel: ObservableObject {
     /// surfaces a message rather than silently no-op'ing.
     private var initError: Error?
 
+    /// True once the launch-time open has finished — successfully or not (`initError` says which). Finder / Dock opens that arrive while the
+    /// catalog is still opening wait for this instead of being refused (`DropAndOpenModifier`).
+    @Published private(set) var openSettled = false
+
     /// Read-only security-scoped bookmarks for imported folders — kept in
     /// their OWN store (a distinct `UserDefaults` key) rather than reusing
     /// `ImageDocumentModel`'s sidecar-save bookmark store, so this new,
@@ -344,6 +348,7 @@ final class CatalogModel: ObservableObject {
                     if !CatalogDatabase.isRunningUnderXCTest {
                         self?.activateKnownFolders()
                     }
+                    self?.openSettled = true
                 }
                 await self?.refresh()
                 if let report = CatalogRestoreReportStore.shared.take() {
@@ -352,6 +357,7 @@ final class CatalogModel: ObservableObject {
             } catch {
                 await MainActor.run {
                     self?.initError = error
+                    self?.openSettled = true
                     // Shown at launch too (it used to surface only when the user tried to import): a catalog this build refuses to open
                     // (made by a newer version, damaged) must not just look like an empty library.
                     self?.importStatusMessage = "Couldn't open the photo catalog: \(error.localizedDescription)"
@@ -374,17 +380,24 @@ final class CatalogModel: ObservableObject {
     init(database: CatalogDatabase, defaults: UserDefaults = .standard) {
         self.database = database
         self.defaults = defaults
+        openSettled = true
         connectFaces()
     }
 
-    func importFolder() {
-        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
+    /// The check every import entry point (panel, drag-and-drop, Finder open) shares: nothing while a rename runs, and a clear message
+    /// while the catalog is not open yet. Returns the open database, or nil after setting `importStatusMessage`.
+    private func databaseForImport() -> CatalogDatabase? {
+        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return nil }
         guard let database else {
             importStatusMessage = initError.map { "Couldn't open the photo catalog: \($0.localizedDescription)" }
                 ?? "The photo catalog isn't ready yet — try again in a moment."
-            return
+            return nil
         }
+        return database
+    }
 
+    func importFolder() {
+        guard databaseForImport() != nil else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -392,43 +405,7 @@ final class CatalogModel: ObservableObject {
         panel.message = "Choose a folder of photos to import into the catalog."
         panel.prompt = "Import"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
-        // Re-check AFTER the panel: a rename/undo may have started while it was up.
-        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
-
-        // Capture + activate access right away, synchronously — the user
-        // just granted it via this exact panel, so there's no extra prompt
-        // involved, matching `ImageDocumentModel.requestFolderAccess`'s
-        // existing synchronous-on-@MainActor `bookmarkData(options:...)`
-        // call, an already-shipped precedent for this class of call. Any
-        // failure is folded into the eventual import summary rather than
-        // shown immediately, since an immediate `importStatusMessage`
-        // here would just get overwritten the moment the import below
-        // finishes.
-        let accessWarning = activateFolderAccess(for: folder)
-
-        importsInFlight += 1
-        Task.detached { [weak self] in
-            let urls = PhotoImporter.imageFiles(in: folder)
-            do {
-                let before = Set(try await database.allPhotos().compactMap(\.id))
-                let result = try await database.importPhotos(at: urls)
-                await self?.refresh()
-                await self?.autoReadXMP(newerThan: before)
-                await MainActor.run {
-                    self?.importsInFlight -= 1
-                    var message = Self.summary(for: result)
-                    if let accessWarning {
-                        message += " \(accessWarning)"
-                    }
-                    self?.importStatusMessage = message
-                }
-            } catch {
-                await MainActor.run {
-                    self?.importsInFlight -= 1
-                    self?.importStatusMessage = "Import failed: \(error.localizedDescription)"
-                }
-            }
-        }
+        importFolder(at: folder)
     }
 
     /// Folder-mirrored nested collections: recursively imports `folder`
@@ -438,13 +415,7 @@ final class CatalogModel: ObservableObject {
     /// `importFolder()` — that one stays a flat, single-level import,
     /// unchanged.
     func importFolderTree() {
-        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
-        guard let database else {
-            importStatusMessage = initError.map { "Couldn't open the photo catalog: \($0.localizedDescription)" }
-                ?? "The photo catalog isn't ready yet — try again in a moment."
-            return
-        }
-
+        guard databaseForImport() != nil else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -452,42 +423,62 @@ final class CatalogModel: ObservableObject {
         panel.message = "Choose a folder to import as a nested collection tree, mirroring its subfolders."
         panel.prompt = "Import"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
-        // Re-check AFTER the panel: a rename/undo may have started while it was up.
-        guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
+        importFolderTree(at: folder)
+    }
 
-        let accessWarning = activateFolderAccess(for: folder)
+    /// Flat import of an already-chosen folder (a panel result, a drop, or a Finder open).
+    func importFolder(at folder: URL) { importFolders([.init(url: folder, asTree: false)]) }
+
+    /// Nested-collection import of an already-chosen folder.
+    func importFolderTree(at folder: URL) { importFolders([.init(url: folder, asTree: true)]) }
+
+    /// Imports each folder in turn (one catalog write at a time) and reports one combined message. The caller must hold access to every
+    /// folder already: a panel result, a dropped URL and a Finder-opened URL all carry a sandbox extension for this launch, and
+    /// `activateFolderAccess` turns it into a saved bookmark.
+    func importFolders(_ folders: [DroppedItemsPlan.FolderImport]) {
+        guard !folders.isEmpty, let database = databaseForImport() else { return }
+
+        // Capture + activate access right away, synchronously — the user just granted it (panel / drop), so there is no extra prompt,
+        // matching `ImageDocumentModel.requestFolderAccess`'s existing synchronous `bookmarkData` call. A failure is folded into the
+        // eventual summary rather than shown immediately, since an immediate `importStatusMessage` would be overwritten when the import
+        // below finishes.
+        let jobs = folders.map { (item: $0, accessWarning: activateFolderAccess(for: $0.url)) }
 
         importsInFlight += 1
         Task.detached { [weak self] in
-            // The recursive scan is synchronous, blocking filesystem I/O
-            // (mirrors `PhotoImporter.imageFiles(in:)`'s existing need to
-            // run off-main) — must happen here, inside `Task.detached`,
-            // not on `@MainActor`.
-            guard let node = PhotoImporter.scanFolderTree(at: folder) else {
-                await MainActor.run {
-                    self?.importsInFlight -= 1
-                    self?.importStatusMessage = "No photos found in that folder."
-                }
-                return
-            }
-            do {
-                let before = Set(try await database.allPhotos().compactMap(\.id))
-                let result = try await database.importFolderTree(node)
-                await self?.refresh()
-                await self?.autoReadXMP(newerThan: before)
-                await MainActor.run {
-                    self?.importsInFlight -= 1
-                    var message = Self.summary(for: result)
-                    if let accessWarning {
-                        message += " \(accessWarning)"
+            var messages: [String] = []
+            for job in jobs {
+                let folder = job.item.url
+                var message: String
+                do {
+                    if job.item.asTree {
+                        // The recursive scan is synchronous, blocking filesystem I/O: it must happen here, off the main actor.
+                        if let node = PhotoImporter.scanFolderTree(at: folder) {
+                            let before = Set(try await database.allPhotos().compactMap(\.id))
+                            let result = try await database.importFolderTree(node)
+                            await self?.refresh()
+                            await self?.autoReadXMP(newerThan: before)
+                            message = await MainActor.run { Self.summary(for: result) }
+                        } else {
+                            message = "No photos found in that folder."
+                        }
+                    } else {
+                        let urls = PhotoImporter.imageFiles(in: folder)
+                        let before = Set(try await database.allPhotos().compactMap(\.id))
+                        let result = try await database.importPhotos(at: urls)
+                        await self?.refresh()
+                        await self?.autoReadXMP(newerThan: before)
+                        message = await MainActor.run { Self.summary(for: result) }
                     }
-                    self?.importStatusMessage = message
+                    if let warning = job.accessWarning { message += " \(warning)" }
+                } catch {
+                    message = "Import failed: \(error.localizedDescription)"
                 }
-            } catch {
-                await MainActor.run {
-                    self?.importsInFlight -= 1
-                    self?.importStatusMessage = "Import failed: \(error.localizedDescription)"
-                }
+                messages.append(jobs.count > 1 ? "\(folder.lastPathComponent): \(message)" : message)
+            }
+            await MainActor.run {
+                self?.importsInFlight -= 1
+                self?.importStatusMessage = messages.joined(separator: "\n")
             }
         }
     }
@@ -1912,6 +1903,9 @@ final class CatalogModel: ObservableObject {
 
         if folder.startAccessingSecurityScopedResource() {
             activeFolders.insert(folder.path)
+        } else if readabilityProbe(folder.path) == .readable {
+            // A dropped / Finder-opened URL can carry a process-wide sandbox extension instead of a scoped one: reading works, so no warning
+            // (the bookmark above is what a later launch relies on).
         } else {
             warning = "Couldn't get access to \"\(folder.lastPathComponent)\" — its photos may not be viewable this session."
         }

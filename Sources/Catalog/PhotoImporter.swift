@@ -82,7 +82,7 @@ enum PhotoImporter {
     private static func scanNode(at folder: URL) -> FolderScanNode {
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: folder,
-            includingPropertiesForKeys: [.isDirectoryKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .isPackageKey],
             options: [.skipsHiddenFiles]
         ) else {
             return FolderScanNode(url: folder, imageFiles: [], children: [])
@@ -91,8 +91,11 @@ enum PhotoImporter {
         var imageFiles: [URL] = []
         var children: [FolderScanNode] = []
         for entry in entries {
-            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            if isDirectory {
+            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+            let isDirectory = values?.isDirectory ?? false
+            // A package (a Photos library, an .app, …) is one opaque thing in Finder: never imported from the inside, where its internal
+            // layout would become collections and its derivative files would become renameable photos.
+            if isDirectory, values?.isPackage != true {
                 let child = scanNode(at: entry)
                 if !child.imageFiles.isEmpty || !child.children.isEmpty {
                     children.append(child)

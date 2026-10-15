@@ -67,12 +67,12 @@ On a Mac (or a fresh macOS user account) that has never run Lightbench, with the
 
 ## Release notes: set expectations
 - RAW support runs on Apple's decoder (`CIRAWFilter`); it has been exercised with Nikon D610 files only.
-- Opening a photo from Finder / double-clicking an image is not supported yet; use Import Folder… or Open….
+- Drag a folder or photo onto the window, or use Open With / the Dock icon, to import a folder or open a photo. Lightbench is an ALTERNATE handler, so it never becomes the default app for images. (Not live-verified at the time of writing: check it on the clean-machine test, including a cold launch by dropping a folder on the Dock icon.)
 - Panorama merge and 3+ frame HDR brackets have had little real-world testing; Merge writes a new TIFF and never touches the originals.
 - Known, deliberately deferred: the Shadows/Highlights/Black Point curve can bend backwards at extreme slider combinations (IMPROVEMENTS.md D64).
 - The app never uploads anything; the catalog, thumbnails and sidecars stay on the Mac. Originals are never modified.
 
 ## Mac App Store instead
 Different requirements: an App Store distribution certificate and provisioning profile, App Store Connect listing (screenshots, description, privacy
-answers), `method` = `app-store-connect` in the export options, and review. The sandbox entitlements are already App-Store-shaped. The unsupported
-open-from-Finder path and the placeholder icon/name are the likeliest review friction. `scripts/release.sh` does NOT cover this route.
+answers), `method` = `app-store-connect` in the export options, and review. The sandbox entitlements are already App-Store-shaped. The
+unverified open-from-Finder path and the name are the likeliest review friction. `scripts/release.sh` does NOT cover this route.

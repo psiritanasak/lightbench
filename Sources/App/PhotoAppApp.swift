@@ -2,6 +2,9 @@ import SwiftUI
 
 @main
 struct PhotoAppApp: App {
+    /// Receives files and folders opened from Finder / the Dock (queued in `OpenRequests`).
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     /// Owns `ImageDocumentModel` here, not in `ContentView`, so the Edit
     /// menu below (a `Scene`-level construct) and the toolbar's own
     /// Undo/Redo buttons in `ContentView` can both act on the SAME
@@ -50,6 +53,8 @@ struct PhotoAppApp: App {
                 document: document, catalog: catalog, pasteModel: pasteModel, renameModel: renameModel, cull: cull,
                 showLibrary: $showLibrary
             )
+            // Drag a folder or photo onto the window, or open one from Finder / the Dock.
+            .modifier(DropAndOpenModifier(document: document, catalog: catalog, renameModel: renameModel, cull: cull, showLibrary: $showLibrary))
             // Flat window buttons instead of the system's glass ones (see `WindowChrome.swift`). To go back to the system buttons,
             // delete this one line.
             .background(WindowChromeInstaller())

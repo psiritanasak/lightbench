@@ -42,6 +42,17 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.photography
         LSMinimumSystemVersion: "14.0"
+        # Lets Finder offer Lightbench in "Open With" and the Dock accept photos and folders — as an ALTERNATE handler, so it never takes
+        # over as the default app for anyone's images.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Image
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.image, public.camera-raw-image]
+          - CFBundleTypeName: Folder
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.folder]
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: "Copyright © 2026 Praween Siritanasak"
         # Opts out of the system "Liquid Glass" restyling that the macOS 26+ SDK applies to toolbars and controls (the user confirmed the

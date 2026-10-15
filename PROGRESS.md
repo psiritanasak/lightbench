@@ -15,7 +15,7 @@ history file.
   per-mask Whites/Blacks, Vignette Softness, B&W Mix, save/restore.
 - Bolivia `raw_files` access granted (camera data 1086 rows).
 - `Open…` is only in the Library toolbar; it now switches to the Editor before
-  loading. Opening a file from Finder / `open -a` is still unsupported (no `onOpenURL`).
+  loading. Finder / Dock / drag-and-drop opens shipped 2026-10-15 (feature A below), live check pending.
 - Recently shipped (2026-10-09..12, all in `docs/ROADMAP_HISTORY.md` /
   `docs/PROGRESS_HISTORY.md`): Faces v1, Culling v1, Photo Merge (HDR + panorama),
   Depth Range mask, field-based search, Smart Collections saving the query, B&W Mix,
@@ -48,7 +48,8 @@ Done: placeholder app icon (`Sources/App/Assets.xcassets`, `scripts/make_app_ico
 
 ## V1 READINESS RUN (2026-10-15; plan: /Users/praween/.claude/plans/squishy-wandering-minsky.md) — order C backup → A drop/open → B empty states → D Preferences → E About/Help+shortcuts → F Move to Trash
 - C catalog backup + restore: SHIPPED (4 reviewer rounds, 36 tests, mutation-checked; details `docs/ROADMAP_HISTORY.md`, limits IMPROVEMENTS.md D66). Manual checks still owed (sandbox, not driven): save-panel backup over an EXISTING file, Restore on relaunch (alert text, `-before-restore` in `Application Support/PhotoApp/Backups/`), launch-backup folder contents after a normal launch.
-- NEXT: A (drag-and-drop + open from Finder/Dock), then B, D, E, F. One live pass at the end, only with the user's go-ahead.
+- A drag-and-drop + open from Finder/Dock: SHIPPED (2 reviewer rounds; round 2 code APPROVE, docs fixed after). Manual checks owed: real Finder drop of a folder and of one photo, Dock-icon drop, "Open With", whether a second window appears per Finder open (no `handlesExternalEvents` is set on purpose, see D67.1), and that a cold-launch open (Dock drop while the app is not running) waits for the catalog and is not lost.
+- NEXT: B (empty states), then D, E, F. One live pass at the end, only with the user's go-ahead.
 - Full-suite note: use `-test-timeouts-enabled YES -default-test-execution-time-allowance 180` (`/tmp/runfull.sh`); two earlier plain runs hung forever on `SkinMaskGeneratorTests.testAnOversizedSceneIsDownscaledAndStillWorks` (passes alone in 0.6 s; cause not found, preceded by Vision `MDB_MAP_FULL` cache errors). The suite is ~2976 tests, ~6-7 min.
 - Pending: new app icon from the user (`Lightbench-icons.zip`, untracked) — macOS set rendered by the rewritten `scripts/make_app_icon.swift`; install into `Sources/App/Assets.xcassets` as its own commit.
 

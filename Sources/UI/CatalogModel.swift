@@ -150,6 +150,11 @@ final class CatalogModel: ObservableObject {
     @Published var xmpRequested: XMPModel.Kind?
     @Published var xmpBusy = false
     let xmp = XMPModel()
+    /// Catalog backup / restore (see `CatalogBackupModel`): the File menu sets `backupRequested`; `CatalogBackupDialogModifier` performs it.
+    /// `backupBusy` mirrors "a restore confirmation is up or a backup is being written".
+    @Published var backupRequested: CatalogBackupModel.Kind?
+    @Published var backupBusy = false
+    let catalogBackup = CatalogBackupModel()
     @Published var searchText: String = ""
 
     /// What the Library grid actually renders — `photos` (the
@@ -341,8 +346,16 @@ final class CatalogModel: ObservableObject {
                     }
                 }
                 await self?.refresh()
+                if let report = CatalogRestoreReportStore.shared.take() {
+                    await MainActor.run { self?.importStatusMessage = report.message }
+                }
             } catch {
-                await MainActor.run { self?.initError = error }
+                await MainActor.run {
+                    self?.initError = error
+                    // Shown at launch too (it used to surface only when the user tried to import): a catalog this build refuses to open
+                    // (made by a newer version, damaged) must not just look like an empty library.
+                    self?.importStatusMessage = "Couldn't open the photo catalog: \(error.localizedDescription)"
+                }
             }
         }
     }
@@ -617,6 +630,12 @@ final class CatalogModel: ObservableObject {
         await refresh()
         let byID = Dictionary(all.compactMap { photo in photo.id.map { ($0, photo) } }, uniquingKeysWith: { first, _ in first })
         return ids.compactMap { byID[$0] }
+    }
+
+    /// A consistent snapshot of the live catalog written to `destination` (the engine is `CatalogDatabase.backUp(to:)`).
+    func backUpCatalog(to destination: URL) async throws -> CatalogFileInfo {
+        guard let database else { throw CatalogDatabaseError(message: "The photo catalog isn't ready yet — try again in a moment.") }
+        return try await database.backUp(to: destination)
     }
 
     /// Applies fields read from XMP sidecars (`XMPImportPolicy` decides what changes), in chunks so one huge batch cannot hold the
@@ -1177,7 +1196,7 @@ final class CatalogModel: ObservableObject {
 
     /// True while a Library tool sheet (keywords, duplicates, people) is up or one of their scans runs; batch rename must not start then.
     var toolSheetIsBusy: Bool {
-        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy
+        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy || backupBusy
     }
 
     /// The People sheet's scan: finds faces in the photos the Library is currently drawing from, then regroups ALL stored faces.

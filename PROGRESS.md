@@ -46,6 +46,12 @@ Done: placeholder app icon (`Sources/App/Assets.xcassets`, `scripts/make_app_ico
 - NOT live: D31/D32 in a real sandbox (see the #6 manual note), Photo ▸ Read Metadata from XMP, Cull key-gate under load.
 - Process notes: the window moved once (user activity) and an AX press on a button without a description does not work for the access NSOpenPanel (Return confirms; verified the folder shown first); a full-suite hang (log silent 89 min, test host at ~97% CPU) happened once and was NOT reproduced — a waiter-livelock theory was fixed defensively (f7ed46c) but never proven.
 
+## V1 READINESS RUN (2026-10-15; plan: /Users/praween/.claude/plans/squishy-wandering-minsky.md) — order C backup → A drop/open → B empty states → D Preferences → E About/Help+shortcuts → F Move to Trash
+- C catalog backup + restore: SHIPPED (4 reviewer rounds, 36 tests, mutation-checked; details `docs/ROADMAP_HISTORY.md`, limits IMPROVEMENTS.md D66). Manual checks still owed (sandbox, not driven): save-panel backup over an EXISTING file, Restore on relaunch (alert text, `-before-restore` in `Application Support/PhotoApp/Backups/`), launch-backup folder contents after a normal launch.
+- NEXT: A (drag-and-drop + open from Finder/Dock), then B, D, E, F. One live pass at the end, only with the user's go-ahead.
+- Full-suite note: use `-test-timeouts-enabled YES -default-test-execution-time-allowance 180` (`/tmp/runfull.sh`); two earlier plain runs hung forever on `SkinMaskGeneratorTests.testAnOversizedSceneIsDownscaledAndStillWorks` (passes alone in 0.6 s; cause not found, preceded by Vision `MDB_MAP_FULL` cache errors). The suite is ~2976 tests, ~6-7 min.
+- Pending: new app icon from the user (`Lightbench-icons.zip`, untracked) — macOS set rendered by the rewritten `scripts/make_app_icon.swift`; install into `Sources/App/Assets.xcassets` as its own commit.
+
 ## Known flaky test
 `FacesModelTests.testClearWhileAScanRunsKeepsItRunningAndItStillTellsTheLibrary` (real Vision face detection on a synthetic fixture) failed in 3 of ~9 full-suite runs this session ("the finished scan still refreshed the Library": the scan finished with no people found) and passed every time when run alone, even right after a forced rebuild. Matches the older note that the Vision-based classes misbehave under load. Not caused by the rename/release work; not investigated further. If it ever fails alone, that is a real bug.
 

@@ -80,6 +80,15 @@ struct PhotoAppApp: App {
             // and `.disabled` reads `@Published` state (`document.currentURL`
             // plus `catalog`'s own published fields, which `displayedPhotos`
             // is derived from) so both items enable/disable reactively.
+            // Catalog safety, in the File menu: a backup is a consistent snapshot of the catalog (ratings, flags, labels, keywords, collections,
+            // presets, people); a restore is staged and applied at the next launch. Both only REQUEST (`CatalogBackupDialogModifier` acts).
+            CommandGroup(after: .newItem) {
+                Divider()
+                Button("Back Up Catalog…") { catalog.backupRequested = .backUp }
+                    .disabled(cull.isActive || catalog.backupBusy)
+                Button("Restore Catalog from Backup…") { catalog.backupRequested = .restore }
+                    .disabled(cull.isActive || catalog.backupBusy || catalog.isRenameInProgress || renameModel.isWorking)
+            }
             CommandMenu("Photo") {
                 // Bound ONCE per body pass on purpose. `catalog.displayedPhotos`
                 // is a full filter+sort of the library, and this Scene's body

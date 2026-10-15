@@ -45,7 +45,8 @@ struct ContentView: View {
                     hasModalPanel: NSApp.modalWindow != nil,
                     isToolScanRunning: catalog.faces.isWorking || catalog.duplicates.isScanning,
                     isMerging: catalog.mergeBusy,
-                    isXMPBusy: catalog.xmpBusy
+                    isXMPBusy: catalog.xmpBusy,
+                    isBackupBusy: catalog.backupBusy
                 ).reason
             }
         )

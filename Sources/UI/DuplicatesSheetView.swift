@@ -198,5 +198,9 @@ struct LibraryToolSheetsModifier: ViewModifier {
                 catalog: catalog, model: catalog.xmp,
                 blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy
             ))
+            .modifier(CatalogBackupDialogModifier(
+                catalog: catalog, model: catalog.catalogBackup,
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+            ))
     }
 }

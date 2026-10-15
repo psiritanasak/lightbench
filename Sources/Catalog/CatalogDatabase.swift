@@ -37,6 +37,12 @@ final class CatalogDatabase: Sendable {
     convenience init() throws {
         let supportDir = try Self.defaultCatalogDirectory()
         let dbURL = supportDir.appendingPathComponent("catalog.sqlite")
+        // Before anything opens the file: a restore the user staged last session is applied first, then a backup is taken so a migration (or
+        // a bug in one) can never be the only copy of the data. Real user state only, never in the XCTest host.
+        if !Self.isRunningUnderXCTest {
+            if let report = Self.applyPendingRestore(in: supportDir) { CatalogRestoreReportStore.shared.set(report) }
+            Self.launchBackup(catalogURL: dbURL)
+        }
         try self.init(path: dbURL.path)
     }
 
@@ -101,7 +107,8 @@ final class CatalogDatabase: Sendable {
         try Self.migrate(dbQueue)
     }
 
-    private static func migrate(_ dbQueue: DatabaseQueue) throws {
+    /// The migrator for THIS build's schema (shared with backup validation, which must judge a file by the same list).
+    static func makeMigrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
         Migration001Initial.register(in: &migrator)
         Migration002RatingsAndFlags.register(in: &migrator)
@@ -117,6 +124,16 @@ final class CatalogDatabase: Sendable {
         Migration012PhotoFingerprint.register(in: &migrator)
         Migration013Faces.register(in: &migrator)
         Migration014PhotoMetadata.register(in: &migrator)
+        return migrator
+    }
+
+    private static func migrate(_ dbQueue: DatabaseQueue) throws {
+        let migrator = makeMigrator()
+        // GRDB opens (and writes to) a catalog made by a NEWER build, silently ignoring the migrations it does not know. Refuse instead,
+        // before touching anything.
+        if try dbQueue.read({ try migrator.hasBeenSuperseded($0) }) {
+            throw CatalogDatabaseError(message: newerVersionMessage)
+        }
         try migrator.migrate(dbQueue)
     }
 

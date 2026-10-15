@@ -1309,3 +1309,13 @@ Shipped: write/read of rating, reject, colour label and keywords to/from standar
 
 **DECISION (user, 2026-10-14): deferred — not fixing for v1.** Revisit after v1; option (b), a narrow fix that leaves every render unchanged where today's curve is already monotone, is the likely next step. The reversal only appears at extreme Shadows/Highlights/Black Point corner combinations.
 
+### D66. Catalog backup + restore v1 — shipped 2026-10-15, limits
+1. A backup holds the catalog only: no edits (they live in `.photoapp.json` / optional `.xmp` next to the photos) and no folder permissions (security-scoped bookmarks live in UserDefaults). A restore on the SAME Mac keeps working; on a new Mac each folder must be imported / granted again.
+2. Restore takes effect at the NEXT launch (the running app holds the catalog open and every model caches rows); there is no live swap, no "Quit Now" button.
+3. A restore replaces EVERYTHING in the catalog, including changes made after the backup (the confirmation says so). The replaced catalog is kept as `-before-restore` (only the newest 5 of each kind are kept, so a very long series of restores eventually drops old ones).
+4. Launch backup is best effort and silent: a failed snapshot never blocks launch; a catalog that cannot be read is not copied.
+5. NOT verified in the real sandbox: the save panel's grant covering the atomic replace of an EXISTING destination (the code falls back to: move the old file aside, copy, and move it back if the copy fails — a failed copy can still leave the old file only if the move-back itself fails); live check pending.
+6. The restore result and a refused/damaged catalog are announced through the same alert as the import status.
+7. A crash mid-write leaves a hot `-journal`; a read-only open cannot roll it back, so both the launch backup and the restore first open the catalog read-write once WITHOUT migrating (`rollBackHotJournalIfAny`) so SQLite recovers it before anything is copied. The test builds the hot journal with `synchronous = OFF` (otherwise SQLite zeroes the journal magic until the first sync and the journal is not hot yet); a catalog that is too damaged for SQLite to recover is set aside as `-damaged` (its journal, if any survived, is not kept with it).
+8. A backup stamped in the future (clock or time-zone change) is ignored when deciding whether a daily backup is due.
+

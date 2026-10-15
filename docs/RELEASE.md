@@ -4,7 +4,7 @@ How to turn this repo into a signed, notarized app other people can open. The Ap
 without your Apple account is already done and checked by `scripts/release.sh --check`.
 
 ## What is already in place
-- App icon: PLACEHOLDER art in `Sources/App/Assets.xcassets` (`scripts/make_app_icon.swift` redraws it; replace the PNGs with real artwork any time).
+- App icon: the designer's Lightbench mark (half white / half amber disc over a bar; master SVG in `docs/icon/`), drawn on the macOS rounded tile by `scripts/make_app_icon.swift` into `Sources/App/Assets.xcassets` (re-run it to regenerate all ten sizes).
 - Version: `MARKETING_VERSION` (1.0.0) and `CURRENT_PROJECT_VERSION` (1) in `project.yml`. Bump the build number for every notarized build.
 - Category (`public.app-category.photography`), hardened runtime, App Sandbox + user-selected read-write file access.
 - `ThirdPartyNotices.md` (GRDB MIT, Depth Anything V2 Small Apache-2.0 with its full text) is bundled in the app.

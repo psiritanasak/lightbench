@@ -1,13 +1,14 @@
 #!/usr/bin/env swift
-// Draws the PLACEHOLDER app icon (a lens ring over three adjustment sliders on a dark rounded square) and writes every size macOS needs into
-// Sources/App/Assets.xcassets/AppIcon.appiconset. Replace the artwork whenever a real icon exists — just overwrite the PNGs (or delete the
-// appiconset and drop a designer's one in); nothing else depends on this script.
-// Usage: swift scripts/make_app_icon.swift
+// Draws the Lightbench app icon (a half-white / half-amber disc over a short bar, on a dark rounded square — geometry from the designer's
+// lightbench-master-square.svg, 100-unit viewBox) and writes every size macOS needs into Sources/App/Assets.xcassets/AppIcon.appiconset.
+// Usage: swift scripts/make_app_icon.swift [output-directory]   (default: the appiconset above)
 import AppKit
 import CoreGraphics
 
 let root = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().deletingLastPathComponent()
-let outDir = root.appendingPathComponent("Sources/App/Assets.xcassets/AppIcon.appiconset")
+let outDir = CommandLine.arguments.count > 1
+    ? URL(fileURLWithPath: CommandLine.arguments[1])
+    : root.appendingPathComponent("Sources/App/Assets.xcassets/AppIcon.appiconset")
 try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
 func render(pixels: Int) -> Data {
@@ -18,6 +19,9 @@ func render(pixels: Int) -> Data {
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
     let ctx = NSGraphicsContext.current!.cgContext
     let space = CGColorSpace(name: CGColorSpace.sRGB)!
+    func color(_ hex: UInt32) -> CGColor {
+        CGColor(colorSpace: space, components: [CGFloat((hex >> 16) & 0xFF) / 255, CGFloat((hex >> 8) & 0xFF) / 255, CGFloat(hex & 0xFF) / 255, 1])!
+    }
 
     // macOS icon grid: the artwork fills ~82% of the canvas, corner radius ~22.5% of that.
     let inset = s * 0.09
@@ -28,45 +32,27 @@ func render(pixels: Int) -> Data {
     // Soft drop shadow under the tile.
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -s * 0.012), blur: s * 0.03, color: CGColor(red: 0, green: 0, blue: 0, alpha: 0.45))
-    ctx.addPath(tilePath); ctx.setFillColor(CGColor(red: 0.1, green: 0.09, blue: 0.14, alpha: 1)); ctx.fillPath()
+    ctx.addPath(tilePath); ctx.setFillColor(color(0x15171A)); ctx.fillPath()
     ctx.restoreGState()
 
-    // Background gradient (the app's dark purple-grey).
     ctx.saveGState()
     ctx.addPath(tilePath); ctx.clip()
-    let gradient = CGGradient(colorsSpace: space, colors: [
-        CGColor(red: 0.22, green: 0.18, blue: 0.33, alpha: 1), CGColor(red: 0.07, green: 0.06, blue: 0.11, alpha: 1)] as CFArray, locations: [0, 1])!
-    ctx.drawLinearGradient(gradient, start: CGPoint(x: tile.midX, y: tile.maxY), end: CGPoint(x: tile.midX, y: tile.minY), options: [])
-
-    // Lens ring.
-    let center = CGPoint(x: tile.midX, y: tile.midY + tile.height * 0.13)
-    let ringR = tile.width * 0.235
-    ctx.setStrokeColor(CGColor(red: 0.96, green: 0.96, blue: 0.98, alpha: 1))
-    ctx.setLineWidth(tile.width * 0.045)
-    ctx.strokeEllipse(in: CGRect(x: center.x - ringR, y: center.y - ringR, width: ringR * 2, height: ringR * 2))
-    // Inner glass: a gentle highlight.
-    let glassR = ringR - tile.width * 0.03
-    ctx.saveGState()
-    ctx.addEllipse(in: CGRect(x: center.x - glassR, y: center.y - glassR, width: glassR * 2, height: glassR * 2)); ctx.clip()
-    let glass = CGGradient(colorsSpace: space, colors: [
-        CGColor(red: 0.45, green: 0.62, blue: 0.95, alpha: 0.55), CGColor(red: 0.18, green: 0.2, blue: 0.4, alpha: 0.15)] as CFArray, locations: [0, 1])!
-    ctx.drawLinearGradient(glass, start: CGPoint(x: center.x - glassR, y: center.y + glassR), end: CGPoint(x: center.x + glassR, y: center.y - glassR), options: [])
-    ctx.restoreGState()
-
-    // Three adjustment sliders under the lens.
-    let sliderW = tile.width * 0.56
-    let x0 = tile.midX - sliderW / 2
-    let ys = [tile.minY + tile.height * 0.27, tile.minY + tile.height * 0.19, tile.minY + tile.height * 0.11]
-    let knobs: [CGFloat] = [0.68, 0.30, 0.52]
-    for (y, k) in zip(ys, knobs) {
-        ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.28)); ctx.setLineWidth(tile.width * 0.018); ctx.setLineCap(.round)
-        ctx.move(to: CGPoint(x: x0, y: y)); ctx.addLine(to: CGPoint(x: x0 + sliderW, y: y)); ctx.strokePath()
-        ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.85))
-        ctx.move(to: CGPoint(x: x0, y: y)); ctx.addLine(to: CGPoint(x: x0 + sliderW * k, y: y)); ctx.strokePath()
-        let kr = tile.width * 0.026
-        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-        ctx.fillEllipse(in: CGRect(x: x0 + sliderW * k - kr, y: y - kr, width: kr * 2, height: kr * 2))
-    }
+    // SVG units (0...100, y down) -> tile points (y up).
+    let u = tile.width / 100
+    func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: tile.minX + x * u, y: tile.maxY - y * u) }
+    let centre = pt(50, 44)
+    let r = 24 * u
+    // Left half warm white, right half amber (the two half-discs meet on the vertical diameter).
+    ctx.setFillColor(color(0xF5F3EF))
+    ctx.addArc(center: centre, radius: r, startAngle: .pi / 2, endAngle: -.pi / 2, clockwise: false)   // top -> bottom through the left
+    ctx.closePath(); ctx.fillPath()
+    ctx.setFillColor(color(0xFFC24D))
+    ctx.addArc(center: centre, radius: r, startAngle: .pi / 2, endAngle: -.pi / 2, clockwise: true)    // top -> bottom through the right
+    ctx.closePath(); ctx.fillPath()
+    // The bar under the disc.
+    let bar = CGRect(x: tile.minX + 28 * u, y: tile.maxY - 80 * u, width: 44 * u, height: 4 * u)
+    ctx.addPath(CGPath(roundedRect: bar, cornerWidth: 2 * u, cornerHeight: 2 * u, transform: nil))
+    ctx.setFillColor(color(0xF5F3EF)); ctx.fillPath()
     ctx.restoreGState()
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!

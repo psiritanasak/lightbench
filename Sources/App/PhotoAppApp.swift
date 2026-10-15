@@ -66,6 +66,7 @@ struct PhotoAppApp: App {
             .tint(Theme.controlTint)
         }
         .commands {
+            AboutAndHelpCommands()
             // Replaces macOS's default (inert) Edit > Undo/Redo items —
             // the canonical, keyboard-shortcut-owning home for these
             // actions. Wired to the SAME `document.undo()`/`.redo()` the
@@ -209,6 +210,11 @@ struct PhotoAppApp: App {
                     )
             }
         }
+        Window("Keyboard Shortcuts", id: AboutAndHelpCommands.shortcutsWindowID) {
+            KeyboardShortcutsView()
+                .tint(Theme.controlTint)
+        }
+        .windowResizability(.contentSize)
         Settings {
             PreferencesView(model: preferences, isBackupBusy: catalog.backupBusy, backUpNow: { await catalog.backUpNow() },
                             backupsFolder: { catalog.backupsFolderURL })

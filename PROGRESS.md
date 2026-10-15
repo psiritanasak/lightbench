@@ -51,7 +51,8 @@ Done: placeholder app icon (`Sources/App/Assets.xcassets`, `scripts/make_app_ico
 - A drag-and-drop + open from Finder/Dock: SHIPPED (2 reviewer rounds; round 2 code APPROVE, docs fixed after). Manual checks owed: real Finder drop of a folder and of one photo, Dock-icon drop, "Open With", whether a second window appears per Finder open (no `handlesExternalEvents` is set on purpose, see D67.1), and that a cold-launch open (Dock drop while the app is not running) waits for the catalog and is not lost.
 - B empty states: SHIPPED (2 reviewer rounds, APPROVE). Manual: look at the empty Library / empty collection / no-photo Editor at real window sizes.
 - D Preferences: SHIPPED (2 reviewer rounds, APPROVE). Manual: open ⌘, and check the toggles are grey, Back Up Now writes a file into the Backups folder, Show Backups in Finder opens it.
-- NEXT: E (About/Help + shortcuts), F (Move to Trash). One live pass at the end, only with the user's go-ahead.
+- E About/Help + shortcuts: SHIPPED (2 reviewer rounds; round 2 found two pin/wording issues, fixed and verified without a third round). Manual: open About, Help ▸ Keyboard Shortcuts (⌘/), Third-Party Licences; check the shortcuts window does NOT also open at launch (D70.1).
+- NEXT: F (Move to Trash). One live pass at the end, only with the user's go-ahead.
 - Full-suite note: use `-test-timeouts-enabled YES -default-test-execution-time-allowance 180` (`/tmp/runfull.sh`); two earlier plain runs hung forever on `SkinMaskGeneratorTests.testAnOversizedSceneIsDownscaledAndStillWorks` (passes alone in 0.6 s; cause not found, preceded by Vision `MDB_MAP_FULL` cache errors). The suite is ~2976 tests, ~6-7 min.
 - Pending: new app icon from the user (`Lightbench-icons.zip`, untracked) — macOS set rendered by the rewritten `scripts/make_app_icon.swift`; install into `Sources/App/Assets.xcassets` as its own commit.
 

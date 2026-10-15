@@ -184,19 +184,25 @@ struct DuplicatesSheetModifier: ViewModifier {
 struct LibraryToolSheetsModifier: ViewModifier {
     @ObservedObject var catalog: CatalogModel
     let blocked: Bool
+    /// What Move to Trash re-checks around its prompts (see `TrashModel`): the open photo and everything that makes moving files unsafe.
+    let trashProviders: RenameProviders
 
     func body(content: Content) -> some View {
         content
-            .modifier(KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.xmpBusy))
-            .modifier(DuplicatesSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.xmpBusy))
-            .modifier(PeopleSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.mergeBusy || catalog.xmpBusy))
+            .modifier(KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
+            .modifier(DuplicatesSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
+            .modifier(PeopleSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
             .modifier(MergeDialogModifier(
                 catalog: catalog, model: catalog.merge,
-                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.xmpBusy
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.fileToolBusy
             ))
             .modifier(XMPDialogModifier(
                 catalog: catalog, model: catalog.xmp,
                 blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy
+            ))
+            .modifier(TrashDialogModifier(
+                catalog: catalog, model: catalog.trash, providers: trashProviders,
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.xmpBusy
             ))
             .modifier(CatalogBackupDialogModifier(
                 catalog: catalog, model: catalog.catalogBackup,

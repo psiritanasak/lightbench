@@ -222,7 +222,7 @@ final class MergeWiringTests: XCTestCase {
         XCTAssertTrue(app.contains("renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy"), "Rename Files")
         XCTAssertTrue(app.contains("renameModel.isPresentingSheet || catalog.mergeBusy"), "Undo Rename")
         let sheets = try text("Sources/UI/DuplicatesSheetView.swift")
-        XCTAssertEqual(sheets.components(separatedBy: "catalog.mergeBusy").count - 1, 4, "keyword, duplicates and people sheets block on a merge, and so does the XMP dialog")
+        XCTAssertEqual(sheets.components(separatedBy: "catalog.mergeBusy").count - 1, 5, "keyword, duplicates and people sheets block on a merge, and so do the XMP and Trash dialogs")
         XCTAssertTrue(sheets.contains("MergeDialogModifier(") && sheets.contains("model: catalog.merge,"))
         let model = try text("Sources/UI/CatalogModel.swift")
         XCTAssertTrue(model.contains("faces.isWorking || mergeBusy"), "batch rename must not start under a merge")
@@ -237,8 +237,8 @@ final class MergeWiringTests: XCTestCase {
                       "the enabled state uses the SAME set the merge acts on")
         XCTAssertTrue(content.contains("Merge to HDR (\\(catalog.selectedPhotosInDisplayedGrid.count))…"), "so does the label")
         XCTAssertTrue(content.contains("isMerging: catalog.mergeBusy"), "rename/undo re-check the merge flag")
-        XCTAssertTrue(content.contains("|| document.isLoadInFlight || catalog.mergeBusy || catalog.xmpBusy\n                        )"), "selection-menu Rename Files")
-        XCTAssertTrue(content.contains("renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy || catalog.xmpBusy)"), "selection-menu Undo Rename")
+        XCTAssertTrue(content.contains("|| document.isLoadInFlight || catalog.mergeBusy || catalog.fileToolBusy\n                        )"), "selection-menu Rename Files")
+        XCTAssertTrue(content.contains("renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy || catalog.fileToolBusy)"), "selection-menu Undo Rename")
         XCTAssertTrue(content.contains("pasteModel.pendingTargets != nil || catalog.mergeBusy"), "otherSheetIsPresented includes a merge")
     }
 }

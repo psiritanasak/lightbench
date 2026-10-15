@@ -155,7 +155,14 @@ final class CatalogModel: ObservableObject {
     /// up or XMP files are being read/written".
     @Published var xmpRequested: XMPModel.Kind?
     @Published var xmpBusy = false
+    /// Move to Trash (see `TrashModel`): `trashRequested` is set by the menus, `TrashDialogModifier` performs it; `trashBusy` mirrors "a confirmation is
+    /// up or photos are being moved".
+    @Published var trashRequested: TrashModel.Kind?
+    @Published var trashBusy = false
+    /// A file tool (XMP read/write, Move to Trash) is up or running: the menus that act on the selection's files wait for it.
+    var fileToolBusy: Bool { xmpBusy || trashBusy }
     let xmp = XMPModel()
+    let trash = TrashModel()
     /// Catalog backup / restore (see `CatalogBackupModel`): the File menu sets `backupRequested`; `CatalogBackupDialogModifier` performs it.
     /// `backupBusy` mirrors "a restore confirmation is up or a backup is being written".
     @Published var backupRequested: CatalogBackupModel.Kind?
@@ -659,6 +666,26 @@ final class CatalogModel: ObservableObject {
         } catch {
             return "Couldn't back up the catalog: \(error.localizedDescription)"
         }
+    }
+
+    /// What the Library is showing, in words (a confirmation names it): All Photos, or the selected collection / smart collection.
+    var currentScopeName: String {
+        switch selectedFilter {
+        case .allPhotos: return "All Photos"
+        case .collection(let id): return collections.first { $0.id == id }.map { "“\($0.name)”" } ?? "this collection"
+        case .smartCollection(let id): return smartCollections.first { $0.id == id }.map { "“\($0.name)”" } ?? "this smart collection"
+        }
+    }
+
+    /// After `TrashEngine` moved these photos' files to the Trash: remove exactly their rows (one transaction), forget them in the selection and
+    /// the focus, drop their cached thumbnails and re-read the library (`photoCount` must follow: the empty-state logic trusts it).
+    func removeTrashedPhotos(ids: [Int64], paths: [String]) async throws {
+        guard let database else { throw CatalogDatabaseError(message: "The photo catalog isn't ready yet.") }
+        try await database.deletePhotos(ids: ids)
+        selectedPhotoIDs.subtract(ids)
+        if let focused = focusedPhotoPath, paths.contains(focused) { focusedPhotoPath = nil }
+        for path in paths { invalidateThumbnail(for: URL(fileURLWithPath: path)) }
+        await refresh()
     }
 
     /// A consistent snapshot of the live catalog written to `destination` (the engine is `CatalogDatabase.backUp(to:)`).
@@ -1225,7 +1252,7 @@ final class CatalogModel: ObservableObject {
 
     /// True while a Library tool sheet (keywords, duplicates, people) is up or one of their scans runs; batch rename must not start then.
     var toolSheetIsBusy: Bool {
-        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy || backupBusy
+        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy || trashBusy || backupBusy
     }
 
     /// The People sheet's scan: finds faces in the photos the Library is currently drawing from, then regroups ALL stored faces.

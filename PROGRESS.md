@@ -52,7 +52,8 @@ Done: placeholder app icon (`Sources/App/Assets.xcassets`, `scripts/make_app_ico
 - B empty states: SHIPPED (2 reviewer rounds, APPROVE). Manual: look at the empty Library / empty collection / no-photo Editor at real window sizes.
 - D Preferences: SHIPPED (2 reviewer rounds, APPROVE). Manual: open ⌘, and check the toggles are grey, Back Up Now writes a file into the Backups folder, Show Backups in Finder opens it.
 - E About/Help + shortcuts: SHIPPED (2 reviewer rounds; round 2 found two pin/wording issues, fixed and verified without a third round). Manual: open About, Help ▸ Keyboard Shortcuts (⌘/), Third-Party Licences; check the shortcuts window does NOT also open at launch (D70.1).
-- NEXT: F (Move to Trash). One live pass at the end, only with the user's go-ahead.
+- F Move to Trash: SHIPPED (4 reviewer rounds, APPROVE; 62 tests, mutation-checked). FIRST live check: does Return confirm the dialog? (D71.1). Manual (SCRATCH COPIES ONLY, real Trash): Move Rejected / Move Selected on JPEGs, a RAW+JPG pair with a shared .xmp (both orders), a photo open in the Editor, a photo hidden by a filter, Put Back in the Finder, the folder-grant prompt.
+- NEXT: full suite, `scripts/release.sh --check`, then ONE live pass (only with the user's go-ahead) over A/C/D/E/F manual lists above. One live pass at the end, only with the user's go-ahead.
 - Full-suite note: use `-test-timeouts-enabled YES -default-test-execution-time-allowance 180` (`/tmp/runfull.sh`); two earlier plain runs hung forever on `SkinMaskGeneratorTests.testAnOversizedSceneIsDownscaledAndStillWorks` (passes alone in 0.6 s; cause not found, preceded by Vision `MDB_MAP_FULL` cache errors). The suite is ~2976 tests, ~6-7 min.
 - Pending: new app icon from the user (`Lightbench-icons.zip`, untracked) — macOS set rendered by the rewritten `scripts/make_app_icon.swift`; install into `Sources/App/Assets.xcassets` as its own commit.
 

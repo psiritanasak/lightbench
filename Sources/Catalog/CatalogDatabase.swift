@@ -333,13 +333,21 @@ final class CatalogDatabase: Sendable {
     /// nonexistent ID is a silent no-op (`deleteAll` on an empty filter),
     /// matching this file's other mutators' tolerance of stale IDs.
     ///
-    /// Catalog-only: the original file on disk is never touched. This app
-    /// only holds READ-ONLY security-scoped bookmarks on imported folders,
-    /// so it has no write access to delete the file even if it wanted to
-    /// — see `CatalogModel`'s folder-bookmark handling.
+    /// Catalog-only: this removes the ROW, never a file. (Moving a photo's file to the Trash is `TrashEngine`'s job and happens first;
+    /// `deletePhotos(ids:)` below then removes the rows of the photos whose file really went.)
     func deletePhoto(id: Int64) async throws {
         try await dbQueue.write { db in
             _ = try Photo.filter(Photo.Columns.id == id).deleteAll(db)
+        }
+    }
+
+    /// Removes the rows of `ids` in ONE transaction (all or none), with the same cascades as `deletePhoto`. Ids that no longer exist are
+    /// ignored. Returns how many rows were removed.
+    @discardableResult
+    func deletePhotos(ids: [Int64]) async throws -> Int {
+        guard !ids.isEmpty else { return 0 }
+        return try await dbQueue.write { db in
+            try Photo.filter(ids.contains(Photo.Columns.id)).deleteAll(db)
         }
     }
 

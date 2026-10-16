@@ -23,6 +23,7 @@ performance items, MEASURE before and after.
 - **D14** — No keyboard/AT path to pick a Color Range mask's target color (Phase 7 slice 5, second half) — SHIPPED 2026-09-25
 - **D23** — Transform Scale/Stretch has no minification prefiltering (reviewer-caught) — SHIPPED 2026-09-29
 - **D25** — `ImageAverageColor`/`PixelSampler` read `CIContext.render`'s premultiplied output as if it were straight (reviewer-caught, Auto Tone planning session) — FIXED 2026-09-29
+- **D64** — Parametric curve (Shadows/Highlights/Black Point/Whites) can bend backwards at extreme slider combinations — FIXED 2026-10-16 (monotone guard; edits that did not reverse are bit-identical)
 - **D33** — Ghost selection IDs make Export/Add-to-Collection UI silently misleading (reviewer-caught while correcting a stale nit, 2026-09-29) — SHIPPED 2026-09-29
 - **D7** — Code design: split ContentView.swift (1352 lines) — SHIPPED 2026-08-28
 - **D34** — `xcodebuild test` ran migrations against the user's REAL catalog (found 2026-09-30, Pick/Reject live check) — SHIPPED 2026-09-30
@@ -1288,9 +1289,6 @@ Takeaway for us: the part worth copying is not any single control but that the r
 5. Capture sort puts undated photos last in BOTH directions (not by import date).
 6. Photos in folders this sandbox has no library access to are skipped by the scan (and by thumbnails); fixing the access fixes both.
 7. Multi-word plain search is now an AND of words (was one substring): results only broaden.
-
-### D64. Parametric curve: Shadows +1 with Highlights +1 reverses the very top (pre-existing, found 2026-10-12)
-`curveControlPoints` builds a 5-point natural cubic; with both point1 and point3 raised to their maximum the end slope goes slightly negative (global path: -0.029 at sh+1 hi+1, -0.093 at hi+1 bp-1), so the brightest tones/headroom can come out marginally darker than slightly less bright ones. Not introduced by per-mask Whites/Blacks (which only scale it for a strong Whites boost). Fixing it would change the byte-exact curve pinned by ~70 assertions; a monotone-clamped variant would need those re-pinned deliberately.
 
 ### D65. XMP sidecar interop v1 — shipped 2026-10-14, open limits
 Shipped: write/read of rating, reject, colour label and keywords to/from standard `.xmp` (see CLAUDE.md's XMP bullet and the history entry). Open, none blocking:

@@ -65,11 +65,18 @@ On a Mac (or a fresh macOS user account) that has never run Lightbench, with the
 - Cull a few photos (Compare `C`, Survey `N`), Write Metadata to XMP on a copy of a folder, undo a rename.
 - If you shipped the depth model: add a Depth mask to an HEIC with depth data and to a JPEG.
 
+## Clean-machine check, simulated on the dev Mac (2026-10-16)
+There was no second Mac, so this is a SIMULATION of a stranger's first launch of `build/unsigned/Lightbench-1.0.0-unsigned.zip`, not the real thing. What was done and found:
+- Zip quarantined like a browser download, extracted into a fresh folder (the quarantine flag also put on the app). `codesign --verify --deep --strict`: valid. `spctl --assess`: **rejected** — as expected for an unsigned build; the person must use Control-click ▸ Open / Open Anyway (see above).
+- Universal binary (`x86_64 arm64`), minimum macOS 14.0. Links only system libraries (the Swift runtime from `/usr/lib/swift`); no `Frameworks` folder needed; no `/Users/…`, DerivedData or project paths baked into the binary or Info.plist. All 20 `.cikernel` shaders, the depth model (48 MB), `GRDB_GRDB.bundle`, the icon and `ThirdPartyNotices.md` are in the bundle. Entitlements: sandbox + user-selected read-write (+ `get-task-allow`, expected for this ad-hoc build; never notarizable).
+- First launch under a THROWAWAY bundle identifier (a copy re-signed ad hoc, so macOS made a brand-new sandbox container: no catalog, preferences or folder grants): the app ran, created `catalog.sqlite` with all 14 migrations applied and `integrity_check` ok, no crash report. Second launch: it took the launch backup into `Backups/` (`catalog-<stamp>.sqlite`), a valid catalog with 14 migrations — the backup feature working in a real sandbox. The throwaway container, preferences and copy were deleted; the real container was never touched.
+- NOT covered, still needs a real clean Mac (or fresh macOS user): the Gatekeeper dialog flow itself; an Intel Mac or macOS 14 (only the `x86_64` slice's presence was checked, not run); importing a real folder / RAW (no photos were used); the "allow access to data from other apps" prompt macOS 14+ may show for a changed signature; double-click / Dock / "Open With" paths; any UI interaction (nothing was driven).
+
 ## Release notes: set expectations
 - RAW support runs on Apple's decoder (`CIRAWFilter`); it has been exercised with Nikon D610 files only.
 - Drag a folder or photo onto the window, or use Open With / the Dock icon, to import a folder or open a photo. Lightbench is an ALTERNATE handler, so it never becomes the default app for images. (Not live-verified at the time of writing: check it on the clean-machine test, including a cold launch by dropping a folder on the Dock icon.)
 - Panorama merge and 3+ frame HDR brackets have had little real-world testing; Merge writes a new TIFF and never touches the originals.
-- Known, deliberately deferred: the Shadows/Highlights/Black Point curve can bend backwards at extreme slider combinations (IMPROVEMENTS.md D64).
+- The Shadows/Highlights/Black Point/Whites curve is now kept from bending backwards at extreme slider combinations (D64, fixed 2026-10-16); edits that never did are unchanged. Extreme combinations of two or more of those sliders are eased back, by up to about 40% of the slider values in the worst corners (the common case, e.g. Highlights +1 with Shadows +1, by under 3%).
 - The app never uploads anything; the catalog, thumbnails and sidecars stay on the Mac. Originals are never modified.
 
 ## Mac App Store instead

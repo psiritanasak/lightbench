@@ -68,6 +68,10 @@ struct ToneCurveSpline {
     /// close to it.
     let endSlope: Double
 
+    /// `points` as Doubles, built once: `splineValue` runs hundreds of times per monotonicity check and must not allocate on every call.
+    private let xs: [Double]
+    private let ys: [Double]
+
     /// Fails (returns nil) on fewer than 3 points or non-increasing x —
     /// a degenerate solve would divide by a zero interval. Callers treat
     /// nil as "leave the image alone", never as "carry on with garbage".
@@ -89,6 +93,8 @@ struct ToneCurveSpline {
         self.points = points
         let xs = points.map { Double($0.x) }
         let ys = points.map { Double($0.y) }
+        self.xs = xs
+        self.ys = ys
         let m = Self.naturalSecondDerivatives(xs: xs, ys: ys)
         self.secondDerivatives = m
 
@@ -189,8 +195,6 @@ struct ToneCurveSpline {
     /// extraction — `value(at:)`'s behaviour is unchanged, and the existing
     /// assertions covering it are the proof.
     func splineValue(atEncoded u: Double) -> Double {
-        let xs = points.map { Double($0.x) }
-        let ys = points.map { Double($0.y) }
         let m = secondDerivatives
         let n = xs.count
 
@@ -207,5 +211,60 @@ struct ToneCurveSpline {
     /// without a `CIContext`; the kernel is the twin that must agree.
     func value(at v: Double) -> Double {
         Self.srgbDecode(splineValue(atEncoded: Self.srgbEncode(v)))
+    }
+
+    // MARK: - Monotonicity (D64)
+
+    /// How far the curve ever falls back below the highest value it has already reached, over `[x0, x4]` (0 for a curve that never goes down).
+    /// Sampled (64 points per segment — the curve is a smooth cubic, so the sampling error is far below `reversalTolerance`).
+    var deepestReversal: Double {
+        var peak = -Double.infinity
+        var deepest = 0.0
+        let n = points.count
+        for i in 0..<(n - 1) {
+            let x0 = Double(points[i].x), x1 = Double(points[i + 1].x)
+            for k in 0...64 {
+                let y = splineValue(atEncoded: x0 + (x1 - x0) * Double(k) / 64)
+                peak = max(peak, y)
+                deepest = max(deepest, peak - y)
+            }
+        }
+        return deepest
+    }
+
+    /// Reversals shallower than this are ignored (0.015, about 4 steps of 8-bit near black). It is set just above the deepest dip any SINGLE slider
+    /// produces — Black Point -1 alone, 0.0104 — because single-slider curves are pinned against measurements of Apple's `CIToneCurve`
+    /// (`testBlackPointNegativeCrushesShadows` and friends; the recorded "soft black" 0.03381) and must stay exactly as they are. Every
+    /// combination with all sliders within +/-0.5 is also far below it (deepest 0.0007). The deeper reversals that remain are only reachable with
+    /// two or more sliders near their limits.
+    static let reversalTolerance = 0.015
+
+    /// True when the curve does not go visibly DOWN as the input rises: no reversal deeper than `reversalTolerance` inside `[x0, x4]`, and a
+    /// non-negative `endSlope` (above `x4` the curve continues along that slope, so a negative one darkens the headroom — the D64 symptom).
+    var isEffectivelyMonotone: Bool {
+        endSlope >= 0 && deepestReversal <= Self.reversalTolerance
+    }
+
+    /// `build(s)` makes the control points with every slider displacement scaled by `s` (1 = as the user set it, 0 = the identity line). Returns
+    /// `build(1)` untouched whenever that curve is already effectively monotone — so every ordinary edit renders exactly as it always did — and otherwise the
+    /// largest scale (found by a downward scan, then bisection) whose curve is monotone: an extreme COMBINATION of sliders (Shadows + Highlights, or
+    /// Highlights + Black Point) is eased back just far enough that the brightest tones are never rendered darker than slightly less bright ones.
+    /// `build(0)` is the identity, which is monotone, so a monotone scale always exists.
+    static func monotonePoints(build: (Double) -> [CGPoint]) -> [CGPoint] {
+        func isMonotone(_ s: Double) -> Bool { ToneCurveSpline(points: build(s))?.isEffectivelyMonotone ?? true }
+        if isMonotone(1) { return build(1) }
+        var high = 1.0
+        var low = 0.0
+        var s = 1.0 - 1.0 / 64
+        while s > 0 {
+            if isMonotone(s) { low = s; break }
+            high = s
+            s -= 1.0 / 64
+        }
+        for _ in 0..<30 {
+            let mid = (low + high) / 2
+            if isMonotone(mid) { low = mid } else { high = mid }
+        }
+        return build(low)
     }
 }

@@ -27,7 +27,7 @@ history file.
 - Test-suite note: the first full run after a rebuild twice showed 2 failures of unknown identity (a rerun of the same tree was green both times); cold-start flake suspected, not investigated.
 
 - **#1 Global Whites — SHIPPED (018e871), reviewer APPROVE (1 round), suite green, not live-checked.** Manual: drag Whites on a bright photo, undo, relaunch (sidecar), Reset Adjustments clears it.
-- **#2 D64 curve — SKIPPED; user decided 2026-10-14 to defer it past v1.** The monotone swap was built and measured: it moves renders by up to 0.265 (typical 0.02-0.07), not ~0.016, weakening Highlights/Black Point/Brilliance on every old edit; nothing committed. Numbers + options (a/b/c) in IMPROVEMENTS.md D64.
+- **#2 D64 curve — FIXED 2026-10-16 (after the user asked for it post-v1-run): a monotone guard that leaves every non-reversing edit bit-identical and eases extreme slider combinations back; numbers in `docs/IMPROVEMENTS_HISTORY.md` D64. Reviewer: 1 round (docs/tests only), see git log. Manual: Highlights +1 with Black Point -1 on a bright photo — the highlights no longer darken at the very top.**
 
 - **#3 B&W extras — SHIPPED (b1ecfd5), reviewer 2 rounds APPROVE, not live-checked.** Intensity (scales the Mix; nothing to scale when every Mix slider is 0), Neutrals/Tone (one monotone grey curve), Grain (rides the Grain stage; `EditState.zeroingGrain()` now lists every grain source for Export + the eyedropper). Manual: B&W on, drag each slider, undo, Reset Adjustments.
 - **#5 Culling Compare + Survey — SHIPPED (commit after this line), reviewer 2 rounds APPROVE, suite 2926 green, not live-checked.** C = Compare (select left, candidate right; ←/→ candidate, ↑ swap, ↓ make-select), N = Survey (page of up to 12; ←/→ focus, `/` remove from page), Esc leaves the mode first, toolbar picker. Manual: run both on ~10 scratch photos, check the key gate (press P while a cell is still spinning: nothing should change), the picker does not eat arrow keys after a click, ⌘Z after a make-select.
@@ -57,6 +57,9 @@ Done: placeholder app icon (`Sources/App/Assets.xcassets`, `scripts/make_app_ico
 - Full-suite note: use `-test-timeouts-enabled YES -default-test-execution-time-allowance 180` (`/tmp/runfull.sh`); two earlier plain runs hung forever on `SkinMaskGeneratorTests.testAnOversizedSceneIsDownscaledAndStillWorks` (passes alone in 0.6 s; cause not found, preceded by Vision `MDB_MAP_FULL` cache errors). The suite is ~2976 tests, ~6-7 min.
 - Pending: new app icon from the user (`Lightbench-icons.zip`, untracked) — macOS set rendered by the rewritten `scripts/make_app_icon.swift`; install into `Sources/App/Assets.xcassets` as its own commit.
 
+## Clean-Mac check of the zip (2026-10-16) — simulated, see docs/RELEASE.md
+- Built `build/unsigned/Lightbench-1.0.0-unsigned.zip`; inspected it as a stranger's Mac would (quarantine, Gatekeeper verdict "rejected" = expected, signature valid, universal x86_64+arm64, min macOS 14, no foreign library or baked-in paths, all 20 shaders + depth model bundled) and did two first launches under a throwaway bundle id (fresh container: catalog + 14 migrations, launch backup written and valid, no crash). Throwaway state deleted. A REAL clean Mac is still owed for the Gatekeeper dialog, Intel/macOS 14, importing a real folder.
+
 ## Known flaky test
 `FacesModelTests.testClearWhileAScanRunsKeepsItRunningAndItStillTellsTheLibrary` (real Vision face detection on a synthetic fixture) failed in 3 of ~9 full-suite runs this session ("the finished scan still refreshed the Library": the scan finished with no people found) and passed every time when run alone, even right after a forced rebuild. Matches the older note that the Vision-based classes misbehave under load. Not caused by the rename/release work; not investigated further. If it ever fails alone, that is a real bug.
 
@@ -74,7 +77,7 @@ None.
 ## Exact next step
 None required. Pick a feature with the user (one per session, Plan Mode first).
 Candidates: global Whites slider, B&W Mix extras (Intensity/Neutrals/Tone/Grain),
-culling Compare/Survey, XMP interop spike (IMPROVEMENTS.md D57/D63/D64);
+culling Compare/Survey, XMP interop spike (IMPROVEMENTS.md D57/D63);
 Lightroom parity list D35; open design/robustness items D28, D31/D32, D13,
 D22/D24/D26, D20 keyboard half, D61/D62 (merge/depth limits), D60 (faces nits).
 

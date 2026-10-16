@@ -936,13 +936,30 @@ enum EditPipeline {
     /// sRGB-encoded space. Split out from the render call so the spline maths
     /// can be tested directly against `ToneCurveSpline` without a CIContext.
     private static func curveControlPoints(_ effective: EffectiveTone, _ blackPoint: Double, whitePoint: Double = 0) -> [CGPoint] {
+        parametricControlPoints(shadows: effective.shadows, highlights: effective.highlights, blackPoint: blackPoint, whitePoint: whitePoint)
+    }
+
+    /// The parametric curve's five control points as the sliders set them — NOT guarded against reversal (see `parametricControlPoints`).
+    /// Internal (not private) so a test can state exactly which curves the guard must leave bit-identical.
+    static func rawParametricControlPoints(shadows: Double, highlights: Double, blackPoint: Double, whitePoint: Double = 0) -> [CGPoint] {
         [
             CGPoint(x: max(0, -blackPoint) * kBlackPointSpan, y: max(0, blackPoint) * kBlackPointSpan),
-            CGPoint(x: 0.25, y: 0.25 + effective.shadows * kCurvePointSpan),
+            CGPoint(x: 0.25, y: 0.25 + shadows * kCurvePointSpan),
             CGPoint(x: 0.5, y: 0.5),
-            CGPoint(x: 0.75, y: 0.75 + effective.highlights * kCurvePointSpan),
+            CGPoint(x: 0.75, y: 0.75 + highlights * kCurvePointSpan),
             CGPoint(x: 1, y: 1 + whitePoint * kWhitesSpan)
         ]
+    }
+
+    /// The control points `applyCurves` really uses: the raw ones, unchanged whenever they make a monotone curve (every ordinary edit, so every
+    /// saved photo that never reversed renders exactly as before), and otherwise the raw ones with every displacement scaled back just far enough
+    /// to be monotone (D64: Shadows +1 with Highlights +1, or Highlights +1 with Black Point -1, used to bend the top of the curve backwards so the
+    /// brightest tones and the headroom came out DARKER than slightly less bright ones). Used by the global stage AND per-mask Shadows / Highlights
+    /// / Whites / Blacks, which all go through `applyCurves`.
+    static func parametricControlPoints(shadows: Double, highlights: Double, blackPoint: Double, whitePoint: Double = 0) -> [CGPoint] {
+        ToneCurveSpline.monotonePoints { s in
+            rawParametricControlPoints(shadows: shadows * s, highlights: highlights * s, blackPoint: blackPoint * s, whitePoint: whitePoint * s)
+        }
     }
 
     /// `whitePoint` (Whites — per-mask, and the separate global Whites pass) defaults to 0, which leaves the Shadows/Highlights/Black Point call exactly as before (`1 + 0 * span` is 1).

@@ -41,10 +41,18 @@ enum ImportCopyEngine {
             hash: { FileHasher.sha256Hex(ofFileAt: $0) },
             fileSize: { (try? FileManager.default.attributesOfItem(atPath: $0.path))?[.size] as? Int64 },
             availableBytes: { url in
-                (try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
-                    .volumeAvailableCapacityForImportantUsage
+                let keys = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
+                let posix = (try? FileManager.default.attributesOfFileSystem(forPath: url.path))?[.systemFreeSize] as? Int64
+                return bestAvailable(important: keys?.volumeAvailableCapacityForImportantUsage, plain: keys.flatMap { $0.volumeAvailableCapacity }.map(Int64.init), posix: posix)
             }
         )
+    }
+
+    /// The largest free-space figure any source reports, or nil when none does. The "important usage" key reads 0 on some volumes (an
+    /// exFAT disk image, found live 2026-10-19: "The destination has Zero KB free" on an empty volume), so a single source cannot be trusted;
+    /// a genuinely full volume reports 0 from all of them.
+    static func bestAvailable(important: Int64?, plain: Int64?, posix: Int64?) -> Int64? {
+        [important, plain, posix].compactMap { $0 }.max()
     }
 
     /// A message when the destination volume cannot hold the copies (with 5% + 10 MB headroom); nil when it can or the space is unknown.

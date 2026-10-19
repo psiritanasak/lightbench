@@ -67,6 +67,10 @@ Done: placeholder app icon (`Sources/App/Assets.xcassets`, `scripts/make_app_ico
 - ODD: once the Library window flipped to the Editor on `other_01.jpg` while the XMP dialog ran; cause not found.
 - NOT checked: Faces, HDR/panorama, Put Back in the Finder, cold-launch Dock drop, real drag-and-drop, RAW+JPG shared-xmp pair.
 
+## COPY PHOTOS INTO LIBRARY (v1.1 feature, 2026-10-19) — SHIPPED in code, committed, live-checked
+Plan: `/Users/praween/.claude/plans/serene-scribbling-mist.md`. Reviewer: 4 rounds (FIX FIRST x3 -> APPROVE), every fix mutation-checked; full suite 3200 green before the live pass. Live check: IMPROVEMENTS.md D72 item 16 (found and fixed the exFAT "Zero KB free" bug). NEXT: v1.1 release notes + unsigned zip + GitHub Release (nothing pushed yet for 1.1); Apple Developer account and a real clean Mac are still owed for a signed v1.
+Automation notes (for the next live pass): the user's REAL Lightbench has the same process name "PhotoApp" — rename the test copy's executable (CFBundleExecutable) so System Events cannot resolve to the wrong app; the Mac's input source is Thai (type via `setinput` ABC, restore Thai after); the Go-to field in the file panel opens with "/"; capture only the panel's own AX frame (the panel's screen position changes between launches).
+
 ## Known flaky test
 `FacesModelTests.testClearWhileAScanRunsKeepsItRunningAndItStillTellsTheLibrary` (real Vision face detection on a synthetic fixture) failed in 3 of ~9 full-suite runs this session ("the finished scan still refreshed the Library": the scan finished with no people found) and passed every time when run alone, even right after a forced rebuild. Matches the older note that the Vision-based classes misbehave under load. Not caused by the rename/release work; not investigated further. If it ever fails alone, that is a real bug.
 

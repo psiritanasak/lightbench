@@ -360,6 +360,18 @@ final class ImportCopyEngineTests: XCTestCase {
         XCTAssertNil(ImportCopyEngine.spaceProblem(plan: plan([a]), destination: dest, environment: environment))
     }
 
+    func testFreeSpaceTakesTheLargestFigureAnySourceReports() {
+        // The "important usage" key read 0 on an empty exFAT volume: the other sources must win.
+        XCTAssertEqual(ImportCopyEngine.bestAvailable(important: 0, plain: 0, posix: 60_000_000), 60_000_000)
+        XCTAssertEqual(ImportCopyEngine.bestAvailable(important: 5, plain: 9, posix: nil), 9)
+        XCTAssertEqual(ImportCopyEngine.bestAvailable(important: 0, plain: 0, posix: 0), 0, "a genuinely full volume reports 0 everywhere")
+        XCTAssertNil(ImportCopyEngine.bestAvailable(important: nil, plain: nil, posix: nil))
+    }
+
+    func testTheLiveFreeSpaceReadingIsNonZeroForARealFolder() {
+        XCTAssertGreaterThan(ImportCopyEngine.Environment.live.availableBytes(fm.temporaryDirectory) ?? 0, 0)
+    }
+
     // MARK: the source is read-only
 
     func testTheEngineNeverRemovesOrMovesAnythingExceptItsOwnTempFiles() throws {

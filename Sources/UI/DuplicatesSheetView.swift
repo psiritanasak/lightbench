@@ -186,6 +186,8 @@ struct LibraryToolSheetsModifier: ViewModifier {
     let blocked: Bool
     /// What Move to Trash re-checks around its prompts (see `TrashModel`): the open photo and everything that makes moving files unsafe.
     let trashProviders: RenameProviders
+    /// What Copy Photos into Library… re-checks around its panels and before every photo (see `ImportCopyModel`).
+    let importCopyProviders: RenameProviders
 
     func body(content: Content) -> some View {
         content
@@ -203,6 +205,11 @@ struct LibraryToolSheetsModifier: ViewModifier {
             .modifier(TrashDialogModifier(
                 catalog: catalog, model: catalog.trash, providers: trashProviders,
                 blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.xmpBusy
+            ))
+            .modifier(ImportCopyDialogModifier(
+                catalog: catalog, model: catalog.importCopy, providers: importCopyProviders,
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy
+                    || catalog.xmpBusy || catalog.trashBusy
             ))
             .modifier(CatalogBackupDialogModifier(
                 catalog: catalog, model: catalog.catalogBackup,

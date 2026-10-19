@@ -36,7 +36,10 @@ struct ContentView: View {
     /// The same checks for Move to Trash, which must not count ITS OWN busy flag (it would refuse its own run).
     private var trashProviders: RenameProviders { providers(includingTrash: false) }
 
-    private func providers(includingTrash: Bool) -> RenameProviders {
+    /// The same checks for Copy Photos into Library…, which must not count ITS OWN busy flag (it would refuse its own run).
+    private var importCopyProviders: RenameProviders { providers(includingTrash: true, includingImportCopy: false) }
+
+    private func providers(includingTrash: Bool, includingImportCopy: Bool = true) -> RenameProviders {
         RenameProviders(
             openPhotoPath: { document.currentURL?.path },
             busyReason: {
@@ -52,7 +55,8 @@ struct ContentView: View {
                     isMerging: catalog.mergeBusy,
                     isXMPBusy: catalog.xmpBusy,
                     isBackupBusy: catalog.backupBusy,
-                    isTrashBusy: includingTrash && catalog.trashBusy
+                    isTrashBusy: includingTrash && catalog.trashBusy,
+                    isImportCopyBusy: includingImportCopy && catalog.importCopyBusy
                 ).reason
             }
         )
@@ -1204,7 +1208,9 @@ struct ContentView: View {
         // compiler could type-check in reasonable time (measured: this
         // split is what fixed it).
         mainContent
-            .modifier(LibraryToolSheetsModifier(catalog: catalog, blocked: otherSheetIsPresented, trashProviders: trashProviders))
+            .modifier(LibraryToolSheetsModifier(
+                catalog: catalog, blocked: otherSheetIsPresented, trashProviders: trashProviders, importCopyProviders: importCopyProviders
+            ))
             .alert(
                 "Couldn't Open Image",
                 isPresented: Binding(
@@ -1700,11 +1706,15 @@ struct ContentView: View {
                 Button("Import Folder…") {
                     catalog.importFolder()
                 }
-                .disabled(catalog.isRenameInProgress)
+                .disabled(catalog.isRenameInProgress || catalog.importCopyBusy)
                 Button("Import Folder Tree…") {
                     catalog.importFolderTree()
                 }
-                .disabled(catalog.isRenameInProgress)
+                .disabled(catalog.isRenameInProgress || catalog.importCopyBusy)
+                Button("Copy Photos into Library…") {
+                    catalog.importCopyRequested = true
+                }
+                .disabled(catalog.isRenameInProgress || catalog.fileToolBusy || catalog.mergeBusy || document.isLoadInFlight)
             } label: {
                 Label("Add Photos", systemImage: "plus")
             }

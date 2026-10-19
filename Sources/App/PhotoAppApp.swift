@@ -101,6 +101,8 @@ struct PhotoAppApp: App {
                 Divider()
                 Button("Back Up Catalog…") { catalog.backupRequested = .backUp }
                     .disabled(cull.isActive || catalog.backupBusy)
+                Button("Copy Photos into Library…") { catalog.importCopyRequested = true }
+                    .disabled(cull.isActive || !showLibrary || catalog.isRenameInProgress || catalog.fileToolBusy || catalog.mergeBusy || renameModel.isWorking)
                 Button("Restore Catalog from Backup…") { catalog.backupRequested = .restore }
                     .disabled(cull.isActive || catalog.backupBusy || catalog.isRenameInProgress || renameModel.isWorking)
             }

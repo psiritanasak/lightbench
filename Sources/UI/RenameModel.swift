@@ -37,6 +37,9 @@ struct RenameBusyState {
     /// A Move to Trash confirmation is up or photos are being moved (a rename would move the files under it). Left false in the providers the
     /// Trash itself uses, which would otherwise refuse their own run.
     var isTrashBusy = false
+    /// Copy Photos into Library… is scanning, asking for options or copying (a rename would move the files it is reading or has just added).
+    /// Left false in the providers that tool uses itself.
+    var isImportCopyBusy = false
 
     var reason: String? {
         if hasModalPanel { return "Finish or cancel the open dialog first." }
@@ -46,6 +49,7 @@ struct RenameBusyState {
         if isMerging { return "Photo Merge is in progress — wait for it to finish." }
         if isBackupBusy { return "A catalog backup or restore is in progress — wait for it to finish." }
         if isTrashBusy { return "Photos are being moved to the Trash — wait for it to finish." }
+        if isImportCopyBusy { return "Photos are being copied into the Library — wait for it to finish." }
         if isXMPBusy { return "XMP metadata is being read or written — wait for it to finish." }
         if isImporting { return "An import is running — wait for it to finish." }
         if isToolScanRunning { return "A face or duplicate scan is still running — wait for it to finish." }

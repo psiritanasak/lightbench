@@ -159,10 +159,15 @@ final class CatalogModel: ObservableObject {
     /// up or photos are being moved".
     @Published var trashRequested: TrashModel.Kind?
     @Published var trashBusy = false
-    /// A file tool (XMP read/write, Move to Trash) is up or running: the menus that act on the selection's files wait for it.
-    var fileToolBusy: Bool { xmpBusy || trashBusy }
+    /// Copy Photos into Library… (see `ImportCopyModel`): `importCopyRequested` is set by the menus, `ImportCopyDialogModifier` performs it;
+    /// `importCopyBusy` mirrors "a source is being scanned, the options sheet is up or photos are being copied".
+    @Published var importCopyRequested = false
+    @Published var importCopyBusy = false
+    /// A file tool (XMP read/write, Move to Trash, Copy Photos) is up or running: the menus that act on the selection's files wait for it.
+    var fileToolBusy: Bool { xmpBusy || trashBusy || importCopyBusy }
     let xmp = XMPModel()
     let trash = TrashModel()
+    let importCopy = ImportCopyModel()
     /// Catalog backup / restore (see `CatalogBackupModel`): the File menu sets `backupRequested`; `CatalogBackupDialogModifier` performs it.
     /// `backupBusy` mirrors "a restore confirmation is up or a backup is being written".
     @Published var backupRequested: CatalogBackupModel.Kind?
@@ -453,6 +458,21 @@ final class CatalogModel: ObservableObject {
 
     /// Nested-collection import of an already-chosen folder.
     func importFolderTree(at folder: URL) { importFolders([.init(url: folder, asTree: true)]) }
+
+    /// Adds photos that "Copy Photos into Library…" just wrote under `root` (verified copies only): the destination gets the same saved folder
+    /// access an imported folder gets (so thumbnails open after a relaunch), then the rows and folder-mirrored collections are written, the
+    /// Library refreshed and `.xmp` metadata read for the new photos. Runs inside an `importsInFlight` window so a rename cannot start under it.
+    func registerCopiedPhotos(_ urls: [URL], under root: URL) async throws -> (result: ImportResult, accessWarning: String?) {
+        guard let database else { throw CatalogDatabaseError(message: "The photo catalog isn't ready yet.") }
+        let warning = activateFolderAccess(for: root)
+        importsInFlight += 1
+        defer { importsInFlight -= 1 }
+        let before = Set(try await database.allPhotos().compactMap(\.id))
+        let result = try await database.importCopiedFiles(urls, under: root)
+        await refresh()
+        await autoReadXMP(newerThan: before)
+        return (result, warning)
+    }
 
     /// Imports each folder in turn (one catalog write at a time) and reports one combined message. The caller must hold access to every
     /// folder already: a panel result, a dropped URL and a Finder-opened URL all carry a sandbox extension for this launch, and
@@ -1252,7 +1272,7 @@ final class CatalogModel: ObservableObject {
 
     /// True while a Library tool sheet (keywords, duplicates, people) is up or one of their scans runs; batch rename must not start then.
     var toolSheetIsBusy: Bool {
-        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy || trashBusy || backupBusy
+        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy || trashBusy || importCopyBusy || backupBusy
     }
 
     /// The People sheet's scan: finds faces in the photos the Library is currently drawing from, then regroups ALL stored faces.

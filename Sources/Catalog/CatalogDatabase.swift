@@ -152,6 +152,35 @@ final class CatalogDatabase: Sendable {
         }
     }
 
+    /// Registers photos that "Copy Photos into Library…" just wrote under `root`: each becomes a `Photo` row (or reuses the existing row at
+    /// the same path) and joins the folder-mirrored collection of its DIRECT folder, exactly as a folder-tree import would. The chain of
+    /// collections from `root` down to that folder is found or created (`root` itself has no parent). Deliberately NOT
+    /// `importFolderTree(root)`: that would also sweep in unrelated files already sitting in the destination. One write, atomic.
+    func importCopiedFiles(_ urls: [URL], under root: URL) async throws -> ImportResult {
+        try await dbQueue.write { db in
+            let rootPath = root.path
+            var collectionIDs: [String: Int64] = [:]
+            func collectionID(for folder: URL) throws -> Int64 {
+                if let known = collectionIDs[folder.path] { return known }
+                let isBelowRoot = folder.path.hasPrefix(rootPath + "/")
+                let parentID: Int64? = isBelowRoot ? try collectionID(for: folder.deletingLastPathComponent()) : nil
+                let id = try Self.findOrCreateFolderCollection(
+                    name: folder.lastPathComponent, folderPath: folder.path, parentID: parentID, db: db
+                )
+                collectionIDs[folder.path] = id
+                return id
+            }
+            var result = ImportResult(inserted: 0, skipped: 0)
+            for url in urls {
+                let (photoID, wasInserted) = try Self.insertPhotoIfNeeded(url: url, db: db)
+                let folderID = try collectionID(for: url.deletingLastPathComponent())
+                try CollectionPhoto(collectionId: folderID, photoId: photoID).insert(db, onConflict: .ignore)
+                if wasInserted { result.inserted += 1 } else { result.skipped += 1 }
+            }
+            return result
+        }
+    }
+
     /// Inserts `url` as a new `Photo` if no row with that `path` already
     /// exists, or returns the existing row's id unchanged. Shared by
     /// `importPhotos` (above) and `importFolderTree` (below) so a photo

@@ -17,6 +17,9 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let cullStartUnflaggedOnly = "prefs.v1.cullStartUnflaggedOnly"
         static let autoReadXMPOnImport = "prefs.v1.autoReadXMPOnImport"
         static let backupsToKeep = "prefs.v1.backupsToKeep"
+        static let importCopySubfolders = "prefs.v1.importCopySubfolders"
+        static let importCopyTemplate = "prefs.v1.importCopyTemplate"
+        static let importCopySkipAlreadyCopied = "prefs.v1.importCopySkipAlreadyCopied"
     }
 
     let defaults: UserDefaults
@@ -62,6 +65,25 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
         }
         nonmutating set {
             defaults.set(min(max(newValue, Self.keepBackupsRange.lowerBound), Self.keepBackupsRange.upperBound), forKey: Key.backupsToKeep)
+        }
+    }
+
+    /// "Copy Photos into Library…": the last options used (the destination folder is NOT remembered: a saved path carries no sandbox grant).
+    /// A stored value that is no longer valid reads back as the default.
+    var importCopyOptions: ImportCopyOptions {
+        get {
+            var options = ImportCopyOptions()
+            if let raw = defaults.string(forKey: Key.importCopySubfolders), let stored = ImportCopyOptions.Subfolders(rawValue: raw) {
+                options.subfolders = stored
+            }
+            if let template = defaults.string(forKey: Key.importCopyTemplate), !template.isEmpty { options.renameTemplate = template }
+            options.skipAlreadyCopied = bool(Key.importCopySkipAlreadyCopied, default: true)
+            return options
+        }
+        nonmutating set {
+            defaults.set(newValue.subfolders.rawValue, forKey: Key.importCopySubfolders)
+            defaults.set(newValue.renameTemplate, forKey: Key.importCopyTemplate)
+            defaults.set(newValue.skipAlreadyCopied, forKey: Key.importCopySkipAlreadyCopied)
         }
     }
 }

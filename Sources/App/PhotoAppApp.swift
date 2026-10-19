@@ -64,8 +64,14 @@ struct PhotoAppApp: App {
             // System controls (checked Toggle, native Slider) fill light grey, not blue: see `Theme.controlTint`.
             // The blue `Theme.accent` is applied explicitly, by prominent buttons only.
             .tint(Theme.controlTint)
+            // ONE main window: the Library, Editor and every sheet share this app's single set of models, so a second window is a
+            // blank duplicate whose alerts also fire on the first. Without this, every Finder / Dock / "Open With" open made SwiftUI
+            // create another window (live-checked 2026-10-19: 2 -> 3). Open events now go to the existing window.
+            .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         }
         .commands {
+            // No "New Window" for the same reason (a Dock click with no window still reopens one).
+            CommandGroup(replacing: .newItem) {}
             AboutAndHelpCommands()
             // Replaces macOS's default (inert) Edit > Undo/Redo items —
             // the canonical, keyboard-shortcut-owning home for these

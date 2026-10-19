@@ -20,8 +20,10 @@ struct EditorRatingBar: View {
                 Text("Not in your Library").font(.caption).foregroundStyle(Theme.textSecondary)
             }
             Spacer(minLength: 8)
-            Button(action: onCopy) { Label("Copy Settings", systemImage: "doc.on.doc") }
+            Button(action: onCopy) { Label("Copy Settings", systemImage: "doc.on.doc").lineLimit(1) }
                 .buttonStyle(.borderless)
+                // Same size as the bar's other text ("Not in your Library"); the default control font was larger and wrapped.
+                .font(.caption)
                 // White (primary) text, not the accent blue a borderless button takes by default.
                 .foregroundStyle(canCopy ? Color.primary : Theme.textSecondary)
                 .disabled(!canCopy)

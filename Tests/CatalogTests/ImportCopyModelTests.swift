@@ -42,14 +42,23 @@ final class ImportCopyModelTests: XCTestCase {
         UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
     }
 
+    private let trashLog = TrashLog()
+
     private func makeModel(environment: ImportCopyEngine.Environment = .live) {
+        let log = trashLog
         model = ImportCopyModel(
             preferences: preferences,
             chooseFolder: { [unowned self] _, _, _ in
                 panelCalls += 1
                 return panelAnswers.isEmpty ? nil : panelAnswers.removeFirst()
             },
-            environment: environment
+            environment: environment,
+            mover: { url in
+                log.record(url)
+                let target = FileManager.default.temporaryDirectory.appendingPathComponent("ImportCopyModelTests-trash-\(UUID().uuidString)-\(url.lastPathComponent)")
+                try FileManager.default.moveItem(at: url, to: target) // a "Trash" in the temp folder, never the real one
+                return target
+            }
         )
     }
 
@@ -247,6 +256,135 @@ final class ImportCopyModelTests: XCTestCase {
         XCTAssertEqual(AppPreferences(defaults: defaults).importCopyOptions, ImportCopyOptions())
     }
 
+    // MARK: move (originals to the Trash)
+
+    func testMoveAsksForTheConfirmationAndDoesNothingWithoutIt() async throws {
+        let a = try photo("a.jpg", "AAA")
+        try await beginAndWait()
+        panelAnswers = [dest]
+        model.chooseDestination()
+        model.options.mode = .move
+        model.confirm(providers: providers, catalog: catalog) // not confirmed
+        XCTAssertTrue(model.confirmingMove)
+        XCTAssertNotNil(model.setup, "the sheet stays open")
+        XCTAssertFalse(model.isWorking)
+        XCTAssertTrue(trashLog.urls.isEmpty)
+        XCTAssertTrue(fm.fileExists(atPath: a.path))
+        XCTAssertFalse(fm.fileExists(atPath: dest.appendingPathComponent("a.jpg").path), "nothing was copied either")
+    }
+
+    func testThePrimaryButtonOpensTheConfirmationInMoveModeAndRunsAtOnceInCopyMode() async throws {
+        let a = try photo("a.jpg", "AAA")
+        try await beginAndWait()
+        panelAnswers = [dest]
+        model.chooseDestination()
+        model.options.mode = .move
+        model.requestStart(providers: providers, catalog: catalog)
+        XCTAssertTrue(model.confirmingMove)
+        XCTAssertFalse(model.isWorking)
+        model.cancel()
+        XCTAssertFalse(model.confirmingMove)
+        XCTAssertTrue(fm.fileExists(atPath: a.path))
+    }
+
+    func testConfirmedMoveCopiesVerifiesAndSendsTheOriginalsToTheTrash() async throws {
+        let a = try photo("a.jpg", "AAA"); let b = try photo("b.jpg", "BBB")
+        try await beginAndWait()
+        panelAnswers = [dest]
+        model.chooseDestination()
+        model.options.mode = .move
+        model.confirm(providers: providers, catalog: catalog, moveConfirmed: true)
+        try await waitUntil(!model.isWorking && model.statusMessage != nil)
+        XCTAssertEqual(Set(trashLog.urls.map(\.lastPathComponent)), ["a.jpg", "b.jpg"])
+        XCTAssertFalse(fm.fileExists(atPath: a.path) || fm.fileExists(atPath: b.path))
+        XCTAssertEqual(try Data(contentsOf: dest.appendingPathComponent("a.jpg")), Data("AAA".utf8))
+        let names = try await db.allPhotos().map(\.filename).sorted()
+        XCTAssertEqual(names, ["a.jpg", "b.jpg"], "the Library holds the copies")
+        XCTAssertTrue(model.statusMessage?.contains("Moved 2 photos") == true)
+        XCTAssertTrue(model.statusMessage?.contains("Nothing was permanently deleted") == true)
+    }
+
+    func testMoveIsNeverRememberedForTheNextRun() async throws {
+        try photo("a.jpg", "AAA")
+        try await beginAndWait()
+        panelAnswers = [dest]
+        model.chooseDestination()
+        model.options.mode = .move
+        model.confirm(providers: providers, catalog: catalog, moveConfirmed: true)
+        try await waitUntil(!model.isWorking && model.statusMessage != nil)
+        XCTAssertEqual(preferences.importCopyOptions.mode, .copy)
+        try photo("c.jpg", "CCC")
+        model.statusMessage = nil
+        try await beginAndWait()
+        XCTAssertEqual(model.options.mode, .copy, "the next sheet starts as Copy")
+    }
+
+    func testMoveRefusesPhotosThatAreAlreadyInTheLibraryAndChangesNothing() async throws {
+        let a = try photo("a.jpg", "AAA")
+        _ = try await db.importPhotos(at: [a]) // the card was imported in place earlier
+        await catalog.refresh()
+        try await beginAndWait()
+        panelAnswers = [dest]
+        model.chooseDestination()
+        model.options.mode = .move
+        model.confirm(providers: providers, catalog: catalog, moveConfirmed: true)
+        try await waitUntil(!model.isWorking && model.statusMessage != nil)
+        XCTAssertTrue(model.statusMessage?.contains("already in the Library") == true)
+        XCTAssertTrue(trashLog.urls.isEmpty)
+        XCTAssertTrue(fm.fileExists(atPath: a.path))
+        XCTAssertFalse(fm.fileExists(atPath: dest.appendingPathComponent("a.jpg").path), "nothing was copied")
+    }
+
+    func testMoveNeverTrashesThePhotoOpenInTheEditor() async throws {
+        let a = try photo("a.jpg", "AAA"); let b = try photo("b.jpg", "BBB")
+        try await beginAndWait()
+        panelAnswers = [dest]
+        model.chooseDestination()
+        model.options.mode = .move
+        let open = RenameProviders(openPhotoPath: { a.path }, busyReason: { nil })
+        model.confirm(providers: open, catalog: catalog, moveConfirmed: true)
+        try await waitUntil(!model.isWorking && model.statusMessage != nil)
+        XCTAssertEqual(trashLog.urls.map(\.lastPathComponent), ["b.jpg"])
+        XCTAssertTrue(fm.fileExists(atPath: a.path))
+        XCTAssertTrue(model.statusMessage?.contains("open in the Editor") == true)
+    }
+
+    func testMoveRefusesADestinationThatContainsTheSourceFolder() {
+        let source = URL(fileURLWithPath: "/Lib/2026", isDirectory: true)
+        XCTAssertNotNil(ImportCopyModel.destinationProblem(URL(fileURLWithPath: "/Lib"), source: source, mode: .move))
+        XCTAssertNil(ImportCopyModel.destinationProblem(URL(fileURLWithPath: "/Lib"), source: source, mode: .copy), "Copy may")
+        XCTAssertNil(ImportCopyModel.destinationProblem(URL(fileURLWithPath: "/Elsewhere"), source: source, mode: .move))
+    }
+
+    func testMoveConfirmationTextNamesTheFoldersAndStatesNothingIsPermanentlyDeleted() {
+        XCTAssertEqual(ImportCopyModel.moveConfirmationTitle(count: 1), "Copy 1 photo, then move the originals to the Trash?")
+        let message = ImportCopyModel.moveConfirmationMessage(source: "DCIM", destination: "Trip")
+        XCTAssertTrue(message.contains("DCIM") && message.contains("Trip"))
+        XCTAssertTrue(message.contains("Nothing is permanently deleted"))
+    }
+
+    func testTheDialogHasADestructiveConfirmationWithNoDefaultButton() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/UI/ImportCopyDialogModifier.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("Button(\"Copy and Move to Trash\", role: .destructive)"))
+        XCTAssertFalse(source.contains("defaultAction"), "Return must not confirm a destructive dialog")
+        let prefs = try String(contentsOf: root.appendingPathComponent("Sources/Catalog/AppPreferences.swift"), encoding: .utf8)
+        XCTAssertFalse(prefs.contains("importCopyMode"), "the Move choice is never stored")
+    }
+
+    func testTheMoveSummaryReportsMovedAndKeptOriginals() {
+        var outcome = ImportCopyEngine.Outcome()
+        outcome.copied = [URL(fileURLWithPath: "/d/a.jpg"), URL(fileURLWithPath: "/d/b.jpg")]
+        outcome.movedToTrash = [URL(fileURLWithPath: "/c/a.jpg")]
+        outcome.notMoved = [.init(source: URL(fileURLWithPath: "/c/b.jpg"), reason: "Could not move the original to the Trash: read-only")]
+        outcome.companionsTrashed = 1
+        let text = ImportCopyModel.summary(outcome, registered: .init(added: 2, accessWarning: nil, error: nil), mode: .move)
+        XCTAssertTrue(text.contains("Moved 1 photo from the source folder to the Trash with 1 edit / XMP file."))
+        XCTAssertTrue(text.contains("1 photo copied but NOT moved"))
+        XCTAssertTrue(text.contains("b.jpg: Could not move the original to the Trash: read-only"))
+        XCTAssertFalse(text.contains("Your original photos were not changed."))
+    }
+
     // MARK: summary
 
     func testSummaryReportsEverythingAndAlwaysSaysTheOriginalsAreUnchanged() {
@@ -271,6 +409,14 @@ final class ImportCopyModelTests: XCTestCase {
         let text = ImportCopyModel.summary(outcome, registered: .init(added: 0, accessWarning: nil, error: "disk full"))
         XCTAssertTrue(text.contains("could not be added to the Library: disk full"))
     }
+}
+
+/// What the injected "Trash" was asked to take.
+private final class TrashLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [URL] = []
+    func record(_ url: URL) { lock.lock(); stored.append(url); lock.unlock() }
+    var urls: [URL] { lock.lock(); defer { lock.unlock() }; return stored }
 }
 
 /// A tiny box a `@Sendable` test closure can flip to simulate another tool starting mid-run.

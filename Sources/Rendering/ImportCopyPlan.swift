@@ -21,6 +21,11 @@ struct ImportCopyOptions: Equatable, Sendable {
         }
     }
 
+    /// Whether the originals stay on the card or are sent to the Trash once their copy is verified. NEVER remembered between runs
+    /// (`AppPreferences` does not store it): every run starts as `.copy`.
+    enum Mode: Equatable, Sendable { case copy, move }
+
+    var mode: Mode = .copy
     var subfolders: Subfolders = .none
     /// A `NamingTemplate`; `{name}` keeps the original base name.
     var renameTemplate: String = "{name}"

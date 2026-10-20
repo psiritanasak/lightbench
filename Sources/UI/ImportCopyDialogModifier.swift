@@ -104,6 +104,22 @@ struct ImportCopySheetView: View {
             Toggle("Skip photos already in the destination (same name and identical content)", isOn: $model.options.skipAlreadyCopied)
                 .font(.caption)
 
+            HStack {
+                Text("Originals").frame(width: 70, alignment: .leading)
+                Picker("", selection: $model.options.mode) {
+                    Text("Keep them").tag(ImportCopyOptions.Mode.copy)
+                    Text("Move to the Trash").tag(ImportCopyOptions.Mode.move)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            if model.options.mode == .move {
+                Text("Each original goes to the Trash only after its copy is flushed to the destination disk and checked against it. A photo that cannot be confirmed stays where it is. Nothing is permanently deleted.")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(model.previewLines().enumerated()), id: \.offset) { _, line in
                     Text(line)
@@ -123,12 +139,27 @@ struct ImportCopySheetView: View {
                 Button("Cancel") { model.cancel() }
                     .buttonStyle(.flat)
                     .keyboardShortcut(.cancelAction)
-                Button("Copy") { model.confirm(providers: providers, catalog: catalog) }
-                    .buttonStyle(FlatButtonStyle(prominent: true))
-                    .disabled(!model.canCopy)
+                Button(model.options.mode == .move ? "Copy and Trash Originals" : "Copy") {
+                    model.requestStart(providers: providers, catalog: catalog)
+                }
+                .buttonStyle(FlatButtonStyle(prominent: true))
+                .disabled(!model.canCopy)
             }
         }
         .padding()
         .frame(width: 560)
+        // Move only: a destructive confirmation with NO default button (Return must not confirm), like the Trash commands.
+        .confirmationDialog(
+            ImportCopyModel.moveConfirmationTitle(count: model.setup?.sources.count ?? 0),
+            isPresented: $model.confirmingMove,
+            titleVisibility: .visible
+        ) {
+            Button("Copy and Move to Trash", role: .destructive) { model.confirm(providers: providers, catalog: catalog, moveConfirmed: true) }
+            Button("Cancel", role: .cancel) { model.confirmingMove = false }
+        } message: {
+            Text(ImportCopyModel.moveConfirmationMessage(
+                source: model.setup?.sourceFolder.lastPathComponent ?? "", destination: model.destination?.lastPathComponent ?? ""
+            ))
+        }
     }
 }

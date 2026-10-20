@@ -38,15 +38,22 @@ final class ImportCopyModel: ObservableObject {
     private let preferences: AppPreferences
     private let chooseFolder: (_ message: String, _ prompt: String, _ canCreate: Bool) -> URL?
     private let environment: ImportCopyEngine.Environment
+    /// The only way an original leaves the source folder in Move mode (the Finder's Trash). Under XCTest the default refuses.
+    private let mover: TrashEngine.Mover
+
+    /// Move mode only: the sheet asks "Copy N photos, then move the originals to the Trash?" first (destructive role, no default button).
+    @Published var confirmingMove = false
 
     init(
         preferences: AppPreferences = .shared,
         chooseFolder: @escaping (String, String, Bool) -> URL? = ImportCopyModel.runPanel,
-        environment: ImportCopyEngine.Environment = .live
+        environment: ImportCopyEngine.Environment = .live,
+        mover: @escaping TrashEngine.Mover = TrashEngine.systemTrash
     ) {
         self.preferences = preferences
         self.chooseFolder = chooseFolder
         self.environment = environment
+        self.mover = mover
         options = preferences.importCopyOptions
     }
 
@@ -105,7 +112,7 @@ final class ImportCopyModel: ObservableObject {
     func chooseDestination() {
         guard let setup, !isWorking else { return }
         guard let folder = chooseFolder("Choose (or create) the folder the photos are copied into.", "Choose", true) else { return }
-        sheetError = Self.destinationProblem(folder, source: setup.sourceFolder)
+        sheetError = Self.destinationProblem(folder, source: setup.sourceFolder, mode: options.mode)
         destination = sheetError == nil ? folder : nil
     }
 
@@ -128,24 +135,44 @@ final class ImportCopyModel: ObservableObject {
 
     func cancel() {
         guard !isWorking else { return }
+        confirmingMove = false
         setup = nil
         destination = nil
         sheetError = nil
     }
 
-    /// The destination may not be the source folder or anything inside it: that would write into the source tree.
-    nonisolated static func destinationProblem(_ destination: URL, source: URL) -> String? {
+    /// The destination may not be the source folder or anything inside it: that would write into the source tree. In Move mode it may not CONTAIN the
+    /// source folder either (a planned destination folder could then be the source's own folder, and an original could be mistaken for its copy).
+    nonisolated static func destinationProblem(_ destination: URL, source: URL, mode: ImportCopyOptions.Mode = .copy) -> String? {
         func key(_ url: URL) -> String { url.resolvingSymlinksInPath().standardizedFileURL.path.precomposedStringWithCanonicalMapping.lowercased() }
         let d = key(destination), s = key(source)
         if d == s || d.hasPrefix(s + "/") { return "Choose a folder outside the one the photos come from." }
+        if mode == .move, s.hasPrefix(d + "/") { return "To move photos, choose a destination that does not contain the folder they come from." }
         return nil
     }
 
     // MARK: - Run
 
-    func confirm(providers: RenameProviders, catalog: CatalogModel) {
+    /// What the sheet's primary button calls: Copy runs at once; Move asks for the destructive confirmation first.
+    func requestStart(providers: RenameProviders, catalog: CatalogModel) {
+        guard canCopy else { return }
+        if options.mode == .move {
+            if let setup, let destination, let problem = Self.destinationProblem(destination, source: setup.sourceFolder, mode: .move) { sheetError = problem; return }
+            confirmingMove = true
+        } else {
+            confirm(providers: providers, catalog: catalog)
+        }
+    }
+
+    /// `moveConfirmed` must be true for Move mode (only the confirmation dialog's destructive button passes it): without it a Move request
+    /// is turned into the confirmation, so no wiring slip can start trashing originals unasked.
+    func confirm(providers: RenameProviders, catalog: CatalogModel, moveConfirmed: Bool = false) {
         self.catalog = catalog
         guard let setup, let destination, canCopy else { return }
+        // The mode may have been switched after the destination was chosen.
+        if let problem = Self.destinationProblem(destination, source: setup.sourceFolder, mode: options.mode) { sheetError = problem; confirmingMove = false; return }
+        if options.mode == .move, !moveConfirmed { confirmingMove = true; return }
+        confirmingMove = false
         if let reason = refusal(providers, catalog) { sheetError = reason; return }
         let chosen = options
         preferences.importCopyOptions = chosen
@@ -183,6 +210,23 @@ final class ImportCopyModel: ObservableObject {
         if let reason = refusal(providers, catalog) { statusMessage = reason; return }
 
         let skip = options.skipAlreadyCopied
+        let mode = options.mode
+        let mover = self.mover
+        if mode == .move {
+            // Photos already in the Library must not be moved away from their rows (that would leave rows pointing at missing files):
+            // Library photos are trashed with "Move Rejected / Selected to Trash…", which also removes their rows.
+            func canonical(_ path: String) -> String {
+                URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path.precomposedStringWithCanonicalMapping.lowercased()
+            }
+            let known = Set((await catalog.cataloguedPathOwners()).keys.map(canonical))
+            let inLibrary = plan.copyItems.filter { known.contains(canonical($0.source.path)) }
+            if !inLibrary.isEmpty {
+                statusMessage = "\(inLibrary.count) of these photos are already in the Library, so they cannot be moved away from it from here. Use Copy, or trash them from the Library (Photo ▸ Move Selected to Trash…). Nothing was copied or moved."
+                return
+            }
+        }
+        // `.move` only: the photo open in the Editor is copied but never trashed.
+        let isProtected: @MainActor @Sendable (URL) -> Bool = { url in providers.openPhotoPath().map { TrashPlan.samePhoto($0, url.path) } ?? false }
         // Built here, on the main actor, so the detached copy only calls back through these two closures.
         let gate: @MainActor () -> Bool = { [weak self] in
             guard let self else { return false }
@@ -192,7 +236,9 @@ final class ImportCopyModel: ObservableObject {
             Task { @MainActor in self?.progressDone = done; self?.progressTotal = total }
         }
         let outcome = await Task.detached {
-            await ImportCopyEngine.apply(plan: plan, skipAlreadyCopied: skip, environment: environment, gate: gate, progress: progress)
+            await ImportCopyEngine.apply(
+                plan: plan, skipAlreadyCopied: skip, mode: mode, environment: environment, mover: mover, isProtected: isProtected, gate: gate, progress: progress
+            )
         }.value
 
         var registered: Registration?
@@ -207,7 +253,7 @@ final class ImportCopyModel: ObservableObject {
                 registered = Registration(added: 0, accessWarning: nil, error: error.localizedDescription)
             }
         }
-        statusMessage = Self.summary(outcome, registered: registered)
+        statusMessage = Self.summary(outcome, registered: registered, mode: mode)
     }
 
     // MARK: - Summary (pure, testable)
@@ -226,7 +272,9 @@ final class ImportCopyModel: ObservableObject {
         return outcome
     }
 
-    nonisolated static func summary(_ outcome: ImportCopyEngine.Outcome, registered: Registration?) -> String {
+    nonisolated static func summary(
+        _ outcome: ImportCopyEngine.Outcome, registered: Registration?, mode: ImportCopyOptions.Mode = .copy
+    ) -> String {
         func photos(_ n: Int) -> String { "\(n) photo" + (n == 1 ? "" : "s") }
         var lines: [String] = []
         if outcome.copied.isEmpty {
@@ -252,7 +300,31 @@ final class ImportCopyModel: ObservableObject {
                 if let warning = registered.accessWarning { lines.append(warning) }
             }
         }
-        lines.append("Your original photos were not changed.")
+        if mode == .move {
+            if !outcome.movedToTrash.isEmpty {
+                var text = "Moved \(photos(outcome.movedToTrash.count)) from the source folder to the Trash"
+                if outcome.companionsTrashed > 0 { text += " with \(outcome.companionsTrashed) edit / XMP file" + (outcome.companionsTrashed == 1 ? "" : "s") }
+                lines.append(text + ".")
+            }
+            if !outcome.notMoved.isEmpty {
+                let first = outcome.notMoved.prefix(3).map { "\($0.source.lastPathComponent): \($0.reason)" }.joined(separator: "\n")
+                lines.append("\(photos(outcome.notMoved.count)) copied but NOT moved (still in the source folder):\n\(first)" + (outcome.notMoved.count > 3 ? "\n…" : ""))
+            }
+            if outcome.companionsNotTrashed > 0 {
+                lines.append("\(outcome.companionsNotTrashed) edit / XMP file\(outcome.companionsNotTrashed == 1 ? "" : "s") stayed in the source folder.")
+            }
+            lines.append("Nothing was permanently deleted: the originals are in the Trash (a memory card keeps them in its own Trash while it is mounted — use Put Back in the Finder to restore one).")
+        } else {
+            lines.append("Your original photos were not changed.")
+        }
         return lines.joined(separator: "\n")
+    }
+
+    nonisolated static func moveConfirmationTitle(count: Int) -> String {
+        "Copy \(count) photo\(count == 1 ? "" : "s"), then move the originals to the Trash?"
+    }
+
+    nonisolated static func moveConfirmationMessage(source: String, destination: String) -> String {
+        "Each photo from “\(source)” is copied to “\(destination)”, flushed to the destination disk and checked against the original. Only then is the original — with its edit file and XMP — moved to the Trash. A photo whose copy cannot be confirmed, or whose edit / XMP files did not all arrive, stays where it is.\n\nNothing is permanently deleted: the Finder's Trash has a Put Back command."
     }
 }

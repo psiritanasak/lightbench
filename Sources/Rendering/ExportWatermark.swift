@@ -38,12 +38,26 @@ enum WatermarkPosition: String, CaseIterable, Identifiable, Sendable, Codable {
     }
 }
 
-/// A text mark composited onto exported images (copyright line, name…). Export-only, never part of an edit.
+/// What the mark is made of.
+enum WatermarkKind: String, CaseIterable, Identifiable, Sendable, Codable {
+    case text, image
+
+    var id: String { rawValue }
+    var label: String { self == .text ? "Text" : "Image" }
+}
+
+/// A text or logo mark composited onto exported images (copyright line, name, logo…). Export-only, never part of an edit.
 struct ExportWatermark: Sendable, Equatable {
     var isEnabled = false
+    /// Text or a logo picture. Both share position, size, opacity and the margin.
+    var kind: WatermarkKind = .text
     var text = ""
+    /// The `WatermarkLogoStore` id of the chosen logo (kind `.image`). The picture itself is NOT in the settings.
+    var logoID: String?
     var position: WatermarkPosition = .bottomRight
-    /// Text height as a fraction of the image's SHORT edge, so the mark looks the same at any export size.
+    /// Text: the text height as a fraction of the image's SHORT edge, so the mark looks the same at any export size.
+    /// Logo: the logo's LONGER side is `logoSizeMultiplier` times this fraction of the short edge (a logo is not a
+    /// line of text: at the same numbers it would otherwise be a speck).
     var sizeFraction: Double = 0.04
     /// 0.05...1. Applied as the mark's alpha and blended in LINEAR light (the working space), so a given value looks
     /// somewhat stronger than the same percentage in a gamma-encoded editor (0.7 white over black reads ~0.85 sRGB).
@@ -52,19 +66,50 @@ struct ExportWatermark: Sendable, Equatable {
     static let sizeRange: ClosedRange<Double> = 0.01...0.15
     static let opacityRange: ClosedRange<Double> = 0.05...1
     static let maximumTextLength = 200
+    static let logoSizeMultiplier: Double = 4
 
-    /// Whether applying this watermark changes anything.
-    var isActive: Bool { isEnabled && !WatermarkRenderer.normalizedText(text).isEmpty }
+    /// Whether applying this watermark changes anything, judged from the settings alone. A logo mark is "active" when a
+    /// logo is chosen; whether its file can still be loaded is `inactiveReason(store:)`'s question (a file read).
+    var isActive: Bool {
+        guard isEnabled else { return false }
+        switch kind {
+        case .text: return !WatermarkRenderer.normalizedText(text).isEmpty
+        case .image: return logoID.map(WatermarkLogoStore.isValidID) ?? false
+        }
+    }
+
+    /// Why an ENABLED mark would draw nothing, in words for the Export sheet; nil when it will be drawn (or the
+    /// watermark is off). The logo file is read, so call it off hot paths (the sheet calls it on appear/choose/remove).
+    func inactiveReason(store: WatermarkLogoStore = .shared) -> String? {
+        inactiveReason(logoLoads: { id in store.loadImage(id: id) != nil })
+    }
+
+    /// Same, with the logo file read supplied by the caller, so the sheet decodes the stored picture ONCE for both the
+    /// thumbnail and this message.
+    func inactiveReason(logoLoads: (String) -> Bool) -> String? {
+        guard isEnabled else { return nil }
+        switch kind {
+        case .text:
+            return WatermarkRenderer.normalizedText(text).isEmpty ? "Type some text to add the mark." : nil
+        case .image:
+            guard let logoID else { return "Choose a logo to add the mark." }
+            guard WatermarkLogoStore.isValidID(logoID) else { return "The saved logo setting is damaged. Choose the logo again." }
+            return !logoLoads(logoID) ? "The saved logo can't be found or read any more, so no mark will be added. Choose it again." : nil
+        }
+    }
 }
 
 /// Schema-tolerant persistence, per field (same pattern as `ExportSettings`), with out-of-range numbers clamped.
 extension ExportWatermark: Codable {
-    private enum CodingKeys: String, CodingKey { case isEnabled, text, position, sizeFraction, opacity }
+    private enum CodingKeys: String, CodingKey { case isEnabled, kind, text, logoID, position, sizeFraction, opacity }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = ExportWatermark()
         isEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .isEnabled)) ?? defaults.isEnabled
+        // An unknown `kind` (a newer build) or a malformed logo id falls back to today's behaviour: a text mark, no logo.
+        kind = (try? container.decodeIfPresent(WatermarkKind.self, forKey: .kind)) ?? defaults.kind
+        logoID = (try? container.decodeIfPresent(String.self, forKey: .logoID)).flatMap { WatermarkLogoStore.isValidID($0) ? $0 : nil }
         let storedText = (try? container.decodeIfPresent(String.self, forKey: .text)) ?? defaults.text
         text = String(storedText.prefix(Self.maximumTextLength))
         position = (try? container.decodeIfPresent(WatermarkPosition.self, forKey: .position)) ?? defaults.position
@@ -90,11 +135,12 @@ enum WatermarkRenderer {
     }
 
     /// `image` with the watermark composited on it (unchanged when inactive). Extent never changes.
-    static func apply(_ watermark: ExportWatermark, to image: CIImage) -> CIImage {
+    static func apply(_ watermark: ExportWatermark, to image: CIImage, logoStore: WatermarkLogoStore = .shared) -> CIImage {
         guard watermark.isActive else { return image }
         let extent = image.extent
         let shortSide = Double(min(extent.width, extent.height))
         guard shortSide >= 1, extent.width.isFinite, extent.height.isFinite else { return image }
+        if watermark.kind == .image { return applyLogo(watermark, to: image, logoStore: logoStore) }
 
         let text = normalizedText(watermark.text)
         let maxWidth = maximumWidthFraction * Double(extent.width)
@@ -118,10 +164,44 @@ enum WatermarkRenderer {
         guard let (mark, padding) = rendered.map({ ($0.image, $0.padding) }),
               Double(mark.extent.width) <= maxWidth else { return image }
 
+        return composite(mark, padding: padding, position: watermark.position, over: image)
+    }
+
+    /// The logo variant of `apply`: the picture is scaled so its longer side is `logoSizeMultiplier * sizeFraction` of the
+    /// short edge (never wider/taller than `maximumWidthFraction` of the frame) and drawn with `opacity` as its alpha.
+    /// A logo that cannot be loaded or drawn leaves the image untouched (the sheet says so beforehand).
+    private static func applyLogo(_ watermark: ExportWatermark, to image: CIImage, logoStore: WatermarkLogoStore) -> CIImage {
+        let extent = image.extent
+        let shortSide = Double(min(extent.width, extent.height))
+        guard let id = watermark.logoID, let logo = logoStore.loadImage(id: id), logo.width > 0, logo.height > 0 else { return image }
+        let longSide = Double(max(logo.width, logo.height))
+        var scale = watermark.sizeFraction * ExportWatermark.logoSizeMultiplier * shortSide / longSide
+        scale = min(scale, maximumWidthFraction * Double(extent.width) / Double(logo.width),
+                    maximumWidthFraction * Double(extent.height) / Double(logo.height))
+        let width = Int((Double(logo.width) * scale).rounded()), height = Int((Double(logo.height) * scale).rounded())
+        guard width >= 1, height >= 1, width <= 16_384, height <= 16_384,
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return image }
+        // The logo is drawn into an 8-bit sRGB bitmap, so a wide-gamut (Display P3 / Adobe RGB) export gets the logo's
+        // colours clipped to sRGB. Fine for a logo; not a general-purpose overlay path.
+        context.interpolationQuality = .high
+        context.setAlpha(CGFloat(min(max(watermark.opacity, 0), 1)))
+        context.draw(logo, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let cgImage = context.makeImage() else { return image }
+        return composite(CIImage(cgImage: cgImage), padding: 0, position: watermark.position, over: image)
+    }
+
+    /// Places `mark` (extent at the origin) on the position grid, `marginFraction` of the short edge from the edges,
+    /// and composites it over `image` in the working space. `padding` is transparent room around the visible pixels.
+    private static func composite(_ mark: CIImage, padding: Double, position: WatermarkPosition, over image: CIImage) -> CIImage {
+        let extent = image.extent
+        let shortSide = Double(min(extent.width, extent.height))
         // Margins are measured to the VISIBLE glyphs, so the bitmap's shadow padding is subtracted. (Vertical gap
         // still follows the glyphs' own bounds, so a descender such as "y" sits a little higher than "o".)
         let margin = marginFraction * shortSide
-        let grid = watermark.position.grid
+        let grid = position.grid
         let markWidth = Double(mark.extent.width), markHeight = Double(mark.extent.height)
         let originX: Double, originY: Double
         switch grid.x {

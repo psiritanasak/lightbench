@@ -5,7 +5,8 @@ import ImageIO
 /// properties' IPTC dictionary; ImageIO's writers then emit both the IPTC `Keywords` block and an XMP `dc:subject`
 /// bag — measured 2026-10-06 (`KeywordEmbeddingTests.testWritersEmitIPTCAndXMPForEveryFormat`): JPEG, PNG and TIFF
 /// written through `CIContext.write*Representation` each carry an XMP packet with `dc:subject` and read back
-/// unchanged, including accented, CJK and ZWJ-emoji keywords.
+/// unchanged, including accented, CJK and ZWJ-emoji keywords. HEIC (`writeHEIFRepresentation`) was added to the same
+/// test loop afterwards and passes it too (IPTC keywords and XMP `dc:subject` both read back identical).
 enum KeywordEmbedding {
     /// `catalog` first (in the order given), then any keyword the source file already carried that the catalog does not
     /// have, de-duplicated by `KeywordName.key(for:)` (case- and normalization-insensitive; first spelling wins).

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The format/quality/resize options sheet for batch export — the first
 /// `.sheet` in this app (a standard SwiftUI pattern, not the same class
@@ -18,6 +19,13 @@ struct ExportOptionsView: View {
     @State private var maxLongEdgeText = "2048"
     /// Read once (off the main thread) when the sheet appears — never per keystroke.
     @State private var previewCaptureDate: Date?
+    @State private var logoImporterShown = false
+    /// The chosen logo's picture for the thumbnail, nil when none/unreadable. Refreshed when the sheet appears and when the choice changes.
+    @State private var logoThumbnail: CGImage?
+    /// Why the enabled watermark would draw nothing (nil when it will be drawn), refreshed with the thumbnail.
+    @State private var watermarkProblem: String?
+    @State private var logoImportError: String?
+    @State private var logoImportBusy = false
 
     /// What the keyword toggle does and does NOT control. The toggle only adds the keywords typed in the Library; keywords
     /// the original file already carries (e.g. written by another app) follow the Metadata setting, not this toggle.
@@ -37,6 +45,76 @@ struct ExportOptionsView: View {
             template: exportModel.settings.namingTemplate, photo: previewPhoto,
             format: exportModel.settings.format, captureDate: previewCaptureDate
         )
+    }
+
+    /// Thumbnail + Choose/Remove. Picking uses `.fileImporter` (attached to the watermark section in `form`, which is
+    /// always present), never an `NSOpenPanel` opened from here (see the note at the Export button about panels and
+    /// sheet dismissal).
+    private var logoRow: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 4).fill(Theme.raised)
+                if let logoThumbnail {
+                    Image(decorative: logoThumbnail, scale: 1)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(3)
+                }
+            }
+            .frame(width: 44, height: 44)
+            .accessibilityHidden(true)
+            Button(exportModel.settings.watermark.logoID == nil ? "Choose Logo…" : "Change Logo…") { logoImporterShown = true }
+                .buttonStyle(.flat)
+                .disabled(logoImportBusy)
+            if exportModel.settings.watermark.logoID != nil {
+                Button("Remove") {
+                    exportModel.settings.watermark.logoID = nil
+                    logoImportError = nil
+                    refreshLogoState()
+                }
+                .buttonStyle(.flat)
+                .disabled(logoImportBusy)
+            }
+            if logoImportBusy { ProgressView().controlSize(.small) }
+        }
+    }
+
+    /// One decode of the stored logo feeds both the thumbnail and the "why is nothing drawn" message.
+    private func refreshLogoState() {
+        let watermark = exportModel.settings.watermark
+        // The logo file is only opened in Image mode with the watermark on, so typing in Text mode never touches the disk.
+        let image = (watermark.isEnabled && watermark.kind == .image)
+            ? watermark.logoID.flatMap { WatermarkLogoStore.shared.loadImage(id: $0) } : nil
+        logoThumbnail = image
+        watermarkProblem = watermark.inactiveReason(logoLoads: { _ in image != nil })
+    }
+
+    /// Decoding and re-encoding the picture runs off the main thread; a second pick is blocked meanwhile.
+    private func importLogo(_ result: Result<URL, Error>) {
+        guard !logoImportBusy else { return }
+        switch result {
+        case .failure:
+            logoImportError = "The logo could not be opened."
+            refreshLogoState()
+        case .success(let url):
+            logoImportBusy = true
+            Task {
+                let outcome: Result<String, Error> = await Task.detached {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    return Result { try WatermarkLogoStore.shared.importLogo(from: url) }
+                }.value
+                switch outcome {
+                case .success(let id):
+                    exportModel.settings.watermark.logoID = id
+                    logoImportError = nil
+                case .failure(let error):
+                    logoImportError = (error as? LocalizedError)?.errorDescription ?? "The logo could not be used."
+                }
+                logoImportBusy = false
+                refreshLogoState()
+            }
+        }
     }
 
     private var form: some View {
@@ -80,7 +158,7 @@ struct ExportOptionsView: View {
                     .foregroundStyle(Theme.textSecondary)
             }
 
-            if exportModel.settings.format == .jpeg {
+            if exportModel.settings.format.isLossy {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Quality: \(Int(exportModel.settings.quality * 100))%")
                     ThinSlider(
@@ -88,7 +166,7 @@ struct ExportOptionsView: View {
                         range: 0.1...1.0,
                         valueDescription: { "\(Int($0 * 100))%" }
                     )
-                    .accessibilityLabel("JPEG quality")
+                    .accessibilityLabel("\(exportModel.settings.format.label) quality")
                 }
             }
 
@@ -121,9 +199,21 @@ struct ExportOptionsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Watermark", isOn: $exportModel.settings.watermark.isEnabled)
                 if exportModel.settings.watermark.isEnabled {
-                    TextField("Text (e.g. © Your Name)", text: $exportModel.settings.watermark.text)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Watermark text")
+                    Picker("Mark", selection: $exportModel.settings.watermark.kind) {
+                        ForEach(WatermarkKind.allCases) { kind in
+                            Text(kind.label).tag(kind)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityLabel("Watermark type")
+                    if exportModel.settings.watermark.kind == .text {
+                        TextField("Text (e.g. © Your Name)", text: $exportModel.settings.watermark.text)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Watermark text")
+                    } else {
+                        logoRow
+                    }
                     Picker("Position", selection: $exportModel.settings.watermark.position) {
                         ForEach(WatermarkPosition.allCases) { position in
                             Text(position.label).tag(position)
@@ -139,12 +229,21 @@ struct ExportOptionsView: View {
                         ThinSlider(value: $exportModel.settings.watermark.opacity, range: ExportWatermark.opacityRange)
                             .accessibilityLabel("Watermark opacity")
                     }
-                    if !exportModel.settings.watermark.isActive {
-                        Text("Type some text to add the mark.")
+                    if let problem = watermarkProblem {
+                        Text(problem)
                             .font(.caption)
-                            .foregroundStyle(Theme.textSecondary)
+                            .foregroundStyle(Theme.warning)
+                    }
+                    if let error = logoImportError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(Theme.warning)
                     }
                 }
+            }
+            // On the always-present watermark section (not on `logoRow`, which only exists in Image mode).
+            .fileImporter(isPresented: $logoImporterShown, allowedContentTypes: [.png, .jpeg, .heic]) { result in
+                importLogo(result)
             }
 
             Toggle("Resize", isOn: $useCustomResize)
@@ -197,7 +296,11 @@ struct ExportOptionsView: View {
             ScrollView { form }.frame(height: 560)
         }
         .frame(width: 380)
+        .onChange(of: exportModel.settings.watermark.isEnabled) { _, _ in refreshLogoState() }
+        .onChange(of: exportModel.settings.watermark.kind) { _, _ in refreshLogoState() }
+        .onChange(of: exportModel.settings.watermark.text) { _, _ in refreshLogoState() }
         .onAppear {
+            refreshLogoState()
             // Seed the resize controls from the remembered setting — otherwise the Export button would overwrite a
             // stored long edge with "original" from this sheet's own unseeded defaults.
             if case .maxLongEdge(let edge) = exportModel.settings.resize.sanitized {

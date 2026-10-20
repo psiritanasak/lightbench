@@ -510,7 +510,7 @@ final class ExportSettingsStoreTests: XCTestCase {
     }
 
     func testUnknownEnumValueResetsOnlyThatField() {
-        defaults.set(Data(#"{"format":"heic","quality":0.5,"namingTemplate":"{seq}"}"#.utf8), forKey: ExportSettingsStore.key)
+        defaults.set(Data(#"{"format":"avif","quality":0.5,"namingTemplate":"{seq}"}"#.utf8), forKey: ExportSettingsStore.key)
         let loaded = ExportSettingsStore(defaults: defaults).load()
         XCTAssertEqual(loaded.format, .jpeg)
         XCTAssertEqual(loaded.quality, 0.5, accuracy: 0.0001)

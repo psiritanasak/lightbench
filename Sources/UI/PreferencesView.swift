@@ -31,6 +31,9 @@ final class PreferencesModel: ObservableObject {
 struct PreferencesView: View {
     @ObservedObject var model: PreferencesModel
     /// Plain values and actions, not the whole `CatalogModel`: observing it would redraw this window on every catalog change.
+    /// The Library's "Show Photos in Subfolders" flag lives on `CatalogModel` (it re-reads the grid when it changes and the sidebar's
+    /// context menu flips it too), so it is passed as a binding to that one value rather than copied into this model.
+    var showPhotosInSubfolders: Binding<Bool>
     var isBackupBusy: Bool
     var backUpNow: () async -> String
     var backupsFolder: () -> URL?
@@ -42,6 +45,12 @@ struct PreferencesView: View {
                 Toggle("Move to the next photo after Pick, Reject or Unflag", isOn: $model.cullAutoAdvance)
                 Toggle("Start a pass on unflagged photos only", isOn: $model.cullStartUnflaggedOnly)
                 Text("Applies the next time you start a culling pass.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            Section("Library") {
+                Toggle("Show photos from subfolders when a folder is selected", isOn: showPhotosInSubfolders)
+                Text("Applies to folders imported as a tree. Also in the folder\u{2019}s right-click menu.")
                     .font(.footnote)
                     .foregroundStyle(Theme.textTertiary)
             }

@@ -189,7 +189,8 @@ struct LibraryGridView: View {
                 } else if emptyKind == .emptyLibrary {
                     LibraryEmptyLibraryView(catalog: catalog)
                 } else if emptyKind == .emptyCollection {
-                    LibraryEmptyCollectionView(isFolder: Self.isFolderCollection(catalog))
+                    LibraryEmptyCollectionView(isFolder: Self.isFolderCollection(catalog), includesSubfolders: catalog.viewedCollectionIDs.count > 1,
+                                               subfolderSettingOn: catalog.showPhotosInSubfolders)
                 } else if catalog.displayedPhotos.isEmpty {
                     noMatchesState
                 } else {

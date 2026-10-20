@@ -134,4 +134,41 @@ final class SidebarRowsTests: XCTestCase {
         let kept = SidebarRows.pruned([1, 2, 99], collections: [collection(1, "a", folder: true), collection(2, "b")])
         XCTAssertEqual(kept, [1])
     }
+
+    // MARK: folder photo counts
+
+    func testFolderCountsAreDirectMembersUnlessSubfoldersAreIncluded() {
+        // 10 > 11 (Alps), 10 > 12 (Zoo); 1 is an album (not a folder).
+        let cols = sample.collections
+        let memberships: [Int64: Set<Int64>] = [100: [10], 101: [11], 102: [11, 1], 103: [10, 11], 104: [12], 105: [1]]
+        let direct = SidebarRows.folderPhotoCounts(collections: cols, membershipsByPhotoID: memberships, includeSubfolders: false)
+        XCTAssertEqual(direct[10], 2)
+        XCTAssertEqual(direct[11], 3)
+        XCTAssertEqual(direct[12], 1)
+        XCTAssertNil(direct[1], "albums get no count")
+        let total = SidebarRows.folderPhotoCounts(collections: cols, membershipsByPhotoID: memberships, includeSubfolders: true)
+        XCTAssertEqual(total[10], 5, "100, 101, 102, 103 and 104: a photo in a folder AND its subfolder (103) counts once")
+        XCTAssertEqual(total[11], 3)
+        XCTAssertEqual(total[12], 1)
+        XCTAssertNil(total[20])
+    }
+
+    func testFolderCountsSurviveAParentCycle() {
+        let cols = [collection(1, "a", folder: true, parent: 2), collection(2, "b", folder: true, parent: 1)]
+        let counts = SidebarRows.folderPhotoCounts(collections: cols, membershipsByPhotoID: [7: [1]], includeSubfolders: true)
+        XCTAssertEqual(counts[1], 1)
+        XCTAssertEqual(counts[2], 1)
+    }
+
+    func testRowsCarryCountsOnlyOnFolderRowsAndOnlyWhenGiven() {
+        let without = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [10])
+        XCTAssertTrue(without.allSatisfy { $0.count == nil })
+        let counts: [Int64: Int] = [10: 5, 11: 3]
+        let rows = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [10], folderCounts: counts)
+        XCTAssertEqual(rows.first { $0.id == "folder-10" }?.count, 5)
+        XCTAssertEqual(rows.first { $0.id == "folder-11" }?.count, 3)
+        XCTAssertEqual(rows.first { $0.id == "folder-20" }?.count, 0, "a folder missing from the map is empty")
+        XCTAssertNil(rows.first { $0.id == "collection-1" }?.count)
+        XCTAssertNil(rows.first { $0.id == "all" }?.count)
+    }
 }

@@ -229,7 +229,7 @@ struct PhotoAppApp: App {
         }
         .windowResizability(.contentSize)
         Settings {
-            PreferencesView(model: preferences, isBackupBusy: catalog.backupBusy, backUpNow: { await catalog.backUpNow() },
+            PreferencesView(model: preferences, showPhotosInSubfolders: $catalog.showPhotosInSubfolders, isBackupBusy: catalog.backupBusy, backUpNow: { await catalog.backUpNow() },
                             backupsFolder: { catalog.backupsFolderURL })
                 .tint(Theme.controlTint)
         }

@@ -702,6 +702,28 @@ final class CatalogDatabase: Sendable {
         }
     }
 
+    /// Every photo that is a member of ANY of `collectionIDs`, each once, in the same `importedAt, id` order as `photos(inCollection:)`.
+    /// Runs one subselect query per chunk of 500 collection ids (the ids never expand into a giant photo-id `IN (...)`, and stay under
+    /// SQLite's variable limit), drops a photo that turns up in several chunks, and sorts the merged result in memory. An empty list gives
+    /// no photos. The folder-tree "show photos in subfolders" view uses it; `photos(inCollection:)` stays direct-members-only.
+    func photos(inCollections collectionIDs: [Int64]) async throws -> [Photo] {
+        guard !collectionIDs.isEmpty else { return [] }
+        return try await dbQueue.read { db in
+            var photos: [Photo] = []
+            // Chunked below SQLite's variable limit (999 on old builds); the id sets of different chunks are merged afterwards.
+            var seen = Set<Int64>()
+            for start in stride(from: 0, to: collectionIDs.count, by: 500) {
+                let chunk = Array(collectionIDs[start..<min(start + 500, collectionIDs.count)])
+                let members = CollectionPhoto
+                    .filter(chunk.contains(CollectionPhoto.Columns.collectionId))
+                    .select(CollectionPhoto.Columns.photoId)
+                let found = try Photo.filter(members.contains(Photo.Columns.id)).fetchAll(db)
+                for photo in found { if let id = photo.id, seen.insert(id).inserted { photos.append(photo) } }
+            }
+            return photos.sorted { ($0.importedAt, $0.id ?? 0) < ($1.importedAt, $1.id ?? 0) }
+        }
+    }
+
     /// Every membership row in the catalog — `CatalogModel` uses this to
     /// build a photoID→collectionIDs map for cheap, synchronous per-cell
     /// checkmark lookups rather than a query per grid cell.

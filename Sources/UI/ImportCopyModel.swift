@@ -320,6 +320,14 @@ final class ImportCopyModel: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
+    /// The sheet's one-line promise about the originals, which must match the chosen mode.
+    nonisolated static func sheetIntro(mode: ImportCopyOptions.Mode) -> String {
+        switch mode {
+        case .copy: return "Every copy is checked against the original before it is added; the originals are never changed or deleted."
+        case .move: return "Every copy is checked against the original before it is added; each original then goes to the Trash (Move mode)."
+        }
+    }
+
     nonisolated static func moveConfirmationTitle(count: Int) -> String {
         "Copy \(count) photo\(count == 1 ? "" : "s"), then move the originals to the Trash?"
     }

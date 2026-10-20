@@ -62,7 +62,7 @@ struct ImportCopySheetView: View {
         VStack(alignment: .leading, spacing: 12) {
             let count = model.setup?.sources.count ?? 0
             Text("Copy \(count) Photo\(count == 1 ? "" : "s") into the Library").font(.headline)
-            Text("From “\(model.setup?.sourceFolder.lastPathComponent ?? "")” · \(sizeText). Every copy is checked against the original before it is added; the originals are never changed or deleted.")
+            Text("From “\(model.setup?.sourceFolder.lastPathComponent ?? "")” · \(sizeText). \(ImportCopyModel.sheetIntro(mode: model.options.mode))")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)

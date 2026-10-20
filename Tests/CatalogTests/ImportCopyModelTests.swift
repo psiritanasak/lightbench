@@ -356,6 +356,12 @@ final class ImportCopyModelTests: XCTestCase {
         XCTAssertNil(ImportCopyModel.destinationProblem(URL(fileURLWithPath: "/Elsewhere"), source: source, mode: .move))
     }
 
+    func testTheSheetIntroNeverPromisesTheOriginalsStayWhenMovingThem() {
+        XCTAssertTrue(ImportCopyModel.sheetIntro(mode: .copy).contains("never changed or deleted"))
+        XCTAssertFalse(ImportCopyModel.sheetIntro(mode: .move).contains("never changed or deleted"))
+        XCTAssertTrue(ImportCopyModel.sheetIntro(mode: .move).contains("Trash"))
+    }
+
     func testMoveConfirmationTextNamesTheFoldersAndStatesNothingIsPermanentlyDeleted() {
         XCTAssertEqual(ImportCopyModel.moveConfirmationTitle(count: 1), "Copy 1 photo, then move the originals to the Trash?")
         let message = ImportCopyModel.moveConfirmationMessage(source: "DCIM", destination: "Trip")

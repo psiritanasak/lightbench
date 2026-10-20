@@ -20,6 +20,7 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let importCopySubfolders = "prefs.v1.importCopySubfolders"
         static let importCopyTemplate = "prefs.v1.importCopyTemplate"
         static let importCopySkipAlreadyCopied = "prefs.v1.importCopySkipAlreadyCopied"
+        static let showPhotosInSubfolders = "prefs.v1.showPhotosInSubfolders"
     }
 
     let defaults: UserDefaults
@@ -52,6 +53,13 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
     var autoReadXMPOnImport: Bool {
         get { bool(Key.autoReadXMPOnImport, default: true) }
         nonmutating set { defaults.set(newValue, forKey: Key.autoReadXMPOnImport) }
+    }
+
+    /// Library: a selected folder (folder-mirrored collection) also shows the photos of all its subfolders. Off by default: a folder shows only
+    /// the photos directly inside it, as before.
+    var showPhotosInSubfolders: Bool {
+        get { bool(Key.showPhotosInSubfolders, default: false) }
+        nonmutating set { defaults.set(newValue, forKey: Key.showPhotosInSubfolders) }
     }
 
     /// How many backups of each kind (daily, manual) are kept in the Backups folder. The safety kinds (before-migration, before-restore, damaged)

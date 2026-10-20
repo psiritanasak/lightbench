@@ -56,6 +56,23 @@ final class CatalogModel: ObservableObject {
             Task { await refresh() }
         }
     }
+    /// Library: a selected FOLDER (folder-mirrored collection) also shows the photos of all its subfolders. Persisted in `AppPreferences`
+    /// (off by default). Changing it re-reads the grid when a folder is selected; it never affects albums, All Photos or smart collections.
+    @Published var showPhotosInSubfolders = false {
+        didSet {
+            guard oldValue != showPhotosInSubfolders else { return }
+            preferences.showPhotosInSubfolders = showPhotosInSubfolders
+            recomputeFolderPhotoCounts()
+            if case .collection(let id) = selectedFilter, collections.first(where: { $0.id == id })?.isFolder == true {
+                selectedPhotoIDs.removeAll()
+                Task { await refresh() }
+            }
+        }
+    }
+    /// Folder id → the number the sidebar shows beside it (direct, or the subtree total while `showPhotosInSubfolders` is on). Stored, not
+    /// computed in the sidebar's body: it is O(photos x depth) and the sidebar redraws on every grid click. Kept in step with `collections`,
+    /// `membershipsByPhotoID` and the flag by `recomputeFolderPhotoCounts()` (assigns only on a real change).
+    @Published private(set) var folderPhotoCounts: [Int64: Int] = [:]
     /// photoID → the set of collectionIDs it belongs to, rebuilt from
     /// `allMemberships()` on every `refresh()`. Keeping this as one
     /// client-side map (rather than a query per grid cell) is what makes
@@ -361,6 +378,7 @@ final class CatalogModel: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.preferences = AppPreferences(defaults: defaults)
+        self.showPhotosInSubfolders = preferences.showPhotosInSubfolders
         Task.detached { [weak self] in
             do {
                 let database = try CatalogDatabase()
@@ -411,6 +429,7 @@ final class CatalogModel: ObservableObject {
         self.database = database
         self.defaults = defaults
         self.preferences = AppPreferences(defaults: defaults)
+        self.showPhotosInSubfolders = preferences.showPhotosInSubfolders
         openSettled = true
         connectFaces()
     }
@@ -549,6 +568,7 @@ final class CatalogModel: ObservableObject {
             let memberships = try await database.allMemberships()
             membershipsByPhotoID = Dictionary(grouping: memberships, by: \.photoId)
                 .mapValues { Set($0.map(\.collectionId)) }
+            recomputeFolderPhotoCounts()
             let loadedKeywords = try await database.allKeywords()
             let keywordLinks = try await database.allKeywordLinks()
             keywords = Self.sortedKeywords(loadedKeywords)
@@ -579,7 +599,10 @@ final class CatalogModel: ObservableObject {
             case .allPhotos, .smartCollection:
                 photos = try await database.allPhotos()
             case .collection(let collectionID):
-                photos = try await database.photos(inCollection: collectionID)
+                let viewed = viewedCollectionIDs(of: collectionID)
+                photos = viewed.count > 1
+                    ? try await database.photos(inCollections: Array(viewed).sorted())
+                    : try await database.photos(inCollection: collectionID)
             }
             // Its own do/catch like the face read: a failed camera-data read keeps the previous map.
             if let loaded = try? await database.allMetadata() { metadataByPhotoID = loaded }
@@ -692,11 +715,54 @@ final class CatalogModel: ObservableObject {
         }
     }
 
+    // MARK: - Photos in subfolders
+
+    /// `folderID` and every folder below it, found breadth-first over the `parentId` links the sidebar draws. Only folder rows count,
+    /// each id is visited once (a corrupt parent cycle ends instead of looping), and the result always contains `folderID` itself.
+    /// A folder imported AFTER its parent folder was already imported stays a separate root (`findOrCreateFolderCollection` never
+    /// re-parents), so it is not below that parent here — the sidebar does not show it there either.
+    nonisolated static func descendantFolderIDs(of folderID: Int64, in collections: [PhotoCollection]) -> Set<Int64> {
+        let childrenByParent = Dictionary(grouping: collections.filter(\.isFolder), by: \.parentId)
+        var seen: Set<Int64> = [folderID]
+        var queue = [folderID]
+        while !queue.isEmpty {
+            let current = queue.removeFirst()
+            for child in childrenByParent[current] ?? [] {
+                guard let id = child.id, seen.insert(id).inserted else { continue }
+                queue.append(id)
+            }
+        }
+        return seen
+    }
+
+    private func recomputeFolderPhotoCounts() {
+        let counts = SidebarRows.folderPhotoCounts(collections: collections, membershipsByPhotoID: membershipsByPhotoID,
+                                                   includeSubfolders: showPhotosInSubfolders)
+        if counts != folderPhotoCounts { folderPhotoCounts = counts }
+    }
+
+    func descendantFolderIDs(of folderID: Int64) -> Set<Int64> { Self.descendantFolderIDs(of: folderID, in: collections) }
+
+    /// The collection ids whose photos the grid shows for `.collection(collectionID)`: just that one, unless it is a folder and
+    /// "show photos in subfolders" is on, in which case the folder and all its descendants.
+    private func viewedCollectionIDs(of collectionID: Int64) -> Set<Int64> {
+        guard showPhotosInSubfolders, collections.first(where: { $0.id == collectionID })?.isFolder == true else { return [collectionID] }
+        return descendantFolderIDs(of: collectionID)
+    }
+
+    /// Every collection id the current filter shows photos of (empty for All Photos / a smart collection).
+    var viewedCollectionIDs: Set<Int64> {
+        guard case .collection(let id) = selectedFilter else { return [] }
+        return viewedCollectionIDs(of: id)
+    }
+
     /// What the Library is showing, in words (a confirmation names it): All Photos, or the selected collection / smart collection.
     var currentScopeName: String {
         switch selectedFilter {
         case .allPhotos: return "All Photos"
-        case .collection(let id): return collections.first { $0.id == id }.map { "“\($0.name)”" } ?? "this collection"
+        case .collection(let id):
+            guard let collection = collections.first(where: { $0.id == id }) else { return "this collection" }
+            return viewedCollectionIDs.count > 1 ? "“\(collection.name)” and its subfolders" : "“\(collection.name)”"
         case .smartCollection(let id): return smartCollections.first { $0.id == id }.map { "“\($0.name)”" } ?? "this smart collection"
         }
     }
@@ -1322,6 +1388,7 @@ final class CatalogModel: ObservableObject {
         if photos.count < before { photoCount = max(0, photoCount - 1) }
         selectedPhotoIDs.remove(id)
         membershipsByPhotoID.removeValue(forKey: id)
+        recomputeFolderPhotoCounts()
         keywordIDsByPhotoID.removeValue(forKey: id)
         personIDsByPhotoID.removeValue(forKey: id)
         metadataByPhotoID.removeValue(forKey: id)
@@ -1665,14 +1732,19 @@ final class CatalogModel: ObservableObject {
     func toggleMembership(of photo: Photo, in collection: PhotoCollection) {
         guard let database, let photoID = photo.id, let collectionID = collection.id else { return }
         let willBeMember = !membershipsByPhotoID[photoID, default: []].contains(collectionID)
-        let affectsCurrentFilter = selectedFilter == .collection(collectionID)
+        let viewed = viewedCollectionIDs
+        let affectsCurrentFilter = viewed.contains(collectionID)
 
         if willBeMember {
             membershipsByPhotoID[photoID, default: []].insert(collectionID)
         } else {
             membershipsByPhotoID[photoID]?.remove(collectionID)
-            if affectsCurrentFilter { photos.removeAll { $0.id == photoID } }
+            // With subfolders shown, the photo stays in the grid while it is still a member of another viewed folder.
+            if affectsCurrentFilter, membershipsByPhotoID[photoID, default: []].isDisjoint(with: viewed) {
+                photos.removeAll { $0.id == photoID }
+            }
         }
+        recomputeFolderPhotoCounts()
 
         Task.detached { [weak self] in
             do {
@@ -1720,6 +1792,7 @@ final class CatalogModel: ObservableObject {
         for photoID in photoIDs {
             membershipsByPhotoID[photoID, default: []].insert(collectionID)
         }
+        recomputeFolderPhotoCounts()
 
         Task.detached { [weak self] in
             do {
@@ -1751,7 +1824,7 @@ final class CatalogModel: ObservableObject {
     /// collection differs from what was active at call time but matches
     /// by completion (e.g. the user switches filters mid-write).
     private func refreshIfViewingCollection(_ collectionID: Int64) async {
-        if selectedFilter == .collection(collectionID) {
+        if viewedCollectionIDs.contains(collectionID) {
             await refresh()
         }
     }

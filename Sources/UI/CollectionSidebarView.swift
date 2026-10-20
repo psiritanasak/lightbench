@@ -52,7 +52,9 @@ struct CollectionSidebarView: View {
     @FocusState private var isFocused: Bool
 
     private var rows: [SidebarRow] {
-        SidebarRows.rows(collections: catalog.collections, smartCollections: catalog.smartCollections, expandedFolders: expandedFolders)
+        SidebarRows.rows(
+            collections: catalog.collections, smartCollections: catalog.smartCollections, expandedFolders: expandedFolders,
+            folderCounts: catalog.folderPhotoCounts)
     }
 
     var body: some View {
@@ -230,6 +232,12 @@ struct CollectionSidebarView: View {
             }
             Text(row.title).lineLimit(1)
             Spacer(minLength: 0)
+            if let count = row.count {
+                Text("\(count)")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.textTertiary)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -261,8 +269,8 @@ struct CollectionSidebarView: View {
         catalog.selectedFilter = result.selection
     }
 
-    /// Rename / Delete on the flat collections and smart collections; nothing on folder rows (deleting a folder collection deletes
-    /// its whole subtree — see the note on `collectionPendingRename`).
+    /// Rename / Delete on the flat collections and smart collections; folder rows only get the "Show Photos in Subfolders" toggle
+    /// (deleting a folder collection deletes its whole subtree — see the note on `collectionPendingRename`).
     @ViewBuilder
     private func contextMenu(for row: SidebarRow) -> some View {
         switch row.source {
@@ -300,7 +308,9 @@ struct CollectionSidebarView: View {
                     Image(systemName: "trash").foregroundStyle(.red)
                 }
             }
-        case .allPhotos, .folder, nil:
+        case .folder:
+            Toggle("Show Photos in Subfolders", isOn: $catalog.showPhotosInSubfolders)
+        case .allPhotos, nil:
             EmptyView()
         }
     }

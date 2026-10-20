@@ -44,6 +44,16 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(again.backupsToKeep, 12)
     }
 
+    func testShowPhotosInSubfoldersDefaultsToOffAndRoundTrips() {
+        let defaults = makeDefaults()
+        XCTAssertFalse(AppPreferences(defaults: defaults).showPhotosInSubfolders, "off by default: nothing changes for existing users")
+        AppPreferences(defaults: defaults).showPhotosInSubfolders = true
+        XCTAssertTrue(AppPreferences(defaults: defaults).showPhotosInSubfolders)
+        XCTAssertEqual(AppPreferences.Key.showPhotosInSubfolders, "prefs.v1.showPhotosInSubfolders")
+        defaults.set("yes", forKey: AppPreferences.Key.showPhotosInSubfolders)
+        XCTAssertFalse(AppPreferences(defaults: defaults).showPhotosInSubfolders, "garbage falls back to the default")
+    }
+
     func testGarbageInTheDefaultsFallsBackToTheDefaultsNeverCrashes() {
         let defaults = makeDefaults()
         defaults.set("yes", forKey: AppPreferences.Key.cullAutoAdvance)
@@ -299,7 +309,7 @@ final class AppPreferencesTests: XCTestCase {
     func testThePreferencesWindowRendersItsContent() throws {
         let defaults = makeDefaults()
         let model = PreferencesModel(store: AppPreferences(defaults: defaults)) // every toggle on
-        let view = PreferencesView(model: model, isBackupBusy: false, backUpNow: { "" }, backupsFolder: { nil }).tint(Theme.controlTint).environment(\.colorScheme, .dark)
+        let view = PreferencesView(model: model, showPhotosInSubfolders: .constant(false), isBackupBusy: false, backUpNow: { "" }, backupsFolder: { nil }).tint(Theme.controlTint).environment(\.colorScheme, .dark)
         let hosting = NSHostingView(rootView: view)
         hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
         let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -333,7 +343,7 @@ final class AppPreferencesTests: XCTestCase {
     func testTheSettingsSceneAndTheLaunchBackupUseThePreferences() throws {
         let app = try source("Sources/App/PhotoAppApp.swift")
         XCTAssertTrue(app.contains("Settings {"))
-        XCTAssertTrue(app.contains("PreferencesView(model: preferences, isBackupBusy: catalog.backupBusy"))
+        XCTAssertTrue(app.contains("PreferencesView(model: preferences, showPhotosInSubfolders: $catalog.showPhotosInSubfolders, isBackupBusy: catalog.backupBusy"))
         XCTAssertTrue(try source("Sources/Catalog/CatalogDatabase.swift").contains("keepNewest: AppPreferences.shared.backupsToKeep"))
         XCTAssertTrue(try source("Sources/Catalog/CatalogDatabase+Backup.swift").contains("safetyKeepAtLeast: defaultBackupsToKeep"), "the launch prune protects the safety backups")
     }

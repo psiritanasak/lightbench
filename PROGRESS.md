@@ -8,19 +8,11 @@ rounds, live-verification detail, measured numbers) lives in
 When a slice ships, put a 2-4 line summary here and move older entries to the
 history file.
 
-## Current state (2026-10-14)
-- master is clean apart from the untracked `.Rhistory` (never stage it). Last
-  commits: `Open…` fix (0aa676e) + progress note (9a49e32). Full suite 2797 green.
-- The user's live pass (2026-10-14) confirmed: Color Grading Global wheel,
-  per-mask Whites/Blacks, Vignette Softness, B&W Mix, save/restore.
-- Bolivia `raw_files` access granted (camera data 1086 rows).
-- `Open…` is only in the Library toolbar; it now switches to the Editor before
-  loading. Finder / Dock / drag-and-drop opens shipped 2026-10-15 (feature A below), live check pending.
-- Recently shipped (2026-10-09..12, all in `docs/ROADMAP_HISTORY.md` /
-  `docs/PROGRESS_HISTORY.md`): Faces v1, Culling v1, Photo Merge (HDR + panorama),
-  Depth Range mask, field-based search, Smart Collections saving the query, B&W Mix,
-  Color Grading Blending/Balance/Global, Vignette Softness, per-mask Whites/Blacks,
-  minimal-look pass, editor tool rail, tab memory.
+## Current state (2026-10-20)
+- v1.0.0 is PUBLISHED: https://github.com/psiritanasak/lightbench (public, MIT) and release `v1.0.0` with the UNSIGNED zip + `docs/RELEASE_NOTES_1.0.0.md`. Commit author email was rewritten to the user's Gmail before publishing (a local branch `backup-before-email-rewrite` keeps the old history; never push it).
+- v1.1 work since the release (5 commits, NOT pushed yet — `git status` says ahead of origin): single-window fix (b448dc0), Copy Settings font (5a7fe78), Return-key check recorded (dcc0f23), release notes + MIT licence, and the Copy Photos into Library feature (275e490..6b8ea8b). Full suite 3200 green at the feature commit.
+- STILL OWED for a signed public v1: an Apple Developer account (Developer ID cert + notary profile; `scripts/release.sh` full flow has never run) and a test on a real clean Mac. The unsigned zip needs "Open Anyway".
+- Live checks done 2026-10-19 (see the two LIVE CHECK sections below): Move to Trash (Return does NOT confirm), backup/restore, Preferences, About, Shortcuts, Finder open (extra-window bug FIXED), Read XMP, Copy Photos on exFAT.
 
 ## UNATTENDED RUN (started 2026-10-14; plan: /Users/praween/.claude/plans/squishy-wandering-minsky.md) — order #4 XMP → #1 Whites → #2 D64 curve → #3 B&W extras → #5 Culling Compare/Survey → #6 robustness
 - **#4 XMP interop — SHIPPED in code (commits 84b0c84, 9b811ec, e5b14ed, 2ebff69 + docs), full suite 2871 green, NOT live-verified.** Photo ▸ Write / Read Metadata to XMP… (rating, reject, label, keywords; write only on request; merge keeps foreign tags), fill-defaults read after import, rename moves an owned `.xmp`. Reviewer: engine 3 rounds, UI/rename 5 rounds (the last blockers-only APPROVE); every fix mutation-checked. Limits: IMPROVEMENTS.md D65. MANUAL CHECKLIST: Write on 3 scratch photos incl. a CR2+JPG pair, open the `.xmp` text; hand-made `.xmp` with `crs:Exposure2012` keeps it after a write; Read on a fresh import restores values; Rename + Undo Rename move the `.xmp`; originals byte-identical.
@@ -86,11 +78,9 @@ None.
 - Enhance: MetalFX-vs-Lanczos comparison, a RAW source.
 
 ## Exact next step
-None required. Pick a feature with the user (one per session, Plan Mode first).
-Candidates: global Whites slider, B&W Mix extras (Intensity/Neutrals/Tone/Grain),
-culling Compare/Survey, XMP interop spike (IMPROVEMENTS.md D57/D63);
-Lightroom parity list D35; open design/robustness items D28, D31/D32, D13,
-D22/D24/D26, D20 keyboard half, D61/D62 (merge/depth limits), D60 (faces nits).
+1. Ship v1.1: write release notes for Copy Photos into Library + the single-window fix, `./scripts/release.sh --unsigned`, push master, `gh release create v1.1.0` (ask the user first: it publishes).
+2. Then one feature per session (Plan Mode first). Candidates, most valuable first: Move (copy → verify → Trash) for card import; HEIC/WebP/AVIF export + image watermark (D57 item 9); virtual copies / versions; Upright / auto-straighten (D57 item 7); Recently Deleted. Robustness items still open: D28/D31/D32 (live in a real sandbox), D13, D22/D24/D26, D20 keyboard half, D61/D62 (merge/depth limits), D60 (faces nits), D72 (copy limits).
+3. Not live-checked at all yet: Faces, HDR/panorama, Put Back in the Finder, a cold-launch Dock drop, real mouse drag-and-drop, a RAW+JPG pair through the Copy UI, declining the Copy destination panel, the Library window that flipped to the Editor once during the XMP dialog (cause unknown).
 
 Process note: the `reviewer` agent only registers when the session starts from
 `~/photoapp-starter`, not `~`. Always pass `model: "opus"` when invoking it.

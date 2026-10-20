@@ -1024,9 +1024,8 @@ struct ContentView: View {
     /// Vertical/Horizontal perspective, Scale/Stretch, Flip, the crop
     /// rectangle, and the aspect lock. A real, implementable analog to the
     /// screenshot's
-    /// "Reset" button. ("Auto" is deliberately not implemented — it would
-    /// need actual auto-straighten/auto-crop detection, which doesn't
-    /// exist in this app; skipped rather than faked.)
+    /// "Reset" button. (The tab's "Auto" button is Auto Straighten only —
+    /// it sets the angle from the detected horizon and does not auto-crop.)
     private func resetCropTab() {
         document.editState.straightenAngle = 0
         document.editState.verticalPerspective = 0

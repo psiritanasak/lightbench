@@ -17,6 +17,26 @@ struct CropTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            Button {
+                document.autoStraighten()
+            } label: {
+                Label(document.isAutoStraightening ? "Finding horizon…" : "Auto", systemImage: "wand.and.stars")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.flat)
+            .disabled(document.currentImage == nil || document.isAutoStraightening)
+            .help("Find the horizon and set Straighten to level it")
+            .alert(
+                "Auto Straighten",
+                isPresented: Binding(
+                    get: { document.straightenMessage != nil },
+                    set: { if !$0 { document.straightenMessage = nil } }
+                )
+            ) {
+                Button("OK") {}
+            } message: {
+                Text(document.straightenMessage ?? "")
+            }
             EditSliderRow(
                 label: "Straighten", value: $document.editState.straightenAngle,
                 range: -45...45, identity: 0

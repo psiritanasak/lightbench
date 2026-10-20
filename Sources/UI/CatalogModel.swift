@@ -364,15 +364,19 @@ final class CatalogModel: ObservableObject {
         Task.detached { [weak self] in
             do {
                 let database = try CatalogDatabase()
+                // Resolving a bookmark can block (an offline network share, a slow volume), so it happens HERE, off the main actor; only the
+                // cheap start/refresh step runs on it. D34: the test host must not start real security scopes or refresh the developer's REAL
+                // folder bookmarks in `UserDefaults.standard`; its throwaway temp catalog needs no folder access anyway.
+                let resolved: [String: ResolvedBookmark]
+                if CatalogDatabase.isRunningUnderXCTest {
+                    resolved = [:]
+                } else {
+                    let saved = await MainActor.run { self?.folderBookmarks ?? [:] }
+                    resolved = Self.resolveAll(saved)
+                }
                 await MainActor.run {
                     self?.database = database
-                    // D34: the test host must not prune/activate the developer's
-                    // REAL folder bookmarks (`activateKnownFolders` deletes any
-                    // bookmark that fails to resolve from `UserDefaults.standard`);
-                    // its throwaway temp catalog needs no folder access anyway.
-                    if !CatalogDatabase.isRunningUnderXCTest {
-                        self?.activateKnownFolders()
-                    }
+                    if !resolved.isEmpty { self?.activateKnownFolders(resolved: resolved) }
                     self?.openSettled = true
                 }
                 await self?.refresh()
@@ -832,10 +836,8 @@ final class CatalogModel: ObservableObject {
                 return
             }
             self.silentRecoveryTried.insert(root)
-            guard await self.reacquireAccess(forStaleRoot: root, allowPrompt: false) else { return }
-            for candidate in self.photos where candidate.path.hasPrefix(root + "/") {
-                self.thumbnailRevisions[candidate.path, default: 0] += 1
-            }
+            // On success `reacquireAccess` itself asks the cells under the root to reload (`requestThumbnailsAgain`).
+            await self.reacquireAccess(forStaleRoot: root, allowPrompt: false)
         }
         thumbnailRecoveryTasks[root] = task
         await task.value
@@ -1937,6 +1939,7 @@ final class CatalogModel: ObservableObject {
                 ) {
                     folderBookmarks[root] = refreshed
                 }
+                requestThumbnailsAgain(under: root)
                 return true
             }
         }
@@ -1960,7 +1963,18 @@ final class CatalogModel: ObservableObject {
         if let warning = activateFolderAccess(for: grantedURL) {
             importStatusMessage = warning
         }
+        requestThumbnailsAgain(under: root)
+        if grantedURL.path != root { requestThumbnailsAgain(under: grantedURL.path) } // a parent grant may cover other spinning roots too
         return true
+    }
+
+    /// Access to `root` was just restored: the grid and filmstrip cells under it that already failed a decode (and are showing a spinner) are
+    /// asked to request their thumbnails again (`thumbnailRevisions` is part of a cell's task identity). Found live 2026-10-20: after an
+    /// Editor-open recovery the cells kept spinning until something else reloaded them.
+    func requestThumbnailsAgain(under root: String) {
+        for candidate in photos where candidate.path.hasPrefix(root + "/") {
+            thumbnailRevisions[candidate.path, default: 0] += 1
+        }
     }
 
     /// Captures a security-scoped bookmark for `folder` and activates it
@@ -2001,32 +2015,51 @@ final class CatalogModel: ObservableObject {
         return warning
     }
 
-    /// Resolves and activates every previously-granted folder bookmark.
-    /// Called once, right after the catalog DB finishes opening. There is
-    /// deliberately no matching `stop` call anywhere — the scope is meant
-    /// to stay open for the app's entire lifetime (the OS reclaims it on
-    /// quit), since `ImageDocumentModel.load(from:)`'s `CIImage(contentsOf:)`
-    /// decode is lazy and can re-read the file well after `load` returns
-    /// (e.g. on every redraw), so a scope that closed early would produce
-    /// intermittent, hard-to-explain read failures. A stale/unresolvable
-    /// bookmark is dropped rather than surfaced as an error — self-healing,
-    /// since re-importing that folder simply re-grants it.
-    private func activateKnownFolders() {
-        for (path, data) in folderBookmarks {
-            var isStale = false
-            guard let resolved = try? URL(
-                resolvingBookmarkData: data,
-                options: .withSecurityScope,
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            ), !isStale else {
-                folderBookmarks.removeValue(forKey: path)
-                continue
-            }
-            if resolved.startAccessingSecurityScopedResource() {
-                activeFolders.insert(path)
-            }
+    /// A saved folder bookmark after resolving it.
+    struct ResolvedBookmark {
+        let url: URL
+        let isStale: Bool
+    }
+
+    /// Resolves every saved folder bookmark (blocking file-system work: call off the main actor). A bookmark that cannot be resolved is simply
+    /// absent from the result.
+    nonisolated static func resolveAll(
+        _ bookmarks: [String: Data], resolve: (Data) -> ResolvedBookmark? = CatalogModel.resolveBookmark
+    ) -> [String: ResolvedBookmark] {
+        bookmarks.compactMapValues(resolve)
+    }
+
+    /// Activates the resolved folder bookmarks at launch. There is deliberately no matching `stop` call anywhere — the scope is meant to stay
+    /// open for the app's entire lifetime (the OS reclaims it on quit), since `ImageDocumentModel.load(from:)`'s `CIImage(contentsOf:)` decode
+    /// is lazy and can re-read the file well after `load` returns, so a scope that closed early would produce intermittent, hard-to-explain
+    /// read failures.
+    ///
+    /// A bookmark that could not be resolved (absent from `resolved`), will not start, or now points at a different folder than its key is KEPT,
+    /// never deleted (found live 2026-10-19 in a real sandbox: this used to drop it, so launching the app while an external drive or card was not
+    /// connected permanently lost that folder's grant and every later photo from it needed a re-grant panel). It stays in `folderBookmarks` and
+    /// is retried when a photo from the folder is opened (`ensureAccessActive` → `reacquireAccess`, which re-resolves silently first) and at the
+    /// next launch. A bookmark that resolves but is flagged stale (a system update) is started and silently refreshed — the same routine
+    /// self-heal `reacquireAccess` does — instead of being dropped. `start`/`refresh` are injectable so the decisions are unit-tested without real
+    /// security scopes.
+    func activateKnownFolders(
+        resolved: [String: ResolvedBookmark],
+        start: (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+        refresh: (URL) -> Data? = { try? $0.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) }
+    ) {
+        for (path, bookmark) in resolved {
+            // A stale bookmark of a moved or renamed folder resolves to the NEW location: that grants nothing at the key's path.
+            guard bookmark.url.coversAccess(to: URL(fileURLWithPath: path)), start(bookmark.url) else { continue }
+            activeFolders.insert(path)
+            if bookmark.isStale, let refreshed = refresh(bookmark.url) { folderBookmarks[path] = refreshed }
         }
+    }
+
+    nonisolated static func resolveBookmark(_ data: Data) -> ResolvedBookmark? {
+        var isStale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else {
+            return nil
+        }
+        return ResolvedBookmark(url: url, isStale: isStale)
     }
 
     private static func summary(for result: ImportResult) -> String {

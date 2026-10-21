@@ -63,7 +63,7 @@ final class UprightRoundTripTests: XCTestCase {
     func testLevelUndoesAKnownRotation() throws {
         let source = Self.building()
         var worst = 0.0
-        for x in [-10.0, -6.0, 6.0] {
+        for x in [-11.0, -6.0, 6.0] {
             var state = EditState(); state.straightenAngle = x
             let outcome = try solved(try Self.rendered(state, from: source), .level)
             guard case .solved(let c) = outcome else { return XCTFail("rotation \(x): \(outcome)") }
@@ -118,7 +118,7 @@ final class UprightRoundTripTests: XCTestCase {
             case .solved(let residual):
                 XCTAssertLessThan(abs(residual.straightenAngle), 0.6, "\(rotation)/\(keystone)")
                 XCTAssertLessThan(abs(residual.verticalPerspective ?? 9), 0.1, "\(rotation)/\(keystone)")
-            case .noLines, .unmeasurable: XCTFail("\(rotation)/\(keystone): re-measure found no lines")
+            case .noLines, .unmeasurable, .noAgreement, .tiltTooLarge: XCTFail("\(rotation)/\(keystone): re-measure found no lines")
             }
         }
     }

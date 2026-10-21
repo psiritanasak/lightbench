@@ -136,7 +136,7 @@ final class UprightSolverTests: XCTestCase {
     }
 
     func testLevelRefusesAConsensusBeyondTheCap() {
-        XCTAssertEqual(UprightSolver.solve(horizontal([20.0, 20.1, 19.9]), mode: .level), .noLines)
+        XCTAssertEqual(UprightSolver.solve(horizontal([20.0, 20.1, 19.9]), mode: .level), .tiltTooLarge)
         XCTAssertNotEqual(UprightSolver.solve(horizontal([11.0, 11.1, 10.9]), mode: .level), .noLines)
     }
 
@@ -147,6 +147,87 @@ final class UprightSolverTests: XCTestCase {
     func testLevelBelowTheThresholdIsAlreadyUpright() {
         XCTAssertEqual(UprightSolver.solve(horizontal([0.1, 0.05]), mode: .level), .alreadyUpright)
         XCTAssertEqual(UprightSolver.solve(horizontal([]), mode: .level), .noLines)
+    }
+
+    func testACappedHorizontalFamilyFallsBackToParallelVerticals() throws {
+        let hor = horizontal([20.0, 20.1, 19.9]).horizontal
+        let ver = [0.0, 60].map { UprightLineDetector.Line(theta: 0.02, rho: $0, span: 400, votes: 400) }
+        let lines = UprightLineDetector.Lines(width: width, height: height, vertical: ver, horizontal: hor)
+        let c = try XCTUnwrap(correction(UprightSolver.solve(lines, mode: .level)))
+        XCTAssertEqual(c.straightenAngle, 1.1, accuracy: 0.0001) // the verticals' 0.02 rad clockwise lean
+    }
+
+    // MARK: Vertical consensus
+
+    private func lineAt(a: Double, thetaDegrees: Double, span: Double = 400) -> UprightLineDetector.Line {
+        let t = thetaDegrees * .pi / 180
+        return UprightLineDetector.Line(theta: t, rho: a * cos(t), span: span, votes: 500)
+    }
+
+    func testTwoLinesWithClashingConvergenceAreRefused() {
+        // A building edge and a lamp post 12 degrees off, 120 px apart: the pair diverges upward with k about 2.85
+        // (beyond the slider's 2), with no second opinion to confirm it.
+        XCTAssertEqual(UprightSolver.solve(vertical([lineAt(a: -60, thetaDegrees: 0), lineAt(a: 60, thetaDegrees: 12)]), mode: .vertical), .noAgreement)
+        // Four agreeing lines may ask for the clamped maximum; two may not.
+        XCTAssertEqual(correction(UprightSolver.solve(converging(xv: 0, yv: 500), mode: .vertical))?.verticalPerspective, -1)
+    }
+
+    func testFourLinesWithNoCommonVanishingPointAreRefused() {
+        let lines = [lineAt(a: -150, thetaDegrees: 0), lineAt(a: -50, thetaDegrees: 25), lineAt(a: 50, thetaDegrees: -20), lineAt(a: 150, thetaDegrees: 10)]
+        XCTAssertEqual(UprightSolver.solve(vertical(lines), mode: .vertical), .noAgreement)
+    }
+
+    func testTwoAgreeingLinesAmongTwoDisagreeingOnesAreRefused() {
+        // Pairs (A,B) and (C,D) are each plausible on their own but disagree with each other: the winning pair carries
+        // 50% of the length, not the more than two thirds a pair needs.
+        let lines = [lineAt(a: -150, thetaDegrees: 0), lineAt(a: -50, thetaDegrees: 2), lineAt(a: 50, thetaDegrees: -2), lineAt(a: 150, thetaDegrees: 0.5)]
+        XCTAssertEqual(UprightSolver.solve(vertical(lines), mode: .vertical), .noAgreement)
+    }
+
+    func testThreeAgreeingLinesUnderHalfTheFamilyLengthAreRefused() {
+        let agreeing = converging(xv: 0, yv: 1500, offsets: [-250, 50, 250]).vertical.map {
+            UprightLineDetector.Line(theta: $0.theta, rho: $0.rho, span: 100, votes: 100)
+        }
+        let scattered = zip([-300.0, -200, -100, 0, 100, 200, 300], [-20.0, -12, -4, 6, 13, 22, 28]).map { lineAt(a: $0, thetaDegrees: $1, span: 90) }
+        XCTAssertEqual(UprightSolver.solve(vertical(agreeing + scattered), mode: .vertical), .noAgreement)
+        // Without the clutter the same three lines solve.
+        XCTAssertNotNil(correction(UprightSolver.solve(vertical(agreeing), mode: .vertical)))
+    }
+
+    func testAHeavyClashingPairThatCrossesInsideTheFrameIsUnmeasurable() {
+        // Three agreeing short lines against two heavy clashing ones (+-25 degrees, 200 px apart): the heavy pair wins
+        // (about 87% of the length) but its lines cross inside the frame, so nothing can be measured.
+        let agreeing = converging(xv: 0, yv: 1500, offsets: [-200, 0, 200]).vertical.map {
+            UprightLineDetector.Line(theta: $0.theta, rho: $0.rho, span: 100, votes: 100)
+        }
+        let clashing = [lineAt(a: -100, thetaDegrees: 25, span: 1000), lineAt(a: 100, thetaDegrees: -25, span: 1000)]
+        XCTAssertEqual(UprightSolver.solve(vertical(agreeing + clashing), mode: .vertical), .unmeasurable)
+    }
+
+    func testALegitimateTwoLineFamilyStillSolves() throws {
+        // k = (1500 - 240) / (1500 + 240) is inside [0.5, 2].
+        let c = try XCTUnwrap(correction(UprightSolver.solve(converging(xv: 0, yv: 1500, offsets: [-150, 150]), mode: .vertical)))
+        XCTAssertLessThan(c.verticalPerspective ?? 9, -0.4)
+    }
+
+    func testADominantPairPlusAShortThirdLineStillSolves() throws {
+        let pair = converging(xv: 0, yv: 1500, offsets: [-150, 150]).vertical
+        let shortLine = lineAt(a: 20, thetaDegrees: 20, span: 100) // about 11% of the family's length, clashing
+        let c = try XCTUnwrap(correction(UprightSolver.solve(vertical(pair + [shortLine]), mode: .vertical)))
+        XCTAssertLessThan(c.verticalPerspective ?? 9, -0.4)
+    }
+
+    func testAPairNeedsMoreThanTwoThirdsOfTheLength() {
+        // The same pair (800) against a clashing line carrying 40% of the total (533): the pair has 60%, refused.
+        let pair = converging(xv: 0, yv: 1500, offsets: [-150, 150]).vertical
+        let heavy = lineAt(a: 20, thetaDegrees: 20, span: 533)
+        XCTAssertEqual(UprightSolver.solve(vertical(pair + [heavy]), mode: .vertical), .noAgreement)
+    }
+
+    func testRefusalMessagesNameTheirRealReasons() {
+        XCTAssertNotEqual(UprightMessages.noAgreement, UprightMessages.unmeasurable)
+        XCTAssertTrue(UprightMessages.noAgreement.contains("do not agree"))
+        XCTAssertTrue(UprightMessages.unmeasurable.contains("too close together or cross"))
     }
 
     // MARK: Vertical outliers

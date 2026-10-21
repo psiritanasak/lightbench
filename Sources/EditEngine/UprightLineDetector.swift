@@ -18,8 +18,8 @@ enum UprightLineDetector {
         /// Normal angle, radians (see the type's comment).
         let theta: Double
         let rho: Double
-        /// Length in pixels the supporting edge pixels actually cover (runs with gaps of at most `maxGapFraction` of the
-        /// axis; scattered pixels or a dashed line cover far less than their end-to-end distance).
+        /// Length in pixels the supporting edge pixels actually cover (solid runs, see `coverage`; scattered pixels or a
+        /// dashed line cover far less than their end-to-end distance).
         let span: Double
         /// Number of supporting edge pixels.
         let votes: Int
@@ -45,7 +45,7 @@ enum UprightLineDetector {
     /// lines, width for horizontal ones).
     static let minLengthFraction = 0.12
     /// Pixels along a line more than this fraction of the axis apart do not count as one continuous stretch.
-    static let maxGapFraction = 0.03
+    static let maxGapFraction = 0.01
     /// At least this fraction of the 1 px steps between a line's two ends must hold an edge pixel.
     static let minFill = 0.6
     /// At most this many lines per family.
@@ -141,8 +141,10 @@ enum UprightLineDetector {
         }
 
         var accumulator = [Int32](repeating: 0, count: binCount * rhoBins)
+        var voted = [Bool](repeating: false, count: edges.count)
         for i in 0..<edges.count {
             guard let range = voteRange(i) else { continue }
+            voted[i] = true
             for j in range { accumulator[j * rhoBins + rhoIndex(i, j)] += 1 }
         }
         var used = [Bool](repeating: false, count: edges.count)
@@ -167,7 +169,8 @@ enum UprightLineDetector {
             // from the line) even while the starting line is a quarter degree off: a band that cuts the flank
             // asymmetrically along the line tilts the fit.
             // `inliers` is always the set the CURRENT theta/rho were fitted from (a failed later pass keeps the last
-            // successful one).
+            // successful one). That fallback has no dedicated test: a later pass starts from a line just fitted to at
+            // least 8 pixels with the same band, so it cannot be made to drop below 8 with a drawn image.
             var inliers: [Int] = []
             for (band, angleTolerance) in [(3.4, 6.0), (3.4, 8.0), (3.4, 8.0)] {
                 let candidates = supportingPixels(
@@ -181,44 +184,56 @@ enum UprightLineDetector {
             accumulator[bestIndex] = 0
             guard !inliers.isEmpty else { continue }
 
-            let (covered, occupied, extent) = coverage(
+            let (covered, longest) = coverage(
                 edges: edges, inliers: inliers, theta: theta, maxGap: maxGapFraction * axisLength)
-            for i in inliers {
-                used[i] = true
+            let accepted = Int32(inliers.count) >= minVotes && longest >= minSpan
+                && abs(theta - axisAngle) <= window + step
+            // A refused candidate only takes its own votes back (so the same fragment is not picked again); its
+            // pixels stay available, so a valid segment that shares them can still be found.
+            for i in inliers where voted[i] {
+                voted[i] = false
                 if let range = voteRange(i) {
                     for j in range { accumulator[j * rhoBins + rhoIndex(i, j)] -= 1 }
                 }
             }
-            // The pixels of a refused candidate are gone too, so the same fragment cannot win again.
-            guard Int32(inliers.count) >= minVotes, covered >= minSpan,
-                  Double(occupied) >= minFill * extent, abs(theta - axisAngle) <= window + step else { continue }
+            guard accepted else { continue }
+            for i in inliers { used[i] = true }
             let duplicate = lines.contains { abs($0.theta - theta) < 1.5 * .pi / 180 && abs($0.rho - rho) < 4 }
             if !duplicate { lines.append(Line(theta: theta, rho: rho, span: covered, votes: inliers.count)) }
         }
         return lines
     }
 
-    /// Length of the line actually covered by edge pixels: the pixels' positions along the line, sorted, grouped into
-    /// runs wherever consecutive ones are at most `maxGap` apart, and the runs' extents summed. Scattered pixels or a
-    /// dashed line with big gaps cover far less than their end-to-end distance.
-    /// Also returns how many 1 px steps along the line hold at least one pixel: a real edge fills nearly all of them between
-    /// its two ends, a bundle of short oriented strokes that happen to align fills only a fraction.
-    private static func coverage(edges: Edges, inliers: [Int], theta: Double, maxGap: Double) -> (covered: Double, occupied: Int, extent: Double) {
+    /// How much of the line is really there. The pixels' positions along it are sorted and cut into runs wherever
+    /// consecutive ones are more than `maxGap` apart; a run is SOLID when it holds an edge pixel in at least
+    /// `minFill` of its 1 px steps (so a bundle of short oriented strokes that happen to align is not solid, a real
+    /// edge is). `covered` is the summed extent of the solid runs (what `Line.span` reports: stray far pixels and
+    /// occlusion gaps neither count nor count against a line) and `longest` the longest solid run (a line needs one
+    /// continuous stretch of at least the minimum length, not many tiny ones).
+    private static func coverage(edges: Edges, inliers: [Int], theta: Double, maxGap: Double) -> (covered: Double, longest: Double) {
         let dx = -sin(theta), dy = cos(theta)
         let along = inliers.map { Double(edges.x[$0]) * dx + Double(edges.y[$0]) * dy }.sorted()
-        guard var runStart = along.first, let last = along.last else { return (0, 0, 0) }
-        let extent = last - runStart
-        var previous = runStart
-        var total = 0.0
-        let occupied = Set(along.map { Int($0.rounded(.down)) }).count
+        guard let first = along.first else { return (0, 0) }
+        var covered = 0.0, longest = 0.0
+        var runStart = first, previous = first
+        var bins = Set<Int>([Int(first.rounded(.down))])
+        func close() {
+            let extent = previous - runStart
+            guard Double(bins.count) >= minFill * (extent + 1) else { return }
+            covered += extent
+            longest = max(longest, extent)
+        }
         for value in along.dropFirst() {
             if value - previous > maxGap {
-                total += previous - runStart
+                close()
                 runStart = value
+                bins = []
             }
+            bins.insert(Int(value.rounded(.down)))
             previous = value
         }
-        return (total + previous - runStart, occupied, extent)
+        close()
+        return (covered, longest)
     }
 
     private static func supportingPixels(

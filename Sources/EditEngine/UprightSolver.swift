@@ -40,6 +40,10 @@ enum UprightSolver {
         case noLines
         /// Lines were found but cannot be measured: bunched too close together, or crossing inside the frame.
         case unmeasurable
+        /// Lines were found, but they do not agree on one vanishing point (or two alone claim an implausible one).
+        case noAgreement
+        /// A family agreed on a tilt beyond `maxLevelDegrees`: larger than any camera tilt, so nothing is changed.
+        case tiltTooLarge
     }
 
     /// Below this many degrees a rotation is not worth offering.
@@ -54,6 +58,10 @@ enum UprightSolver {
     static let maxLevelDegrees = 12.0
     /// A line agrees with a vanishing-point model when its slope (dx/dy) is within this of the model's (about 0.7 degrees).
     static let inlierTolerance = 0.012
+    /// The vertical model's inliers must carry at least this fraction of the family's total length.
+    static let minVerticalConsensus = 0.5
+    /// A winning pair (exactly 2 lines) must carry MORE than this fraction of the family's length.
+    static let minPairConsensus = 2.0 / 3.0
     /// Vertical needs at least this many lines.
     static let minVerticalLines = 2
     /// The lines' centre-row positions must spread over at least this fraction of the width, or the convergence is
@@ -85,8 +93,14 @@ enum UprightSolver {
     /// and then only if its lines are parallel (consensus), so converging building edges never level the photo. A
     /// tilt beyond `maxLevelDegrees` is not believed: a hillside or a road is not a horizon.
     private static func solveLevel(_ lines: UprightLineDetector.Lines) -> Outcome {
-        guard let tilt = consensusTilt(lines.horizontal) ?? consensusTilt(lines.vertical),
-              abs(tilt) <= maxLevelDegrees else { return .noLines }
+        var tooLarge = false
+        var chosen: Double?
+        for family in [lines.horizontal, lines.vertical] { // the cap applies per family, before falling back
+            guard let tilt = consensusTilt(family) else { continue }
+            if abs(tilt) <= maxLevelDegrees { chosen = tilt; break }
+            tooLarge = true
+        }
+        guard let tilt = chosen else { return tooLarge ? .tiltTooLarge : .noLines }
         let angle = -tilt // the correction undoes the lines' counter-clockwise tilt
         guard abs(angle) >= levelThresholdDegrees else { return .alreadyUpright }
         return .solved(Correction(straightenAngle: roundedAngle(angle), verticalPerspective: nil))
@@ -131,9 +145,19 @@ enum UprightSolver {
                 if weight > (best?.weight ?? 0) { best = (weight, inliers) }
             }
         }
-        guard let chosen = best?.inliers, chosen.count >= minVerticalLines, let model = fit(chosen) else { return .unmeasurable }
-        let positions = chosen.map(\.a)
-        guard (positions.max() ?? 0) - (positions.min() ?? 0) >= minSpread else { return .unmeasurable }
+        // (`best` always holds the winning pair, so the inliers are at least 2 and spread at least `minSpread`.)
+        guard let chosen = best?.inliers, let model = fit(chosen) else { return .unmeasurable } // no well-separated pair
+        // Consensus, one rule for any family size: a two-line model always fits its own pair exactly, so agreement
+        // must come from the rest of the family. With 3 or more winning lines they carry at least half of the family's
+        // length; with exactly 2 the pair must carry clearly more than two thirds of it (a family of exactly 2 trivially
+        // does) and, below, a believable convergence (k within the slider's range).
+        let inlierWeight = chosen.reduce(0) { $0 + $1.w }
+        let familyWeight = samples.reduce(0) { $0 + $1.w }
+        if chosen.count >= 3 {
+            guard inlierWeight >= minVerticalConsensus * familyWeight else { return .noAgreement }
+        } else {
+            guard inlierWeight > minPairConsensus * familyWeight else { return .noAgreement }
+        }
         let c1 = model.c1, c0 = model.c0
 
         // 1. The rotation that puts the vanishing point straight above (or below) the centre: the tilt of the line
@@ -146,6 +170,9 @@ enum UprightSolver {
         let ratio = halfHeight * inverseDistance
         guard abs(ratio) < 1 else { return .unmeasurable } // the lines cross inside the frame: not a building shot
         let k = (1 - ratio) / (1 + ratio)
+        // Two lines alone cannot confirm a strong convergence (a building edge and a leaning lamp post would): beyond
+        // the slider's range only an agreeing family of 3 or more may ask for the clamped maximum.
+        guard chosen.count >= 3 || (k >= 0.5 && k <= 2) else { return .noAgreement }
         let clampedK = min(max(k, 0.5), 2)
         let vertical = clampedK < 1 ? -2 * (1 - clampedK) : 2 * (1 - 1 / clampedK)
 
@@ -179,7 +206,9 @@ enum UprightSolver {
 /// User-facing wording for Upright outcomes that change nothing.
 enum UprightMessages {
     static let noLines = "No clear straight lines were found in this photo. Use the Straighten and Vertical sliders instead."
+    static let tiltTooLarge = "The detected tilt is larger than a camera tilt, so nothing was changed."
     static let noLevelLines = "No clear horizontal lines were found in this photo. Use the Straighten slider instead."
+    static let noAgreement = "The lines found do not agree on one direction, so no vertical correction was made. Use the Vertical slider instead."
     static let unmeasurable = "Lines were found, but they are too close together or cross inside the picture to measure a correction. Use the Vertical slider instead."
     static let alreadyUpright = "This photo already looks upright."
     static let alreadyApplied = "Upright is already applied."

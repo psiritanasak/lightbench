@@ -157,6 +157,45 @@ final class UprightLineDetectorTests: XCTestCase {
         XCTAssertTrue(pair.vertical.isEmpty)
     }
 
+    func testAFortyPercentLinePlusAFarCollinearSpeckIsStillFound() {
+        // 192 px of a 480 px frame (40%) and, 100 px beyond its end, a 6 px collinear speck.
+        let found = UprightLineDetector.detect(in: Self.draw([
+            Truth(thetaDegrees: 1, rho: 20, alongRange: -96...96), Truth(thetaDegrees: 1, rho: 20, alongRange: 196...202)]))
+        XCTAssertEqual(found.vertical.count, 1)
+        XCTAssertEqual(found.vertical.first?.theta ?? 9, 1 * .pi / 180, accuracy: 0.002)
+        XCTAssertEqual(found.vertical.first?.span ?? 0, 192, accuracy: 15)
+    }
+
+    func testALineWithAFortyFivePercentOcclusionIsOneLineCoveringTheTwoVisibleRuns() {
+        // Visible 0...132 and 348...480 of 480 (a 216 px gap): both runs are over the 12% minimum, so it is ONE line
+        // whose span is the visible part (~264 px), not the end-to-end 480.
+        let found = UprightLineDetector.detect(in: Self.draw([
+            Truth(thetaDegrees: -1.5, rho: -40, alongRange: -240...(-108)), Truth(thetaDegrees: -1.5, rho: -40, alongRange: 108...240)]))
+        XCTAssertEqual(found.vertical.count, 1)
+        XCTAssertEqual(found.vertical.first?.span ?? 0, 264, accuracy: 20)
+    }
+
+    private func dashes(segment: Double, gap: Double) -> [Truth] {
+        var truths: [Truth] = []
+        var start = -240.0
+        while start < 240 {
+            truths.append(Truth(thetaDegrees: 1, rho: 10, alongRange: start...(start + segment)))
+            start += segment + gap
+        }
+        return truths
+    }
+
+    func testAWindowColumnInterruptedByFloorGapsIsOneLine() {
+        // 90 px runs with 8 px gaps (a facade column cut by floor bars at this proxy size): measured, gaps up to 16 px
+        // keep it one line (each run is over the minimum length; the Sobel flank also bridges ~4 px).
+        let found = UprightLineDetector.detect(in: Self.draw(dashes(segment: 90, gap: 8)))
+        XCTAssertEqual(found.vertical.count, 1)
+    }
+
+    func testADashedRoadMarkingIsRejected() {
+        XCTAssertTrue(UprightLineDetector.detect(in: Self.draw(dashes(segment: 30, gap: 30))).vertical.isEmpty)
+    }
+
     func testScatteredCollinearDotsAreRejected() {
         // 20 isolated dots along a vertical line 24 px apart: collinear, but nothing continuous.
         let dots = image { x, y in (abs(x - 320) <= 1 && abs(y % 24 - 12) <= 1) ? 1 : 0.2 }

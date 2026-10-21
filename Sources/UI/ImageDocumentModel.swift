@@ -1136,7 +1136,7 @@ final class ImageDocumentModel: ObservableObject {
     /// `autoTone()`. Returns the work for tests; the UI ignores it.
     @discardableResult
     func autoStraighten() -> Task<Void, Never>? {
-        guard !isAutoStraightening else { return nil }
+        guard !isAutoStraightening, !isAutoUprighting else { return nil }
         guard let currentImage, !isLoadInFlight else {
             straightenMessage = "Wait for the photo to finish loading, then try again."
             return nil
@@ -1493,7 +1493,7 @@ final class ImageDocumentModel: ObservableObject {
     /// `autoTone()`: single-flight, `analysisGeneration` and `isLoadInFlight` staleness. Returns the work for tests.
     @discardableResult
     func autoUpright(_ mode: UprightMode) -> Task<Void, Never>? {
-        guard !isAutoUprighting else { return nil }
+        guard !isAutoUprighting, !isAutoStraightening else { return nil }
         guard let currentImage, !isLoadInFlight else {
             uprightMessage = "Wait for the photo to finish loading, then try again."
             return nil
@@ -1525,6 +1525,12 @@ final class ImageDocumentModel: ObservableObject {
                 return
             case .unmeasurable:
                 self.uprightMessage = UprightMessages.unmeasurable
+                return
+            case .noAgreement:
+                self.uprightMessage = UprightMessages.noAgreement
+                return
+            case .tiltTooLarge:
+                self.uprightMessage = UprightMessages.tiltTooLarge
                 return
             case .alreadyUpright:
                 break // measured on the uncorrected source: the sliders it controls belong at 0

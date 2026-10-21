@@ -251,6 +251,57 @@ final class UprightModelTests: XCTestCase {
         XCTAssertEqual(model.historyEntries.count, entries)
     }
 
+    func testEachRefusalShowsItsOwnMessage() async throws {
+        let model = try await makeModel()
+        func lines(_ specs: [(Double, Double)]) -> UprightLineDetector.Lines {
+            let v = specs.map { spec -> UprightLineDetector.Line in
+                let t = spec.1 * .pi / 180
+                return UprightLineDetector.Line(theta: t, rho: spec.0 * cos(t), span: 30, votes: 100)
+            }
+            return UprightLineDetector.Lines(width: 48, height: 32, vertical: v, horizontal: [])
+        }
+        let detector = gated(model, .lines(lines([(-15, 0), (-5, 25), (5, -20), (15, 10)]))) // no common vanishing point
+        var work = try XCTUnwrap(model.autoUpright(.vertical))
+        detector.release()
+        await work.value
+        XCTAssertEqual(model.uprightMessage, UprightMessages.noAgreement)
+        detector.result = .lines(lines([(0, 0), (2, 0)])) // bunched: too close to measure
+        work = try XCTUnwrap(model.autoUpright(.vertical))
+        detector.release()
+        await work.value
+        XCTAssertEqual(model.uprightMessage, UprightMessages.unmeasurable)
+    }
+
+    // MARK: Mutual exclusion with Auto Straighten
+
+    private final class GatedHorizon: @unchecked Sendable {
+        private let gate = DispatchSemaphore(value: 0)
+        func detect(_ image: CIImage) -> HorizonDetector.Result { gate.wait(); return .angle(0) }
+        func release() { gate.signal() }
+    }
+
+    func testUprightRefusesWhileAutoStraightenRuns() async throws {
+        let model = try await makeModel()
+        let horizon = GatedHorizon()
+        model.horizonDetector = { horizon.detect($0) }
+        let auto = try XCTUnwrap(model.autoStraighten())
+        XCTAssertNil(model.autoUpright(.level), "Upright must not start while Auto Straighten is measuring")
+        horizon.release()
+        await auto.value
+        model.uprightDetector = { _ in .failed("stub") }
+        let again = try XCTUnwrap(model.autoUpright(.level), "and is available again afterwards")
+        await again.value
+    }
+
+    func testAutoStraightenRefusesWhileUprightRuns() async throws {
+        let model = try await makeModel()
+        let detector = gated(model, .lines(Self.levelLines(ccwTilt: 4)))
+        let upright = try XCTUnwrap(model.autoUpright(.level))
+        XCTAssertNil(model.autoStraighten(), "Auto Straighten must not start while Upright is measuring")
+        detector.release()
+        await upright.value
+    }
+
     // MARK: Real detector, end to end
 
     /// A distorted building with flip and Stretch already set still solves from the SOURCE, not the flipped picture.

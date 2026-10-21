@@ -185,6 +185,14 @@ final class ImageDocumentModel: ObservableObject {
     /// here.
     private var analysisGeneration = 0
 
+    /// Shown by the Crop tab's own alert: Upright outcomes that changed nothing (no lines, already upright, failure).
+    @Published var uprightMessage: String?
+    /// The Upright mode being measured right now (nil when idle): the pressed button shows its progress label.
+    @Published private(set) var runningUprightMode: UprightMode?
+    var isAutoUprighting: Bool { runningUprightMode != nil }
+    /// Test seam: the Upright line detector, run off the main actor on the photo's UNEDITED, oriented source image.
+    var uprightDetector: @Sendable (CIImage) -> UprightDetector.Result = { UprightDetector.detect(in: $0) }
+
     // MARK: - Undo/Redo state
 
     private var history = EditHistory()
@@ -1142,7 +1150,7 @@ final class ImageDocumentModel: ObservableObject {
     /// `autoTone()`. Returns the work for tests; the UI ignores it.
     @discardableResult
     func autoStraighten() -> Task<Void, Never>? {
-        guard !isAutoStraightening else { return nil }
+        guard !isAutoStraightening, !isAutoUprighting else { return nil }
         guard let currentImage, !isLoadInFlight else {
             straightenMessage = "Wait for the photo to finish loading, then try again."
             return nil
@@ -1490,6 +1498,77 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    // MARK: - Upright
+
+    /// Detects line families on the UNEDITED source (`currentImage`, no edit geometry: Straighten and Perspective
+    /// would change the very tilt and convergence being measured, and a repeat press must not double the
+    /// correction) and applies the solved Straighten (and, for `.vertical`, Vertical / Horizontal perspective = 0)
+    /// onto the CURRENT edit state as ONE undo step ("Upright Level" / "Upright Vertical"). Same guards as
+    /// `autoTone()`: single-flight, `analysisGeneration` and `isLoadInFlight` staleness. Returns the work for tests.
+    @discardableResult
+    func autoUpright(_ mode: UprightMode) -> Task<Void, Never>? {
+        guard !isAutoUprighting, !isAutoStraightening else { return nil }
+        guard let currentImage, !isLoadInFlight else {
+            uprightMessage = "Wait for the photo to finish loading, then try again."
+            return nil
+        }
+        runningUprightMode = mode
+        let detector = uprightDetector
+        let myGeneration = analysisGeneration
+        return Task { @MainActor [weak self] in
+            let detection = await Task.detached(priority: .userInitiated) { () -> UprightDetector.Result in
+                detector(currentImage)
+            }.value
+            guard let self else { return }
+            self.runningUprightMode = nil
+            guard self.analysisGeneration == myGeneration, !self.isLoadInFlight else { return }
+            let lines: UprightLineDetector.Lines
+            switch detection {
+            case .failed(let reason):
+                self.uprightMessage = reason
+                return
+            case .lines(let found):
+                lines = found
+            }
+            var straighten = 0.0
+            var wasSolved = false
+            var vertical: Double? = mode == .vertical ? 0 : nil
+            switch UprightSolver.solve(lines, mode: mode) {
+            case .noLines:
+                self.uprightMessage = mode == .level ? UprightMessages.noLevelLines : UprightMessages.noLines
+                return
+            case .unmeasurable:
+                self.uprightMessage = UprightMessages.unmeasurable
+                return
+            case .noAgreement:
+                self.uprightMessage = UprightMessages.noAgreement
+                return
+            case .tiltTooLarge:
+                self.uprightMessage = UprightMessages.tiltTooLarge
+                return
+            case .alreadyUpright:
+                break // measured on the uncorrected source: the sliders it controls belong at 0
+            case .solved(let correction):
+                wasSolved = true
+                straighten = correction.straightenAngle
+                if mode == .vertical { vertical = correction.verticalPerspective ?? 0 }
+            }
+            self.finalizePendingCommit()
+            var next = self.editState
+            next.straightenAngle = straighten
+            if let vertical {
+                next.verticalPerspective = vertical
+                next.horizontalPerspective = 0
+            }
+            guard next != self.editState else {
+                self.uprightMessage = wasSolved ? UprightMessages.alreadyApplied : UprightMessages.alreadyUpright
+                return
+            }
+            self.history.commit(next, summary: mode.historyLabel)
+            self.applyHistoryState(self.history.current)
+        }
+    }
+
     // MARK: - Undo/Redo
 
     /// Called from `editState`'s `didSet` for every write that ISN'T an
@@ -1578,6 +1657,7 @@ final class ImageDocumentModel: ObservableObject {
         retouchMessage = nil // likewise a late "no good source"
         straightenMessage = nil // and a late "no horizon found"
         skinProtectionMessage = nil // and a late "no people found"
+        uprightMessage = nil // and a late "no lines found"
     }
 
     /// Undoes the most recent undo step. First flushes any in-progress burst

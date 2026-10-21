@@ -135,7 +135,9 @@ final class EmptyStatesTests: XCTestCase {
     func testAFolderCollectionGetsFolderAdviceNotAddToCollectionAdvice() throws {
         let views = try source("Sources/UI/EmptyStates.swift")
         XCTAssertTrue(views.contains("No photos directly in this folder"))
-        XCTAssertTrue(try source("Sources/UI/LibraryGridView.swift").contains("LibraryEmptyCollectionView(isFolder: Self.isFolderCollection(catalog))"))
+        XCTAssertTrue(views.contains("No photos in this folder or its subfolders"), "a folder that has subfolders shown is empty all the way down")
+        XCTAssertTrue(try source("Sources/UI/LibraryGridView.swift").contains(
+            "subfolderSettingOn: catalog.showPhotosInSubfolders"))
     }
 
     func testTheOpenFailureScreenIsWiredIntoTheGridAndTheModel() throws {

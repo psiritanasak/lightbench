@@ -203,4 +203,78 @@ final class ColorWheelGeometryTests: XCTestCase {
             XCTAssertEqual(actualFraction, expectedFraction, accuracy: 1e-6, "hue \(hue)")
         }
     }
+
+    // MARK: - Keyboard / VoiceOver stepping (D20)
+
+    func testSteppedHueWrapsAtPlusMinus180() {
+        let up = ColorWheelGeometry.stepped(hue: 175, saturation: 0.5, hueDelta: 10)
+        XCTAssertEqual(up.hue, -175, accuracy: 1e-9)
+        let down = ColorWheelGeometry.stepped(hue: -175, saturation: 0.5, hueDelta: -10)
+        XCTAssertEqual(down.hue, 175, accuracy: 1e-9)
+        // -180 and +180 are one direction; the range is (-180, 180], so it reads 180.
+        XCTAssertEqual(ColorWheelGeometry.stepped(hue: 170, saturation: 0.5, hueDelta: 10).hue, 180, accuracy: 1e-9)
+        XCTAssertEqual(ColorWheelGeometry.stepped(hue: -170, saturation: 0.5, hueDelta: -10).hue, 180, accuracy: 1e-9)
+        XCTAssertEqual(ColorWheelGeometry.wrappedHue(540), 180, accuracy: 1e-9)
+        XCTAssertEqual(ColorWheelGeometry.wrappedHue(-540), 180, accuracy: 1e-9)
+    }
+
+    func testSteppedSaturationClampsToZeroAndOne() {
+        XCTAssertEqual(ColorWheelGeometry.stepped(hue: 30, saturation: 0.98, saturationDelta: 0.05).saturation, 1)
+        XCTAssertEqual(ColorWheelGeometry.stepped(hue: 30, saturation: 0.02, saturationDelta: -0.05).saturation, 0)
+        XCTAssertEqual(ColorWheelGeometry.stepped(hue: 30, saturation: 1, saturationDelta: 0.05).hue, 30)
+    }
+
+    func testSteppedSaturationReachingZeroForcesHueToExactlyZero() {
+        let result = ColorWheelGeometry.stepped(hue: 137, saturation: 0.05, saturationDelta: -0.05)
+        XCTAssertEqual(result.saturation, 0)
+        XCTAssertEqual(result.hue, 0, "identity rule: Hue must be exactly 0 at Saturation 0")
+        // Float residue from repeated steps must not leave a tiny non-zero Saturation (0.15 - 3 * 0.05 != 0 exactly).
+        var state: (hue: Double, saturation: Double) = (-90, 0.15)
+        for _ in 0..<3 { state = ColorWheelGeometry.stepped(hue: state.hue, saturation: state.saturation, saturationDelta: -0.05) }
+        XCTAssertEqual(state.saturation, 0)
+        XCTAssertEqual(state.hue, 0)
+        // A Hue step on an identity wheel stays identity.
+        let idle = ColorWheelGeometry.stepped(hue: 0, saturation: 0, hueDelta: 10)
+        XCTAssertEqual(idle.hue, 0)
+        XCTAssertEqual(idle.saturation, 0)
+    }
+
+    func testSteppedRepeatedHueStepsReturnToTheStartAfterAFullTurn() {
+        var state: (hue: Double, saturation: Double) = (40, 0.6)
+        for _ in 0..<36 {
+            state = ColorWheelGeometry.stepped(
+                hue: state.hue, saturation: state.saturation, hueDelta: ColorWheelGeometry.hueStepDegrees
+            )
+            XCTAssertGreaterThan(state.hue, -180)
+            XCTAssertLessThanOrEqual(state.hue, 180)
+        }
+        XCTAssertEqual(state.hue, 40, accuracy: 1e-9)
+        XCTAssertEqual(state.saturation, 0.6, accuracy: 1e-12)
+    }
+
+    func testSteppedUpThenDownRoundTrips() {
+        let up = ColorWheelGeometry.stepped(hue: 25, saturation: 0.4, hueDelta: 10, saturationDelta: 0.05)
+        let back = ColorWheelGeometry.stepped(hue: up.hue, saturation: up.saturation, hueDelta: -10, saturationDelta: -0.05)
+        XCTAssertEqual(back.hue, 25, accuracy: 1e-9)
+        XCTAssertEqual(back.saturation, 0.4, accuracy: 1e-9)
+    }
+
+    func testSteppedNonFiniteInputFallsBackToIdentity() {
+        XCTAssertEqual(ColorWheelGeometry.stepped(hue: .nan, saturation: 0.5, hueDelta: 10).hue, 0)
+        XCTAssertEqual(ColorWheelGeometry.stepped(hue: 10, saturation: .infinity).saturation, 0)
+    }
+
+    func testNoOpStepsReturnNil() {
+        XCTAssertNil(ColorWheelGeometry.steppedIfChanged(hue: 0, saturation: 0, hueDelta: 10))
+        XCTAssertNil(ColorWheelGeometry.steppedIfChanged(hue: 0, saturation: 0, saturationDelta: -0.05))
+        XCTAssertNil(ColorWheelGeometry.steppedIfChanged(hue: 30, saturation: 1, saturationDelta: 0.05))
+        let real = ColorWheelGeometry.steppedIfChanged(hue: 30, saturation: 0.5, hueDelta: 10)
+        XCTAssertEqual(real?.hue ?? 0, 40, accuracy: 1e-9)
+        XCTAssertNotNil(ColorWheelGeometry.steppedIfChanged(hue: 30, saturation: 0.05, saturationDelta: -0.05))
+    }
+
+    func testAccessibilityValueText() {
+        XCTAssertEqual(ColorWheelGeometry.accessibilityValue(hue: 137, saturation: 0.42), "Hue +137°, Saturation 42%")
+        XCTAssertEqual(ColorWheelGeometry.accessibilityValue(hue: -20, saturation: 0), "Hue -20°, Saturation 0%")
+    }
 }

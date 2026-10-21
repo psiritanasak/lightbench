@@ -8,19 +8,11 @@ rounds, live-verification detail, measured numbers) lives in
 When a slice ships, put a 2-4 line summary here and move older entries to the
 history file.
 
-## Current state (2026-10-14)
-- master is clean apart from the untracked `.Rhistory` (never stage it). Last
-  commits: `Open…` fix (0aa676e) + progress note (9a49e32). Full suite 2797 green.
-- The user's live pass (2026-10-14) confirmed: Color Grading Global wheel,
-  per-mask Whites/Blacks, Vignette Softness, B&W Mix, save/restore.
-- Bolivia `raw_files` access granted (camera data 1086 rows).
-- `Open…` is only in the Library toolbar; it now switches to the Editor before
-  loading. Finder / Dock / drag-and-drop opens shipped 2026-10-15 (feature A below), live check pending.
-- Recently shipped (2026-10-09..12, all in `docs/ROADMAP_HISTORY.md` /
-  `docs/PROGRESS_HISTORY.md`): Faces v1, Culling v1, Photo Merge (HDR + panorama),
-  Depth Range mask, field-based search, Smart Collections saving the query, B&W Mix,
-  Color Grading Blending/Balance/Global, Vignette Softness, per-mask Whites/Blacks,
-  minimal-look pass, editor tool rail, tab memory.
+## Current state (2026-10-20)
+- v1.0.0 is PUBLISHED: https://github.com/psiritanasak/lightbench (public, MIT) and release `v1.0.0` with the UNSIGNED zip + `docs/RELEASE_NOTES_1.0.0.md`. Commit author email was rewritten to the user's Gmail before publishing (a local branch `backup-before-email-rewrite` keeps the old history; never push it).
+- v1.1 work since the release (5 commits, NOT pushed yet — `git status` says ahead of origin): single-window fix (b448dc0), Copy Settings font (5a7fe78), Return-key check recorded (dcc0f23), release notes + MIT licence, and the Copy Photos into Library feature (275e490..6b8ea8b). Full suite 3200 green at the feature commit.
+- STILL OWED for a signed public v1: an Apple Developer account (Developer ID cert + notary profile; `scripts/release.sh` full flow has never run) and a test on a real clean Mac. The unsigned zip needs "Open Anyway".
+- Live checks done 2026-10-19 (see the two LIVE CHECK sections below): Move to Trash (Return does NOT confirm), backup/restore, Preferences, About, Shortcuts, Finder open (extra-window bug FIXED), Read XMP, Copy Photos on exFAT.
 
 ## UNATTENDED RUN (started 2026-10-14; plan: /Users/praween/.claude/plans/squishy-wandering-minsky.md) — order #4 XMP → #1 Whites → #2 D64 curve → #3 B&W extras → #5 Culling Compare/Survey → #6 robustness
 - **#4 XMP interop — SHIPPED in code (commits 84b0c84, 9b811ec, e5b14ed, 2ebff69 + docs), full suite 2871 green, NOT live-verified.** Photo ▸ Write / Read Metadata to XMP… (rating, reject, label, keywords; write only on request; merge keeps foreign tags), fill-defaults read after import, rename moves an owned `.xmp`. Reviewer: engine 3 rounds, UI/rename 5 rounds (the last blockers-only APPROVE); every fix mutation-checked. Limits: IMPROVEMENTS.md D65. MANUAL CHECKLIST: Write on 3 scratch photos incl. a CR2+JPG pair, open the `.xmp` text; hand-made `.xmp` with `crs:Exposure2012` keeps it after a write; Read on a fresh import restores values; Rename + Undo Rename move the `.xmp`; originals byte-identical.
@@ -67,6 +59,19 @@ Done: placeholder app icon (`Sources/App/Assets.xcassets`, `scripts/make_app_ico
 - ODD: once the Library window flipped to the Editor on `other_01.jpg` while the XMP dialog ran; cause not found.
 - NOT checked: Faces, HDR/panorama, Put Back in the Finder, cold-launch Dock drop, real drag-and-drop, RAW+JPG shared-xmp pair.
 
+## COPY PHOTOS INTO LIBRARY (v1.1 feature, 2026-10-19) — SHIPPED in code, committed, live-checked
+Plan: `/Users/praween/.claude/plans/serene-scribbling-mist.md`. Reviewer: 4 rounds (FIX FIRST x3 -> APPROVE), every fix mutation-checked; full suite 3200 green before the live pass. Live check: IMPROVEMENTS.md D72 item 16 (found and fixed the exFAT "Zero KB free" bug). NEXT: v1.1 release notes + unsigned zip + GitHub Release (nothing pushed yet for 1.1); Apple Developer account and a real clean Mac are still owed for a signed v1.
+Automation notes (for the next live pass): the user's REAL Lightbench has the same process name "PhotoApp" — rename the test copy's executable (CFBundleExecutable) so System Events cannot resolve to the wrong app; the Mac's input source is Thai (type via `setinput` ABC, restore Thai after); the Go-to field in the file panel opens with "/"; capture only the panel's own AX frame (the panel's screen position changes between launches).
+
+## D31/D32 LIVE CHECK (2026-10-20, Release build under a throwaway bundle id, RAM disk volume unmounted/remounted) — DONE, found + fixed D73
+Verified in a real sandbox: a chmod-000 photo opens to the plain "Couldn't open" alert with NO re-grant panel (D32); a folder with no saved bookmark gets the re-grant panel and works after granting; a volume absent at launch and mounted under the running app recovers SILENTLY on Editor-open (D31/D32). Found and fixed D73 (launch deleted unresolvable bookmarks, so an unplugged drive lost its grant) with off-main resolving and `ActivateKnownFoldersTests`; thumbnails now reload after a recovery. Reviewer: 2 rounds (FIX FIRST -> APPROVE), full suite 3211 green. Process notes: the Go-to field flips the input source back to Thai (re-run `setinput ABC` right before typing); capture a panel only after confirming `window "Open"` exists (a region capture of an absent panel shows whatever app is behind it); `open -a <app> <folder>` is refused while a panel is open.
+
+## MOVE MODE for Copy Photos (2026-10-20) — implemented, committed, LIVE-CHECKED (D72 item 19)
+Plan: `/Users/praween/.claude/plans/serene-scribbling-mist.md`. Copy → flush → verify (uncached read-back, original re-hashed) → originals (and verified companions) to the Trash via the injected mover; refuses sources already in the Library and a destination containing the source; open photo protected; confirmation dialog with no default button. Reviewer: 3 rounds (FIX FIRST x2 -> APPROVE), every guard mutation-checked, full suite 3254 green. Details and limits: IMPROVEMENTS.md D72 items 17-18. Live check done 2026-10-20 on an exFAT image: Move, shared-xmp pair, originals in the card's `.Trashes`, Cancel changes nothing; all copies and trashed originals byte-identical. Still worth ONE manual try by the user: Return on the nested confirmation (synthetic Return is unreliable in this app). NEXT: v1.1 release notes + release (deferred by the user), a real card/write-protect test, then the next feature.
+
+## PARALLEL BATCH (2026-10-20): Export HEIC+logo · Auto Straighten · Subfolders — merged into master, LIVE-CHECKED 2026-10-20
+Three agents built these in separate git worktrees (branches `worktree-agent-*`, still present as worktrees — remove with `git worktree remove` once happy); each was reviewed (opus) until APPROVE and merged with `--no-ff`. Details and limits: IMPROVEMENTS.md D74, CLAUDE.md bullets. Full suite on merged master: 3327 tests, 1 failure (a stale export-settings test that used "heic" as its example of an UNKNOWN format; fixed to "avif"), everything else green; the fixed class re-run: 44 tests, 0 failures. LIVE CHECK RESULTS (Release build, throwaway bundle id, scratch photos): AUTO STRAIGHTEN — a 5° CCW-tilted synthetic horizon measured -4.9° (sign confirmed in the real UI), a second press gave the 'already set' message, Undo returned to 0°, Flip Horizontal on gave -4.9° again (not doubled), the angle was saved to the sidecar. HEIC + LOGO EXPORT — HEIC is in the Format menu with the quality slider kept, the Text|Image switch and Choose Logo… (the .fileImporter inside the Export sheet works), one content-addressed logo file stored, 2 real .heic files (HEVC, sRGB, hasAlpha no; the tilted one 1580x1126 as straightened), logo bottom-right and semi-transparent on both, transparent corner flattened to black like JPEG. SUBFOLDERS — flag off: TripA count 2 and 2 photos; Preferences ▸ Library toggle on: grid 5 photos, count 5; persisted across relaunch; the folder context menu shows 'Show Photos in Subfolders' (clicking it was not driven: the menu closed). NOT checked: the Trash confirmation text with the flag on, HEIC at 200 MP, a real photo's horizon, Vision at ±12°. (Earlier plan text follows.) NEXT: live checks one feature at a time (user's go-ahead): export a HEIC + a logo-watermarked JPEG; Auto Straighten on a tilted scratch photo (press, undo, press twice, flip on); subfolders toggle on a nested scratch tree (counts, grid, Trash scope text, relaunch). v1.1 release is still deferred by the user (many commits unpushed). Worktree branches were based on an older commit (bad4c52); merges were conflict-free except one adjacent AppPreferences key.
+
 ## Known flaky test
 `FacesModelTests.testClearWhileAScanRunsKeepsItRunningAndItStillTellsTheLibrary` (real Vision face detection on a synthetic fixture) failed in 3 of ~9 full-suite runs this session ("the finished scan still refreshed the Library": the scan finished with no people found) and passed every time when run alone, even right after a forced rebuild. Matches the older note that the Vision-based classes misbehave under load. Not caused by the rename/release work; not investigated further. If it ever fails alone, that is a real bug.
 
@@ -82,11 +87,9 @@ None.
 - Enhance: MetalFX-vs-Lanczos comparison, a RAW source.
 
 ## Exact next step
-None required. Pick a feature with the user (one per session, Plan Mode first).
-Candidates: global Whites slider, B&W Mix extras (Intensity/Neutrals/Tone/Grain),
-culling Compare/Survey, XMP interop spike (IMPROVEMENTS.md D57/D63);
-Lightroom parity list D35; open design/robustness items D28, D31/D32, D13,
-D22/D24/D26, D20 keyboard half, D61/D62 (merge/depth limits), D60 (faces nits).
+1. Ship v1.1: write release notes for Copy Photos into Library + the single-window fix, `./scripts/release.sh --unsigned`, push master, `gh release create v1.1.0` (ask the user first: it publishes).
+2. Then one feature per session (Plan Mode first). Candidates, most valuable first: Move (copy → verify → Trash) for card import; HEIC/WebP/AVIF export + image watermark (D57 item 9); virtual copies / versions; Upright / auto-straighten (D57 item 7); Recently Deleted. Robustness items still open: D28/D31/D32 (live in a real sandbox), D13, D22/D24/D26, D20 keyboard half, D61/D62 (merge/depth limits), D60 (faces nits), D72 (copy limits).
+3. Not live-checked at all yet: Faces, HDR/panorama, Put Back in the Finder, a cold-launch Dock drop, real mouse drag-and-drop, a RAW+JPG pair through the Copy UI, declining the Copy destination panel, the Library window that flipped to the Editor once during the XMP dialog (cause unknown).
 
 Process note: the `reviewer` agent only registers when the session starts from
 `~/photoapp-starter`, not `~`. Always pass `model: "opus"` when invoking it.

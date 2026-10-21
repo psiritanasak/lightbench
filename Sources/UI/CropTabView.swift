@@ -17,6 +17,26 @@ struct CropTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            Button {
+                document.autoStraighten()
+            } label: {
+                Label(document.isAutoStraightening ? "Finding horizon…" : "Auto", systemImage: "wand.and.stars")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.flat)
+            .disabled(document.currentImage == nil || document.isAutoStraightening || document.isAutoUprighting)
+            .help("Find the horizon and set Straighten to level it")
+            .alert(
+                "Auto Straighten",
+                isPresented: Binding(
+                    get: { document.straightenMessage != nil },
+                    set: { if !$0 { document.straightenMessage = nil } }
+                )
+            ) {
+                Button("OK") {}
+            } message: {
+                Text(document.straightenMessage ?? "")
+            }
             HStack(spacing: 8) {
                 uprightButton(.level, title: "Level", help: "Find the dominant lines and rotate the photo so they are level")
                 uprightButton(.vertical, title: "Vertical", help: "Straighten vertical lines: rotate and correct keystone so they run parallel")
@@ -90,7 +110,7 @@ struct CropTabView: View {
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.flat)
-        .disabled(document.currentImage == nil || document.isAutoUprighting)
+        .disabled(document.currentImage == nil || document.isAutoUprighting || document.isAutoStraightening)
         .help(help)
     }
 

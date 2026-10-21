@@ -183,13 +183,13 @@ final class PhotoExporterTests: XCTestCase {
         XCTAssertNotNil(CIImage(contentsOf: outputURL))
     }
 
-    func testExportWritesPNGAndTIFF() async throws {
+    func testExportWritesPNGTIFFAndHEIC() async throws {
         let sourceURL = try writeSolidColorJPEG(size: 200)
         let photo = Photo(id: 1, path: sourceURL.path, filename: sourceURL.lastPathComponent, fileSize: nil, importedAt: Date())
         let outputDir = tempDir.appendingPathComponent("out", isDirectory: true)
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
-        for format in [ExportFormat.png, .tiff] {
+        for format in [ExportFormat.png, .tiff, .heic] {
             let outputURL = try await PhotoExporter.export(photo, editState: .identity, to: outputDir, settings: ExportSettings(format: format))
             XCTAssertEqual(outputURL.pathExtension, format.fileExtension)
             XCTAssertNotNil(CIImage(contentsOf: outputURL))
@@ -510,7 +510,7 @@ final class ExportSettingsStoreTests: XCTestCase {
     }
 
     func testUnknownEnumValueResetsOnlyThatField() {
-        defaults.set(Data(#"{"format":"heic","quality":0.5,"namingTemplate":"{seq}"}"#.utf8), forKey: ExportSettingsStore.key)
+        defaults.set(Data(#"{"format":"avif","quality":0.5,"namingTemplate":"{seq}"}"#.utf8), forKey: ExportSettingsStore.key)
         let loaded = ExportSettingsStore(defaults: defaults).load()
         XCTAssertEqual(loaded.format, .jpeg)
         XCTAssertEqual(loaded.quality, 0.5, accuracy: 0.0001)

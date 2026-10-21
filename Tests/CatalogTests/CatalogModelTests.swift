@@ -1136,3 +1136,107 @@ final class CatalogModelTests: XCTestCase {
         XCTAssertNil(model.keywordNames(for: mine)[ids[1]])
     }
 }
+
+/// `activateKnownFolders` at launch (injected resolve/start/refresh: real security scopes never belong in a unit test). Found live
+/// 2026-10-19 in a real sandbox: it used to DELETE a bookmark it could not resolve, so a drive that was not connected at launch lost its grant.
+@MainActor
+final class ActivateKnownFoldersTests: XCTestCase {
+    private var catalog: CatalogModel!
+    private var suiteName = ""
+
+    override func setUp() async throws {
+        suiteName = "ActivateKnownFoldersTests-\(UUID().uuidString)"
+        catalog = CatalogModel(database: try CatalogDatabase(inMemory: true), defaults: UserDefaults(suiteName: suiteName)!)
+    }
+
+    override func tearDown() async throws {
+        UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+    }
+
+    private let drive = "/Volumes/Card/DCIM"
+    private let local = "/Users/x/Pictures"
+
+    /// What launch does: resolve (off the main actor in production), then apply.
+    private func launch(
+        resolve: @escaping (Data) -> CatalogModel.ResolvedBookmark?, start: @escaping (URL) -> Bool = { _ in true },
+        refresh: @escaping (URL) -> Data? = { _ in nil }
+    ) {
+        let resolved = CatalogModel.resolveAll(catalog.folderBookmarks, resolve: resolve)
+        catalog.activateKnownFolders(resolved: resolved, start: start, refresh: refresh)
+    }
+
+    private func at(_ path: String, stale: Bool = false) -> CatalogModel.ResolvedBookmark {
+        .init(url: URL(fileURLWithPath: path), isStale: stale)
+    }
+
+    func testABookmarkThatCannotBeResolvedIsKeptNotDeleted() {
+        catalog.folderBookmarks = [drive: Data("drive".utf8)]
+        launch(resolve: { _ in nil })
+        XCTAssertEqual(catalog.folderBookmarks.keys.sorted(), [drive], "an unplugged drive must keep its grant")
+        XCTAssertFalse(catalog.activeFolders.contains(drive))
+    }
+
+    func testAResolvableBookmarkIsStartedAndBecomesActive() {
+        catalog.folderBookmarks = [local: Data("local".utf8)]
+        launch(resolve: { _ in self.at(self.local) })
+        XCTAssertTrue(catalog.activeFolders.contains(local))
+        XCTAssertEqual(catalog.folderBookmarks[local], Data("local".utf8), "a fresh bookmark is not rewritten")
+    }
+
+    func testAStaleButResolvableBookmarkIsStartedAndSilentlyRefreshedNotDropped() {
+        catalog.folderBookmarks = [local: Data("old".utf8)]
+        launch(resolve: { _ in self.at(self.local, stale: true) }, refresh: { _ in Data("new".utf8) })
+        XCTAssertTrue(catalog.activeFolders.contains(local))
+        XCTAssertEqual(catalog.folderBookmarks[local], Data("new".utf8))
+    }
+
+    func testAStaleBookmarkWhoseRefreshFailsKeepsTheOldData() {
+        catalog.folderBookmarks = [local: Data("old".utf8)]
+        launch(resolve: { _ in self.at(self.local, stale: true) }, refresh: { _ in nil })
+        XCTAssertEqual(catalog.folderBookmarks[local], Data("old".utf8))
+    }
+
+    func testABookmarkThatResolvesButWillNotStartIsKeptAndNotActive() {
+        catalog.folderBookmarks = [local: Data("local".utf8)]
+        launch(resolve: { _ in self.at(self.local) }, start: { _ in false })
+        XCTAssertEqual(catalog.folderBookmarks.keys.sorted(), [local])
+        XCTAssertFalse(catalog.activeFolders.contains(local))
+    }
+
+    func testAStaleBookmarkThatNowPointsAtAnotherFolderGrantsNothingAtItsKey() {
+        // A moved / renamed folder: the stale bookmark resolves to the NEW place, which says nothing about the old path.
+        catalog.folderBookmarks = [local: Data("old".utf8)]
+        var started = false
+        launch(resolve: { _ in self.at("/Users/x/Elsewhere", stale: true) }, start: { _ in started = true; return true }, refresh: { _ in Data("new".utf8) })
+        XCTAssertFalse(started)
+        XCTAssertFalse(catalog.activeFolders.contains(local))
+        XCTAssertEqual(catalog.folderBookmarks[local], Data("old".utf8), "kept untouched")
+    }
+
+    func testABookmarkOfAParentFolderStillCoversItsKey() {
+        catalog.folderBookmarks = [local + "/Trip": Data("trip".utf8)]
+        launch(resolve: { _ in self.at(self.local) })
+        XCTAssertTrue(catalog.activeFolders.contains(local + "/Trip"))
+    }
+
+    func testEachBookmarkIsHandledOnItsOwn() {
+        catalog.folderBookmarks = [drive: Data("drive".utf8), local: Data("local".utf8)]
+        launch(resolve: { data in data == Data("local".utf8) ? self.at(self.local) : nil })
+        XCTAssertEqual(Set(catalog.folderBookmarks.keys), [drive, local])
+        XCTAssertEqual(catalog.activeFolders, [local])
+    }
+
+    func testRestoredAccessAsksOnlyThePhotosUnderThatRootToReloadTheirThumbnails() async throws {
+        let db = try CatalogDatabase(inMemory: true)
+        let model = CatalogModel(database: db, defaults: UserDefaults(suiteName: suiteName)!)
+        _ = try await db.importPhotos(at: [
+            URL(fileURLWithPath: "/Vol/shoot/a.jpg"), URL(fileURLWithPath: "/Vol/shoot/sub/b.jpg"), URL(fileURLWithPath: "/Vol/shoot2/c.jpg")
+        ])
+        await model.refresh()
+        model.requestThumbnailsAgain(under: "/Vol/shoot")
+        XCTAssertEqual(model.thumbnailRevisions["/Vol/shoot/a.jpg"], 1)
+        XCTAssertEqual(model.thumbnailRevisions["/Vol/shoot/sub/b.jpg"], 1)
+        XCTAssertNil(model.thumbnailRevisions["/Vol/shoot2/c.jpg"], "a sibling folder whose name merely starts the same is not under the root")
+    }
+
+}

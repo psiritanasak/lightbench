@@ -191,7 +191,170 @@ final class ExportWatermarkTests: XCTestCase {
         XCTAssertLessThan(box.3, height / 3)
     }
 
+    // MARK: - Logo
+
+    private var logoRoot: URL!
+    private var logoStore: WatermarkLogoStore!
+
+    override func setUpWithError() throws {
+        logoRoot = FileManager.default.temporaryDirectory.appendingPathComponent("ExportWatermarkLogos-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: logoRoot, withIntermediateDirectories: true)
+        logoStore = WatermarkLogoStore(directory: logoRoot.appendingPathComponent("logos"))
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: logoRoot)
+    }
+
+    /// Imports an opaque white `width` x `height` rectangle as a logo and returns its id.
+    private func importLogo(width: Int = 200, height: Int = 100) throws -> String {
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let url = logoRoot.appendingPathComponent("logo-\(width)x\(height).png")
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return try logoStore.importLogo(from: url)
+    }
+
+    private func logoMark(_ id: String?, _ position: WatermarkPosition = .bottomRight, size: Double = 0.05, opacity: Double = 1) -> ExportWatermark {
+        var watermark = ExportWatermark()
+        watermark.isEnabled = true
+        watermark.kind = .image
+        watermark.logoID = id
+        watermark.position = position
+        watermark.sizeFraction = size
+        watermark.opacity = opacity
+        return watermark
+    }
+
+    func testEachPositionPutsTheLogoInThatPartOfTheImage() throws {
+        let id = try importLogo()
+        for position in WatermarkPosition.allCases {
+            let out = WatermarkRenderer.apply(logoMark(id, position), to: flat(), logoStore: logoStore)
+            let box = try XCTUnwrap(changedBox(out, from: basePixels), "\(position)")
+            let centerX = Double(box.0 + box.2) / 2, centerY = Double(box.1 + box.3) / 2
+            switch position.grid.x {
+            case -1: XCTAssertLessThan(centerX, Double(width) / 3, "\(position) x")
+            case 1: XCTAssertGreaterThan(centerX, Double(width) * 2 / 3, "\(position) x")
+            default: XCTAssertEqual(centerX, Double(width) / 2, accuracy: 3, "\(position) x")
+            }
+            switch position.grid.y {
+            case -1: XCTAssertLessThan(centerY, Double(height) / 3, "\(position) y")
+            case 1: XCTAssertGreaterThan(centerY, Double(height) * 2 / 3, "\(position) y")
+            default: XCTAssertEqual(centerY, Double(height) / 2, accuracy: 3, "\(position) y")
+            }
+        }
+    }
+
+    /// 600x400 image, size 0.05: long side = 4 * 0.05 * 400 = 80 px; a 2:1 logo is 80 x 40, `marginFraction` * 400 = 10 px from the edges.
+    func testLogoSizeAndMarginFollowTheShortEdge() throws {
+        let id = try importLogo(width: 200, height: 100)
+        let box = try XCTUnwrap(changedBox(WatermarkRenderer.apply(logoMark(id, .bottomLeft), to: flat(), logoStore: logoStore), from: basePixels))
+        XCTAssertEqual(box.2 - box.0 + 1, 80, accuracy: 2)
+        XCTAssertEqual(box.3 - box.1 + 1, 40, accuracy: 2)
+        let margin = WatermarkRenderer.marginFraction * Double(min(width, height))
+        XCTAssertEqual(Double(box.0), margin, accuracy: 1.5)
+        XCTAssertEqual(Double(box.1), margin, accuracy: 1.5)
+        let doubled = try XCTUnwrap(changedBox(WatermarkRenderer.apply(logoMark(id, .bottomLeft, size: 0.1), to: flat(), logoStore: logoStore), from: basePixels))
+        XCTAssertEqual(Double(doubled.2 - doubled.0 + 1) / Double(box.2 - box.0 + 1), 2, accuracy: 0.1)
+    }
+
+    /// The decoded range (max 0.15 x 4 = 60% of the short edge) can never reach the cap, so this sets an out-of-range
+    /// size directly in memory: the cap is the defensive limit for such a value.
+    func testALogoNeverExceedsTheFrameFractionEvenWithAnOutOfRangeSize() throws {
+        let id = try importLogo(width: 400, height: 100)
+        let box = try XCTUnwrap(changedBox(WatermarkRenderer.apply(logoMark(id, .center, size: 0.5), to: flat(),
+                                                                    logoStore: logoStore), from: basePixels))
+        XCTAssertLessThanOrEqual(Double(box.2 - box.0 + 1), WatermarkRenderer.maximumWidthFraction * Double(width) + 2)
+        XCTAssertGreaterThan(Double(box.2 - box.0 + 1), WatermarkRenderer.maximumWidthFraction * Double(width) - 4, "it is shrunk TO the cap, not dropped")
+    }
+
+    func testLogoOpacityScalesItsStrength() throws {
+        let id = try importLogo()
+        func peak(_ opacity: Double) -> Float {
+            let data = pixels(WatermarkRenderer.apply(logoMark(id, .center, opacity: opacity), to: flat(), logoStore: logoStore))
+            return zip(data, basePixels).map { abs($0 - $1) }.max() ?? 0
+        }
+        let full = peak(1), half = peak(0.5)
+        XCTAssertGreaterThan(full, 0.5, "an opaque white logo over 0.3 grey lifts it by ~0.7")
+        XCTAssertEqual(half, full / 2, accuracy: full * 0.06, "half opacity gives about half the lift in linear light (full \(full), half \(half))")
+    }
+
+    func testALogoThatCannotBeLoadedDrawsNothingAndSaysWhy() throws {
+        let id = try importLogo()
+        try FileManager.default.removeItem(at: try XCTUnwrap(logoStore.fileURL(forID: id)))
+        let missing = logoMark(id)
+        XCTAssertTrue(missing.isActive, "the settings alone say active; the file read says otherwise")
+        XCTAssertNil(changedBox(WatermarkRenderer.apply(missing, to: flat(), logoStore: logoStore), from: basePixels))
+        XCTAssertNotNil(missing.inactiveReason(store: logoStore))
+        XCTAssertNotNil(logoMark(nil).inactiveReason(store: logoStore))
+        XCTAssertFalse(logoMark(nil).isActive)
+        XCTAssertNotNil(logoMark("../../x").inactiveReason(store: logoStore))
+        var disabled = logoMark(nil)
+        disabled.isEnabled = false
+        XCTAssertNil(disabled.inactiveReason(store: logoStore), "a disabled mark has nothing to explain")
+        XCTAssertNil(logoMark(try importLogo()).inactiveReason(store: logoStore))
+    }
+
+    func testLogoMarkWithTheTextKindIgnoresTheLogo() throws {
+        var watermark = logoMark(try importLogo())
+        watermark.kind = .text
+        XCTAssertNil(changedBox(WatermarkRenderer.apply(watermark, to: flat(), logoStore: logoStore), from: basePixels), "empty text: nothing drawn")
+    }
+
+    func testExportWithALogoCompositesItAndLeavesTheRestAlone() async throws {
+        let dir = logoRoot.appendingPathComponent("export")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let source = dir.appendingPathComponent("flat.png")
+        try PhotoExporter.context.writePNGRepresentation(of: flat(), to: source, format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+        let photo = Photo(id: 1, path: source.path, filename: "flat.png", fileSize: nil, importedAt: Date())
+        let id = try importLogo()
+        func export(_ watermark: ExportWatermark, name: String) async throws -> CIImage {
+            let url = try await PhotoExporter.export(photo, editState: .identity, to: dir,
+                                                     settings: ExportSettings(format: .png, namingTemplate: name, watermark: watermark),
+                                                     logoStore: logoStore)
+            return try XCTUnwrap(CIImage(contentsOf: url))
+        }
+        var off = logoMark(id)
+        off.isEnabled = false
+        let plain = pixels(try await export(off, name: "plain"))
+        let logoExport = try await export(logoMark(id, .topLeft), name: "logo")
+        let box = try XCTUnwrap(changedBox(logoExport, from: plain), "the export carries the logo")
+        XCTAssertLessThan(box.2, width / 3)
+        XCTAssertGreaterThan(box.1, height * 2 / 3)
+    }
+
     // MARK: - Settings
+
+    func testALogoMarkIsRememberedAndAnUnknownKindOrBadIdFallsBack() throws {
+        let id = String(repeating: "ab", count: 32)
+        let suite = "ExportWatermarkTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ExportSettingsStore(defaults: defaults)
+        store.save(ExportSettings(watermark: logoMark(id, .topRight, size: 0.07, opacity: 0.4)))
+        XCTAssertEqual(store.load().watermark, logoMark(id, .topRight, size: 0.07, opacity: 0.4))
+
+        defaults.set(Data(#"{"watermark":{"isEnabled":true,"kind":"hologram","text":"hi","logoID":"\#(id)"}}"#.utf8), forKey: ExportSettingsStore.key)
+        let unknown = store.load().watermark
+        XCTAssertEqual(unknown.kind, .text, "an unknown kind falls back to a text mark")
+        XCTAssertEqual(unknown.text, "hi")
+        XCTAssertEqual(unknown.logoID, id)
+
+        defaults.set(Data(#"{"watermark":{"isEnabled":true,"kind":"image","logoID":"../../etc/passwd"}}"#.utf8), forKey: ExportSettingsStore.key)
+        let bad = store.load().watermark
+        XCTAssertEqual(bad.kind, .image)
+        XCTAssertNil(bad.logoID, "a malformed id is never carried")
+
+        defaults.set(Data(#"{"watermark":{"isEnabled":true,"text":"old"}}"#.utf8), forKey: ExportSettingsStore.key)
+        XCTAssertEqual(store.load().watermark.kind, .text, "settings from before logos existed are unchanged")
+        defaults.set(Data(#"{"watermark":{"kind":7,"logoID":5}}"#.utf8), forKey: ExportSettingsStore.key)
+        XCTAssertEqual(store.load().watermark.kind, .text, "wrong types fall back too")
+    }
 
     func testWatermarkIsRememberedTolerantlyClampedAndDefaultsOff() throws {
         XCTAssertFalse(ExportSettings().watermark.isEnabled)

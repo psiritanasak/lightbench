@@ -142,6 +142,10 @@ final class ImageDocumentModel: ObservableObject {
     @Published var subjectMaskMessage: String?
     /// True while a Vision subject pass is running (disables the Subject buttons: single-flight).
     @Published private(set) var isSelectingSubject = false
+    /// Shown by the Crop tab's own alert — `autoStraighten` outcomes that changed nothing (no horizon, already level, failure).
+    @Published var straightenMessage: String?
+    /// True while Vision is looking for the horizon (single-flight: disables the Crop tab's Auto button).
+    @Published private(set) var isAutoStraightening = false
     /// Shown by its own alert — `generateDepth` outcomes (Depth Range mask).
     @Published var depthMaskMessage: String?
     /// True while a depth map is being read or computed (single-flight: disables the Depth buttons).
@@ -1119,6 +1123,68 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    // MARK: - Auto Straighten
+
+    /// Test seam: the horizon detector, run off the main actor on the photo's UNEDITED, oriented source image.
+    var horizonDetector: @Sendable (CIImage) -> HorizonDetector.Result = { HorizonDetector.detect(in: $0) }
+
+    /// Detects the horizon with Vision and sets `straightenAngle` as ONE undo step ("Auto Straighten").
+    /// Vision sees `currentImage` itself, with NO edit geometry: Straighten is the pipeline's FIRST geometry
+    /// stage, so the angle must be measured on the source (a flip would negate the tilt, Stretch would change
+    /// slopes, perspective/crop would distort them). Because the measurement never includes the current angle,
+    /// a second press gives the same result rather than a doubled correction. Same stale-result guard as
+    /// `autoTone()`. Returns the work for tests; the UI ignores it.
+    @discardableResult
+    func autoStraighten() -> Task<Void, Never>? {
+        guard !isAutoStraightening else { return nil }
+        guard let currentImage, !isLoadInFlight else {
+            straightenMessage = "Wait for the photo to finish loading, then try again."
+            return nil
+        }
+        isAutoStraightening = true
+        let detector = horizonDetector
+        let myGeneration = analysisGeneration
+        return Task { @MainActor [weak self] in
+            let detection = await Task.detached(priority: .userInitiated) { () -> HorizonDetector.Result in
+                detector(currentImage)
+            }.value
+            guard let self else { return }
+            self.isAutoStraightening = false
+            // A photo load in flight means `currentImage`/`editState` are about to be replaced (the generation only
+            // bumps when the load finishes), so this result belongs to the outgoing photo.
+            guard self.analysisGeneration == myGeneration, !self.isLoadInFlight else { return }
+            let outcome: StraightenSolver.Outcome
+            switch detection {
+            case .failed(let reason):
+                self.straightenMessage = reason
+                return
+            case .none:
+                outcome = .noHorizon
+            case .angle(let radians):
+                outcome = StraightenSolver.solve(visionHorizonAngle: radians)
+            }
+            let target: Double
+            switch outcome {
+            case .noHorizon:
+                self.straightenMessage = StraightenMessages.noHorizon
+                return
+            case .alreadyLevel:
+                target = 0 // measured on the uncorrected source, so "level" means Straighten should be 0
+            case .angle(let degrees):
+                target = degrees
+            }
+            self.finalizePendingCommit()
+            guard self.editState.straightenAngle != target else {
+                self.straightenMessage = target == 0 ? StraightenMessages.alreadyLevel : StraightenMessages.alreadyApplied
+                return
+            }
+            var next = self.editState
+            next.straightenAngle = target
+            self.history.commit(next, summary: "Auto Straighten")
+            self.applyHistoryState(self.history.current)
+        }
+    }
+
     // MARK: - Spot removal
 
     /// Shown by the Retouch tab's own alert (placement refusals, a failed auto-source).
@@ -1569,6 +1635,7 @@ final class ImageDocumentModel: ObservableObject {
         subjectMaskMessage = nil // a late "no subject" must not pop up about the NEXT photo
         depthMaskMessage = nil // likewise a late depth message
         retouchMessage = nil // likewise a late "no good source"
+        straightenMessage = nil // and a late "no horizon found"
         skinProtectionMessage = nil // and a late "no people found"
         uprightMessage = nil // and a late "no lines found"
     }

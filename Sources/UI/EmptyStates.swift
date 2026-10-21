@@ -64,17 +64,33 @@ struct LibraryEmptyLibraryView: View {
 struct LibraryEmptyCollectionView: View {
     /// A folder-mirrored collection holds only the photos directly inside that folder: "add photos to it" would be wrong advice.
     var isFolder = false
+    /// "Show Photos in Subfolders" is on, so an empty folder is empty all the way down.
+    var includesSubfolders = false
+    /// The setting itself is on (even if this folder has no subfolders): advice must not tell the user to turn on what is already on.
+    var subfolderSettingOn = false
+
+    private var title: String {
+        guard isFolder else { return "This collection is empty" }
+        return includesSubfolders ? "No photos in this folder or its subfolders" : "No photos directly in this folder"
+    }
+
+    private var advice: String {
+        guard isFolder else {
+            return "Select photos in All Photos, then choose \u{201c}Add to Collection\u{201d} from the selection menu in the toolbar."
+        }
+        return (includesSubfolders || subfolderSettingOn)
+            ? "Import photos from this folder, or choose another folder."
+            : "Photos in its subfolders are shown under those subfolders, or here with \u{201c}Show Photos in Subfolders\u{201d} (right-click the folder)."
+    }
 
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: isFolder ? "folder" : "rectangle.stack")
                 .font(.system(size: 40))
                 .foregroundStyle(Theme.textSecondary)
-            Text(isFolder ? "No photos directly in this folder" : "This collection is empty")
+            Text(title)
                 .font(.headline)
-            Text(isFolder
-                 ? "Photos in its subfolders are shown under those subfolders."
-                 : "Select photos in All Photos, then choose \u{201c}Add to Collection\u{201d} from the selection menu in the toolbar.")
+            Text(advice)
                 .font(.subheadline)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)

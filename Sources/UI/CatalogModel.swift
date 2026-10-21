@@ -56,6 +56,23 @@ final class CatalogModel: ObservableObject {
             Task { await refresh() }
         }
     }
+    /// Library: a selected FOLDER (folder-mirrored collection) also shows the photos of all its subfolders. Persisted in `AppPreferences`
+    /// (off by default). Changing it re-reads the grid when a folder is selected; it never affects albums, All Photos or smart collections.
+    @Published var showPhotosInSubfolders = false {
+        didSet {
+            guard oldValue != showPhotosInSubfolders else { return }
+            preferences.showPhotosInSubfolders = showPhotosInSubfolders
+            recomputeFolderPhotoCounts()
+            if case .collection(let id) = selectedFilter, collections.first(where: { $0.id == id })?.isFolder == true {
+                selectedPhotoIDs.removeAll()
+                Task { await refresh() }
+            }
+        }
+    }
+    /// Folder id → the number the sidebar shows beside it (direct, or the subtree total while `showPhotosInSubfolders` is on). Stored, not
+    /// computed in the sidebar's body: it is O(photos x depth) and the sidebar redraws on every grid click. Kept in step with `collections`,
+    /// `membershipsByPhotoID` and the flag by `recomputeFolderPhotoCounts()` (assigns only on a real change).
+    @Published private(set) var folderPhotoCounts: [Int64: Int] = [:]
     /// photoID → the set of collectionIDs it belongs to, rebuilt from
     /// `allMemberships()` on every `refresh()`. Keeping this as one
     /// client-side map (rather than a query per grid cell) is what makes
@@ -159,10 +176,15 @@ final class CatalogModel: ObservableObject {
     /// up or photos are being moved".
     @Published var trashRequested: TrashModel.Kind?
     @Published var trashBusy = false
-    /// A file tool (XMP read/write, Move to Trash) is up or running: the menus that act on the selection's files wait for it.
-    var fileToolBusy: Bool { xmpBusy || trashBusy }
+    /// Copy Photos into Library… (see `ImportCopyModel`): `importCopyRequested` is set by the menus, `ImportCopyDialogModifier` performs it;
+    /// `importCopyBusy` mirrors "a source is being scanned, the options sheet is up or photos are being copied".
+    @Published var importCopyRequested = false
+    @Published var importCopyBusy = false
+    /// A file tool (XMP read/write, Move to Trash, Copy Photos) is up or running: the menus that act on the selection's files wait for it.
+    var fileToolBusy: Bool { xmpBusy || trashBusy || importCopyBusy }
     let xmp = XMPModel()
     let trash = TrashModel()
+    let importCopy = ImportCopyModel()
     /// Catalog backup / restore (see `CatalogBackupModel`): the File menu sets `backupRequested`; `CatalogBackupDialogModifier` performs it.
     /// `backupBusy` mirrors "a restore confirmation is up or a backup is being written".
     @Published var backupRequested: CatalogBackupModel.Kind?
@@ -356,18 +378,23 @@ final class CatalogModel: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.preferences = AppPreferences(defaults: defaults)
+        self.showPhotosInSubfolders = preferences.showPhotosInSubfolders
         Task.detached { [weak self] in
             do {
                 let database = try CatalogDatabase()
+                // Resolving a bookmark can block (an offline network share, a slow volume), so it happens HERE, off the main actor; only the
+                // cheap start/refresh step runs on it. D34: the test host must not start real security scopes or refresh the developer's REAL
+                // folder bookmarks in `UserDefaults.standard`; its throwaway temp catalog needs no folder access anyway.
+                let resolved: [String: ResolvedBookmark]
+                if CatalogDatabase.isRunningUnderXCTest {
+                    resolved = [:]
+                } else {
+                    let saved = await MainActor.run { self?.folderBookmarks ?? [:] }
+                    resolved = Self.resolveAll(saved)
+                }
                 await MainActor.run {
                     self?.database = database
-                    // D34: the test host must not prune/activate the developer's
-                    // REAL folder bookmarks (`activateKnownFolders` deletes any
-                    // bookmark that fails to resolve from `UserDefaults.standard`);
-                    // its throwaway temp catalog needs no folder access anyway.
-                    if !CatalogDatabase.isRunningUnderXCTest {
-                        self?.activateKnownFolders()
-                    }
+                    if !resolved.isEmpty { self?.activateKnownFolders(resolved: resolved) }
                     self?.openSettled = true
                 }
                 await self?.refresh()
@@ -402,6 +429,7 @@ final class CatalogModel: ObservableObject {
         self.database = database
         self.defaults = defaults
         self.preferences = AppPreferences(defaults: defaults)
+        self.showPhotosInSubfolders = preferences.showPhotosInSubfolders
         openSettled = true
         connectFaces()
     }
@@ -453,6 +481,21 @@ final class CatalogModel: ObservableObject {
 
     /// Nested-collection import of an already-chosen folder.
     func importFolderTree(at folder: URL) { importFolders([.init(url: folder, asTree: true)]) }
+
+    /// Adds photos that "Copy Photos into Library…" just wrote under `root` (verified copies only): the destination gets the same saved folder
+    /// access an imported folder gets (so thumbnails open after a relaunch), then the rows and folder-mirrored collections are written, the
+    /// Library refreshed and `.xmp` metadata read for the new photos. Runs inside an `importsInFlight` window so a rename cannot start under it.
+    func registerCopiedPhotos(_ urls: [URL], under root: URL) async throws -> (result: ImportResult, accessWarning: String?) {
+        guard let database else { throw CatalogDatabaseError(message: "The photo catalog isn't ready yet.") }
+        let warning = activateFolderAccess(for: root)
+        importsInFlight += 1
+        defer { importsInFlight -= 1 }
+        let before = Set(try await database.allPhotos().compactMap(\.id))
+        let result = try await database.importCopiedFiles(urls, under: root)
+        await refresh()
+        await autoReadXMP(newerThan: before)
+        return (result, warning)
+    }
 
     /// Imports each folder in turn (one catalog write at a time) and reports one combined message. The caller must hold access to every
     /// folder already: a panel result, a dropped URL and a Finder-opened URL all carry a sandbox extension for this launch, and
@@ -525,6 +568,7 @@ final class CatalogModel: ObservableObject {
             let memberships = try await database.allMemberships()
             membershipsByPhotoID = Dictionary(grouping: memberships, by: \.photoId)
                 .mapValues { Set($0.map(\.collectionId)) }
+            recomputeFolderPhotoCounts()
             let loadedKeywords = try await database.allKeywords()
             let keywordLinks = try await database.allKeywordLinks()
             keywords = Self.sortedKeywords(loadedKeywords)
@@ -555,7 +599,10 @@ final class CatalogModel: ObservableObject {
             case .allPhotos, .smartCollection:
                 photos = try await database.allPhotos()
             case .collection(let collectionID):
-                photos = try await database.photos(inCollection: collectionID)
+                let viewed = viewedCollectionIDs(of: collectionID)
+                photos = viewed.count > 1
+                    ? try await database.photos(inCollections: Array(viewed).sorted())
+                    : try await database.photos(inCollection: collectionID)
             }
             // Its own do/catch like the face read: a failed camera-data read keeps the previous map.
             if let loaded = try? await database.allMetadata() { metadataByPhotoID = loaded }
@@ -668,11 +715,54 @@ final class CatalogModel: ObservableObject {
         }
     }
 
+    // MARK: - Photos in subfolders
+
+    /// `folderID` and every folder below it, found breadth-first over the `parentId` links the sidebar draws. Only folder rows count,
+    /// each id is visited once (a corrupt parent cycle ends instead of looping), and the result always contains `folderID` itself.
+    /// A folder imported AFTER its parent folder was already imported stays a separate root (`findOrCreateFolderCollection` never
+    /// re-parents), so it is not below that parent here — the sidebar does not show it there either.
+    nonisolated static func descendantFolderIDs(of folderID: Int64, in collections: [PhotoCollection]) -> Set<Int64> {
+        let childrenByParent = Dictionary(grouping: collections.filter(\.isFolder), by: \.parentId)
+        var seen: Set<Int64> = [folderID]
+        var queue = [folderID]
+        while !queue.isEmpty {
+            let current = queue.removeFirst()
+            for child in childrenByParent[current] ?? [] {
+                guard let id = child.id, seen.insert(id).inserted else { continue }
+                queue.append(id)
+            }
+        }
+        return seen
+    }
+
+    private func recomputeFolderPhotoCounts() {
+        let counts = SidebarRows.folderPhotoCounts(collections: collections, membershipsByPhotoID: membershipsByPhotoID,
+                                                   includeSubfolders: showPhotosInSubfolders)
+        if counts != folderPhotoCounts { folderPhotoCounts = counts }
+    }
+
+    func descendantFolderIDs(of folderID: Int64) -> Set<Int64> { Self.descendantFolderIDs(of: folderID, in: collections) }
+
+    /// The collection ids whose photos the grid shows for `.collection(collectionID)`: just that one, unless it is a folder and
+    /// "show photos in subfolders" is on, in which case the folder and all its descendants.
+    private func viewedCollectionIDs(of collectionID: Int64) -> Set<Int64> {
+        guard showPhotosInSubfolders, collections.first(where: { $0.id == collectionID })?.isFolder == true else { return [collectionID] }
+        return descendantFolderIDs(of: collectionID)
+    }
+
+    /// Every collection id the current filter shows photos of (empty for All Photos / a smart collection).
+    var viewedCollectionIDs: Set<Int64> {
+        guard case .collection(let id) = selectedFilter else { return [] }
+        return viewedCollectionIDs(of: id)
+    }
+
     /// What the Library is showing, in words (a confirmation names it): All Photos, or the selected collection / smart collection.
     var currentScopeName: String {
         switch selectedFilter {
         case .allPhotos: return "All Photos"
-        case .collection(let id): return collections.first { $0.id == id }.map { "“\($0.name)”" } ?? "this collection"
+        case .collection(let id):
+            guard let collection = collections.first(where: { $0.id == id }) else { return "this collection" }
+            return viewedCollectionIDs.count > 1 ? "“\(collection.name)” and its subfolders" : "“\(collection.name)”"
         case .smartCollection(let id): return smartCollections.first { $0.id == id }.map { "“\($0.name)”" } ?? "this smart collection"
         }
     }
@@ -812,10 +902,8 @@ final class CatalogModel: ObservableObject {
                 return
             }
             self.silentRecoveryTried.insert(root)
-            guard await self.reacquireAccess(forStaleRoot: root, allowPrompt: false) else { return }
-            for candidate in self.photos where candidate.path.hasPrefix(root + "/") {
-                self.thumbnailRevisions[candidate.path, default: 0] += 1
-            }
+            // On success `reacquireAccess` itself asks the cells under the root to reload (`requestThumbnailsAgain`).
+            await self.reacquireAccess(forStaleRoot: root, allowPrompt: false)
         }
         thumbnailRecoveryTasks[root] = task
         await task.value
@@ -1252,7 +1340,7 @@ final class CatalogModel: ObservableObject {
 
     /// True while a Library tool sheet (keywords, duplicates, people) is up or one of their scans runs; batch rename must not start then.
     var toolSheetIsBusy: Bool {
-        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy || trashBusy || backupBusy
+        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy || trashBusy || importCopyBusy || backupBusy
     }
 
     /// The People sheet's scan: finds faces in the photos the Library is currently drawing from, then regroups ALL stored faces.
@@ -1300,6 +1388,7 @@ final class CatalogModel: ObservableObject {
         if photos.count < before { photoCount = max(0, photoCount - 1) }
         selectedPhotoIDs.remove(id)
         membershipsByPhotoID.removeValue(forKey: id)
+        recomputeFolderPhotoCounts()
         keywordIDsByPhotoID.removeValue(forKey: id)
         personIDsByPhotoID.removeValue(forKey: id)
         metadataByPhotoID.removeValue(forKey: id)
@@ -1643,14 +1732,19 @@ final class CatalogModel: ObservableObject {
     func toggleMembership(of photo: Photo, in collection: PhotoCollection) {
         guard let database, let photoID = photo.id, let collectionID = collection.id else { return }
         let willBeMember = !membershipsByPhotoID[photoID, default: []].contains(collectionID)
-        let affectsCurrentFilter = selectedFilter == .collection(collectionID)
+        let viewed = viewedCollectionIDs
+        let affectsCurrentFilter = viewed.contains(collectionID)
 
         if willBeMember {
             membershipsByPhotoID[photoID, default: []].insert(collectionID)
         } else {
             membershipsByPhotoID[photoID]?.remove(collectionID)
-            if affectsCurrentFilter { photos.removeAll { $0.id == photoID } }
+            // With subfolders shown, the photo stays in the grid while it is still a member of another viewed folder.
+            if affectsCurrentFilter, membershipsByPhotoID[photoID, default: []].isDisjoint(with: viewed) {
+                photos.removeAll { $0.id == photoID }
+            }
         }
+        recomputeFolderPhotoCounts()
 
         Task.detached { [weak self] in
             do {
@@ -1698,6 +1792,7 @@ final class CatalogModel: ObservableObject {
         for photoID in photoIDs {
             membershipsByPhotoID[photoID, default: []].insert(collectionID)
         }
+        recomputeFolderPhotoCounts()
 
         Task.detached { [weak self] in
             do {
@@ -1729,7 +1824,7 @@ final class CatalogModel: ObservableObject {
     /// collection differs from what was active at call time but matches
     /// by completion (e.g. the user switches filters mid-write).
     private func refreshIfViewingCollection(_ collectionID: Int64) async {
-        if selectedFilter == .collection(collectionID) {
+        if viewedCollectionIDs.contains(collectionID) {
             await refresh()
         }
     }
@@ -1917,6 +2012,7 @@ final class CatalogModel: ObservableObject {
                 ) {
                     folderBookmarks[root] = refreshed
                 }
+                requestThumbnailsAgain(under: root)
                 return true
             }
         }
@@ -1940,7 +2036,18 @@ final class CatalogModel: ObservableObject {
         if let warning = activateFolderAccess(for: grantedURL) {
             importStatusMessage = warning
         }
+        requestThumbnailsAgain(under: root)
+        if grantedURL.path != root { requestThumbnailsAgain(under: grantedURL.path) } // a parent grant may cover other spinning roots too
         return true
+    }
+
+    /// Access to `root` was just restored: the grid and filmstrip cells under it that already failed a decode (and are showing a spinner) are
+    /// asked to request their thumbnails again (`thumbnailRevisions` is part of a cell's task identity). Found live 2026-10-20: after an
+    /// Editor-open recovery the cells kept spinning until something else reloaded them.
+    func requestThumbnailsAgain(under root: String) {
+        for candidate in photos where candidate.path.hasPrefix(root + "/") {
+            thumbnailRevisions[candidate.path, default: 0] += 1
+        }
     }
 
     /// Captures a security-scoped bookmark for `folder` and activates it
@@ -1981,32 +2088,51 @@ final class CatalogModel: ObservableObject {
         return warning
     }
 
-    /// Resolves and activates every previously-granted folder bookmark.
-    /// Called once, right after the catalog DB finishes opening. There is
-    /// deliberately no matching `stop` call anywhere — the scope is meant
-    /// to stay open for the app's entire lifetime (the OS reclaims it on
-    /// quit), since `ImageDocumentModel.load(from:)`'s `CIImage(contentsOf:)`
-    /// decode is lazy and can re-read the file well after `load` returns
-    /// (e.g. on every redraw), so a scope that closed early would produce
-    /// intermittent, hard-to-explain read failures. A stale/unresolvable
-    /// bookmark is dropped rather than surfaced as an error — self-healing,
-    /// since re-importing that folder simply re-grants it.
-    private func activateKnownFolders() {
-        for (path, data) in folderBookmarks {
-            var isStale = false
-            guard let resolved = try? URL(
-                resolvingBookmarkData: data,
-                options: .withSecurityScope,
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            ), !isStale else {
-                folderBookmarks.removeValue(forKey: path)
-                continue
-            }
-            if resolved.startAccessingSecurityScopedResource() {
-                activeFolders.insert(path)
-            }
+    /// A saved folder bookmark after resolving it.
+    struct ResolvedBookmark {
+        let url: URL
+        let isStale: Bool
+    }
+
+    /// Resolves every saved folder bookmark (blocking file-system work: call off the main actor). A bookmark that cannot be resolved is simply
+    /// absent from the result.
+    nonisolated static func resolveAll(
+        _ bookmarks: [String: Data], resolve: (Data) -> ResolvedBookmark? = CatalogModel.resolveBookmark
+    ) -> [String: ResolvedBookmark] {
+        bookmarks.compactMapValues(resolve)
+    }
+
+    /// Activates the resolved folder bookmarks at launch. There is deliberately no matching `stop` call anywhere — the scope is meant to stay
+    /// open for the app's entire lifetime (the OS reclaims it on quit), since `ImageDocumentModel.load(from:)`'s `CIImage(contentsOf:)` decode
+    /// is lazy and can re-read the file well after `load` returns, so a scope that closed early would produce intermittent, hard-to-explain
+    /// read failures.
+    ///
+    /// A bookmark that could not be resolved (absent from `resolved`), will not start, or now points at a different folder than its key is KEPT,
+    /// never deleted (found live 2026-10-19 in a real sandbox: this used to drop it, so launching the app while an external drive or card was not
+    /// connected permanently lost that folder's grant and every later photo from it needed a re-grant panel). It stays in `folderBookmarks` and
+    /// is retried when a photo from the folder is opened (`ensureAccessActive` → `reacquireAccess`, which re-resolves silently first) and at the
+    /// next launch. A bookmark that resolves but is flagged stale (a system update) is started and silently refreshed — the same routine
+    /// self-heal `reacquireAccess` does — instead of being dropped. `start`/`refresh` are injectable so the decisions are unit-tested without real
+    /// security scopes.
+    func activateKnownFolders(
+        resolved: [String: ResolvedBookmark],
+        start: (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+        refresh: (URL) -> Data? = { try? $0.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) }
+    ) {
+        for (path, bookmark) in resolved {
+            // A stale bookmark of a moved or renamed folder resolves to the NEW location: that grants nothing at the key's path.
+            guard bookmark.url.coversAccess(to: URL(fileURLWithPath: path)), start(bookmark.url) else { continue }
+            activeFolders.insert(path)
+            if bookmark.isStale, let refreshed = refresh(bookmark.url) { folderBookmarks[path] = refreshed }
         }
+    }
+
+    nonisolated static func resolveBookmark(_ data: Data) -> ResolvedBookmark? {
+        var isStale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else {
+            return nil
+        }
+        return ResolvedBookmark(url: url, isStale: isStale)
     }
 
     private static func summary(for result: ImportResult) -> String {

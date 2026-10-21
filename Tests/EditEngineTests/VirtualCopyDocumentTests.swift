@@ -107,6 +107,10 @@ final class VirtualCopyDocumentTests: XCTestCase {
         XCTAssertEqual(storedMaster.exposureEV, 1, "the master keeps its edits")
     }
 
+    private func unwrapped<T>(_ value: T?, file: StaticString = #filePath, line: UInt = #line) throws -> T {
+        try XCTUnwrap(value, file: file, line: line)
+    }
+
     // MARK: Identity sites
 
     func testThePasteTargetMatchIsByEditKeySoTheMasterIsNotTheOpenCopy() {
@@ -151,7 +155,15 @@ final class VirtualCopyDocumentTests: XCTestCase {
         await cache.invalidate(editKey: copy.editKey)
         let copyAgain = await cache.thumbnail(for: copy)
         XCTAssertNotNil(copyAgain)
+        // Invalidating the FILE drops every version: swap the two edit files on disk, and both thumbnails must be re-rendered from them.
+        var plain = EditState(); plain.exposureEV = 0
+        try SidecarStore.write(edited, forPhotoAt: imageURL) // master now +2 EV
+        try SidecarStore.write(plain, forPhotoAt: imageURL, versionKey: "aaaaaaaa") // copy now unedited
         await cache.invalidate(path: imageURL.path)
+        let masterAfter = try unwrapped(await cache.thumbnail(for: master))
+        let copyAfter = try unwrapped(await cache.thumbnail(for: copy))
+        XCTAssertEqual(firstPixelRed(masterAfter), firstPixelRed(b), "the master was re-rendered with its new edits")
+        XCTAssertEqual(firstPixelRed(copyAfter), firstPixelRed(a), "the copy was re-rendered too")
     }
 
     // MARK: Source pins for the identity sites
@@ -179,7 +191,10 @@ final class VirtualCopyDocumentTests: XCTestCase {
         XCTAssertTrue(paste.contains("photo.editKey == openPhotoPath"))
         let doc = try text("Sources/UI/ImageDocumentModel.swift")
         XCTAssertTrue(doc.contains("historyEditKey == editKey"), "a save may only embed the history that belongs to the open VERSION")
-        XCTAssertTrue(doc.contains("versionKey: versionKey)"))
+        XCTAssertTrue(doc.contains("SidecarStore.write(snapshot, historyObject: historyObject, forPhotoAt: url, versionKey: versionKey)"))
+        XCTAssertTrue(doc.contains("SidecarStore.write(snapshot, forPhotoAt: url, versionKey: versionKey)"))
+        XCTAssertTrue(doc.contains("SidecarStore.read(forPhotoAt: url, versionKey: versionKey)"))
+        XCTAssertTrue(doc.contains("SidecarStore.readHistory(forPhotoAt: url, versionKey: versionKey)"))
         let exporter = try text("Sources/Rendering/PhotoExporter.swift")
         XCTAssertTrue(exporter.contains("versionKey: photo.versionKey"))
     }

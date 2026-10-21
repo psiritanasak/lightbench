@@ -68,7 +68,7 @@ final class TrashModel: ObservableObject {
     // MARK: - Request
 
     /// `shown`: the photos the Library is showing, in grid order (`displayedPhotos`) for `.rejected`, the selected visible ones for `.selected`.
-    func request(_ kind: Kind, shown: [Photo], scope: String, providers: RenameProviders, catalog: CatalogModel) {
+    func request(_ kind: Kind, shown: [Photo], scope: String, providers: RenameProviders, catalog: CatalogModel) async {
         self.catalog = catalog
         guard !isBusy else { return }
         guard !catalog.isRenameInProgress else { statusMessage = CatalogModel.renameInProgressMessage; return }
@@ -78,14 +78,15 @@ final class TrashModel: ObservableObject {
             statusMessage = kind == .rejected ? "There are no rejected photos in what the Library is showing." : "Select at least one photo first."
             return
         }
-        let masterIDs = Set(targets.filter { !$0.isVirtualCopy }.compactMap(\.id))
-        let targetIDs = Set(targets.compactMap(\.id))
-        // Copies of a targeted master that are not themselves targeted: they leave with the master's file.
-        let withMasters = catalog.photos.filter { copy in
-            guard let masterID = copy.masterId, masterIDs.contains(masterID), let id = copy.id else { return false }
-            return !targetIDs.contains(id)
-        }.count
-        pending = Request(kind: kind, photos: targets, scope: scope, copiesWithMasters: withMasters)
+        // Counted from the DATABASE (the plan's own source), not from the viewed list: a master seen from an album or Smart Collection has
+        // copies the view does not show, and they leave with it.
+        let copies: [Int64: [Photo]]
+        do { copies = try await catalog.copiesByMaster() } catch {
+            statusMessage = "Couldn't count the virtual copies that would go with these photos (\(error.localizedDescription)), so nothing was moved."
+            return
+        }
+        guard !isBusy else { return } // something started while the copies were read
+        pending = Request(kind: kind, photos: targets, scope: scope, copiesWithMasters: Self.copiesWithMasters(targets: targets, copiesByMaster: copies))
     }
 
     func cancel() { pending = nil }
@@ -142,7 +143,10 @@ final class TrashModel: ObservableObject {
 
         // 3. Plan. The photo open in the Editor is skipped here, and checked AGAIN right before each photo moves (`gate`).
         let allPaths = Array(await catalog.cataloguedPathOwners().keys)
-        let copiesOfMasters = await catalog.copiesByMaster()
+        guard let copiesOfMasters = try? await catalog.copiesByMaster() else {
+            statusMessage = "Couldn't read the virtual copies of these photos, so nothing was moved."
+            return
+        }
         let plan = await Task.detached { [openPath = providers.openPhotoPath()] in
             TrashPlan.make(photos: reachable, openPhotoPath: openPath, cataloguedPaths: allPaths, copiesOfMasters: copiesOfMasters)
         }.value
@@ -176,6 +180,14 @@ final class TrashModel: ObservableObject {
     }
 
     // MARK: - Pure helpers (testable)
+
+    /// Copies of a targeted master that are not themselves targeted: they leave with the master's file.
+    nonisolated static func copiesWithMasters(targets: [Photo], copiesByMaster: [Int64: [Photo]]) -> Int {
+        let targetIDs = Set(targets.compactMap(\.id))
+        return Set(targets.filter { !$0.isVirtualCopy }.compactMap(\.id)).reduce(0) { total, masterID in
+            total + (copiesByMaster[masterID] ?? []).filter { $0.id.map { !targetIDs.contains($0) } ?? false }.count
+        }
+    }
 
     nonisolated static func targets(_ kind: Kind, from photos: [Photo]) -> [Photo] {
         switch kind {

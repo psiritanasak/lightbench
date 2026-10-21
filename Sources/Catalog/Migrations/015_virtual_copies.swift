@@ -28,6 +28,8 @@ enum Migration015VirtualCopies {
                 table.column("masterId", .integer).references("photo", onDelete: .cascade) // names the FINAL table (a self-reference to photo_new would not be rewritten by the rename)
                 table.column("versionKey", .text)
                 table.column("versionName", .text)
+                // A version key becomes part of a file name: only 8 lowercase hex characters may ever be stored.
+                table.check(sql: "versionKey IS NULL OR (length(versionKey) = 8 AND versionKey NOT GLOB '*[^0-9a-f]*')")
             }
             try db.execute(sql: """
                 INSERT INTO photo_new (id, path, filename, fileSize, importedAt, rating, flagStatus, colorLabel)
@@ -35,8 +37,13 @@ enum Migration015VirtualCopies {
                 """)
             try db.drop(table: "photo")
             try db.rename(table: "photo_new", to: "photo")
-            if let oldSequence {
-                try db.execute(sql: "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'photo'", arguments: [oldSequence])
+            // Carry the counter over even when the table is EMPTY (then `photo_new` got no sqlite_sequence row at all). sqlite_sequence has no
+            // unique key on name, so delete-then-insert rather than INSERT OR REPLACE.
+            let maxID = try Int64.fetchOne(db, sql: "SELECT MAX(id) FROM photo") ?? 0
+            let counter = max(oldSequence ?? 0, maxID)
+            try db.execute(sql: "DELETE FROM sqlite_sequence WHERE name = 'photo'")
+            if counter > 0 {
+                try db.execute(sql: "INSERT INTO sqlite_sequence (name, seq) VALUES ('photo', ?)", arguments: [counter])
             }
             try db.execute(sql: "CREATE UNIQUE INDEX photo_master_path ON photo(path) WHERE versionKey IS NULL")
             try db.execute(sql: "CREATE UNIQUE INDEX photo_path_version ON photo(path, versionKey)")

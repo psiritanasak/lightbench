@@ -28,10 +28,10 @@ final class VirtualCopyFilesTests: XCTestCase {
     func testAMastersSidecarNameIsUnchangedAndACopysCarriesItsKey() {
         let url = URL(fileURLWithPath: "/p/IMG_1.jpg")
         XCTAssertEqual(SidecarStore.sidecarURL(for: url).lastPathComponent, "IMG_1.jpg.photoapp.json")
-        XCTAssertEqual(SidecarStore.sidecarURL(for: url, versionKey: nil).lastPathComponent, "IMG_1.jpg.photoapp.json")
-        XCTAssertEqual(SidecarStore.sidecarURL(for: url, versionKey: "0a1b2c3d").lastPathComponent, "IMG_1.jpg.0a1b2c3d.photoapp.json")
-        XCTAssertEqual(SidecarStore.sidecarURL(for: photo(url)).lastPathComponent, "IMG_1.jpg.photoapp.json")
-        XCTAssertEqual(SidecarStore.sidecarURL(for: photo(url, key: "0a1b2c3d")).lastPathComponent, "IMG_1.jpg.0a1b2c3d.photoapp.json")
+        XCTAssertEqual(SidecarStore.versionedSidecarURL(for: url, versionKey: nil)?.lastPathComponent, "IMG_1.jpg.photoapp.json")
+        XCTAssertEqual(SidecarStore.versionedSidecarURL(for: url, versionKey: "0a1b2c3d")?.lastPathComponent, "IMG_1.jpg.0a1b2c3d.photoapp.json")
+        XCTAssertEqual(SidecarStore.sidecarURL(for: photo(url))?.lastPathComponent, "IMG_1.jpg.photoapp.json")
+        XCTAssertEqual(SidecarStore.sidecarURL(for: photo(url, key: "0a1b2c3d"))?.lastPathComponent, "IMG_1.jpg.0a1b2c3d.photoapp.json")
         XCTAssertEqual(
             SidecarStore.versionSidecarURLs(forMasterAt: url, keys: ["aaaaaaaa", "bbbbbbbb"]).map(\.lastPathComponent),
             ["IMG_1.jpg.aaaaaaaa.photoapp.json", "IMG_1.jpg.bbbbbbbb.photoapp.json"])
@@ -73,6 +73,31 @@ final class VirtualCopyFilesTests: XCTestCase {
         _ = try file("a.jpg.notakey.photoapp.json")
         _ = try file("b.jpg.cccccccc.photoapp.json")
         XCTAssertEqual(SidecarStore.versionSidecarKeys(forPhotoAt: url), ["aaaaaaaa", "bbbbbbbb"])
+    }
+
+    func testAMalformedKeyIsRefusedNeverRepairedIntoAnotherVersionsKey() throws {
+        let url = try file("a.jpg")
+        for bad in ["aaaaaaaaZ", "AAAAAAAA", "aaaaaaa", "aaaaaaaa/", "../../x"] {
+            XCTAssertNil(SidecarStore.versionedSidecarURL(for: url, versionKey: bad), bad)
+            XCTAssertEqual(SidecarStore.read(forPhotoAt: url, versionKey: bad), .undecodable, "never read: \(bad)")
+            XCTAssertThrowsError(try SidecarStore.write(EditState(), forPhotoAt: url, versionKey: bad), bad)
+            XCTAssertNil(SidecarStore.readHistory(forPhotoAt: url, versionKey: bad))
+        }
+        XCTAssertEqual(SidecarStore.versionSidecarKeys(forPhotoAt: url), [], "nothing was written for a bad key")
+    }
+
+    func testAnUnreadableSourceEditFileIsRefusedEvenWithLiveEdits() throws {
+        let url = try file("a.jpg")
+        let broken = try file("a.jpg.photoapp.json", "{not json")
+        var live = EditState(); live.exposureEV = 2
+        XCTAssertThrowsError(try VirtualCopyFiles.writeVersionSidecar(from: photo(url), versionKey: "aaaaaaaa", liveState: live)) {
+            XCTAssertEqual($0 as? VirtualCopyFiles.Failure, .sourceEditsUnreadable)
+        }
+        XCTAssertEqual(SidecarStore.versionSidecarKeys(forPhotoAt: url), [])
+        XCTAssertEqual(try String(contentsOf: broken, encoding: .utf8), "{not json", "the source's file is left exactly as it was")
+        // With a readable (or absent) file the live state wins.
+        try FileManager.default.removeItem(at: broken)
+        XCTAssertNotNil(try VirtualCopyFiles.writeVersionSidecar(from: photo(url), versionKey: "aaaaaaaa", liveState: live))
     }
 
     // MARK: Writing a copy's edit file

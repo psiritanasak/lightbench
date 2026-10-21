@@ -40,6 +40,10 @@ struct ImportCopySource: Equatable, Sendable {
     let captureDate: Date
 }
 
+/// DECISION (virtual copies): Copy Photos copies a photo's own edit file (`<file>.photoapp.json`) but NEVER a virtual copy's edit file
+/// (`<file>.<versionKey>.photoapp.json`). The destination files get no catalog copy rows, so a version file there would be an orphan; and in
+/// Move mode the original goes to the Trash while its version files stay behind in the source folder (never moved, never deleted by this
+/// feature). `ImportCopyVersionSidecarTests` pins both.
 struct ImportCopyPlan: Equatable, Sendable {
     /// A sidecar that follows its photo (same folder as the copy, named after the copy).
     struct Companion: Equatable, Sendable {

@@ -1247,8 +1247,9 @@ final class CatalogModel: ObservableObject {
     }
 
     /// Every known virtual copy, grouped by master row id (what `TrashPlan` needs to take a master's copies with it).
-    func copiesByMaster() async -> [Int64: [Photo]] {
-        guard let database, let all = try? await database.allPhotos() else { return [:] }
+    func copiesByMaster() async throws -> [Int64: [Photo]] {
+        guard let database else { throw CatalogDatabaseError(message: "The photo catalog isn't ready yet.") }
+        let all = try await database.allPhotos()
         return Dictionary(grouping: all.filter { $0.masterId != nil }, by: { $0.masterId ?? -1 })
     }
 
@@ -1266,14 +1267,23 @@ final class CatalogModel: ObservableObject {
     }
 
     /// Photo ▸ Create Virtual Copy and the grid cell's menu item: one copy of each photo in `photos`. Reports through the same alert as import.
-    func createVirtualCopy(of photo: Photo, flushEdits: @escaping () -> Void = {}) {
+    func createVirtualCopy(of photo: Photo, flushEdits: (() -> Void)? = nil) {
         createVirtualCopies(of: [photo], flushEdits: flushEdits)
     }
 
-    func createVirtualCopies(of photos: [Photo], flushEdits: @escaping () -> Void = {}) {
+    /// Set by `ContentView`: the Editor's open version with its in-memory edits, and a flush of its pending save. Every entry point (the Photo
+    /// menu and the grid cell menu) falls back to them, so both behave the same.
+    var openVersionProvider: (() -> (editKey: String, state: EditState)?)?
+    var flushOpenEdits: (() -> Void)?
+
+    /// `openVersion`: the version open in the Editor and its in-memory edits; a copy of THAT version carries what is on screen even if its
+    /// last save did not reach the disk.
+    func createVirtualCopies(of photos: [Photo], flushEdits: (() -> Void)? = nil, openVersion: (editKey: String, state: EditState)? = nil) {
+        let flush = flushEdits ?? flushOpenEdits ?? {}
+        let open = openVersion ?? openVersionProvider?()
         Task { [weak self] in
             guard let self else { return }
-            self.importStatusMessage = await self.virtualCopies.create(from: photos, catalog: self, flushEdits: flushEdits)
+            self.importStatusMessage = await self.virtualCopies.create(from: photos, catalog: self, flushEdits: flush, openVersion: open)
         }
     }
 
@@ -1457,12 +1467,14 @@ final class CatalogModel: ObservableObject {
         guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
         guard let database, let id = photo.id else { return }
         let before = photos.count
+        let removedCopyIDs = Set(photos.filter { photo.isVirtualCopy == false && $0.masterId == id }.compactMap(\.id))
         // Removing a master from the Library removes its virtual copies' rows too (the database cascades); mirror that here.
         photos.removeAll { $0.id == id || (photo.isVirtualCopy == false && $0.masterId == id) }
         // Keep the empty-state decision honest: `photoCount` is only re-read by `refresh()`, which this path skips on success.
         // Only when the list actually got shorter (a repeated Remove on the same cell must not under-count).
         if photos.count < before { photoCount = max(0, photoCount - (before - photos.count)) }
         selectedPhotoIDs.remove(id)
+        if !photo.isVirtualCopy { selectedPhotoIDs.subtract(removedCopyIDs) } // the cascade took the copies; they must not stay selected
         membershipsByPhotoID.removeValue(forKey: id)
         recomputeFolderPhotoCounts()
         keywordIDsByPhotoID.removeValue(forKey: id)

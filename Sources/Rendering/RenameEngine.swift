@@ -80,7 +80,7 @@ enum RenameEngine {
         // too, found by listing the folder (so it works even when the catalog is out of step). Discovered per move, from the pristine folder.
         let ownSidecarsByMove: [[OwnSidecar]] = moves.map { item in
             baseSidecars + SidecarStore.versionSidecarKeys(forPhotoAt: URL(fileURLWithPath: item.oldPath)).map { key in
-                OwnSidecar(url: { SidecarStore.sidecarURL(for: $0, versionKey: key) }, tag: "v" + key,
+                OwnSidecar(url: { SidecarStore.versionedSidecarURL(for: $0, versionKey: key) ?? SidecarStore.sidecarURL(for: $0) }, tag: "v" + key,
                            foreignMessage: "a version edit file already exists next to")
             }
         }

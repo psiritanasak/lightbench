@@ -155,6 +155,8 @@ struct LibraryGridView: View {
     /// file's own `mainContent` doc comment); a 6th alert there would risk
     /// the same failure again.
     @State private var photoPendingRemoval: Photo?
+    /// Virtual copies that would go with `photoPendingRemoval` (read from the database when asked: the view may not show them).
+    @State private var copiesPendingRemoval = 0
 
     /// D4 (IMPROVEMENTS.md): whether the grid itself (as opposed to the
     /// search field, a Picker, or a cell's own Button) currently owns
@@ -209,7 +211,14 @@ struct LibraryGridView: View {
                                     ) {
                                         onOpen(photo)
                                     } onRequestRemoval: {
-                                        photoPendingRemoval = photo
+                                        Task {
+                                            guard let copies = await LibraryRemovalText.copyCount(for: photo, loading: { try await catalog.copiesByMaster() }) else {
+                                                catalog.importStatusMessage = "Couldn't count this photo's virtual copies, so nothing was removed."
+                                                return
+                                            }
+                                            copiesPendingRemoval = copies
+                                            photoPendingRemoval = photo
+                                        }
                                     }
                                     .id(photo.editKey)
                                 }
@@ -280,7 +289,7 @@ struct LibraryGridView: View {
             Button("Remove", role: .destructive) { catalog.removePhoto(photo) }
             Button("Cancel", role: .cancel) {}
         } message: { photo in
-            Text("\"\(photo.filename)\" will be removed from the Library. The original file on disk is not affected.")
+            Text(LibraryRemovalText.message(for: photo, copyCount: copiesPendingRemoval))
         }
         .onAppear {
             // Normalizes the STORED value on every appearance (this view
@@ -852,7 +861,7 @@ private struct LibraryThumbnailCell: View {
                     }
                     Divider()
                     Button {
-                        catalog.createVirtualCopy(of: photo)
+                        catalog.createVirtualCopy(of: photo) // same open-version / flush hooks as the Photo menu (set by ContentView)
                     } label: {
                         Label("Create Virtual Copy", systemImage: "square.on.square")
                     }
@@ -982,8 +991,8 @@ private struct LibraryThumbnailCell: View {
             // session's earlier testing because nothing had been cached
             // yet for the deleted photo.
             async let missingCheck = catalog.isPhotoConfirmedMissing(photo)
-            let sidecarURL = SidecarStore.sidecarURL(for: photo) // the version's own edit file for a virtual copy
-            hasEdits = FileManager.default.fileExists(atPath: sidecarURL.path)
+            let sidecarURL = SidecarStore.sidecarURL(for: photo) // the version's own edit file for a virtual copy (nil: malformed key)
+            hasEdits = sidecarURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
             let thumb = await thumbnail
             let missing = await missingCheck
             // A superseded `.task` (this cell recycled onto a different

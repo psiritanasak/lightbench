@@ -29,7 +29,7 @@ struct TrashDialogModifier: ViewModifier {
                 catalog.trashRequested = nil
                 guard !blocked else { return }
                 let shown = kind == .rejected ? catalog.displayedPhotos : catalog.selectedPhotosInDisplayedGrid
-                model.request(kind, shown: shown, scope: catalog.currentScopeName, providers: providers, catalog: catalog)
+                Task { await model.request(kind, shown: shown, scope: catalog.currentScopeName, providers: providers, catalog: catalog) }
             }
             .confirmationDialog(
                 model.pending.map(TrashModel.confirmationTitle) ?? "Move to Trash",

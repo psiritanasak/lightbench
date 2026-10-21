@@ -162,7 +162,8 @@ struct PhotoAppApp: App {
                 Button("Create Virtual Copy") {
                     catalog.createVirtualCopies(
                         of: catalog.virtualCopyTargets(showLibrary: showLibrary, openEditKey: document.currentEditKey),
-                        flushEdits: { document.flushPendingSidecarSave() }
+                        flushEdits: { document.flushPendingSidecarSave() },
+                        openVersion: document.currentEditKey.map { ($0, document.editState) }
                     )
                 }
                 .keyboardShortcut("'", modifiers: .command)
@@ -260,12 +261,9 @@ struct PhotoAppApp: App {
     private var photoNeighbors: (previous: Photo?, next: Photo?) {
         // Both cheap disqualifiers first, so the common "no photo open" and
         // "browsing the grid" cases never touch the filter+sort at all.
-        guard !showLibrary, !cull.isActive, let currentPath = document.currentURL?.path else { return (nil, nil) }
-        let displayed = catalog.displayedPhotos
-        return (
-            previous: LibraryNavigation.neighbor(of: currentPath, in: displayed, offset: -1),
-            next: LibraryNavigation.neighbor(of: currentPath, in: displayed, offset: 1)
-        )
+        guard !showLibrary, !cull.isActive, let currentKey = document.currentEditKey else { return (nil, nil) }
+        // By EDIT KEY: with a virtual copy open, its master (same path) must not be mistaken for the open photo.
+        return LibraryNavigation.neighbors(ofEditKey: currentKey, in: catalog.displayedPhotos)
     }
 
     /// Deliberately goes through the SAME `load(from:)` the Library grid's own

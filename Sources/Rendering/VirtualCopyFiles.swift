@@ -30,7 +30,7 @@ enum VirtualCopyFiles {
     ) -> String? {
         for _ in 0..<16 {
             let key = String(format: "%08x", random())
-            if !fileExists(SidecarStore.sidecarURL(for: photoURL, versionKey: key)) { return key }
+            if let url = SidecarStore.versionedSidecarURL(for: photoURL, versionKey: key), !fileExists(url) { return key }
         }
         return nil
     }
@@ -38,12 +38,22 @@ enum VirtualCopyFiles {
     /// Writes the new version's edit file: the SOURCE version's saved edits (`source` is a master or another copy), without `_history`.
     /// Returns the file written, or nil when the source has no saved edits (nothing to copy: a version with no file means "unedited").
     @discardableResult
-    static func writeVersionSidecar(from source: Photo, versionKey: String) throws -> URL? {
+    /// `liveState`: the source version's CURRENT in-memory edits when it is the one open in the Editor. They win over the file on disk, which
+    /// may be older (a pending save, a declined folder or a failed write would otherwise silently give the copy stale edits).
+    static func writeVersionSidecar(from source: Photo, versionKey: String, liveState: EditState? = nil) throws -> URL? {
         let photoURL = URL(fileURLWithPath: source.path)
         guard FileManager.default.fileExists(atPath: photoURL.path) else { throw Failure.fileMissing }
-        let target = SidecarStore.sidecarURL(for: photoURL, versionKey: versionKey)
+        guard let target = SidecarStore.versionedSidecarURL(for: photoURL, versionKey: versionKey) else { throw Failure.versionFileExists }
         guard !RenameEngine.itemExists(target) else { throw Failure.versionFileExists }
-        switch SidecarStore.read(forPhotoAt: photoURL, versionKey: source.versionKey) {
+        let onDisk = SidecarStore.read(forPhotoAt: photoURL, versionKey: source.versionKey)
+        // An edit file that exists but cannot be read is refused even when the live state is at hand: the user is told, and nothing is
+        // written over the file that the copy's source keeps using.
+        if onDisk == .undecodable { throw Failure.sourceEditsUnreadable }
+        if let liveState {
+            try SidecarStore.write(liveState, forPhotoAt: photoURL, versionKey: versionKey)
+            return target
+        }
+        switch onDisk {
         case .missing:
             return nil
         case .undecodable:

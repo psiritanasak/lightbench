@@ -1192,6 +1192,8 @@ struct ContentView: View {
             // invalidates its stale Library thumbnail instead of leaving
             // it showing the original forever.
             .onAppear {
+                catalog.openVersionProvider = { document.currentEditKey.map { ($0, document.editState) } }
+                catalog.flushOpenEdits = { document.flushPendingSidecarSave() }
                 document.onSidecarSaved = { url in catalog.invalidateThumbnail(for: url) }
                 document.onVersionSidecarSaved = { url, key in catalog.invalidateThumbnail(forVersion: key, ofFileAt: url) }
                 // D13: drop an armed-but-unfinished mask / Point Color from the OUTGOING photo before `load(from:)` flushes and swaps state.

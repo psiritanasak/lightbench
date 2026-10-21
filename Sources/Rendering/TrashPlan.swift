@@ -188,12 +188,12 @@ struct TrashPlan: Equatable, Sendable {
             for copy in copiesByMaster[entry.id] ?? [] {
                 guard let copyID = copy.id else { continue }
                 if !also.contains(copyID) { also.append(copyID) }
-                if let key = copy.versionKey { versionKeys.insert(key) }
+                if let key = copy.versionKey, SidecarStore.isValidVersionKey(key) { versionKeys.insert(key) }
             }
             // Also any version edit file lying beside the file that no catalog row names (an orphan): it belongs to this file and goes with it.
             versionKeys.formUnion(SidecarStore.versionSidecarKeys(inNames: listingNames[folderPath] ?? [], forFileNamed: entry.url.lastPathComponent))
             for key in versionKeys.sorted() {
-                let versionFile = SidecarStore.sidecarURL(for: entry.url, versionKey: key)
+                guard let versionFile = SidecarStore.versionedSidecarURL(for: entry.url, versionKey: key) else { continue }
                 if present(versionFile) { companions.append(Companion(url: versionFile, kind: .editSidecar)) }
             }
             plan.items.append(Item(photoID: entry.id, photoURL: entry.url, alsoIDs: also, companions: companions))
@@ -202,7 +202,7 @@ struct TrashPlan: Equatable, Sendable {
             guard let id = copy.id else { continue }
             let file = URL(fileURLWithPath: copy.path)
             let versionFile = SidecarStore.sidecarURL(for: copy)
-            let companions = [.file, .symlink].contains(fileKind(versionFile)) ? [Companion(url: versionFile, kind: .editSidecar)] : []
+            let companions = versionFile.map { [.file, .symlink].contains(fileKind($0)) ? [Companion(url: $0, kind: .editSidecar)] : [] } ?? []
             plan.items.append(Item(photoID: id, photoURL: file, companions: companions, isVersionOnly: true))
         }
         return plan

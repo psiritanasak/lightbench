@@ -478,7 +478,7 @@ final class TrashModelTests: XCTestCase {
     }
 
     private func run(_ kind: TrashModel.Kind, shown: [Photo]) async throws {
-        model.request(kind, shown: shown, scope: "All Photos", providers: providers, catalog: catalog)
+        await model.request(kind, shown: shown, scope: "All Photos", providers: providers, catalog: catalog)
         let request = try XCTUnwrap(model.pending)
         model.confirm(request, providers: providers, catalog: catalog)
         for _ in 0..<2000 where model.isWorking { try await Task.sleep(nanoseconds: 5_000_000) }
@@ -492,18 +492,18 @@ final class TrashModelTests: XCTestCase {
     func testRejectedActsOnlyOnRejectedPhotosAmongThoseShown() async throws {
         let photos = try await makePhotos(["a.jpg", "b.jpg", "c.jpg"], rejected: ["a.jpg", "c.jpg"])
         let shown = try await db.allPhotos().filter { $0.filename != "c.jpg" } // c.jpg is rejected but hidden by a filter
-        model.request(.rejected, shown: shown, scope: "All Photos", providers: providers, catalog: catalog)
+        await model.request(.rejected, shown: shown, scope: "All Photos", providers: providers, catalog: catalog)
         XCTAssertEqual(model.pending?.photos.map(\.filename), ["a.jpg"], "b is not rejected, c is not shown")
         _ = photos
     }
 
     func testNothingRejectedOrSelectedExplainsInsteadOfOpeningADialog() async throws {
         let photos = try await makePhotos(["a.jpg"])
-        model.request(.rejected, shown: photos, scope: "All Photos", providers: providers, catalog: catalog)
+        await model.request(.rejected, shown: photos, scope: "All Photos", providers: providers, catalog: catalog)
         XCTAssertNil(model.pending)
         XCTAssertEqual(model.statusMessage, "There are no rejected photos in what the Library is showing.")
         model.statusMessage = nil
-        model.request(.selected, shown: [], scope: "All Photos", providers: providers, catalog: catalog)
+        await model.request(.selected, shown: [], scope: "All Photos", providers: providers, catalog: catalog)
         XCTAssertNil(model.pending)
         XCTAssertEqual(model.statusMessage, "Select at least one photo first.")
     }
@@ -511,19 +511,19 @@ final class TrashModelTests: XCTestCase {
     func testARequestIsRefusedWhileSomethingElseIsBusyOrARenameRuns() async throws {
         let photos = try await makePhotos(["a.jpg"], rejected: ["a.jpg"])
         busy = "An export is running or being set up — finish or cancel it first."
-        model.request(.rejected, shown: photos, scope: "x", providers: providers, catalog: catalog)
+        await model.request(.rejected, shown: photos, scope: "x", providers: providers, catalog: catalog)
         XCTAssertNil(model.pending)
         XCTAssertEqual(model.statusMessage, busy)
         busy = nil
         catalog.isRenameInProgress = true
-        model.request(.rejected, shown: photos, scope: "x", providers: providers, catalog: catalog)
+        await model.request(.rejected, shown: photos, scope: "x", providers: providers, catalog: catalog)
         XCTAssertNil(model.pending)
         XCTAssertEqual(model.statusMessage, CatalogModel.renameInProgressMessage)
     }
 
     func testNothingMovesWithoutAConfirmation() async throws {
         let photos = try await makePhotos(["a.jpg"], rejected: ["a.jpg"])
-        model.request(.rejected, shown: photos, scope: "All Photos", providers: providers, catalog: catalog)
+        await model.request(.rejected, shown: photos, scope: "All Photos", providers: providers, catalog: catalog)
         XCTAssertNotNil(model.pending)
         XCTAssertTrue(model.isBusy)
         XCTAssertTrue(catalog.trashBusy, "a pending confirmation blocks the other file tools")
@@ -563,7 +563,7 @@ final class TrashModelTests: XCTestCase {
         let photos = try await makePhotos(["a.jpg", "b.jpg"], rejected: ["a.jpg", "b.jpg"])
         // Not open while planning; b.jpg becomes the open photo once a.jpg has moved (tied to the run itself, not to how often it is asked).
         let sneaky = RenameProviders(openPhotoPath: { self.log.names.isEmpty ? nil : self.dir.appendingPathComponent("b.jpg").path }, busyReason: { nil })
-        model.request(.rejected, shown: photos, scope: "x", providers: sneaky, catalog: catalog)
+        await model.request(.rejected, shown: photos, scope: "x", providers: sneaky, catalog: catalog)
         model.confirm(try XCTUnwrap(model.pending), providers: sneaky, catalog: catalog)
         for _ in 0..<2000 where model.isWorking { try await Task.sleep(nanoseconds: 5_000_000) }
         XCTAssertEqual(log.names, ["a.jpg"], "b.jpg became the open photo before its turn and was left alone")
@@ -575,7 +575,7 @@ final class TrashModelTests: XCTestCase {
     func testAFlagChangedAfterTheDialogOpenedIsRespected() async throws {
         let photos = try await makePhotos(["a.jpg", "b.jpg"], rejected: ["a.jpg", "b.jpg"])
         let id = try XCTUnwrap(photos.first { $0.filename == "a.jpg" }?.id)
-        model.request(.rejected, shown: photos, scope: "All Photos", providers: providers, catalog: catalog)
+        await model.request(.rejected, shown: photos, scope: "All Photos", providers: providers, catalog: catalog)
         let request = try XCTUnwrap(model.pending)
         // While the dialog (and the folder prompts after it) are up the grid stays interactive: a.jpg is un-rejected meanwhile.
         try await db.setFlagStatus(.picked, for: id)
@@ -601,7 +601,7 @@ final class TrashModelTests: XCTestCase {
         let photos = try await makePhotos(["a.jpg", "b.jpg", "c.jpg"], rejected: ["a.jpg", "b.jpg", "c.jpg"])
         // Busy as soon as one photo has moved (an export started, say): checked before EVERY photo, not once.
         let midRun = RenameProviders(openPhotoPath: { nil }, busyReason: { self.log.names.isEmpty ? nil : "An export is running or being set up — finish or cancel it first." })
-        model.request(.rejected, shown: photos, scope: "x", providers: midRun, catalog: catalog)
+        await model.request(.rejected, shown: photos, scope: "x", providers: midRun, catalog: catalog)
         model.confirm(try XCTUnwrap(model.pending), providers: midRun, catalog: catalog)
         for _ in 0..<2000 where model.isWorking { try await Task.sleep(nanoseconds: 5_000_000) }
         XCTAssertEqual(log.names, ["a.jpg"], "the run stopped after the first photo")
@@ -618,7 +618,7 @@ final class TrashModelTests: XCTestCase {
         // Planned in name order (the JPG first, which claims the shared .xmp). Not open while planning; the NEF becomes the open photo once
         // the JPG has moved, before its own turn.
         let providers = RenameProviders(openPhotoPath: { self.log.names.isEmpty ? nil : nef }, busyReason: { nil })
-        model.request(.rejected, shown: photos, scope: "x", providers: providers, catalog: catalog)
+        await model.request(.rejected, shown: photos, scope: "x", providers: providers, catalog: catalog)
         model.confirm(try XCTUnwrap(model.pending), providers: providers, catalog: catalog)
         for _ in 0..<2000 where model.isWorking { try await Task.sleep(nanoseconds: 5_000_000) }
         XCTAssertEqual(log.names, ["IMG_1.JPG"], "the open NEF and the .xmp it shares were never touched")

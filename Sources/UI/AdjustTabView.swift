@@ -450,7 +450,7 @@ struct AdjustTabView: View {
             // accessibility traits.
             Picker("", selection: $panel.selectedToneCurveChannel) {
                 ForEach(ToneCurveChannel.allCases) { channel in
-                    Text(channelSegmentLabel(for: channel)).tag(channel)
+                    Text(ToneCurveChannelLabels.segmentLabel(for: channel)).tag(channel)
                 }
             }
             .pickerStyle(.segmented)
@@ -462,6 +462,11 @@ struct AdjustTabView: View {
             .onChange(of: panel.selectedToneCurveChannel) { _, _ in
                 panel.selectedToneCurvePointIndex = nil
             }
+            // Always present (blank when nothing is edited): the row appearing would move the canvas mid-drag.
+            Text(ToneCurveChannelLabels.captionRowText(editedChannels: editedToneCurveChannels))
+                .font(.caption2)
+                .foregroundStyle(Theme.textSecondary)
+                .accessibilityHidden(editedToneCurveChannels.isEmpty)
             // `.id(channel)` is LOAD-BEARING, not decoration — the same
             // reasoning as `maskDetail`'s `.id(id)` below. `ToneCurveEditorView`
             // owns view-identity-scoped `@State`
@@ -519,14 +524,11 @@ struct AdjustTabView: View {
         }
     }
 
-    /// The segmented picker's label for `channel` — its plain name, plus a
-    /// trailing dot when that channel's curve is non-empty. Without this,
-    /// an edited channel other than the one currently shown is invisible
-    /// state: exactly the failure class this slice's own backend half was
-    /// reviewer-caught shipping once already (`isAdjustTabAtIdentity` not
-    /// accounting for the three new fields).
-    private func channelSegmentLabel(for channel: ToneCurveChannel) -> String {
-        toneCurvePointsBinding(for: channel).wrappedValue.isEmpty ? channel.rawValue : "\(channel.rawValue) •"
+    /// The channels whose curve is non-empty, named in the "Edited: …" caption under the picker (plain segment
+    /// labels, D21: a dot in the label resized the segments). Without some indicator an edited channel other
+    /// than the one shown is invisible state.
+    private var editedToneCurveChannels: Set<ToneCurveChannel> {
+        Set(ToneCurveChannel.allCases.filter { !toneCurvePointsBinding(for: $0).wrappedValue.isEmpty })
     }
 
     /// The currently-shown channel's own point array — a read-only
@@ -730,7 +732,7 @@ struct AdjustTabView: View {
     /// a puck that could land at a non-zero Hue with near-zero Saturation
     /// — could show Reset enabled with that range absent from the
     /// indicator, the same "invisible edited state" failure class
-    /// `channelSegmentLabel` above documents being reviewer-caught for the
+    /// the Curve channel picker documents being reviewer-caught for the
     /// Curve section once already). `ColorWheelGeometry.polarValue`'s
     /// center snap keeps a puck dragged back to dead-center at exactly
     /// Hue 0/Saturation 0, so this trio reads as identity exactly when the
@@ -744,10 +746,11 @@ struct AdjustTabView: View {
     /// A plain caption summarizing which Shadows/Midtones/Highlights
     /// ranges are edited, so an edited range other than the one currently
     /// shown isn't invisible state (the same failure class
-    /// `channelSegmentLabel` above already documents being
-    /// reviewer-caught for the Curve section once). Hidden entirely
-    /// (`Group` renders nothing) when no range is edited, matching this
-    /// section's other identity-driven visibility precedents.
+    /// the Curve channel picker already documents being
+    /// reviewer-caught for the Curve section once). The row is ALWAYS
+    /// present (a blank line while no range is edited, hidden from
+    /// accessibility then): a row that appears only after the first edit
+    /// moves the wheel mid-drag and makes the puck jump.
     ///
     /// Lives OUTSIDE the `Picker`'s own segment labels — attempt 4 (see
     /// IMPROVEMENTS.md's D21 for the numbering), and this time
@@ -775,26 +778,23 @@ struct AdjustTabView: View {
     /// "Shadows") — a plain summary sentence sidesteps needing that
     /// measurement at all, at the cost of being slightly less compact.
     /// This is ordinary SwiftUI `Text`, with no AppKit control bridging
-    /// segment-by-segment, so it needs no special accessibility handling
-    /// (or `.clear`-based visibility trick) at all — VoiceOver reads it
+    /// segment-by-segment, so VoiceOver reads it (only the blank placeholder
+    /// is hidden from accessibility) — VoiceOver reads it
     /// exactly as it reads any other `Text` in this file. Live-verified
     /// with 3 progressive user screenshots — editing Shadows, then also
     /// Midtones, then also Highlights — confirming the caption read
     /// exactly "Edited: Shadows", then "Edited: Shadows, Midtones", then
     /// "Edited: Shadows, Midtones, Highlights" at each step, in that
     /// order.
-    /// `channelSegmentLabel`'s identical STRING-length-based dot (not
-    /// touched here) still has approach 1's original layout-shift risk —
-    /// see its own IMPROVEMENTS.md entry (D21).
+    /// The Curve channel picker had the same dot and now uses the same
+    /// caption design (`ToneCurveChannelLabels`, D21).
     private var colorGradingEditedRangesSummary: some View {
         let edited = ColorGradingRange.allCases.filter { !isColorGradingRangeAtIdentity($0) }
-        return Group {
-            if !edited.isEmpty {
-                Text("Edited: \(edited.map(\.rawValue).joined(separator: ", "))")
-                    .font(.caption2)
-                    .foregroundStyle(Theme.textSecondary)
-            }
-        }
+        // Always present (blank when nothing is edited) so the wheel below never shifts when a range first changes.
+        return Text(edited.isEmpty ? " " : "Edited: \(edited.map(\.rawValue).joined(separator: ", "))")
+            .font(.caption2)
+            .foregroundStyle(Theme.textSecondary)
+            .accessibilityHidden(edited.isEmpty)
     }
 
     private var isSelectedColorGradingRangeAtIdentity: Bool {

@@ -143,6 +143,7 @@ final class RenameModel: ObservableObject {
         let wasStale = isPresentingSheet && !sheetIsVisible && !isWorking
         if wasStale { isPresentingSheet = false }
         guard !isWorking, !isPresentingSheet else { return }
+        pendingStatusMessage = nil // never let a stale message pop up after this sheet
         if let reason = providers.busyReason() {
             statusMessage = reason
             return
@@ -195,6 +196,20 @@ final class RenameModel: ObservableObject {
     func sheetDidDisappear() {
         sheetIsVisible = false
         isPresentingSheet = false
+        // One run-loop turn later: an alert raised in the same pass as the sheet's dismissal can be dropped.
+        Task { @MainActor [weak self] in
+            guard let self, let message = self.pendingStatusMessage else { return }
+            self.pendingStatusMessage = nil
+            self.statusMessage = message
+        }
+    }
+
+    /// A status alert waiting for the sheet to finish dismissing (see `deliverStatus`).
+    private(set) var pendingStatusMessage: String?
+
+    /// Shows `message` as the status alert: at once when no sheet is on screen, otherwise from `sheetDidDisappear()`.
+    private func deliverStatus(_ message: String) {
+        if sheetIsVisible { pendingStatusMessage = message } else { statusMessage = message }
     }
 
     func cancel() {
@@ -331,10 +346,9 @@ final class RenameModel: ObservableObject {
             let count = try await catalog.applyRename(moves)
             isPresentingSheet = false
             canUndo = true
-            // An alert raised in the same pass as a sheet's dismissal can be dropped by macOS; wait a beat.
-            // (`isWorking` stays true until this returns, so nothing else can start in the gap.)
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            statusMessage = "Renamed \(count) photo\(count == 1 ? "" : "s"). Use Undo Rename to put the names back."
+            // An alert raised in the same pass as a sheet's dismissal can be dropped by macOS, so while the
+            // sheet is still on screen the message waits for `sheetDidDisappear()` (no timer to lose the race).
+            deliverStatus("Renamed \(count) photo\(count == 1 ? "" : "s"). Use Undo Rename to put the names back.")
         } catch {
             // `report`, not `sheetError`: if the sheet vanished mid-apply the message (which may be the
             // "files couldn't be put back — use Locate…" one) must still reach the user as an alert.

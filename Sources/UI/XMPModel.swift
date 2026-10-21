@@ -57,7 +57,14 @@ final class XMPModel: ObservableObject {
         guard !isBusy else { return }
         guard !catalog.isRenameInProgress else { statusMessage = CatalogModel.renameInProgressMessage; return }
         guard !photos.isEmpty else { statusMessage = "Select at least one photo first."; return }
-        pending = Request(kind: kind, photos: photos)
+        // XMP belongs to the FILE (one `.xmp` per image), so only MASTER rows take part: a virtual copy inherits its master's metadata and
+        // must never become a second writer of the same `.xmp`.
+        let masters = photos.filter { !$0.isVirtualCopy }
+        guard !masters.isEmpty else {
+            statusMessage = "XMP is stored once per image file — select the original photo, not its virtual copies."
+            return
+        }
+        pending = Request(kind: kind, photos: masters)
     }
 
     func cancel() { pending = nil }
@@ -137,8 +144,9 @@ final class XMPModel: ObservableObject {
     struct WriteOutcome: Equatable { var written = 0, shared = 0, unreadable = 0, failed = 0 }
     struct ReadOutcome { var items: [(photoID: Int64, fields: XMPLibraryFields)] = []; var noXMP = 0; var unreadable = 0 }
 
-    nonisolated static func writeAll(photos: [Photo], allPaths: [String], keywords: [Int64: [String]]) -> WriteOutcome {
+    nonisolated static func writeAll(photos allPhotos: [Photo], allPaths: [String], keywords: [Int64: [String]]) -> WriteOutcome {
         var out = WriteOutcome()
+        let photos = allPhotos.filter { !$0.isVirtualCopy } // masters only (see `request`)
         let urlByPhoto = photos.map { (photo: $0, url: URL(fileURLWithPath: $0.path)) }
         let known = knownPhotos(selected: urlByPhoto.map(\.url), allPaths: allPaths)
         let split = XMPSidecarOwnership.partition(selected: urlByPhoto.map(\.url), allPhotos: known)
@@ -170,8 +178,9 @@ final class XMPModel: ObservableObject {
         return urls
     }
 
-    nonisolated static func readAll(photos: [Photo], allPaths: [String]) -> ReadOutcome {
+    nonisolated static func readAll(photos allPhotos: [Photo], allPaths: [String]) -> ReadOutcome {
         var out = ReadOutcome()
+        let photos = allPhotos.filter { !$0.isVirtualCopy } // masters only (see `request`)
         let index = XMPSidecarOwnership.Index(knownPhotos(selected: photos.map { URL(fileURLWithPath: $0.path) }, allPaths: allPaths))
         for photo in photos {
             guard let id = photo.id else { continue }

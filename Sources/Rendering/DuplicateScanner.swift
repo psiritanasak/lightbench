@@ -56,7 +56,8 @@ enum DuplicateScanner {
         progress: @Sendable (Progress) -> Void = { _ in }
     ) async throws -> Result {
         let persist = persist ?? persistToDatabase(database)
-        let scannable = photos.compactMap { photo in photo.id.map { (id: $0, photo: photo) } }
+        // Virtual copies are never scanned on their own: they share their master's file, and a copy inherits the master's result.
+        let scannable = photos.filter { !$0.isVirtualCopy }.compactMap { photo in photo.id.map { (id: $0, photo: photo) } }
         // A task cancelled before it starts has done nothing; GRDB's async calls would throw CancellationError.
         if Task.isCancelled { return Result(candidates: [], skipped: 0, withoutFeaturePrint: 0, wasCancelled: true) }
         let cached: [Int64: PhotoFingerprint]

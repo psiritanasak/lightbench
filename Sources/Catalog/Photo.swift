@@ -54,6 +54,25 @@ struct Photo: Codable, Equatable, Identifiable, Sendable {
     var flagStatus: FlagStatus = .none
     /// Added in `Migrations/008_color_labels.swift`; default matches its `defaults(to: 0)`.
     var colorLabel: ColorLabel = .none
+    /// Added in `Migrations/015_virtual_copies.swift`: the MASTER row this virtual copy belongs to (nil for a master, i.e. every
+    /// photo imported the ordinary way). A copy is its own row (own rating/flag/label/keywords/collections) over the SAME file.
+    var masterId: Int64?
+    /// A short random token naming the copy's own sidecar (`<file>.<versionKey>.photoapp.json`); nil for a master.
+    var versionKey: String?
+    /// The copy's display name ("Copy 1", "Copy 2" ...); nil for a master.
+    var versionName: String?
+
+    /// True for a virtual copy (a row with a `versionKey`).
+    var isVirtualCopy: Bool { versionKey != nil }
+
+    /// Which EDIT SET this row is: the path for a master (exactly what `path` always meant), path + versionKey for a copy. Use this,
+    /// not `path`, wherever a cache/selection/"is this the open photo" decision is about the edits rather than the file.
+    var editKey: String { Self.editKey(path: path, versionKey: versionKey) }
+
+    static func editKey(path: String, versionKey: String?) -> String {
+        guard let versionKey else { return path }
+        return path + "\u{1F}" + versionKey
+    }
 }
 
 // MARK: - GRDB conformances
@@ -70,6 +89,9 @@ extension Photo: FetchableRecord, MutablePersistableRecord, TableRecord {
         static let rating = Column(CodingKeys.rating)
         static let flagStatus = Column(CodingKeys.flagStatus)
         static let colorLabel = Column(CodingKeys.colorLabel)
+        static let masterId = Column(CodingKeys.masterId)
+        static let versionKey = Column(CodingKeys.versionKey)
+        static let versionName = Column(CodingKeys.versionName)
     }
 
     /// GRDB calls this after a successful `INSERT` so `id` reflects the

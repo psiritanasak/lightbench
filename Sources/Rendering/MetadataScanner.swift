@@ -56,7 +56,7 @@ enum MetadataScanner {
     /// files are caught by `scan` itself, whose stat pass compares size + modification time and is cheap when nothing changed.
     static func photosNeedingScan(_ photos: [Photo], cached: [Int64: PhotoMetadata]) -> [Photo] {
         photos.filter { photo in
-            guard let id = photo.id else { return false }
+            guard let id = photo.id, !photo.isVirtualCopy else { return false }
             guard let row = cached[id] else { return true }
             return row.readerRevision != PhotoMetadata.currentReaderRevision
         }
@@ -70,7 +70,8 @@ enum MetadataScanner {
         progress: @Sendable (Progress) -> Void = { _ in }
     ) async throws -> Result {
         let persist = persist ?? persistToDatabase(database)
-        let scannable = photos.compactMap { photo in photo.id.map { (id: $0, path: photo.path) } }
+        // Virtual copies are never scanned on their own: they share their master's file, and a copy inherits the master's result.
+        let scannable = photos.filter { !$0.isVirtualCopy }.compactMap { photo in photo.id.map { (id: $0, path: photo.path) } }
         if Task.isCancelled { return Result(scanned: 0, reused: 0, skipped: 0, wasCancelled: true) }
         let cached: [Int64: PhotoMetadata]
         do {

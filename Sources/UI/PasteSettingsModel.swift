@@ -58,13 +58,14 @@ enum PasteSettingsPlan {
         URL(fileURLWithPath: photo.path).deletingLastPathComponent().path
     }
 
-    /// Splits `targets` into the one photo matching `openPhotoPath` (if
+    /// Splits `targets` into the one photo matching `openPhotoPath` — an EDIT KEY (`Photo.editKey`: the path for a master, so every
+    /// pre-virtual-copy caller is unchanged; path + version key for a copy, since two versions of one file are different edit sets) — (if
     /// any) and the rest, grouped by their own direct-parent folder.
     static func make(targets: [Photo], openPhotoPath: String?) -> Plan {
         var openPhoto: Photo?
         var remainder: [Photo] = []
         for photo in targets {
-            if openPhoto == nil, let openPhotoPath, photo.path == openPhotoPath {
+            if openPhoto == nil, let openPhotoPath, photo.editKey == openPhotoPath {
                 openPhoto = photo
             } else {
                 remainder.append(photo)
@@ -316,7 +317,7 @@ final class PasteSettingsModel: ObservableObject {
                     continue
                 }
                 let photoURL = URL(fileURLWithPath: photo.path)
-                let existing = SidecarStore.read(forPhotoAt: photoURL)
+                let existing = SidecarStore.read(forPhotoAt: photoURL, versionKey: photo.versionKey)
                 switch PasteSettingsPlan.decide(source: copied.state, existing: existing) {
                 case .unchanged:
                     unchanged += 1
@@ -324,7 +325,7 @@ final class PasteSettingsModel: ObservableObject {
                     skipped += 1
                 case .write(let merged):
                     do {
-                        try SidecarStore.write(merged, forPhotoAt: photoURL)
+                        try SidecarStore.write(merged, forPhotoAt: photoURL, versionKey: photo.versionKey)
                         onSidecarWritten(photoURL)
                         written += 1
                     } catch {

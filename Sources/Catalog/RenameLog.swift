@@ -28,9 +28,12 @@ enum RenameCatalogError: Error, Equatable, LocalizedError {
     case pathChanged(Int64)
     case pathTaken(String)
     case noLoggedRename
+    case copyCannotBeRenamed(Int64)
 
     var errorDescription: String? {
         switch self {
+        case .copyCannotBeRenamed:
+            return "A virtual copy shares its master's file; rename the master instead. Nothing was changed."
         case .photoMissing:
             return "A photo in this rename is no longer in the catalog."
         case .pathChanged:

@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// Small off-main thumbnail cache, keyed by file path. An `actor` gives
+/// Small off-main thumbnail cache, keyed by `Photo.editKey` (the file path for a master, so unchanged for every existing photo). An `actor` gives
 /// free in-flight de-duplication: two concurrent requests for the same
 /// path (SwiftUI's `.task(id:)` re-firing on scroll/relayout is a
 /// realistic way to trigger this) await the SAME decode rather than
@@ -40,7 +40,7 @@ actor ThumbnailCache {
         return cache
     }()
     private var inFlight: [String: Task<CGImage?, Never>] = [:]
-    /// Per-path monotonic counter, bumped by `invalidate(path:)`.
+    /// Per-edit-key monotonic counter, bumped by `invalidate(editKey:)` (and `invalidate(path:)`, which bumps every version).
     /// Reviewer-caught: `Task.cancel()` on `Never`-throwing tasks whose
     /// body never checks `Task.isCancelled` (true here — `ThumbnailGenerator`
     /// is a plain synchronous decode/render) is PURELY COSMETIC, not actual
@@ -93,47 +93,53 @@ actor ThumbnailCache {
     ///
     /// `Task.detached` would additionally drop priority and task-local
     /// propagation, so it is a downgrade for no measured gain.
+    /// Keyed by `Photo.editKey` (the path for a master, path + version key for a virtual copy): two versions of one file are
+    /// different edits and must never share a thumbnail. `keysByPath` remembers which keys exist for a file so a path-level event
+    /// (rename, relocate, trash, a stale folder grant) can invalidate every version at once.
     func thumbnail(for photo: Photo) async -> CGImage? {
         let path = photo.path
-        let key = path as NSString
+        let editKey = photo.editKey
+        let key = editKey as NSString
         if let cached = cache.object(forKey: key) { return cached }
-        if let existing = inFlight[path] { return await existing.value }
+        if let existing = inFlight[editKey] { return await existing.value }
+        keysByPath[path, default: []].insert(editKey)
 
-        let requestGeneration = generation[path, default: 0]
+        let requestGeneration = generation[editKey, default: 0]
         let task = Task<CGImage?, Never> {
             let editState = PhotoExporter.loadEditState(for: photo)
             return await ThumbnailGenerator.thumbnail(
                 for: URL(fileURLWithPath: path), maxPixelSize: Self.maxPixelSize, editState: editState
             )
         }
-        inFlight[path] = task
+        inFlight[editKey] = task
         let result = await task.value
         // See `generation`'s doc comment — skip touching shared state
-        // entirely if this path was invalidated while we were decoding.
-        guard generation[path, default: 0] == requestGeneration else { return result }
-        inFlight[path] = nil
+        // entirely if this edit set was invalidated while we were decoding.
+        guard generation[editKey, default: 0] == requestGeneration else { return result }
+        inFlight[editKey] = nil
         if let result {
             cache.setObject(result, forKey: key, cost: result.bytesPerRow * result.height)
         }
         return result
     }
 
-    /// Drops `path`'s cached thumbnail and bumps its generation (see
-    /// `generation`'s doc comment for why a `Task.cancel()` alone wouldn't
-    /// be sufficient here) — called when that photo's sidecar is saved.
-    /// Clears `inFlight[path]` too: NOT to stop the old decode (it can't),
-    /// but so the NEXT caller for this path starts a fresh request instead
-    /// of awaiting the stale one already running. Does NOT proactively
-    /// regenerate anything — the next `thumbnail(for:)` call decodes
-    /// fresh, triggered EITHER by naturally returning to the Library
-    /// (`LibraryGridView` is torn down and recreated on every Editor↔
-    /// Library switch) OR, while the grid is already on screen, by
-    /// `CatalogModel.invalidateThumbnail(for:)`'s own `thumbnailRevisions`
-    /// bump re-triggering an already-visible cell's `.task(id:)` — see
-    /// that method's own doc comment.
+    private var keysByPath: [String: Set<String>] = [:]
+
+    /// Drops the cached thumbnail of ONE edit set (`Photo.editKey`) and bumps its generation (see `generation`'s doc comment for why a
+    /// `Task.cancel()` alone wouldn't be sufficient here) — called when that version's sidecar is saved.
+    /// Clears `inFlight` too: NOT to stop the old decode (it can't), but so the NEXT caller starts a fresh request instead of awaiting the
+    /// stale one already running. Does NOT proactively regenerate anything — the next `thumbnail(for:)` call decodes fresh, triggered
+    /// EITHER by naturally returning to the Library OR, while the grid is already on screen, by
+    /// `CatalogModel.invalidateThumbnail`'s own `thumbnailRevisions` bump re-triggering an already-visible cell's `.task(id:)`.
+    func invalidate(editKey: String) {
+        generation[editKey, default: 0] += 1
+        cache.removeObject(forKey: editKey as NSString)
+        inFlight[editKey] = nil
+    }
+
+    /// Drops every version of the file at `path` (the master's key IS the path; copies' keys were recorded when they were requested).
     func invalidate(path: String) {
-        generation[path, default: 0] += 1
-        cache.removeObject(forKey: path as NSString)
-        inFlight[path] = nil
+        invalidate(editKey: path)
+        for key in keysByPath[path] ?? [] where key != path { invalidate(editKey: key) }
     }
 }

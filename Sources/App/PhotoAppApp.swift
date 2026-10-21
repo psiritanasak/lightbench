@@ -122,7 +122,7 @@ struct PhotoAppApp: App {
                 // Culling: a full-window Pick / Reject review of the photos the Library is showing.
                 Button("Cull Photos") {
                     guard !renameModel.isWorking else { return }
-                    cull.begin(startingAtPath: showLibrary ? catalog.focusedPhotoPath : document.currentURL?.path)
+                    cull.begin(startingAtPath: showLibrary ? catalog.focusedPhotoPath : document.currentEditKey)
                 }
                 .keyboardShortcut("c", modifiers: [.command, .option])
                 .help("Review photos one by one. Esc returns to the Library.")
@@ -154,6 +154,20 @@ struct PhotoAppApp: App {
                     cull.isActive || pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight || catalog.mergeBusy || catalog.fileToolBusy
                         || renameModel.isWorking || renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil
                         || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+                )
+                // Virtual copies: another independent edit version of the same file (Lightroom's own ⌘'). Library: the selected visible
+                // photos, else the focused one; Editor: the open photo/version. Edits made so far in the Editor are flushed first.
+                Button("Create Virtual Copy") {
+                    catalog.createVirtualCopies(
+                        of: catalog.virtualCopyTargets(showLibrary: showLibrary, openEditKey: document.currentEditKey),
+                        flushEdits: { document.flushPendingSidecarSave() }
+                    )
+                }
+                .keyboardShortcut("'", modifiers: .command)
+                .disabled(
+                    cull.isActive || catalog.virtualCopyTargets(showLibrary: showLibrary, openEditKey: document.currentEditKey).isEmpty
+                        || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight || catalog.mergeBusy
+                        || catalog.fileToolBusy || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
                 )
                 Divider()
                 // Batch rename: no default shortcut (matches Enhance). These only REQUEST — `ContentView`
@@ -266,7 +280,7 @@ struct PhotoAppApp: App {
         guard let photo, !renameModel.isWorking else { return }
         Task {
             await catalog.ensureAccessActive(forPhotoAt: photo.path)
-            await document.load(from: URL(fileURLWithPath: photo.path))
+            await document.load(photo: photo)
         }
     }
 }

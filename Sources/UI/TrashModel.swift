@@ -23,6 +23,10 @@ final class TrashModel: ObservableObject {
         let photos: [Photo]
         /// What the Library was showing when asked (named in the confirmation).
         let scope: String
+        /// Virtual copies that go WITH a targeted master (known when the request was made): named in the confirmation.
+        var copiesWithMasters = 0
+        /// Targeted virtual copies: only their edits and rows go; the shared image file stays.
+        var copiesOnly: Int { photos.filter(\.isVirtualCopy).count }
     }
 
     /// What a run did, for the result alert.
@@ -74,7 +78,14 @@ final class TrashModel: ObservableObject {
             statusMessage = kind == .rejected ? "There are no rejected photos in what the Library is showing." : "Select at least one photo first."
             return
         }
-        pending = Request(kind: kind, photos: targets, scope: scope)
+        let masterIDs = Set(targets.filter { !$0.isVirtualCopy }.compactMap(\.id))
+        let targetIDs = Set(targets.compactMap(\.id))
+        // Copies of a targeted master that are not themselves targeted: they leave with the master's file.
+        let withMasters = catalog.photos.filter { copy in
+            guard let masterID = copy.masterId, masterIDs.contains(masterID), let id = copy.id else { return false }
+            return !targetIDs.contains(id)
+        }.count
+        pending = Request(kind: kind, photos: targets, scope: scope, copiesWithMasters: withMasters)
     }
 
     func cancel() { pending = nil }
@@ -131,8 +142,9 @@ final class TrashModel: ObservableObject {
 
         // 3. Plan. The photo open in the Editor is skipped here, and checked AGAIN right before each photo moves (`gate`).
         let allPaths = Array(await catalog.cataloguedPathOwners().keys)
+        let copiesOfMasters = await catalog.copiesByMaster()
         let plan = await Task.detached { [openPath = providers.openPhotoPath()] in
-            TrashPlan.make(photos: reachable, openPhotoPath: openPath, cataloguedPaths: allPaths)
+            TrashPlan.make(photos: reachable, openPhotoPath: openPath, cataloguedPaths: allPaths, copiesOfMasters: copiesOfMasters)
         }.value
         if let reason = refusal(providers, catalog) { statusMessage = reason; return }
         result.skipped = plan.skipped
@@ -156,7 +168,8 @@ final class TrashModel: ObservableObject {
         result.stoppedBecause = outcome.stoppedBecause
         result.notAttempted = outcome.notAttempted
         if !outcome.trashedIDs.isEmpty {
-            let paths = plan.items.filter { outcome.trashedIDs.contains($0.photoID) }.map { $0.photoURL.path }
+            // A virtual copy trashed on its own leaves the shared file in place: its path must not drop the master's focus/thumbnail.
+            let paths = plan.items.filter { !$0.isVersionOnly && outcome.trashedIDs.contains($0.photoID) }.map { $0.photoURL.path }
             do { try await catalog.removeTrashedPhotos(ids: outcome.trashedIDs, paths: paths) } catch { result.catalogError = error.localizedDescription }
         }
         statusMessage = Self.summary(result)
@@ -183,7 +196,16 @@ final class TrashModel: ObservableObject {
         case .rejected: what = "the \(n) rejected \(n == 1 ? "photo" : "photos") in \(request.scope) that the Library is showing (its filters and search apply)"
         case .selected: what = "the \(n) selected \(n == 1 ? "photo" : "photos") in \(request.scope)"
         }
-        return "Moves \(what) to the Trash, with each photo's edit file and XMP sidecar. "
+        var copies = ""
+        if request.copiesWithMasters > 0 {
+            let c = request.copiesWithMasters
+            copies += "\(c) virtual cop\(c == 1 ? "y" : "ies") of these photos \(c == 1 ? "goes" : "go") with them (the file they share is moved). "
+        }
+        if request.copiesOnly > 0 {
+            let c = request.copiesOnly
+            copies += "\(c) selected virtual cop\(c == 1 ? "y is" : "ies are") removed on their own: only their edits go, the image file stays. "
+        }
+        return "Moves \(what) to the Trash, with each photo's edit file and XMP sidecar. " + copies
             + "A shared .xmp (same name as a RAW or JPEG that stays) is kept. The photo open in the Editor is skipped.\n\n"
             + "Nothing is permanently deleted: in the Trash, choose Put Back to restore a file, then import its folder again. "
             + "The photos are removed from the Library, and their ratings, labels, keywords, collections and face data go with them."

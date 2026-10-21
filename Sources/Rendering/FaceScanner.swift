@@ -49,7 +49,8 @@ enum FaceScanner {
         progress: @Sendable (Progress) -> Void = { _ in }
     ) async throws -> Result {
         let persist = persist ?? persistToDatabase(database)
-        let scannable = photos.compactMap { photo in photo.id.map { (id: $0, photo: photo) } }
+        // Virtual copies are never scanned on their own: they share their master's file, and a copy inherits the master's result.
+        let scannable = photos.filter { !$0.isVirtualCopy }.compactMap { photo in photo.id.map { (id: $0, photo: photo) } }
         var result = Result(scanned: 0, alreadyCurrent: 0, facesFound: 0, skipped: 0, undecodable: 0, wasCancelled: false)
         if Task.isCancelled { result.wasCancelled = true; return result }
         let cached: [Int64: FaceScanRecord]

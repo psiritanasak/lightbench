@@ -38,7 +38,7 @@ enum LibraryNavigation {
     /// a wrong jump. This is the same normalization caveat `PROGRESS.md`
     /// records for `invalidateThumbnail(for:)`.
     static func neighbor(of currentPath: String?, in photos: [Photo], offset: Int) -> Photo? {
-        guard let currentPath, let index = photos.firstIndex(where: { $0.path == currentPath }) else { return nil }
+        guard let currentPath, let index = photos.firstIndex(where: { $0.editKey == currentPath }) else { return nil }
         let target = index + offset
         guard photos.indices.contains(target) else { return nil }
         return photos[target]

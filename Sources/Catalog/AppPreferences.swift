@@ -17,6 +17,10 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let cullStartUnflaggedOnly = "prefs.v1.cullStartUnflaggedOnly"
         static let autoReadXMPOnImport = "prefs.v1.autoReadXMPOnImport"
         static let backupsToKeep = "prefs.v1.backupsToKeep"
+        static let importCopySubfolders = "prefs.v1.importCopySubfolders"
+        static let importCopyTemplate = "prefs.v1.importCopyTemplate"
+        static let importCopySkipAlreadyCopied = "prefs.v1.importCopySkipAlreadyCopied"
+        static let showPhotosInSubfolders = "prefs.v1.showPhotosInSubfolders"
     }
 
     let defaults: UserDefaults
@@ -51,6 +55,13 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
         nonmutating set { defaults.set(newValue, forKey: Key.autoReadXMPOnImport) }
     }
 
+    /// Library: a selected folder (folder-mirrored collection) also shows the photos of all its subfolders. Off by default: a folder shows only
+    /// the photos directly inside it, as before.
+    var showPhotosInSubfolders: Bool {
+        get { bool(Key.showPhotosInSubfolders, default: false) }
+        nonmutating set { defaults.set(newValue, forKey: Key.showPhotosInSubfolders) }
+    }
+
     /// How many backups of each kind (daily, manual) are kept in the Backups folder. The safety kinds (before-migration, before-restore, damaged)
     /// keep at least 5 whatever this is, and Back Up Now prunes only the manual pool.
     var backupsToKeep: Int {
@@ -62,6 +73,25 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
         }
         nonmutating set {
             defaults.set(min(max(newValue, Self.keepBackupsRange.lowerBound), Self.keepBackupsRange.upperBound), forKey: Key.backupsToKeep)
+        }
+    }
+
+    /// "Copy Photos into Library…": the last options used (the destination folder is NOT remembered: a saved path carries no sandbox grant).
+    /// A stored value that is no longer valid reads back as the default.
+    var importCopyOptions: ImportCopyOptions {
+        get {
+            var options = ImportCopyOptions()
+            if let raw = defaults.string(forKey: Key.importCopySubfolders), let stored = ImportCopyOptions.Subfolders(rawValue: raw) {
+                options.subfolders = stored
+            }
+            if let template = defaults.string(forKey: Key.importCopyTemplate), !template.isEmpty { options.renameTemplate = template }
+            options.skipAlreadyCopied = bool(Key.importCopySkipAlreadyCopied, default: true)
+            return options
+        }
+        nonmutating set {
+            defaults.set(newValue.subfolders.rawValue, forKey: Key.importCopySubfolders)
+            defaults.set(newValue.renameTemplate, forKey: Key.importCopyTemplate)
+            defaults.set(newValue.skipAlreadyCopied, forKey: Key.importCopySkipAlreadyCopied)
         }
     }
 }

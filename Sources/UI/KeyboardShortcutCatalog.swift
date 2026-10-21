@@ -98,6 +98,12 @@ enum KeyboardShortcutCatalog {
             ShortcutEntry(keys: "Delete", action: "Remove the point",
                           source: .code(file: "Sources/UI/ToneCurveEditorView.swift", contains: "case .delete, .deleteForward:")),
         ]),
+        ShortcutSection(title: "Color Grading wheel (when it has focus)", entries: [
+            ShortcutEntry(keys: "\u{2190} \u{2192}", action: "Step Hue (hold Shift for 3x)",
+                          source: .code(file: "Sources/UI/ColorGradingWheelView.swift", contains: "case .rightArrow: step(hueDelta:")),
+            ShortcutEntry(keys: "\u{2191} \u{2193}", action: "Step Saturation (hold Shift for 3x)",
+                          source: .code(file: "Sources/UI/ColorGradingWheelView.swift", contains: "case .upArrow: step(saturationDelta:")),
+        ]),
         ShortcutSection(title: "Culling", entries: [
             ShortcutEntry(keys: "\u{2190}", action: "Previous photo", source: .cull(.leftArrow)),
             ShortcutEntry(keys: "\u{2192}  Space", action: "Next photo", sources: [.cull(.rightArrow), .cull(.space)]),

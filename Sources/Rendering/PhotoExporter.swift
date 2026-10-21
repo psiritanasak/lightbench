@@ -4,15 +4,18 @@ import Metal
 
 /// The output format for an exported photo.
 enum ExportFormat: String, CaseIterable, Identifiable, Sendable, Codable {
-    case jpeg, png, tiff
+    case jpeg, png, tiff, heic
 
     var id: String { rawValue }
     var fileExtension: String { self == .jpeg ? "jpg" : rawValue }
+    /// Whether the format takes a lossy quality setting (the Export sheet shows the quality slider for these).
+    var isLossy: Bool { self == .jpeg || self == .heic }
     var label: String {
         switch self {
         case .jpeg: return "JPEG"
         case .png: return "PNG"
         case .tiff: return "TIFF"
+        case .heic: return "HEIC"
         }
     }
 }
@@ -65,7 +68,7 @@ enum ExportResize: Equatable, Sendable, Codable {
 
 struct ExportSettings: Sendable, Equatable {
     var format: ExportFormat = .jpeg
-    var quality: CGFloat = 0.9 // JPEG only, 0...1
+    var quality: CGFloat = 0.9 // JPEG and HEIC only, 0...1
     var resize: ExportResize = .original
     /// File-name template for the exported files (`NamingTemplate` syntax).
     /// The default `{name}` reproduces the source's own base name exactly,
@@ -261,7 +264,8 @@ enum PhotoExporter {
         to destinationFolder: URL,
         settings: ExportSettings,
         sequenceIndex: Int = 0,
-        keywords: [String] = []
+        keywords: [String] = [],
+        logoStore: WatermarkLogoStore = .shared
     ) async throws -> URL {
         let sourceURL = URL(fileURLWithPath: photo.path)
         // D37: refuse a truncated source rather than silently exporting a partial image.
@@ -290,7 +294,7 @@ enum PhotoExporter {
         // OutputSharpenTests); after-resize is simply the exact-pixel, unambiguous definition.
         var sharpened = OutputSharpen.apply(settings.sharpening, to: Self.resized(edited, option: settings.resize))
         if deferGrain { sharpened = EditPipeline.applyFinalGrain(editState, to: sharpened) }
-        let resizedPixels = WatermarkRenderer.apply(settings.watermark, to: sharpened)
+        let resizedPixels = WatermarkRenderer.apply(settings.watermark, to: sharpened, logoStore: logoStore)
         // The writer emits the image's own `properties`, so setting them IS applying the metadata policy.
         let resized = resizedPixels.settingProperties(
             KeywordEmbedding.properties(
@@ -357,6 +361,29 @@ enum PhotoExporter {
             try context.writePNGRepresentation(of: image, to: url, format: .RGBA8, colorSpace: outputColorSpace)
         case .tiff:
             try context.writeTIFFRepresentation(of: image, to: url, format: .RGBA16, colorSpace: outputColorSpace)
+        case .heic:
+            // HEIC is a delivery format like JPEG, so transparency is FLATTENED the same way JPEG does it: over opaque
+            // black (a 50%-alpha red reads back (127, 0, 1) from JPEG; HEIC is pinned to match in
+            // `ExportFormatProbeTests`). Left alone, `.RGBA8` would write an alpha auxiliary image that many HEIC
+            // readers ignore or show differently. 8-bit (`.RGBA8`) like the other lossy path.
+            // The blend is done on the OUTPUT-ENCODED values (as JPEG's writer does; blending in linear light would give
+            // 187 instead of 126 for that red), and `settingAlphaOne` makes the result opaque so no alpha plane is written.
+            let flattened: CIImage
+            if image.extent.isInfinite {
+                flattened = image
+            } else {
+                let encoded = image.matchedFromWorkingSpace(to: outputColorSpace) ?? image
+                let opaque = encoded.composited(over: CIImage(color: .black).cropped(to: image.extent))
+                    .settingAlphaOne(in: image.extent)
+                flattened = opaque.matchedToWorkingSpace(from: outputColorSpace) ?? opaque
+            }
+            try context.writeHEIFRepresentation(
+                of: flattened,
+                to: url,
+                format: .RGBA8,
+                colorSpace: outputColorSpace,
+                options: [.init(rawValue: kCGImageDestinationLossyCompressionQuality as String): quality]
+            )
         }
     }
 

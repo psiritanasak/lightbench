@@ -1051,4 +1051,86 @@ final class CatalogDatabaseTests: XCTestCase {
 
         XCTAssertNil(found)
     }
+
+    // MARK: - photos(inCollections:)
+
+    func testPhotosInCollectionsReturnsTheWholeSubtreeOnceAndSortedByImportedAtThenID() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importFolderTree(yearTripDayTree(dayFileCount: 3))
+        let collections = try await db.allCollections()
+        let ids = try collections.map { try XCTUnwrap($0.id) }
+        let tripID = try XCTUnwrap(collections.first { $0.name == "Trip" }?.id)
+
+        // Make the order observable: importedAt runs OPPOSITE to the ids, with a tie on the last two (id breaks it).
+        let stored = try await db.allPhotos().sorted { ($0.id ?? 0) < ($1.id ?? 0) }
+        XCTAssertEqual(stored.count, 4)
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        let offsets: [TimeInterval] = [40, 30, 10, 10]
+        for (photo, offset) in zip(stored, offsets) {
+            let photoID = try XCTUnwrap(photo.id)
+            let date = base.addingTimeInterval(offset)
+            try await db.dbQueue.write { database in
+                try database.execute(sql: "UPDATE photo SET importedAt = ? WHERE id = ?", arguments: [date, photoID])
+            }
+        }
+        let expected = zip(stored, offsets).sorted { ($0.1, $0.0.id ?? 0) < ($1.1, $1.0.id ?? 0) }.map { $0.0.id }
+
+        let all = try await db.photos(inCollections: ids)
+        XCTAssertEqual(all.count, 4)
+        XCTAssertEqual(all.map(\.id), expected, "importedAt ascending, id breaking ties - not rowid order")
+        XCTAssertNotEqual(all.map(\.id), stored.map(\.id), "the fixture really differs from id order")
+
+        let direct = try await db.photos(inCollection: tripID)
+        XCTAssertEqual(direct.map(\.filename), ["group.jpg"], "the single-collection query stays direct-only")
+    }
+
+    func testPhotosInCollectionsDeduplicatesAPhotoFoundInDifferentChunks() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importFolderTree(yearTripDayTree())
+        let all = try await db.allCollections()
+        let trip = try XCTUnwrap(all.first { $0.name == "Trip" }?.id)
+        let day = try XCTUnwrap(all.first { $0.name == "Day1" }?.id)
+        let tripPhotos = try await db.photos(inCollection: trip)
+        let groupPhoto = try XCTUnwrap(tripPhotos.first?.id)
+        try await db.setMembership(photoID: groupPhoto, collectionID: day, isMember: true)
+        // trip and day sit 600 positions apart, so they are queried in different chunks of 500.
+        let ids = [trip] + Array(repeating: Int64(50_000), count: 600) + [day]
+        let photos = try await db.photos(inCollections: ids)
+        XCTAssertEqual(photos.count, 2, "group.jpg is a member of both and must appear once")
+        XCTAssertEqual(Set(photos.compactMap(\.id)).count, 2)
+    }
+
+    func testPhotosInCollectionsDoesNotDuplicateAPhotoInSeveralCollections() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importFolderTree(yearTripDayTree())
+        let collections = try await db.allCollections()
+        let trip = try XCTUnwrap(collections.first { $0.name == "Trip" }?.id)
+        let day = try XCTUnwrap(collections.first { $0.name == "Day1" }?.id)
+        let tripPhotos = try await db.photos(inCollection: trip)
+        let groupPhoto = try XCTUnwrap(tripPhotos.first?.id)
+        try await db.setMembership(photoID: groupPhoto, collectionID: day, isMember: true)
+
+        let both = try await db.photos(inCollections: [trip, day, day])
+        XCTAssertEqual(both.count, 2)
+        XCTAssertEqual(Set(both.compactMap(\.id)).count, 2)
+    }
+
+    func testPhotosInCollectionsEmptyAndUnknownListsGiveNothing() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importFolderTree(yearTripDayTree())
+        let none = try await db.photos(inCollections: [])
+        XCTAssertTrue(none.isEmpty)
+        let unknown = try await db.photos(inCollections: [9999])
+        XCTAssertTrue(unknown.isEmpty)
+    }
+
+    func testPhotosInCollectionsHandlesAListLargerThanOneChunk() async throws {
+        let db = try makeDatabase()
+        _ = try await db.importFolderTree(yearTripDayTree())
+        let allCollections = try await db.allCollections()
+        let trip = try XCTUnwrap(allCollections.first { $0.name == "Trip" }?.id)
+        let ids = Array(repeating: Int64(50_000), count: 1_200) + [trip]
+        let photos = try await db.photos(inCollections: ids)
+        XCTAssertEqual(photos.map(\.filename), ["group.jpg"])
+    }
 }

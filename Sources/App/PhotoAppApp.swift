@@ -101,6 +101,8 @@ struct PhotoAppApp: App {
                 Divider()
                 Button("Back Up Catalog…") { catalog.backupRequested = .backUp }
                     .disabled(cull.isActive || catalog.backupBusy)
+                Button("Copy Photos into Library…") { catalog.importCopyRequested = true }
+                    .disabled(cull.isActive || !showLibrary || catalog.isRenameInProgress || catalog.fileToolBusy || catalog.mergeBusy || renameModel.isWorking)
                 Button("Restore Catalog from Backup…") { catalog.backupRequested = .restore }
                     .disabled(cull.isActive || catalog.backupBusy || catalog.isRenameInProgress || renameModel.isWorking)
             }
@@ -243,7 +245,7 @@ struct PhotoAppApp: App {
         }
         .windowResizability(.contentSize)
         Settings {
-            PreferencesView(model: preferences, isBackupBusy: catalog.backupBusy, backUpNow: { await catalog.backUpNow() },
+            PreferencesView(model: preferences, showPhotosInSubfolders: $catalog.showPhotosInSubfolders, isBackupBusy: catalog.backupBusy, backUpNow: { await catalog.backUpNow() },
                             backupsFolder: { catalog.backupsFolderURL })
                 .tint(Theme.controlTint)
         }

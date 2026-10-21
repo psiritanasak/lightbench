@@ -153,6 +153,35 @@ final class CatalogDatabase: Sendable {
         }
     }
 
+    /// Registers photos that "Copy Photos into Library…" just wrote under `root`: each becomes a `Photo` row (or reuses the existing row at
+    /// the same path) and joins the folder-mirrored collection of its DIRECT folder, exactly as a folder-tree import would. The chain of
+    /// collections from `root` down to that folder is found or created (`root` itself has no parent). Deliberately NOT
+    /// `importFolderTree(root)`: that would also sweep in unrelated files already sitting in the destination. One write, atomic.
+    func importCopiedFiles(_ urls: [URL], under root: URL) async throws -> ImportResult {
+        try await dbQueue.write { db in
+            let rootPath = root.path
+            var collectionIDs: [String: Int64] = [:]
+            func collectionID(for folder: URL) throws -> Int64 {
+                if let known = collectionIDs[folder.path] { return known }
+                let isBelowRoot = folder.path.hasPrefix(rootPath + "/")
+                let parentID: Int64? = isBelowRoot ? try collectionID(for: folder.deletingLastPathComponent()) : nil
+                let id = try Self.findOrCreateFolderCollection(
+                    name: folder.lastPathComponent, folderPath: folder.path, parentID: parentID, db: db
+                )
+                collectionIDs[folder.path] = id
+                return id
+            }
+            var result = ImportResult(inserted: 0, skipped: 0)
+            for url in urls {
+                let (photoID, wasInserted) = try Self.insertPhotoIfNeeded(url: url, db: db)
+                let folderID = try collectionID(for: url.deletingLastPathComponent())
+                try CollectionPhoto(collectionId: folderID, photoId: photoID).insert(db, onConflict: .ignore)
+                if wasInserted { result.inserted += 1 } else { result.skipped += 1 }
+            }
+            return result
+        }
+    }
+
     /// Inserts `url` as a new `Photo` if no row with that `path` already
     /// exists, or returns the existing row's id unchanged. Shared by
     /// `importPhotos` (above) and `importFolderTree` (below) so a photo
@@ -766,6 +795,28 @@ final class CatalogDatabase: Sendable {
                 .filter(photoIDs.contains(Photo.Columns.id))
                 .order(Photo.Columns.importedAt, Photo.Columns.id)
                 .fetchAll(db)
+        }
+    }
+
+    /// Every photo that is a member of ANY of `collectionIDs`, each once, in the same `importedAt, id` order as `photos(inCollection:)`.
+    /// Runs one subselect query per chunk of 500 collection ids (the ids never expand into a giant photo-id `IN (...)`, and stay under
+    /// SQLite's variable limit), drops a photo that turns up in several chunks, and sorts the merged result in memory. An empty list gives
+    /// no photos. The folder-tree "show photos in subfolders" view uses it; `photos(inCollection:)` stays direct-members-only.
+    func photos(inCollections collectionIDs: [Int64]) async throws -> [Photo] {
+        guard !collectionIDs.isEmpty else { return [] }
+        return try await dbQueue.read { db in
+            var photos: [Photo] = []
+            // Chunked below SQLite's variable limit (999 on old builds); the id sets of different chunks are merged afterwards.
+            var seen = Set<Int64>()
+            for start in stride(from: 0, to: collectionIDs.count, by: 500) {
+                let chunk = Array(collectionIDs[start..<min(start + 500, collectionIDs.count)])
+                let members = CollectionPhoto
+                    .filter(chunk.contains(CollectionPhoto.Columns.collectionId))
+                    .select(CollectionPhoto.Columns.photoId)
+                let found = try Photo.filter(members.contains(Photo.Columns.id)).fetchAll(db)
+                for photo in found { if let id = photo.id, seen.insert(id).inserted { photos.append(photo) } }
+            }
+            return photos.sorted { ($0.importedAt, $0.id ?? 0) < ($1.importedAt, $1.id ?? 0) }
         }
     }
 

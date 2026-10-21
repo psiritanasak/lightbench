@@ -349,6 +349,35 @@ final class RenameModelTests: XCTestCase {
         XCTAssertNil(read("a.jpg"))
     }
 
+    /// D43: with the sheet on screen the success alert is held until the sheet has disappeared (never timed, never lost).
+    func testTheSuccessAlertWaitsForTheSheetToDisappear() async throws {
+        let photos = try await makePhotos(["a.jpg", "b.jpg"])
+        try await beginAndSettle(photos, template: "Trip_{seq}")
+        model.sheetDidAppear()
+        try await applyAndWait()
+        XCTAssertNil(model.statusMessage, "raised while the sheet was still up")
+        XCTAssertNotNil(model.pendingStatusMessage)
+        model.sheetDidDisappear()
+        XCTAssertNil(model.statusMessage, "delivered one run-loop turn after the sheet is gone, not inside onDisappear")
+        try await waitUntil("the held alert") { self.model.statusMessage != nil }
+        XCTAssertTrue(model.statusMessage?.contains("Renamed 2 photos") ?? false, "\(String(describing: model.statusMessage))")
+        XCTAssertNil(model.pendingStatusMessage)
+    }
+
+    func testAHeldAlertIsDroppedWhenTheNextRenameBegins() async throws {
+        let photos = try await makePhotos(["a.jpg", "b.jpg"])
+        try await beginAndSettle(photos, template: "Trip_{seq}")
+        model.sheetDidAppear()
+        try await applyAndWait()
+        XCTAssertNotNil(model.pendingStatusMessage)
+        model.sheetDidDisappear()
+        model.statusMessage = nil
+        model.begin(photos: photos, catalog: catalog, providers: providers)
+        XCTAssertNil(model.pendingStatusMessage)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertNil(model.statusMessage, "a stale message must not pop up after the next sheet opens")
+    }
+
     // MARK: Opening, loading state, races
 
     func testBeginWhileTheSheetIsAlreadyOpenIsIgnored() async throws {

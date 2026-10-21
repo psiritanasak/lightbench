@@ -37,6 +37,9 @@ struct RenameBusyState {
     /// A Move to Trash confirmation is up or photos are being moved (a rename would move the files under it). Left false in the providers the
     /// Trash itself uses, which would otherwise refuse their own run.
     var isTrashBusy = false
+    /// Copy Photos into Library… is scanning, asking for options or copying (a rename would move the files it is reading or has just added).
+    /// Left false in the providers that tool uses itself.
+    var isImportCopyBusy = false
 
     var reason: String? {
         if hasModalPanel { return "Finish or cancel the open dialog first." }
@@ -46,6 +49,7 @@ struct RenameBusyState {
         if isMerging { return "Photo Merge is in progress — wait for it to finish." }
         if isBackupBusy { return "A catalog backup or restore is in progress — wait for it to finish." }
         if isTrashBusy { return "Photos are being moved to the Trash — wait for it to finish." }
+        if isImportCopyBusy { return "Photos are being copied into the Library — wait for it to finish." }
         if isXMPBusy { return "XMP metadata is being read or written — wait for it to finish." }
         if isImporting { return "An import is running — wait for it to finish." }
         if isToolScanRunning { return "A face or duplicate scan is still running — wait for it to finish." }
@@ -139,6 +143,7 @@ final class RenameModel: ObservableObject {
         let wasStale = isPresentingSheet && !sheetIsVisible && !isWorking
         if wasStale { isPresentingSheet = false }
         guard !isWorking, !isPresentingSheet else { return }
+        pendingStatusMessage = nil // never let a stale message pop up after this sheet
         if let reason = providers.busyReason() {
             statusMessage = reason
             return
@@ -191,6 +196,20 @@ final class RenameModel: ObservableObject {
     func sheetDidDisappear() {
         sheetIsVisible = false
         isPresentingSheet = false
+        // One run-loop turn later: an alert raised in the same pass as the sheet's dismissal can be dropped.
+        Task { @MainActor [weak self] in
+            guard let self, let message = self.pendingStatusMessage else { return }
+            self.pendingStatusMessage = nil
+            self.statusMessage = message
+        }
+    }
+
+    /// A status alert waiting for the sheet to finish dismissing (see `deliverStatus`).
+    private(set) var pendingStatusMessage: String?
+
+    /// Shows `message` as the status alert: at once when no sheet is on screen, otherwise from `sheetDidDisappear()`.
+    private func deliverStatus(_ message: String) {
+        if sheetIsVisible { pendingStatusMessage = message } else { statusMessage = message }
     }
 
     func cancel() {
@@ -327,10 +346,9 @@ final class RenameModel: ObservableObject {
             let count = try await catalog.applyRename(moves)
             isPresentingSheet = false
             canUndo = true
-            // An alert raised in the same pass as a sheet's dismissal can be dropped by macOS; wait a beat.
-            // (`isWorking` stays true until this returns, so nothing else can start in the gap.)
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            statusMessage = "Renamed \(count) photo\(count == 1 ? "" : "s"). Use Undo Rename to put the names back."
+            // An alert raised in the same pass as a sheet's dismissal can be dropped by macOS, so while the
+            // sheet is still on screen the message waits for `sheetDidDisappear()` (no timer to lose the race).
+            deliverStatus("Renamed \(count) photo\(count == 1 ? "" : "s"). Use Undo Rename to put the names back.")
         } catch {
             // `report`, not `sheetError`: if the sheet vanished mid-apply the message (which may be the
             // "files couldn't be put back — use Locate…" one) must still reach the user as an alert.

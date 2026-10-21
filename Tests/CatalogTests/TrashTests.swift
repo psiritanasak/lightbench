@@ -753,7 +753,7 @@ final class TrashModelTests: XCTestCase {
         let content = try source("Sources/UI/ContentView.swift")
         XCTAssertTrue(content.contains("isTrashBusy: includingTrash && catalog.trashBusy"), "the Trash's own providers must not count its own flag")
         XCTAssertTrue(content.contains("trashProviders: trashProviders"))
-        XCTAssertTrue(try source("Sources/UI/CatalogModel.swift").contains("mergeBusy || xmpBusy || trashBusy || backupBusy"))
+        XCTAssertTrue(try source("Sources/UI/CatalogModel.swift").contains("mergeBusy || xmpBusy || trashBusy || importCopyBusy || backupBusy"))
         XCTAssertTrue(RenameBusyState(isTrashBusy: true).reason != nil, "a rename waits for a Trash run")
     }
 }

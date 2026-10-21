@@ -1,7 +1,7 @@
 import Foundation
 
 /// The catalog row (rating / flag / colour label) of the photo OPEN in the Editor, for the bar under the photo and the editor's
-/// rating keys. The Editor only knows a URL, so the row is looked up by path, asynchronously; no row (a photo opened with
+/// rating keys. The Editor knows a URL plus a version key, so the row is looked up by EDIT KEY (`Photo.editKey`: the path for a master, path + version key for a virtual copy — the bar must act on the open VERSION), asynchronously; no row (a photo opened with
 /// File > Open that was never imported, a lookup failure) means `photo == nil` and every action is a no-op.
 ///
 /// Two hazards it guards: a lookup that finishes AFTER the user moved on (each `sync` bumps a token; a stale result is dropped),
@@ -41,7 +41,7 @@ final class EditorPhotoMeta: ObservableObject {
         self.setLabelInCatalog = setColorLabel
     }
 
-    /// Call whenever the open photo's path or the load state changes. Clears `photo` while loading or with no photo; otherwise
+    /// Call whenever the open photo's edit key (`path` here, for source compatibility) or the load state changes. Clears `photo` while loading or with no photo; otherwise
     /// looks the row up. Returns the lookup task (nil when nothing is looked up) so tests can await it.
     @discardableResult
     func sync(path: String?, isLoading: Bool) -> Task<Void, Never>? {
@@ -51,7 +51,7 @@ final class EditorPhotoMeta: ObservableObject {
             return nil
         }
         // A different path than the one held must not keep acting on the old row while the lookup runs.
-        if photo?.path != path { photo = nil }
+        if photo?.editKey != path { photo = nil }
         let mine = token
         return Task { [weak self] in
             guard let self else { return }

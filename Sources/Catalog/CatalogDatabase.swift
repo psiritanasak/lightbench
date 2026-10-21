@@ -124,6 +124,7 @@ final class CatalogDatabase: Sendable {
         Migration012PhotoFingerprint.register(in: &migrator)
         Migration013Faces.register(in: &migrator)
         Migration014PhotoMetadata.register(in: &migrator)
+        Migration015VirtualCopies.register(in: &migrator)
         return migrator
     }
 
@@ -189,7 +190,7 @@ final class CatalogDatabase: Sendable {
     /// still report its own inserted-vs-skipped counts.
     private static func insertPhotoIfNeeded(url: URL, db: Database) throws -> (photoID: Int64, wasInserted: Bool) {
         let path = url.path
-        if let existing = try Photo.filter(Photo.Columns.path == path).fetchOne(db), let id = existing.id {
+        if let existing = try Photo.filter(Photo.Columns.path == path).filter(Photo.Columns.versionKey == nil).fetchOne(db), let id = existing.id {
             return (id, false)
         }
         let attributes = try? FileManager.default.attributesOfItem(atPath: path)
@@ -247,7 +248,7 @@ final class CatalogDatabase: Sendable {
     /// opened via `Open…` rather than imported has no row here).
     func photo(atPath path: String) async throws -> Photo? {
         try await dbQueue.read { db in
-            try Photo.filter(Photo.Columns.path == path).fetchOne(db)
+            try Photo.filter(Photo.Columns.path == path).filter(Photo.Columns.versionKey == nil).fetchOne(db)
         }
     }
 
@@ -408,17 +409,22 @@ final class CatalogDatabase: Sendable {
         try await dbQueue.write { db in
             var relocated: Set<Int64> = []
             for move in moves {
+                // Another MASTER at the destination blocks the move (copies share their master's path and follow it below).
                 guard try Photo.filter(Photo.Columns.path == move.newPath)
+                    .filter(Photo.Columns.versionKey == nil)
                     .filter(Photo.Columns.id != move.photoID)
                     .fetchCount(db) == 0
                 else { continue }
                 guard var photo = try Photo.filter(Photo.Columns.id == move.photoID).fetchOne(db) else { continue }
+                // A virtual copy never relocates on its own: it shares its master's file and moves with the master row.
+                guard !photo.isVirtualCopy else { continue }
                 photo.path = move.newPath
                 photo.filename = URL(fileURLWithPath: move.newPath).lastPathComponent
                 if let fileSize = (try? FileManager.default.attributesOfItem(atPath: move.newPath))?[.size] as? Int64 {
                     photo.fileSize = fileSize
                 }
                 try photo.update(db)
+                try Self.followMaster(photo, in: db)
                 relocated.insert(move.photoID)
             }
             return relocated
@@ -506,6 +512,18 @@ final class CatalogDatabase: Sendable {
         }
     }
 
+    /// Points every virtual copy of `master` at the master's (new) path/filename/size, in the caller's transaction. A copy is the
+    /// same FILE, so its `path` column must always equal its master's.
+    private static func followMaster(_ master: Photo, in db: Database) throws {
+        guard let masterID = master.id else { return }
+        try Photo.filter(Photo.Columns.masterId == masterID).updateAll(
+            db,
+            Photo.Columns.path.set(to: master.path),
+            Photo.Columns.filename.set(to: master.filename),
+            Photo.Columns.fileSize.set(to: master.fileSize)
+        )
+    }
+
     private static func fileSizes(atPaths paths: [String]) -> [String: Int64] {
         var sizes: [String: Int64] = [:]
         for path in paths {
@@ -524,12 +542,16 @@ final class CatalogDatabase: Sendable {
                 throw RenameCatalogError.photoMissing(move.photoID)
             }
             guard photo.path == move.oldPath else { throw RenameCatalogError.pathChanged(move.photoID) }
+            // Renaming acts on masters only; a copy's path follows its master (below). Never rename a shared file through a copy row.
+            guard !photo.isVirtualCopy else { throw RenameCatalogError.copyCannotBeRenamed(move.photoID) }
             // Case-insensitive for ASCII only (SQLite NOCASE): SQLite's `=` is case-sensitive but APFS isn't, so a
             // catalogued photo at a differently-cased path could be the very same file. This is a best-effort catalog
             // guard — non-ASCII case (É/é) and NFC/NFD forms can still alias here; the engine's RENAME_EXCL is what
             // guarantees no FILE is ever overwritten.
             let taken = try Photo.filter(Photo.Columns.path.collating(.nocase) == move.newPath)
-                .filter(!batchIDs.contains(Photo.Columns.id)).fetchCount(db)
+                .filter(!batchIDs.contains(Photo.Columns.id))
+                .filter(Photo.Columns.masterId == nil || !batchIDs.contains(Photo.Columns.masterId)) // the batch's own copies share a moving master's path (NULL-safe: masters have no masterId)
+                .fetchCount(db)
             guard taken == 0 else { throw RenameCatalogError.pathTaken(move.newPath) }
             photos[move.photoID] = photo
         }
@@ -547,6 +569,51 @@ final class CatalogDatabase: Sendable {
             photo.filename = URL(fileURLWithPath: move.newPath).lastPathComponent
             if let size = sizes[move.newPath] { photo.fileSize = size }
             try photo.update(db)
+            try Self.followMaster(photo, in: db)
+        }
+    }
+
+    // MARK: - Virtual copies
+
+    /// The copies of the master `masterID`, oldest first.
+    func copies(ofMasterID masterID: Int64) async throws -> [Photo] {
+        try await dbQueue.read { db in
+            try Photo.filter(Photo.Columns.masterId == masterID).order(Photo.Columns.id).fetchAll(db)
+        }
+    }
+
+    /// Inserts a virtual copy of `source` (a master or another copy: the copy always hangs off the MASTER) under `versionKey`, in ONE
+    /// transaction, and joins the master's FOLDER collection(s). The new row starts with default rating/flag/label (per-version metadata) and
+    /// the display name "Copy N" (N = one more than the master's highest existing number). The caller creates the version's edit file
+    /// (it needs folder access) and passes a fresh random `versionKey`; a key that is not well formed or is already in use for this path
+    /// is refused, changing nothing. The shared image file is never touched here.
+    func createVirtualCopy(of source: Photo, versionKey: String) async throws -> Photo {
+        guard SidecarStore.isValidVersionKey(versionKey) else {
+            throw CatalogDatabaseError(message: "createVirtualCopy: malformed version key")
+        }
+        return try await dbQueue.write { db in
+            guard let sourceID = source.id, let current = try Photo.fetchOne(db, key: sourceID) else {
+                throw CatalogDatabaseError(message: "createVirtualCopy: the source photo is no longer in the catalog")
+            }
+            guard let masterID = current.masterId ?? current.id, let master = try Photo.fetchOne(db, key: masterID) else {
+                throw CatalogDatabaseError(message: "createVirtualCopy: the master photo is no longer in the catalog")
+            }
+            let names = try String.fetchAll(db, Photo.filter(Photo.Columns.masterId == masterID).select(Photo.Columns.versionName))
+            let highest = names.compactMap { $0.hasPrefix("Copy ") ? Int($0.dropFirst(5)) : nil }.max() ?? 0
+            var copy = Photo(
+                id: nil, path: master.path, filename: master.filename, fileSize: master.fileSize,
+                importedAt: master.importedAt, // sorts right after its master in the default (import) order
+                masterId: masterID, versionKey: versionKey, versionName: "Copy \(highest + 1)"
+            )
+            try copy.insert(db)
+            guard let copyID = copy.id else { throw CatalogDatabaseError(message: "insert(db) did not assign photo.id") }
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO collection_photo (collectionId, photoId)
+                SELECT cp.collectionId, ? FROM collection_photo cp
+                JOIN collection c ON c.id = cp.collectionId
+                WHERE cp.photoId = ? AND c.isFolder = 1
+                """, arguments: [copyID, masterID])
+            return copy
         }
     }
 

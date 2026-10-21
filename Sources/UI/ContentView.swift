@@ -128,8 +128,8 @@ struct ContentView: View {
     /// message now names rather than implies is comprehensive.
     private func pasteConfirmationMessage(for targets: [Photo]) -> String {
         let source = pasteModel.copied?.sourceFileName ?? "the copied photo"
-        let openPath = document.currentURL?.path
-        let includesOpenPhoto = openPath != nil && targets.contains { $0.path == openPath }
+        let openKey = document.currentEditKey
+        let includesOpenPhoto = openKey != nil && targets.contains { $0.editKey == openKey }
         let undoNote = includesOpenPhoto
             ? "This can't be undone, except for the currently open photo."
             : "This can't be undone."
@@ -621,8 +621,8 @@ struct ContentView: View {
     /// The grid's own row for the open photo. The path is read ONCE (not per element: `URL.path` in the closure measured ~70x
     /// slower), and nothing is scanned with no photo open — this runs on every body evaluation, including each slider tick.
     private var openPhotoGridRow: Photo? {
-        guard let openPath = document.currentURL?.path else { return nil }
-        return catalog.photos.first(where: { $0.path == openPath })
+        guard let openKey = document.currentEditKey else { return nil }
+        return catalog.photos.first(where: { $0.editKey == openKey })
     }
 
     /// Points the culling pass at the catalog: photos in the Library's order, live rows, the same rating / flag / label setters the grid
@@ -639,7 +639,7 @@ struct ContentView: View {
 
     /// Leaves culling for the Library, focused on the photo the pass ended on.
     private func exitCulling() {
-        if let last = cull.end() { catalog.focusedPhotoPath = last.path }
+        if let last = cull.end() { catalog.focusedPhotoPath = last.editKey }
         showLibrary = true
     }
 
@@ -650,7 +650,7 @@ struct ContentView: View {
         showLibrary = false
         Task {
             await catalog.ensureAccessActive(forPhotoAt: photo.path)
-            await document.load(from: URL(fileURLWithPath: photo.path))
+            await document.load(photo: photo)
         }
     }
 
@@ -658,14 +658,14 @@ struct ContentView: View {
     /// open photo up again.
     private func syncEditorMeta() {
         editorMeta.configure(
-            resolve: { path in
-                if let row = catalog.photos.first(where: { $0.path == path }) { return row }
-                return try await catalog.catalogedPhoto(atPath: path)
+            resolve: { key in
+                if let row = catalog.photos.first(where: { $0.editKey == key }) { return row }
+                return try await catalog.catalogedPhoto(atPath: key) // a master's edit key IS its path; a copy's key matches no path
             },
             setRating: { catalog.setRating($0, for: $1) },
             setFlagStatus: { catalog.setFlagStatus($0, for: $1) },
             setColorLabel: { catalog.setColorLabel($0, for: $1) })
-        editorMeta.sync(path: document.currentURL?.path, isLoading: document.isLoadInFlight)
+        editorMeta.sync(path: document.currentEditKey, isLoading: document.isLoadInFlight)
     }
 
     /// Pans an off-screen spot to the centre when it is selected while zoomed in (selecting from the sidebar no longer resets zoom, so the
@@ -1149,7 +1149,7 @@ struct ContentView: View {
                     // Captured ONCE, synchronously, in the same step as
                     // the guard above — `openPhotoPath` must name the
                     // photo this exact confirm is acting on.
-                    let openPhotoPath = document.currentURL?.path
+                    let openPhotoPath = document.currentEditKey // an edit key (see PasteSettingsPlan.make)
                     pasteModel.performPaste(
                         onto: targets,
                         openPhotoPath: openPhotoPath,
@@ -1169,13 +1169,13 @@ struct ContentView: View {
                         // vice versa) mid-batch.
                         canProceed: {
                             !document.isLoadInFlight && !renameModel.isWorking
-                                && document.currentURL?.path == openPhotoPath
+                                && document.currentEditKey == openPhotoPath
                         },
                         applyToOpenPhoto: { source in
                             // Cheap backstop, not the primary guard (that's
                             // `canProceed` above) — re-verified once more
                             // at the point of actually applying the paste.
-                            guard document.currentURL?.path == openPhotoPath else { return .skipped }
+                            guard document.currentEditKey == openPhotoPath else { return .skipped }
                             return document.pasteSettings(source)
                         },
                         onSidecarWritten: { catalog.invalidateThumbnail(for: $0) },
@@ -1192,7 +1192,10 @@ struct ContentView: View {
             // invalidates its stale Library thumbnail instead of leaving
             // it showing the original forever.
             .onAppear {
+                catalog.openVersionProvider = { document.currentEditKey.map { ($0, document.editState) } }
+                catalog.flushOpenEdits = { document.flushPendingSidecarSave() }
                 document.onSidecarSaved = { url in catalog.invalidateThumbnail(for: url) }
+                document.onVersionSidecarSaved = { url, key in catalog.invalidateThumbnail(forVersion: key, ofFileAt: url) }
                 // D13: drop an armed-but-unfinished mask / Point Color from the OUTGOING photo before `load(from:)` flushes and swaps state.
                 document.willSwitchPhoto = { discardUnfinishedPlaceholders() }
             }
@@ -1410,7 +1413,7 @@ struct ContentView: View {
         .onChange(of: document.isLoadInFlight) { _, _ in syncEditorMeta() }
         // The grid's own row for the open photo (rating changed elsewhere, a failed write's refresh, the catalog finishing loading).
         .onChange(of: openPhotoGridRow) { _, _ in syncEditorMeta() }
-        .onChange(of: document.currentURL) { _, _ in
+        .onChange(of: document.currentEditKey) { _, _ in // not currentURL: a master and its virtual copy are one URL
             syncEditorMeta()
             isHistoryPresented = false
             selectedTab = .adjust
@@ -1907,7 +1910,7 @@ struct ContentView: View {
                 showLibrary = false
                 Task {
                     await catalog.ensureAccessActive(forPhotoAt: photo.path)
-                    await document.load(from: URL(fileURLWithPath: photo.path))
+                    await document.load(photo: photo)
                 }
             }
         }
@@ -1919,11 +1922,11 @@ struct ContentView: View {
         VStack(spacing: 0) {
             editorSplitView
             if isFilmstripVisible {
-                EditorFilmstripView(catalog: catalog, currentURL: document.currentURL) { photo in
+                EditorFilmstripView(catalog: catalog, currentURL: document.currentURL, currentEditKey: document.currentEditKey) { photo in
                     guard !renameModel.isWorking else { return }
                     Task {
                         await catalog.ensureAccessActive(forPhotoAt: photo.path)
-                        await document.load(from: URL(fileURLWithPath: photo.path))
+                        await document.load(photo: photo)
                     }
                 }
             }

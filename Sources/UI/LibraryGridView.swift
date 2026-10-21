@@ -155,6 +155,8 @@ struct LibraryGridView: View {
     /// file's own `mainContent` doc comment); a 6th alert there would risk
     /// the same failure again.
     @State private var photoPendingRemoval: Photo?
+    /// Virtual copies that would go with `photoPendingRemoval` (read from the database when asked: the view may not show them).
+    @State private var copiesPendingRemoval = 0
 
     /// D4 (IMPROVEMENTS.md): whether the grid itself (as opposed to the
     /// search field, a Picker, or a cell's own Button) currently owns
@@ -204,14 +206,21 @@ struct LibraryGridView: View {
                                 ForEach(catalog.displayedPhotos) { photo in
                                     LibraryThumbnailCell(
                                         catalog: catalog, photo: photo, cellSize: cellSize,
-                                        isFocused: catalog.focusedPhotoPath == photo.path,
-                                        thumbnailRevision: catalog.thumbnailRevisions[photo.path, default: 0]
+                                        isFocused: catalog.focusedPhotoPath == photo.editKey,
+                                        thumbnailRevision: catalog.thumbnailRevisions[photo.editKey, default: 0]
                                     ) {
                                         onOpen(photo)
                                     } onRequestRemoval: {
-                                        photoPendingRemoval = photo
+                                        Task {
+                                            guard let copies = await LibraryRemovalText.copyCount(for: photo, loading: { try await catalog.copiesByMaster() }) else {
+                                                catalog.importStatusMessage = "Couldn't count this photo's virtual copies, so nothing was removed."
+                                                return
+                                            }
+                                            copiesPendingRemoval = copies
+                                            photoPendingRemoval = photo
+                                        }
                                     }
-                                    .id(photo.path)
+                                    .id(photo.editKey)
                                 }
                             }
                             .padding(Self.gridPadding)
@@ -280,7 +289,7 @@ struct LibraryGridView: View {
             Button("Remove", role: .destructive) { catalog.removePhoto(photo) }
             Button("Cancel", role: .cancel) {}
         } message: { photo in
-            Text("\"\(photo.filename)\" will be removed from the Library. The original file on disk is not affected.")
+            Text(LibraryRemovalText.message(for: photo, copyCount: copiesPendingRemoval))
         }
         .onAppear {
             // Normalizes the STORED value on every appearance (this view
@@ -397,12 +406,12 @@ struct LibraryGridView: View {
     private func moveFocus(by offset: Int, in photos: [Photo]) -> KeyPress.Result {
         guard !photos.isEmpty else { return .ignored }
         guard let currentPath = catalog.focusedPhotoPath,
-              photos.contains(where: { $0.path == currentPath }) else {
-            catalog.focusedPhotoPath = photos.first?.path
+              photos.contains(where: { $0.editKey == currentPath }) else {
+            catalog.focusedPhotoPath = photos.first?.editKey
             return .handled
         }
         if let next = LibraryNavigation.neighbor(of: currentPath, in: photos, offset: offset) {
-            catalog.focusedPhotoPath = next.path
+            catalog.focusedPhotoPath = next.editKey
         }
         return .handled
     }
@@ -411,7 +420,7 @@ struct LibraryGridView: View {
     /// mouse click on a cell already calls, so `ContentView.libraryContent`
     /// needs no changes to support this.
     private func openFocused(in photos: [Photo]) -> KeyPress.Result {
-        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.path == path }) else {
+        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.editKey == path }) else {
             return .ignored
         }
         onOpen(photo)
@@ -419,7 +428,7 @@ struct LibraryGridView: View {
     }
 
     private func setRatingOnFocused(_ rating: Int, in photos: [Photo]) -> KeyPress.Result {
-        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.path == path }) else {
+        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.editKey == path }) else {
             return .ignored
         }
         catalog.setRating(rating, for: photo)
@@ -430,7 +439,7 @@ struct LibraryGridView: View {
     /// `6`-`9` toggle red/yellow/green/blue: pressing the photo's current
     /// label's key clears it.
     private func setLabelOnFocused(_ label: ColorLabel, in photos: [Photo]) -> KeyPress.Result {
-        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.path == path }) else {
+        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.editKey == path }) else {
             return .ignored
         }
         catalog.setColorLabel(photo.colorLabel.toggled(to: label), for: photo)
@@ -441,7 +450,7 @@ struct LibraryGridView: View {
     /// `.`/`f` toggle Pick (a Rejected photo goes back to unflagged rather
     /// than straight to Picked); `p`/`x`/`u` set Pick/Reject/Unflag directly.
     private func setFlagOnFocused(_ status: FlagStatus?, in photos: [Photo]) -> KeyPress.Result {
-        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.path == path }) else {
+        guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.editKey == path }) else {
             return .ignored
         }
         catalog.setFlagStatus(status ?? photo.flagStatus.toggledPick, for: photo)
@@ -461,10 +470,10 @@ struct LibraryGridView: View {
     /// still visible (the overwhelmingly common case).
     private func advanceFocusIfNoLongerVisible(previousPath: String, previousList: [Photo]) {
         let freshList = catalog.displayedPhotos
-        guard !freshList.contains(where: { $0.path == previousPath }) else { return }
-        guard let previousIndex = previousList.firstIndex(where: { $0.path == previousPath }) else { return }
+        guard !freshList.contains(where: { $0.editKey == previousPath }) else { return }
+        guard let previousIndex = previousList.firstIndex(where: { $0.editKey == previousPath }) else { return }
         let clampedIndex = min(previousIndex, freshList.count - 1)
-        catalog.focusedPhotoPath = freshList.indices.contains(clampedIndex) ? freshList[clampedIndex].path : nil
+        catalog.focusedPhotoPath = freshList.indices.contains(clampedIndex) ? freshList[clampedIndex].editKey : nil
     }
 
     private var filterBar: some View { LibraryFilterBar(catalog: catalog) }
@@ -717,6 +726,11 @@ private struct LibraryThumbnailCell: View {
                     editedBadge
                 }
             }
+            .overlay(alignment: .topLeading) {
+                if photo.isVirtualCopy {
+                    copyBadge
+                }
+            }
             .overlay(alignment: .topTrailing) {
                 if photo.colorLabel != .none {
                     Circle()
@@ -735,7 +749,7 @@ private struct LibraryThumbnailCell: View {
                     .stroke(Color.white, lineWidth: isFocused ? 2 : 0)
             )
 
-            Text(photo.filename)
+            Text(photo.versionName.map { "\(photo.filename) · \($0)" } ?? photo.filename)
                 .font(.caption)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -845,6 +859,13 @@ private struct LibraryThumbnailCell: View {
                             )
                         }
                     }
+                    Divider()
+                    Button {
+                        catalog.createVirtualCopy(of: photo) // same open-version / flush hooks as the Photo menu (set by ContentView)
+                    } label: {
+                        Label("Create Virtual Copy", systemImage: "square.on.square")
+                    }
+                    .disabled(isMissing)
                     if isMissing {
                         Divider()
                         Button {
@@ -935,7 +956,7 @@ private struct LibraryThumbnailCell: View {
         // native tracking loop, which is harder to probe than a plain
         // `Button` tap; expected to behave the same way but flagged here
         // rather than silently assumed.
-        .simultaneousGesture(TapGesture().onEnded { catalog.focusedPhotoPath = photo.path })
+        .simultaneousGesture(TapGesture().onEnded { catalog.focusedPhotoPath = photo.editKey })
         // D6 (IMPROVEMENTS.md): `children: .contain` (not `.combine`/
         // `.ignore`) keeps the star rating/flag/menu/checkbox/thumbnail
         // below individually reachable as child elements, rather than
@@ -949,7 +970,7 @@ private struct LibraryThumbnailCell: View {
         // visible `Text(photo.filename)` row below, both already children).
         .accessibilityElement(children: .contain)
         .onHover { isHovered = $0 }
-        .task(id: ThumbnailTaskKey(path: photo.path, revision: thumbnailRevision)) {
+        .task(id: ThumbnailTaskKey(path: photo.editKey, revision: thumbnailRevision)) {
             // Reset immediately: a reused cell carries over `@State` from
             // whatever photo it PREVIOUSLY showed (same as `image`/
             // `hasEdits` below), and a stale "Missing" is more alarming
@@ -970,8 +991,8 @@ private struct LibraryThumbnailCell: View {
             // session's earlier testing because nothing had been cached
             // yet for the deleted photo.
             async let missingCheck = catalog.isPhotoConfirmedMissing(photo)
-            let sidecarURL = ImageDocumentModel.sidecarURL(for: URL(fileURLWithPath: photo.path))
-            hasEdits = FileManager.default.fileExists(atPath: sidecarURL.path)
+            let sidecarURL = SidecarStore.sidecarURL(for: photo) // the version's own edit file for a virtual copy (nil: malformed key)
+            hasEdits = sidecarURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
             let thumb = await thumbnail
             let missing = await missingCheck
             // A superseded `.task` (this cell recycled onto a different
@@ -998,6 +1019,7 @@ private struct LibraryThumbnailCell: View {
     /// the color label so the dot (which is hidden from AT) isn't lost.
     private var thumbnailAccessibilityLabel: String {
         var parts = [photo.filename]
+        if let name = photo.versionName { parts.append(name) }
         if isMissing { parts.append("missing") }
         if photo.colorLabel != .none { parts.append(photo.colorLabel.accessibilityName) }
         return parts.joined(separator: ", ")
@@ -1020,6 +1042,22 @@ private struct LibraryThumbnailCell: View {
 
     /// D3 (IMPROVEMENTS.md): same circular-backdrop visual language the
     /// selection checkbox above already uses, for consistency.
+    /// Marks a virtual copy (another edit version of the same file); the name ("Copy 2") is its accessibility label.
+    private var copyBadge: some View {
+        ZStack {
+            Circle()
+                .fill(.black.opacity(0.35))
+                .frame(width: 22, height: 22)
+            Image(systemName: "square.on.square")
+                .font(.system(size: 11))
+                .foregroundStyle(.white)
+        }
+        .padding(6)
+        .padding(.top, 22) // below the selection checkbox, which sits in the same corner
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(photo.versionName ?? "Virtual copy")
+    }
+
     private var editedBadge: some View {
         ZStack {
             Circle()

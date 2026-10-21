@@ -184,6 +184,8 @@ final class CatalogModel: ObservableObject {
     var fileToolBusy: Bool { xmpBusy || trashBusy || importCopyBusy }
     let xmp = XMPModel()
     let trash = TrashModel()
+    /// "Create Virtual Copy" (Photo menu, grid cell menu).
+    let virtualCopies = VirtualCopyModel()
     let importCopy = ImportCopyModel()
     /// Catalog backup / restore (see `CatalogBackupModel`): the File menu sets `backupRequested`; `CatalogBackupDialogModifier` performs it.
     /// `backupBusy` mirrors "a restore confirmation is up or a backup is being written".
@@ -298,6 +300,8 @@ final class CatalogModel: ObservableObject {
     /// detached `Task` that does the open off-main and hops back only to
     /// publish the result.
     private var database: CatalogDatabase? { didSet { connectFaces() } }
+    /// The open catalog for `VirtualCopyModel` (same module-internal read access `freshPhotos`-style helpers use).
+    var databaseForVirtualCopies: CatalogDatabase? { database }
 
     /// Gives the People model the database and a way to refresh this model's people list after it changes something.
     private func connectFaces() {
@@ -605,7 +609,9 @@ final class CatalogModel: ObservableObject {
                     : try await database.photos(inCollection: collectionID)
             }
             // Its own do/catch like the face read: a failed camera-data read keeps the previous map.
-            if let loaded = try? await database.allMetadata() { metadataByPhotoID = loaded }
+            // Virtual copies have no camera data / faces of their own: they inherit their master's, so search and the Person filter see them.
+            if let loaded = try? await database.allMetadata() { metadataByPhotoID = Self.inheritingFromMasters(loaded, photos: photos) }
+            personIDsByPhotoID = Self.inheritingFromMasters(personIDsByPhotoID, photos: photos)
             startMetadataScanIfNeeded()
         } catch {
             // Best-effort — a transient read failure shouldn't blank out
@@ -771,9 +777,14 @@ final class CatalogModel: ObservableObject {
     /// the focus, drop their cached thumbnails and re-read the library (`photoCount` must follow: the empty-state logic trusts it).
     func removeTrashedPhotos(ids: [Int64], paths: [String]) async throws {
         guard let database else { throw CatalogDatabaseError(message: "The photo catalog isn't ready yet.") }
+        // The rows about to go (a master's copies included, by the cascade): read BEFORE deleting so focus and thumbnails can be dropped by edit key.
+        let doomed = Set(ids)
+        let doomedKeys = Set(((try? await database.allPhotos()) ?? []).filter { row in
+            row.id.map(doomed.contains) == true || row.masterId.map(doomed.contains) == true
+        }.map(\.editKey))
         try await database.deletePhotos(ids: ids)
         selectedPhotoIDs.subtract(ids)
-        if let focused = focusedPhotoPath, paths.contains(focused) { focusedPhotoPath = nil }
+        if let focused = focusedPhotoPath, paths.contains(focused) || doomedKeys.contains(focused) { focusedPhotoPath = nil }
         for path in paths { invalidateThumbnail(for: URL(fileURLWithPath: path)) }
         await refresh()
     }
@@ -803,7 +814,8 @@ final class CatalogModel: ObservableObject {
     /// isn't in view. Empty when the catalog isn't ready.
     func cataloguedPathOwners() async -> [String: Int64] {
         guard let database, let all = try? await database.allPhotos() else { return [:] }
-        return Dictionary(all.compactMap { photo in photo.id.map { (photo.path, $0) } }, uniquingKeysWith: { first, _ in first })
+        // MASTER rows only: a virtual copy shares its master's path and must never look like a second owner of it.
+        return Dictionary(all.filter { !$0.isVirtualCopy }.compactMap { photo in photo.id.map { (photo.path, $0) } }, uniquingKeysWith: { first, _ in first })
     }
 
     /// The most recent applied rename batch (what "Undo Rename" would undo), if any.
@@ -839,7 +851,7 @@ final class CatalogModel: ObservableObject {
         return count
     }
 
-    /// Thumbnails are cached by PATH, so both names go stale; focus is tracked by path too. (Known, low
+    /// Thumbnails are cached by edit key (the path, for a master), so both names go stale; focus is tracked by edit key too. (Known, low
     /// severity: a thumbnail already being decoded for an OLD path when the rename lands can finish after
     /// this invalidation and cache a stale image under that dead path — nothing displays it, and an
     /// Undo invalidates again.)
@@ -847,7 +859,11 @@ final class CatalogModel: ObservableObject {
         for move in moves {
             invalidateThumbnail(for: URL(fileURLWithPath: move.oldPath))
             invalidateThumbnail(for: URL(fileURLWithPath: move.newPath))
-            if focusedPhotoPath == move.oldPath { focusedPhotoPath = move.newPath }
+            if focusedPhotoPath == move.oldPath {
+                focusedPhotoPath = move.newPath
+            } else if let focused = focusedPhotoPath, focused.hasPrefix(move.oldPath + "\u{1F}") {
+                focusedPhotoPath = move.newPath + focused.dropFirst(move.oldPath.count) // a copy's edit key follows its master's path
+            }
         }
         await refresh()
     }
@@ -1017,6 +1033,10 @@ final class CatalogModel: ObservableObject {
     func relocatePhoto(_ photo: Photo) async {
         guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
         guard let id = photo.id, let database else { return }
+        guard !photo.isVirtualCopy else {
+            importStatusMessage = "A virtual copy shares its master's file — locate the master photo instead."
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -1096,8 +1116,8 @@ final class CatalogModel: ObservableObject {
         let candidates = photos.filter { visibleSelectedIDs.contains($0.id ?? -1) }
 
         var missing: [Photo] = []
-        for photo in candidates where await isPhotoConfirmedMissing(photo) {
-            missing.append(photo)
+        for photo in candidates where !photo.isVirtualCopy { // copies follow their master
+            if await isPhotoConfirmedMissing(photo) { missing.append(photo) }
         }
         guard !missing.isEmpty else {
             importStatusMessage = "None of the selected photos are missing."
@@ -1194,11 +1214,76 @@ final class CatalogModel: ObservableObject {
     /// cell's own concurrent re-fetch run ahead of the cache actually
     /// being cleared and simply SERVE the still-cached stale bitmap under
     /// the new revision number, rather than re-decoding.
+    ///
+    /// Path-level: the FILE changed (rename, relocate, remove, a batch paste, a stale grant), so every version of it goes stale — the master's
+    /// thumbnail (keyed by the path itself) and each virtual copy's (keyed by `Photo.editKey`).
     func invalidateThumbnail(for url: URL) {
         let path = url.path
+        let keys = Set([path] + photos.filter { $0.path == path }.map(\.editKey))
         Task {
             await thumbnailCache.invalidate(path: path)
-            thumbnailRevisions[path, default: 0] += 1
+            for key in keys { thumbnailRevisions[key, default: 0] += 1 }
+        }
+    }
+
+    /// One virtual copy's edits changed (its sidecar was saved): only that version's thumbnail goes stale, not the master's or its siblings'.
+    func invalidateThumbnail(forVersion versionKey: String, ofFileAt url: URL) {
+        let editKey = Photo.editKey(path: url.path, versionKey: versionKey)
+        Task {
+            await thumbnailCache.invalidate(editKey: editKey)
+            thumbnailRevisions[editKey, default: 0] += 1
+        }
+    }
+
+    /// Gives every virtual copy in `photos` its master's entry of `map` (camera data, faces): a copy is the same picture, so search and the
+    /// Person filter must see it. A copy's OWN entry, if it ever had one, wins.
+    nonisolated static func inheritingFromMasters<V>(_ map: [Int64: V], photos: [Photo]) -> [Int64: V] {
+        var out = map
+        for photo in photos {
+            guard let id = photo.id, let masterID = photo.masterId, out[id] == nil, let inherited = map[masterID] else { continue }
+            out[id] = inherited
+        }
+        return out
+    }
+
+    /// Every known virtual copy, grouped by master row id (what `TrashPlan` needs to take a master's copies with it).
+    func copiesByMaster() async throws -> [Int64: [Photo]] {
+        guard let database else { throw CatalogDatabaseError(message: "The photo catalog isn't ready yet.") }
+        let all = try await database.allPhotos()
+        return Dictionary(grouping: all.filter { $0.masterId != nil }, by: { $0.masterId ?? -1 })
+    }
+
+    /// What Photo ▸ Create Virtual Copy acts on: in the Library the selected photos that are showing (else the keyboard-focused one); in the
+    /// Editor the open photo/version (by edit key).
+    func virtualCopyTargets(showLibrary: Bool, openEditKey: String?) -> [Photo] {
+        if showLibrary {
+            let selected = selectedPhotosInDisplayedGrid
+            if !selected.isEmpty { return selected }
+            guard let focused = focusedPhotoPath, let row = displayedPhotos.first(where: { $0.editKey == focused }) else { return [] }
+            return [row]
+        }
+        guard let openEditKey, let row = photos.first(where: { $0.editKey == openEditKey }) else { return [] }
+        return [row]
+    }
+
+    /// Photo ▸ Create Virtual Copy and the grid cell's menu item: one copy of each photo in `photos`. Reports through the same alert as import.
+    func createVirtualCopy(of photo: Photo, flushEdits: (() -> Void)? = nil) {
+        createVirtualCopies(of: [photo], flushEdits: flushEdits)
+    }
+
+    /// Set by `ContentView`: the Editor's open version with its in-memory edits, and a flush of its pending save. Every entry point (the Photo
+    /// menu and the grid cell menu) falls back to them, so both behave the same.
+    var openVersionProvider: (() -> (editKey: String, state: EditState)?)?
+    var flushOpenEdits: (() -> Void)?
+
+    /// `openVersion`: the version open in the Editor and its in-memory edits; a copy of THAT version carries what is on screen even if its
+    /// last save did not reach the disk.
+    func createVirtualCopies(of photos: [Photo], flushEdits: (() -> Void)? = nil, openVersion: (editKey: String, state: EditState)? = nil) {
+        let flush = flushEdits ?? flushOpenEdits ?? {}
+        let open = openVersion ?? openVersionProvider?()
+        Task { [weak self] in
+            guard let self else { return }
+            self.importStatusMessage = await self.virtualCopies.create(from: photos, catalog: self, flushEdits: flush, openVersion: open)
         }
     }
 
@@ -1382,11 +1467,14 @@ final class CatalogModel: ObservableObject {
         guard !isRenameInProgress else { importStatusMessage = Self.renameInProgressMessage; return }
         guard let database, let id = photo.id else { return }
         let before = photos.count
-        photos.removeAll { $0.id == id }
+        let removedCopyIDs = Set(photos.filter { photo.isVirtualCopy == false && $0.masterId == id }.compactMap(\.id))
+        // Removing a master from the Library removes its virtual copies' rows too (the database cascades); mirror that here.
+        photos.removeAll { $0.id == id || (photo.isVirtualCopy == false && $0.masterId == id) }
         // Keep the empty-state decision honest: `photoCount` is only re-read by `refresh()`, which this path skips on success.
         // Only when the list actually got shorter (a repeated Remove on the same cell must not under-count).
-        if photos.count < before { photoCount = max(0, photoCount - 1) }
+        if photos.count < before { photoCount = max(0, photoCount - (before - photos.count)) }
         selectedPhotoIDs.remove(id)
+        if !photo.isVirtualCopy { selectedPhotoIDs.subtract(removedCopyIDs) } // the cascade took the copies; they must not stay selected
         membershipsByPhotoID.removeValue(forKey: id)
         recomputeFolderPhotoCounts()
         keywordIDsByPhotoID.removeValue(forKey: id)
@@ -2046,7 +2134,7 @@ final class CatalogModel: ObservableObject {
     /// Editor-open recovery the cells kept spinning until something else reloaded them.
     func requestThumbnailsAgain(under root: String) {
         for candidate in photos where candidate.path.hasPrefix(root + "/") {
-            thumbnailRevisions[candidate.path, default: 0] += 1
+            thumbnailRevisions[candidate.editKey, default: 0] += 1
         }
     }
 
@@ -2201,7 +2289,7 @@ extension CatalogModel {
     }
 
     private func finishMetadataScan(database: CatalogDatabase) async {
-        if let loaded = try? await database.allMetadata() { metadataByPhotoID = loaded }
+        if let loaded = try? await database.allMetadata() { metadataByPhotoID = Self.inheritingFromMasters(loaded, photos: photos) }
         metadataScanProgress = nil
         metadataScanTask = nil
         if metadataScanWanted {

@@ -54,8 +54,10 @@ final class MergeModel: ObservableObject {
 
     /// Asks for a merge of `photos` (already filtered to what the Library shows). Refuses with a message rather than opening a dialog that
     /// could not succeed.
-    func request(_ kind: Kind, photos: [Photo], catalog: CatalogModel) {
+    func request(_ kind: Kind, photos allPhotos: [Photo], catalog: CatalogModel) {
         self.catalog = catalog
+        // MASTERS only: a virtual copy is the same frame as its master, which would otherwise be fed to the merge twice.
+        let photos = allPhotos.filter { !$0.isVirtualCopy }
         guard !isBusy else { return }
         guard !catalog.isRenameInProgress else { statusMessage = CatalogModel.renameInProgressMessage; return }
         if let problem = Self.selectionProblem(kind, count: photos.count) { statusMessage = problem; return }

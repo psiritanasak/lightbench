@@ -124,7 +124,7 @@ final class CullModel: ObservableObject {
         guard !photos.isEmpty else { return false }
         // "Unflagged only" starts on when there is anything unflagged AND the preference allows it.
         let unflagged = preferences.cullStartUnflaggedOnly && photos.contains { $0.flagStatus == .none }
-        var startID = path.flatMap { path in photos.first { $0.path == path }?.id }
+        var startID = path.flatMap { path in photos.first { $0.editKey == path }?.id }
         // Focused on a flagged photo while only unflagged ones are listed: start at the next unflagged photo after it.
         if unflagged, let id = startID, let at = photos.firstIndex(where: { $0.id == id }), photos[at].flagStatus != .none {
             startID = photos[at...].first { $0.flagStatus == .none }?.id ?? photos.first { $0.flagStatus == .none }?.id

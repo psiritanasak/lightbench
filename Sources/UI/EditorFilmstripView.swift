@@ -18,6 +18,9 @@ import SwiftUI
 struct EditorFilmstripView: View {
     @ObservedObject var catalog: CatalogModel
     let currentURL: URL?
+    /// `Photo.editKey` of the open version (the path for a master): what "current" and scroll targets are matched on, since a master and
+    /// its virtual copies share one URL.
+    var currentEditKey: String?
     let onSelect: (Photo) -> Void
 
     private let cellSize: CGFloat = 56
@@ -35,23 +38,23 @@ struct EditorFilmstripView: View {
                         FilmstripCell(
                             catalog: catalog,
                             photo: photo,
-                            isCurrent: photo.path == currentURL?.path,
+                            isCurrent: photo.editKey == currentEditKey,
                             cellSize: cellSize,
                             onTap: { onSelect(photo) }
                         )
-                        .id(photo.path)
+                        .id(photo.editKey)
                     }
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 8)
             }
             .onAppear {
-                if let path = currentURL?.path {
+                if let path = currentEditKey {
                     proxy.scrollTo(path, anchor: .center)
                 }
             }
-            .onChange(of: currentURL) { _, newURL in
-                if let path = newURL?.path {
+            .onChange(of: currentEditKey) { _, newKey in
+                if let path = newKey {
                     withAnimation {
                         proxy.scrollTo(path, anchor: .center)
                     }
@@ -138,7 +141,7 @@ private struct FilmstripCell: View {
         .accessibilityLabel(isMissing ? "\(photo.filename), missing" : photo.filename)
         .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : [.isButton])
         .accessibilityAction { onTap() }
-        .task(id: photo.path) {
+        .task(id: photo.editKey) {
             // Reset immediately — see `LibraryThumbnailCell`'s own
             // `.task(id:)` for why a reused cell must not carry over the
             // previous photo's `isMissing` value.

@@ -30,6 +30,11 @@ final class ImageDocumentModel: ObservableObject {
     /// to track it — the same reason `canUndo`/`canRedo` are published for the
     /// Edit menu. Writes stay internal; `load(from:)` is the only one.
     @Published private(set) var currentURL: URL?
+    /// Which VERSION of `currentURL`'s file is open: nil for the master (its edits live in `<file>.photoapp.json`, exactly as before virtual
+    /// copies), a copy's `versionKey` otherwise (`<file>.<versionKey>.photoapp.json`). Set together with `currentURL`, in `load`.
+    @Published private(set) var currentVersionKey: String?
+    /// `Photo.editKey` of the open version (the path for a master): what "which edit set is open" comparisons must use instead of the path.
+    var currentEditKey: String? { currentURL.map { Photo.editKey(path: $0.path, versionKey: currentVersionKey) } }
     /// Whether `currentURL`'s file EXIF orientation was CONFIRMED `.up` at
     /// load time (`RawDecoder.confirmedOrientation`) — always `false` for
     /// non-RAW photos and for a RAW photo whose orientation is non-`.up`
@@ -72,6 +77,9 @@ final class ImageDocumentModel: ObservableObject {
     /// already bridges the opposite direction (Library selection →
     /// `document.load(from:)`).
     var onSidecarSaved: ((URL) -> Void)?
+    /// The same notification for a virtual COPY's sidecar (the file URL and the copy's version key), so the Library can invalidate that
+    /// version's thumbnail only. `onSidecarSaved` stays master-only: its callers (and tests) predate versions.
+    var onVersionSidecarSaved: ((URL, String) -> Void)?
 
     /// Called at the very start of `load(from:)`, BEFORE the outgoing photo's pending edits are flushed and before `editState` is replaced, so the
     /// Editor can drop an unfinished placeholder (an armed, never-painted Brush mask, an unpicked Color Range mask or Point Color instance) from
@@ -190,7 +198,7 @@ final class ImageDocumentModel: ObservableObject {
     private var history = EditHistory()
     /// Whose history `history` is (the photo it was reset/restored for) — so a save can never embed one photo's history in
     /// ANOTHER photo's sidecar (the one window where they differ: `load(from:)` between `currentURL = url` and the reset).
-    private var historyURL: URL?
+    private var historyEditKey: String?
     /// Caches each history entry's encoded form across saves (see `HistoryArchive.Encoder`).
     private var historyEncoder = HistoryArchive.Encoder()
 
@@ -290,7 +298,12 @@ final class ImageDocumentModel: ObservableObject {
     /// paste is requested, while its confirmation dialog is open).
     @Published private(set) var isLoadInFlight = false
 
-    func load(from url: URL) async {
+    /// Opens one catalog row: the master, or a virtual copy (the same file with that copy's own edits).
+    func load(photo: Photo) async {
+        await load(from: URL(fileURLWithPath: photo.path), versionKey: photo.versionKey)
+    }
+
+    func load(from url: URL, versionKey: String? = nil) async {
         willSwitchPhoto?()
         loadGeneration += 1
         let myGeneration = loadGeneration
@@ -340,10 +353,10 @@ final class ImageDocumentModel: ObservableObject {
         // `var`, not `let` — Phase 6 slice 7's decoder-version pin (below)
         // mutates this in place before it's committed to `editState` at
         // the bottom of this function.
-        let existingSidecarState = loadSidecarIfReachable(for: url)
+        let existingSidecarState = loadSidecarIfReachable(for: url, versionKey: versionKey)
         // The photo's persisted edit history (sidecar `_history`), if any and still consistent with its edits. Read OFF the
         // main thread (decoding re-serialises every entry — hundreds of ms with a big mask).
-        let persistedHistory = existingSidecarState == nil ? nil : await loadPersistedHistory(for: url)
+        let persistedHistory = existingSidecarState == nil ? nil : await loadPersistedHistory(for: url, versionKey: versionKey)
         var restoredState = existingSidecarState ?? EditState()
         // Set below only when this load backfills a decoder-version pin
         // into a photo that ALREADY had a sidecar on disk — see the
@@ -462,6 +475,7 @@ final class ImageDocumentModel: ObservableObject {
         currentImage = resolvedImage
         currentFileName = url.lastPathComponent
         currentURL = url
+        currentVersionKey = versionKey
         refreshDepthAvailability()
         currentRawOrientationIsUp = isRawOrientationUp
         currentRawAdjustmentSupport = rawAdjustmentSupport
@@ -1635,7 +1649,7 @@ final class ImageDocumentModel: ObservableObject {
             history = EditHistory(editState, initialSummary: "Opened")
             historyEncoder = HistoryArchive.Encoder()
         }
-        historyURL = currentURL
+        historyEditKey = currentEditKey
         refreshHistoryState()
         analysisGeneration += 1
         subjectMaskMessage = nil // a late "no subject" must not pop up about the NEXT photo
@@ -1983,22 +1997,22 @@ final class ImageDocumentModel: ObservableObject {
     /// though — it must NOT treat "undecodable" as "identity," since that
     /// would silently clobber an existing sidecar it couldn't parse; see
     /// `SidecarStore.ReadResult`'s own doc comment.
-    private func loadSidecarIfReachable(for url: URL) -> EditState? {
+    private func loadSidecarIfReachable(for url: URL, versionKey: String? = nil) -> EditState? {
         guard let folderURL = folderAccess.resolvedURL(for: url.deletingLastPathComponent()) else { return nil }
         guard folderURL.startAccessingSecurityScopedResource() else { return nil }
         defer { folderURL.stopAccessingSecurityScopedResource() }
-        guard case .decoded(let state) = SidecarStore.read(forPhotoAt: url) else { return nil }
+        guard case .decoded(let state) = SidecarStore.read(forPhotoAt: url, versionKey: versionKey) else { return nil }
         return state
     }
 
     /// `SidecarStore.readHistory` for `url`, run off the main thread inside the folder's security scope. nil when the folder
     /// is not reachable (load must stay silent) or the photo has no usable persisted history.
-    private func loadPersistedHistory(for url: URL) async -> (archive: HistoryArchive, encoder: HistoryArchive.Encoder)? {
+    private func loadPersistedHistory(for url: URL, versionKey: String? = nil) async -> (archive: HistoryArchive, encoder: HistoryArchive.Encoder)? {
         guard let folderURL = folderAccess.resolvedURL(for: url.deletingLastPathComponent()),
               folderURL.startAccessingSecurityScopedResource() else { return nil }
         defer { folderURL.stopAccessingSecurityScopedResource() }
         return await Task.detached(priority: .userInitiated) {
-            guard let archive = SidecarStore.readHistory(forPhotoAt: url) else { return nil }
+            guard let archive = SidecarStore.readHistory(forPhotoAt: url, versionKey: versionKey) else { return nil }
             // Warm the encoder's per-entry cache HERE: a fresh one would re-encode (base64 + SHA-256 of every mask blob) the
             // whole restored timeline on the MAIN thread at the first save after the user's next edit.
             let encoder = HistoryArchive.Encoder()
@@ -2062,11 +2076,13 @@ final class ImageDocumentModel: ObservableObject {
         // Whether a real `load(from:)` can finish inside the panel is UNDETERMINED (see `SaveSidecarRaceTests`'
         // header for what was and was not reproduced), so this is hardening, not a fix for an observed corruption.
         guard let url = currentURL else { return }
+        let versionKey = currentVersionKey
+        let editKey = Photo.editKey(path: url.path, versionKey: versionKey)
         let snapshot = editState
         // The history rides in the same snapshot (a value type): written only when it belongs to THIS photo and is exactly
         // in step with the saved state — otherwise the sidecar is written without `_history` (never a stale one).
         let historySnapshot = history
-        let historyBelongsHere = historyURL == url && historySnapshot.entries.count > 1 && historySnapshot.current == snapshot
+        let historyBelongsHere = historyEditKey == editKey && historySnapshot.entries.count > 1 && historySnapshot.current == snapshot
         let folder = url.deletingLastPathComponent()
         guard !declinedFolders.contains(folder.path) else { return }
         let folderURL: URL
@@ -2095,11 +2111,11 @@ final class ImageDocumentModel: ObservableObject {
         defer { folderURL.stopAccessingSecurityScopedResource() }
         do {
             if historyBelongsHere, let historyObject = historyEncoder.jsonObject(for: HistoryArchive(historySnapshot)) {
-                try SidecarStore.write(snapshot, historyObject: historyObject, forPhotoAt: url)
+                try SidecarStore.write(snapshot, historyObject: historyObject, forPhotoAt: url, versionKey: versionKey)
             } else {
-                try SidecarStore.write(snapshot, forPhotoAt: url)
+                try SidecarStore.write(snapshot, forPhotoAt: url, versionKey: versionKey)
             }
-            onSidecarSaved?(url)
+            if let versionKey { onVersionSidecarSaved?(url, versionKey) } else { onSidecarSaved?(url) }
         } catch {
             if !suppressErrorMessage {
                 sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"

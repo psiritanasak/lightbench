@@ -13,6 +13,12 @@ import Foundation
 /// itself renders — so ⌘→ always goes to the photo the user would SEE next,
 /// not to some hidden catalog order.
 enum LibraryNavigation {
+    /// The photos before and after the open VERSION (matched on `Photo.editKey`, so with a virtual copy open the master is a neighbour, not
+    /// the starting point). `nil` for an unknown key.
+    static func neighbors(ofEditKey editKey: String?, in photos: [Photo]) -> (previous: Photo?, next: Photo?) {
+        (neighbor(of: editKey, in: photos, offset: -1), neighbor(of: editKey, in: photos, offset: 1))
+    }
+
     /// The photo `offset` positions away from the one at `currentPath`.
     ///
     /// Returns `nil` — meaning the corresponding menu item disables — when:
@@ -38,7 +44,7 @@ enum LibraryNavigation {
     /// a wrong jump. This is the same normalization caveat `PROGRESS.md`
     /// records for `invalidateThumbnail(for:)`.
     static func neighbor(of currentPath: String?, in photos: [Photo], offset: Int) -> Photo? {
-        guard let currentPath, let index = photos.firstIndex(where: { $0.path == currentPath }) else { return nil }
+        guard let currentPath, let index = photos.firstIndex(where: { $0.editKey == currentPath }) else { return nil }
         let target = index + offset
         guard photos.indices.contains(target) else { return nil }
         return photos[target]

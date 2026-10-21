@@ -23,6 +23,10 @@ final class TrashModel: ObservableObject {
         let photos: [Photo]
         /// What the Library was showing when asked (named in the confirmation).
         let scope: String
+        /// Virtual copies that go WITH a targeted master (known when the request was made): named in the confirmation.
+        var copiesWithMasters = 0
+        /// Targeted virtual copies: only their edits and rows go; the shared image file stays.
+        var copiesOnly: Int { photos.filter(\.isVirtualCopy).count }
     }
 
     /// What a run did, for the result alert.
@@ -64,7 +68,7 @@ final class TrashModel: ObservableObject {
     // MARK: - Request
 
     /// `shown`: the photos the Library is showing, in grid order (`displayedPhotos`) for `.rejected`, the selected visible ones for `.selected`.
-    func request(_ kind: Kind, shown: [Photo], scope: String, providers: RenameProviders, catalog: CatalogModel) {
+    func request(_ kind: Kind, shown: [Photo], scope: String, providers: RenameProviders, catalog: CatalogModel) async {
         self.catalog = catalog
         guard !isBusy else { return }
         guard !catalog.isRenameInProgress else { statusMessage = CatalogModel.renameInProgressMessage; return }
@@ -74,7 +78,15 @@ final class TrashModel: ObservableObject {
             statusMessage = kind == .rejected ? "There are no rejected photos in what the Library is showing." : "Select at least one photo first."
             return
         }
-        pending = Request(kind: kind, photos: targets, scope: scope)
+        // Counted from the DATABASE (the plan's own source), not from the viewed list: a master seen from an album or Smart Collection has
+        // copies the view does not show, and they leave with it.
+        let copies: [Int64: [Photo]]
+        do { copies = try await catalog.copiesByMaster() } catch {
+            statusMessage = "Couldn't count the virtual copies that would go with these photos (\(error.localizedDescription)), so nothing was moved."
+            return
+        }
+        guard !isBusy else { return } // something started while the copies were read
+        pending = Request(kind: kind, photos: targets, scope: scope, copiesWithMasters: Self.copiesWithMasters(targets: targets, copiesByMaster: copies))
     }
 
     func cancel() { pending = nil }
@@ -131,8 +143,12 @@ final class TrashModel: ObservableObject {
 
         // 3. Plan. The photo open in the Editor is skipped here, and checked AGAIN right before each photo moves (`gate`).
         let allPaths = Array(await catalog.cataloguedPathOwners().keys)
+        guard let copiesOfMasters = try? await catalog.copiesByMaster() else {
+            statusMessage = "Couldn't read the virtual copies of these photos, so nothing was moved."
+            return
+        }
         let plan = await Task.detached { [openPath = providers.openPhotoPath()] in
-            TrashPlan.make(photos: reachable, openPhotoPath: openPath, cataloguedPaths: allPaths)
+            TrashPlan.make(photos: reachable, openPhotoPath: openPath, cataloguedPaths: allPaths, copiesOfMasters: copiesOfMasters)
         }.value
         if let reason = refusal(providers, catalog) { statusMessage = reason; return }
         result.skipped = plan.skipped
@@ -156,13 +172,22 @@ final class TrashModel: ObservableObject {
         result.stoppedBecause = outcome.stoppedBecause
         result.notAttempted = outcome.notAttempted
         if !outcome.trashedIDs.isEmpty {
-            let paths = plan.items.filter { outcome.trashedIDs.contains($0.photoID) }.map { $0.photoURL.path }
+            // A virtual copy trashed on its own leaves the shared file in place: its path must not drop the master's focus/thumbnail.
+            let paths = plan.items.filter { !$0.isVersionOnly && outcome.trashedIDs.contains($0.photoID) }.map { $0.photoURL.path }
             do { try await catalog.removeTrashedPhotos(ids: outcome.trashedIDs, paths: paths) } catch { result.catalogError = error.localizedDescription }
         }
         statusMessage = Self.summary(result)
     }
 
     // MARK: - Pure helpers (testable)
+
+    /// Copies of a targeted master that are not themselves targeted: they leave with the master's file.
+    nonisolated static func copiesWithMasters(targets: [Photo], copiesByMaster: [Int64: [Photo]]) -> Int {
+        let targetIDs = Set(targets.compactMap(\.id))
+        return Set(targets.filter { !$0.isVirtualCopy }.compactMap(\.id)).reduce(0) { total, masterID in
+            total + (copiesByMaster[masterID] ?? []).filter { $0.id.map { !targetIDs.contains($0) } ?? false }.count
+        }
+    }
 
     nonisolated static func targets(_ kind: Kind, from photos: [Photo]) -> [Photo] {
         switch kind {
@@ -183,7 +208,16 @@ final class TrashModel: ObservableObject {
         case .rejected: what = "the \(n) rejected \(n == 1 ? "photo" : "photos") in \(request.scope) that the Library is showing (its filters and search apply)"
         case .selected: what = "the \(n) selected \(n == 1 ? "photo" : "photos") in \(request.scope)"
         }
-        return "Moves \(what) to the Trash, with each photo's edit file and XMP sidecar. "
+        var copies = ""
+        if request.copiesWithMasters > 0 {
+            let c = request.copiesWithMasters
+            copies += "\(c) virtual cop\(c == 1 ? "y" : "ies") of these photos \(c == 1 ? "goes" : "go") with them (the file they share is moved). "
+        }
+        if request.copiesOnly > 0 {
+            let c = request.copiesOnly
+            copies += "\(c) selected virtual cop\(c == 1 ? "y is" : "ies are") removed on their own: only their edits go, the image file stays. "
+        }
+        return "Moves \(what) to the Trash, with each photo's edit file and XMP sidecar. " + copies
             + "A shared .xmp (same name as a RAW or JPEG that stays) is kept. The photo open in the Editor is skipped.\n\n"
             + "Nothing is permanently deleted: in the Trash, choose Put Back to restore a file, then import its folder again. "
             + "The photos are removed from the Library, and their ratings, labels, keywords, collections and face data go with them."

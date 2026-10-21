@@ -116,12 +116,15 @@ struct RenamePlan: Equatable, Sendable {
     }
 
     static func make(
-        photos: [Photo],
+        photos allPhotos: [Photo],
         template: CompiledNamingTemplate,
         sequenceStart: Int,
         captureDates: [Int64: Date],
         environment: RenameEnvironment
     ) -> RenamePlan {
+        // Renaming acts on MASTERS: a virtual copy shares its master's file (and its row follows the master's path in the catalog), so a
+        // selected copy is simply left out of the batch rather than planned.
+        let photos = allPhotos.filter { !$0.isVirtualCopy }
         struct Draft {
             var photo: Photo
             var folder: String

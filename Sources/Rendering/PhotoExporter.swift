@@ -248,7 +248,7 @@ enum PhotoExporter {
     /// held for the whole process lifetime, no matching `stop`) — a
     /// design bet confirmed live (see PROGRESS.md), not assumed.
     static func loadEditState(for photo: Photo) -> EditState {
-        guard case .decoded(let state) = SidecarStore.read(forPhotoAt: URL(fileURLWithPath: photo.path)) else {
+        guard case .decoded(let state) = SidecarStore.read(forPhotoAt: URL(fileURLWithPath: photo.path), versionKey: photo.versionKey) else {
             return .identity
         }
         return state

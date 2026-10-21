@@ -14,6 +14,10 @@ import Foundation
 ///    (on disk, in the catalog, skipped or open) and the folder could be listed; the ENGINE then moves it last, and only if every photo
 ///    that shares it really reached the Trash (and not at all after a stop).
 ///  - Never trashed: the photo that is open in the Editor (compared by resolved path, case-insensitively), a photo whose file is not on disk.
+///  - Virtual copies (several catalog rows over ONE file, each with its own `<file>.<versionKey>.photoapp.json`): trashing a MASTER takes all
+///    its copies' rows and edit files with it (the file is gone for them too); trashing only a COPY removes that copy's row and edit file
+///    and NEVER the shared image file (`Item.isVersionOnly`: the engine has no path to the file for it at all). A copy of the open photo is
+///    skipped like the open photo itself (conservative: the open version's edit file could be among them).
 ///  - In the engine a companion is moved only AFTER its photo moved successfully, so a photo that fails to move keeps its edit file and XMP.
 struct TrashPlan: Equatable, Sendable {
     enum CompanionKind: Equatable, Sendable { case editSidecar, alternateXMP, sharedXMP }
@@ -29,6 +33,9 @@ struct TrashPlan: Equatable, Sendable {
         /// Other catalog rows that point at the SAME file: they go with it (their file is gone too).
         var alsoIDs: [Int64] = []
         var companions: [Companion]
+        /// A virtual copy trashed on its own: `photoURL` names the SHARED file (display/open-photo checks only) and is never moved; only
+        /// the copy's edit file (its sole companion, if present) goes to the Trash, and the copy's row is removed once that succeeded.
+        var isVersionOnly = false
     }
 
     struct Skipped: Equatable, Sendable {
@@ -74,6 +81,7 @@ struct TrashPlan: Equatable, Sendable {
         photos: [Photo],
         openPhotoPath: String?,
         cataloguedPaths: [String],
+        copiesOfMasters: [Int64: [Photo]] = [:],
         fileKind: (URL) -> FileKind = systemFileKind,
         folderListing: (URL) -> [URL]? = systemFolderListing
     ) -> TrashPlan {
@@ -82,7 +90,8 @@ struct TrashPlan: Equatable, Sendable {
         // 1. Which photos are moved at all.
         var moving: [(id: Int64, url: URL, also: [Int64])] = []
         var indexByPath: [String: Int] = [:]
-        for photo in photos {
+        let selectedCopies = photos.filter(\.isVirtualCopy)
+        for photo in photos where !photo.isVirtualCopy {
             let url = URL(fileURLWithPath: photo.path)
             let path = url.standardizedFileURL.path
             guard let id = photo.id else { continue }
@@ -106,6 +115,27 @@ struct TrashPlan: Equatable, Sendable {
         }
         let movingPaths = Set(moving.map { $0.url.standardizedFileURL.path })
 
+        // 1b. Virtual copies. One whose MASTER is moving rides along with it (row + edit file); any other is trashed on its own and never
+        // touches the file. `copiesByMaster` is every known copy of a moving master, selected or not.
+        let movingMasterIDs = Set(moving.map(\.id))
+        var copiesByMaster: [Int64: [Photo]] = [:]
+        for master in moving {
+            var known = copiesOfMasters[master.id] ?? []
+            for copy in selectedCopies where copy.masterId == master.id && !known.contains(where: { $0.id == copy.id }) { known.append(copy) }
+            copiesByMaster[master.id] = known
+        }
+        var versionOnly: [Photo] = []
+        for copy in selectedCopies {
+            guard let id = copy.id else { continue }
+            if let masterID = copy.masterId, movingMasterIDs.contains(masterID) { continue }
+            let path = URL(fileURLWithPath: copy.path).standardizedFileURL.path
+            if let openPhotoPath, samePhoto(openPhotoPath, path) {
+                plan.skipped.append(Skipped(photoID: id, name: copy.versionName ?? copy.filename, reason: .openInEditor))
+                continue
+            }
+            versionOnly.append(copy)
+        }
+
         // 2. What stays behind, by shared base name: every catalogued photo not being moved, plus EVERYTHING else in the folders involved
         // that is not an .xmp sidecar (a `.mov` or `.psd` next to the JPEG shares the base name just as a RAW does).
         var staying: [String: [String]] = [:]
@@ -117,11 +147,13 @@ struct TrashPlan: Equatable, Sendable {
         for path in cataloguedPaths { noteStaying(URL(fileURLWithPath: path)) }
         var unlistable = Set<String>()
         var listed = Set<String>()
+        var listingNames: [String: [String]] = [:] // file names per folder, to find a trashed file's version edit files on disk
         for entry in moving {
             let folder = entry.url.deletingLastPathComponent()
             let folderPath = folder.standardizedFileURL.path
             guard listed.insert(folderPath).inserted else { continue }
             guard let entries = folderListing(folder) else { unlistable.insert(folderPath); continue }
+            listingNames[folderPath] = entries.map(\.lastPathComponent)
             for url in entries where url.pathExtension.lowercased() != "xmp" { noteStaying(url) }
         }
 
@@ -151,7 +183,27 @@ struct TrashPlan: Equatable, Sendable {
                claimedXMP.insert(shared.standardizedFileURL.path.lowercased()).inserted {
                 companions.append(Companion(url: shared, kind: .sharedXMP))
             }
-            plan.items.append(Item(photoID: entry.id, photoURL: entry.url, alsoIDs: entry.also, companions: companions))
+            var also = entry.also
+            var versionKeys = Set<String>()
+            for copy in copiesByMaster[entry.id] ?? [] {
+                guard let copyID = copy.id else { continue }
+                if !also.contains(copyID) { also.append(copyID) }
+                if let key = copy.versionKey, SidecarStore.isValidVersionKey(key) { versionKeys.insert(key) }
+            }
+            // Also any version edit file lying beside the file that no catalog row names (an orphan): it belongs to this file and goes with it.
+            versionKeys.formUnion(SidecarStore.versionSidecarKeys(inNames: listingNames[folderPath] ?? [], forFileNamed: entry.url.lastPathComponent))
+            for key in versionKeys.sorted() {
+                guard let versionFile = SidecarStore.versionedSidecarURL(for: entry.url, versionKey: key) else { continue }
+                if present(versionFile) { companions.append(Companion(url: versionFile, kind: .editSidecar)) }
+            }
+            plan.items.append(Item(photoID: entry.id, photoURL: entry.url, alsoIDs: also, companions: companions))
+        }
+        for copy in versionOnly {
+            guard let id = copy.id else { continue }
+            let file = URL(fileURLWithPath: copy.path)
+            let versionFile = SidecarStore.sidecarURL(for: copy)
+            let companions = versionFile.map { [.file, .symlink].contains(fileKind($0)) ? [Companion(url: $0, kind: .editSidecar)] : [] } ?? []
+            plan.items.append(Item(photoID: id, photoURL: file, companions: companions, isVersionOnly: true))
         }
         return plan
     }
@@ -222,9 +274,25 @@ enum TrashEngine {
                 return outcome
             case .skipOpen:
                 outcome.lateSkippedOpen.append(item.photoURL.lastPathComponent)
-                notTrashedKeys.insert(key)
+                if !item.isVersionOnly { notTrashedKeys.insert(key) }
                 continue
             case .proceed: break
+            }
+            if item.isVersionOnly {
+                // A virtual copy on its own: ONLY its edit file may move; the shared image file (`photoURL`) is never handed to the mover.
+                var moved = true
+                for companion in item.companions where companion.kind == .editSidecar {
+                    do {
+                        _ = try mover(companion.url)
+                        outcome.companionsTrashed += 1
+                    } catch {
+                        moved = false
+                        outcome.companionsFailed += 1
+                        outcome.failures.append(Failure(photoID: item.photoID, name: companion.url.lastPathComponent, message: error.localizedDescription))
+                    }
+                }
+                if moved { outcome.trashedIDs.append(item.photoID) }
+                continue
             }
             do {
                 _ = try mover(item.photoURL)

@@ -50,29 +50,31 @@ actor CullPreviewCache {
 
     /// The cached preview for `photo` at `pixelSize`, without decoding anything.
     func cached(for photo: Photo, pixelSize: Int) -> CGImage? {
-        cache.object(forKey: Self.key(photo.path, pixelSize) as NSString)
+        cache.object(forKey: Self.key(photo.editKey, pixelSize) as NSString)
     }
 
     /// The preview for `photo`: from the cache, from a decode already running for the same size, or a fresh decode (edits applied from
     /// the photo's saved sidecar, like the grid thumbnail).
     func preview(for photo: Photo, pixelSize: Int) async -> CGImage? {
         let path = photo.path
-        let key = Self.key(path, pixelSize)
+        // Keyed by EDIT KEY (`Photo.editKey`: the path for a master): two versions of one file are different pictures.
+        let editKey = photo.editKey
+        let key = Self.key(editKey, pixelSize)
         if let hit = cache.object(forKey: key as NSString) { return hit }
         if let existing = inFlight[key] { return await existing.value }
 
-        let requestGeneration = generation[path, default: 0]
+        let requestGeneration = generation[editKey, default: 0]
         let task = Task<CGImage?, Never> {
             let editState = PhotoExporter.loadEditState(for: photo)
             return await ThumbnailGenerator.thumbnail(for: URL(fileURLWithPath: path), maxPixelSize: pixelSize, editState: editState)
         }
         inFlight[key] = task
         let result = await task.value
-        guard generation[path, default: 0] == requestGeneration else { return result }
+        guard generation[editKey, default: 0] == requestGeneration else { return result }
         inFlight[key] = nil
         if let result {
             cache.setObject(result, forKey: key as NSString, cost: result.bytesPerRow * result.height)
-            keysByPath[path, default: []].insert(key)
+            keysByPath[editKey, default: []].insert(key)
         }
         return result
     }
@@ -96,7 +98,7 @@ actor CullPreviewCache {
     }
 
     /// Whether a decode for `photo` at `pixelSize` is running right now (tests wait on this instead of sleeping).
-    func isDecoding(_ photo: Photo, pixelSize: Int) -> Bool { inFlight[Self.key(photo.path, pixelSize)] != nil }
+    func isDecoding(_ photo: Photo, pixelSize: Int) -> Bool { inFlight[Self.key(photo.editKey, pixelSize)] != nil }
 
     /// Suspends until the current prefetch worker has finished or been cancelled (tests, and "settle" in the view).
     func idle() async { await prefetchWorker?.value }
@@ -107,7 +109,7 @@ actor CullPreviewCache {
         prefetchWorker = nil
     }
 
-    /// Drops every size of `path` (its edits changed, or the file did).
+    /// Drops every size of one edit set (`path` is the `Photo.editKey`: the file path for a master) — its edits changed, or the file did.
     func invalidate(path: String) {
         generation[path, default: 0] += 1
         for key in keysByPath[path] ?? [] { cache.removeObject(forKey: key as NSString) }

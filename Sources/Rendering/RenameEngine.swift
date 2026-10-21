@@ -72,10 +72,18 @@ enum RenameEngine {
         // Files that belong to ONE photo and always travel with it: its edit sidecar and a darktable/digiKam-style `<file>.xmp`.
         // (The shared Adobe `<base>.xmp` is handled separately below because it can belong to a RAW sibling instead.)
         struct OwnSidecar { let url: (URL) -> URL; let tag: String; let foreignMessage: String }
-        let ownSidecars = [
-            OwnSidecar(url: SidecarStore.sidecarURL(for:), tag: "sidecar", foreignMessage: "an edit file already exists next to"),
+        let baseSidecars = [
+            OwnSidecar(url: { SidecarStore.sidecarURL(for: $0) }, tag: "sidecar", foreignMessage: "an edit file already exists next to"),
             OwnSidecar(url: XMPSidecarStore.alternateSidecarURL(for:), tag: "altxmp", foreignMessage: "an XMP file already exists next to")
         ]
+        // A master's virtual copies keep their own edit files (`<file>.<versionKey>.photoapp.json`); they travel with the shared file
+        // too, found by listing the folder (so it works even when the catalog is out of step). Discovered per move, from the pristine folder.
+        let ownSidecarsByMove: [[OwnSidecar]] = moves.map { item in
+            baseSidecars + SidecarStore.versionSidecarKeys(forPhotoAt: URL(fileURLWithPath: item.oldPath)).map { key in
+                OwnSidecar(url: { SidecarStore.versionedSidecarURL(for: $0, versionKey: key) ?? SidecarStore.sidecarURL(for: $0) }, tag: "v" + key,
+                           foreignMessage: "a version edit file already exists next to")
+            }
+        }
         do {
             // Phase 1: park every source (and its sidecars) under a temp name.
             var staged: [(move: RenameMove, tempPhoto: URL, tempOwn: [URL?], tempXMP: URL?, destinationXMPShared: Bool)] = []
@@ -87,7 +95,7 @@ enum RenameEngine {
                 )
                 try step(old, tempPhoto)
                 var tempOwn: [URL?] = []
-                for kind in ownSidecars {
+                for kind in ownSidecarsByMove[index] {
                     let source = kind.url(old)
                     if somethingExists(at: source) { // lstat-aware, same as phase 2: a dangling symlink here moves with its photo
                         let temp = folder.appendingPathComponent(tempPhoto.lastPathComponent + "." + kind.tag)
@@ -106,7 +114,8 @@ enum RenameEngine {
                 staged.append((item, tempPhoto, tempOwn, tempXMP, xmpPlans[index].destinationShared))
             }
             // Phase 2: temps → final names.
-            for entry in staged {
+            for (entryIndex, entry) in staged.enumerated() {
+                let ownSidecars = ownSidecarsByMove[entryIndex]
                 let new = URL(fileURLWithPath: entry.move.newPath)
                 // A photo with NO sidecar of its own must not land next to an existing one at
                 // its new name (every sidecar this batch frees is already parked under a temp
@@ -143,8 +152,8 @@ enum RenameEngine {
         }
     }
 
-    /// Extra bytes the temp name must leave room for: the longest suffix appended to it (`.sidecar`, `.altxmp`, `.xmp`).
-    static let tempReserve = ".sidecar".utf8.count
+    /// Extra bytes the temp name must leave room for: the longest suffix appended to it (`.sidecar`, `.altxmp`, `.xmp`, or a copy's `.v<versionKey>`).
+    static let tempReserve = ".v".utf8.count + SidecarStore.versionKeyLength
 
     /// What a move does about the shared `<base>.xmp`, judged from the folder's files as they are NOW.
     struct XMPPlan: Equatable {

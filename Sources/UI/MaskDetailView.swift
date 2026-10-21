@@ -84,6 +84,23 @@ extension MaskCombineTarget {
 /// `EditorCrosshairOverlay` machinery the WB eyedropper already used —
 /// confirming that entry's own prediction this would be "mostly a routing
 /// change, not new machinery."
+/// D44: a Subject mask whose subjects are all unticked selects NOTHING (also with Invert on: inverting "nothing
+/// known" must not light up the photo — see `Mask.subjectRasters`). The UI says so and disables Invert; the
+/// render and the stored data are untouched.
+enum SubjectSelectionState {
+    static let emptyCaption = "No subject is ticked, so this mask selects nothing. Tick at least one subject to use it."
+
+    /// True when subjects are stored but none is enabled.
+    static func selectsNothing(_ mask: Mask) -> Bool {
+        mask.hasStoredSubject && mask.subjectRasters.isEmpty
+    }
+
+    /// Invert is disabled only when it is off: if it is already on, the user must still be able to turn it off.
+    static func invertIsDisabled(_ mask: Mask) -> Bool {
+        selectsNothing(mask) && !mask.invertSelection
+    }
+}
+
 struct MaskDetailView: View {
     @Binding var mask: Mask
     /// `.brush` only — called when "Paint Stroke"/"Redraw Stroke" is
@@ -313,8 +330,12 @@ struct MaskDetailView: View {
                         .font(.caption).foregroundStyle(Theme.textSecondary)
                 }
             }
+            if SubjectSelectionState.selectsNothing(mask) {
+                Text(SubjectSelectionState.emptyCaption).font(.caption).foregroundStyle(Theme.textSecondary)
+            }
             Toggle("Invert (select background)", isOn: $mask.invertSelection)
                 .accessibilityLabel("Invert Subject Selection")
+                .disabled(SubjectSelectionState.invertIsDisabled(mask))
             Button(isRecomputingSubject ? "Finding…" : "Recompute Subject") {
                 onRecomputeSubject?()
             }

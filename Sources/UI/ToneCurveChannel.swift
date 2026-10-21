@@ -53,3 +53,25 @@ enum ToneCurveChannel: String, CaseIterable, Identifiable {
         }
     }
 }
+
+// MARK: - Segment labels and the edited caption (D21)
+
+/// The Curve section's channel picker shows PLAIN labels (a trailing " •" on an edited channel resized the
+/// `NSSegmentedControl`'s segments, shifting them when the first point was added) and a separate caption names
+/// the edited channels, the way the Color Grading picker already does.
+enum ToneCurveChannelLabels {
+    /// The picker's label for `channel`: always its plain name, whatever its curve holds.
+    static func segmentLabel(for channel: ToneCurveChannel) -> String { channel.rawValue }
+
+    /// "Edited: Red, Blue" (picker order) for the channels in `edited`, or nil when none is.
+    static func editedCaption(editedChannels edited: Set<ToneCurveChannel>) -> String? {
+        let names = ToneCurveChannel.allCases.filter { edited.contains($0) }.map(\.rawValue)
+        return names.isEmpty ? nil : "Edited: \(names.joined(separator: ", "))"
+    }
+
+    /// The caption row's text, ALWAYS non-empty: a blank line (" ") while nothing is edited keeps the row's
+    /// height constant, so the curve canvas below never moves when the first point is added mid-drag.
+    static func captionRowText(editedChannels edited: Set<ToneCurveChannel>) -> String {
+        editedCaption(editedChannels: edited) ?? " "
+    }
+}

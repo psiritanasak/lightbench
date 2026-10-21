@@ -30,14 +30,11 @@ import SwiftUI
 /// hue-degree equivalence" disclaimer `SelectiveColorBand.swatchColor`'s
 /// own doc comment already establishes for this codebase.
 ///
-/// Keyboard/VoiceOver support for dragging the puck is EXPLICITLY DEFERRED
-/// to its own future session — matches this app's own established
-/// precedent (the WB eyedropper and Red-Eye placement both shipped
-/// pointer-first; see IMPROVEMENTS.md D8/D14 for the shape of that
-/// follow-up). The Luminance slider next to this view (a plain
-/// `EditSliderRow`) remains a real, fully keyboard/AT-accessible path to
-/// that one axis regardless — the same partial-coverage shape D9 already
-/// documents for mask overlays.
+/// Keyboard/VoiceOver (D20, shipped after the pointer-first Slice B): the
+/// wheel is one accessibility element with an adjustable Saturation, named
+/// Hue +/- and Reset actions, and focus + arrow keys (Left/Right Hue,
+/// Up/Down Saturation, Shift = 3x). Verified by unit tests of the pure
+/// stepping maths only, not by VoiceOver itself.
 struct ColorGradingWheelView: View {
     @Binding var hue: Double
     @Binding var saturation: Double
@@ -87,7 +84,48 @@ struct ColorGradingWheelView: View {
         // already-circular, already-bounded control within the section's
         // full row width without re-widening the square `Circle()` clips.
         .frame(maxWidth: .infinity, alignment: .center)
-        .accessibilityHidden(true)
+        // D20: one accessibility element (the painted wheel and puck are decoration for AT). Adjust steps
+        // Saturation; Hue has named actions; arrow keys do the same when the wheel has focus. The maths lives in
+        // `ColorWheelGeometry.stepped` (Hue wraps, Saturation clamps, Saturation 0 forces Hue 0).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Color wheel")
+        .accessibilityValue(ColorWheelGeometry.accessibilityValue(hue: hue, saturation: saturation))
+        .accessibilityAdjustableAction { direction in
+            step(saturationDelta: direction == .increment ? ColorWheelGeometry.saturationStep : -ColorWheelGeometry.saturationStep)
+        }
+        .accessibilityAction(named: "Increase Hue") { step(hueDelta: ColorWheelGeometry.hueStepDegrees) }
+        .accessibilityAction(named: "Decrease Hue") { step(hueDelta: -ColorWheelGeometry.hueStepDegrees) }
+        .accessibilityAction(named: "Reset Wheel") {
+            if hue != 0 { hue = 0 }
+            if saturation != 0 { saturation = 0 }
+        }
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(phases: [.down, .repeat]) { press in handleKey(press) }
+    }
+
+    private func step(hueDelta: Double = 0, saturationDelta: Double = 0) {
+        // A no-op step writes nothing (a write would reach `editState` and schedule a sidecar save).
+        guard let next = ColorWheelGeometry.steppedIfChanged(
+            hue: hue, saturation: saturation, hueDelta: hueDelta, saturationDelta: saturationDelta
+        ) else { return }
+        if next.hue != hue { hue = next.hue }
+        if next.saturation != saturation { saturation = next.saturation }
+    }
+
+    /// Left / Right step Hue, Up / Down step Saturation; Shift steps three at a time. Command / Option / Control are
+    /// left alone so menu shortcuts keep working.
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.isDisjoint(with: [.command, .option, .control]) else { return .ignored }
+        let scale = press.modifiers.contains(.shift) ? 3.0 : 1.0
+        switch press.key {
+        case .rightArrow: step(hueDelta: ColorWheelGeometry.hueStepDegrees * scale)
+        case .leftArrow: step(hueDelta: -ColorWheelGeometry.hueStepDegrees * scale)
+        case .upArrow: step(saturationDelta: ColorWheelGeometry.saturationStep * scale)
+        case .downArrow: step(saturationDelta: -ColorWheelGeometry.saturationStep * scale)
+        default: return .ignored
+        }
+        return .handled
     }
 
     /// `endRadius` is `ColorWheelGeometry.wheelRadius(rect)` — the SAME

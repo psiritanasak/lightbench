@@ -23,6 +23,50 @@ import CoreGraphics
 /// PRESERVING the angle (a true polar clamp), not an independent x/y clamp
 /// — those produce different results for the same out-of-circle point.
 enum ColorWheelGeometry {
+    // MARK: - Keyboard / VoiceOver stepping (D20)
+
+    /// Default step sizes for the wheel's arrow keys and accessibility actions.
+    static let hueStepDegrees: Double = 10
+    static let saturationStep: Double = 0.05
+
+    /// Steps the wheel's value without a pointer. Hue wraps into (-180, 180] (`polarValue`'s range; -180 and
+    /// 180 are the same direction and are reported as 180); Saturation clamps to 0...1 (residue below 1e-9 from
+    /// repeated float steps counts as 0). IDENTITY RULE: whenever the resulting Saturation is 0, Hue is EXACTLY 0,
+    /// the same snap `polarValue` makes at the centre, because `isColorGradingRangeAtIdentity` and
+    /// `isAdjustTabAtIdentity` read identity as Hue == 0 && Saturation == 0. A Hue step on a wheel whose
+    /// Saturation is 0 therefore changes nothing (a hue with no saturation is not a state this wheel has).
+    static func stepped(
+        hue: Double, saturation: Double, hueDelta: Double = 0, saturationDelta: Double = 0
+    ) -> (hue: Double, saturation: Double) {
+        guard hue.isFinite, saturation.isFinite else { return (0, 0) }
+        var newSaturation = min(max(saturation + saturationDelta, 0), 1)
+        if newSaturation < 1e-9 { newSaturation = 0 }
+        guard newSaturation > 0 else { return (0, 0) }
+        return (wrappedHue(hue + hueDelta), newSaturation)
+    }
+
+    /// `stepped`, or nil when the step changes nothing (Hue at Saturation 0, Down at 0, Up at 1), so callers
+    /// can skip the write instead of dirtying the edit state with an identical value.
+    static func steppedIfChanged(
+        hue: Double, saturation: Double, hueDelta: Double = 0, saturationDelta: Double = 0
+    ) -> (hue: Double, saturation: Double)? {
+        let next = stepped(hue: hue, saturation: saturation, hueDelta: hueDelta, saturationDelta: saturationDelta)
+        return next.hue == hue && next.saturation == saturation ? nil : next
+    }
+
+    /// `degrees` wrapped into (-180, 180].
+    static func wrappedHue(_ degrees: Double) -> Double {
+        var wrapped = degrees.truncatingRemainder(dividingBy: 360)
+        if wrapped > 180 { wrapped -= 360 }
+        if wrapped <= -180 { wrapped += 360 }
+        return wrapped
+    }
+
+    /// VoiceOver value, e.g. "Hue +137°, Saturation 42%".
+    static func accessibilityValue(hue: Double, saturation: Double) -> String {
+        String(format: "Hue %+.0f°, Saturation %.0f%%", hue, saturation * 100)
+    }
+
     /// Inset between the wheel's outer edge and the puck's own visual
     /// radius, so a puck at full Saturation (1) doesn't render half-clipped
     /// outside the control's bounds — the same role `ToneCurveEditorView`'s

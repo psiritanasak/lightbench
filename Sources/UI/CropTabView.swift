@@ -17,6 +17,21 @@ struct CropTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                uprightButton(.level, title: "Level", help: "Find the dominant lines and rotate the photo so they are level")
+                uprightButton(.vertical, title: "Vertical", help: "Straighten vertical lines: rotate and correct keystone so they run parallel")
+            }
+            .alert(
+                "Upright",
+                isPresented: Binding(
+                    get: { document.uprightMessage != nil },
+                    set: { if !$0 { document.uprightMessage = nil } }
+                )
+            ) {
+                Button("OK") {}
+            } message: {
+                Text(document.uprightMessage ?? "")
+            }
             EditSliderRow(
                 label: "Straighten", value: $document.editState.straightenAngle,
                 range: -45...45, identity: 0
@@ -65,6 +80,18 @@ struct CropTabView: View {
                 .buttonStyle(.flat)
                 .disabled(document.currentImage == nil)
         }
+    }
+
+    private func uprightButton(_ mode: UprightMode, title: String, help: String) -> some View {
+        Button {
+            document.autoUpright(mode)
+        } label: {
+            Label(document.runningUprightMode == mode ? "Finding lines…" : title, systemImage: "wand.and.stars")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.flat)
+        .disabled(document.currentImage == nil || document.isAutoUprighting)
+        .help(help)
     }
 
     /// The Aspect preset list — a full always-visible vertical list (not a

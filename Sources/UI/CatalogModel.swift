@@ -83,6 +83,9 @@ final class CatalogModel: ObservableObject {
     @Published private(set) var keywords: [Keyword] = []
     /// photoID → the keyword ids on it; same role/discipline as `membershipsByPhotoID`.
     @Published private(set) var keywordIDsByPhotoID: [Int64: Set<Int64>] = [:]
+    /// photoID → Library info (title, caption, creator, copyright). Keyed by the MASTER photo id only: a virtual copy has no
+    /// entry of its own (read through `info(for:)` / `inheritingFromMasters`).
+    @Published private(set) var infoByPhotoID: [Int64: PhotoInfo] = [:]
     /// Which photos are checked in the Library grid, for batch export —
     /// pure in-memory UI state (unlike every other `@Published` mutation
     /// in this class, this never touches the database, so it needs no
@@ -143,6 +146,10 @@ final class CatalogModel: ObservableObject {
     /// Set by the Photo menu's "Edit Keywords…" (a Scene-level command that can't see the other sheets'
     /// state); `KeywordSheetModifier` performs it — or drops it while another sheet/dialog is up — then clears it.
     @Published var keywordSheetRequested = false
+    /// The Edit Info sheet's snapshot of the photo ids it edits; `nil` = sheet closed (same shape as the keyword sheet's).
+    @Published var infoSheetPhotoIDs: [Int64]?
+    /// Set by the Photo menu's "Edit Info…"; `InfoSheetModifier` performs it (or drops it while another sheet is up) and clears it.
+    @Published var infoSheetRequested = false
     /// The keyword the grid is filtered to; `nil` = no keyword filter.
     @Published var keywordFilterID: Int64?
     /// Faces and people (see `FacesModel`): the people list, which photos each person is in, and the Library's Person filter.
@@ -216,7 +223,8 @@ final class CatalogModel: ObservableObject {
             keywordNamesByPhotoID: keywordNamesForSearch,
             personFilter: personFilterID,
             personIDsByPhotoID: personIDsByPhotoID,
-            metadataByPhotoID: metadataByPhotoID
+            metadataByPhotoID: metadataByPhotoID,
+            infoByPhotoID: infoForSearch(searchText)
         )
     }
 
@@ -234,8 +242,15 @@ final class CatalogModel: ObservableObject {
             to: photos, keywords: keywords, keywordIDsByPhotoID: keywordIDsByPhotoID,
             // Only built when the collection has a saved search (the only reader).
             keywordNamesByPhotoID: smart.criteria.searchQuery.isEmpty ? [:] : keywordNamesByPhoto(),
-            metadataByPhotoID: metadataByPhotoID
+            metadataByPhotoID: metadataByPhotoID,
+            infoByPhotoID: infoForSearch(smart.criteria.searchQuery)
         )
+    }
+
+    /// The info map the search reads (copies inherit their master's), built only while `query` is non-empty.
+    private func infoForSearch(_ query: String) -> [Int64: PhotoInfo] {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
+        return Self.inheritingFromMasters(infoByPhotoID, photos: photos)
     }
 
     /// The selected smart collection's saved search text ("" when none is selected or it has none).
@@ -578,6 +593,8 @@ final class CatalogModel: ObservableObject {
             keywords = Self.sortedKeywords(loadedKeywords)
             keywordIDsByPhotoID = Dictionary(grouping: keywordLinks, by: \.photoId)
                 .mapValues { Set($0.map(\.keywordId)) }
+            // Its own try?: a failed info read keeps the previous map.
+            if let loadedInfo = try? await database.allInfo() { infoByPhotoID = loadedInfo }
             // Its own do/catch: a failed face read must not stop the photos below from refreshing.
             do {
                 people = try await database.peopleSummaries()
@@ -1425,7 +1442,7 @@ final class CatalogModel: ObservableObject {
 
     /// True while a Library tool sheet (keywords, duplicates, people) is up or one of their scans runs; batch rename must not start then.
     var toolSheetIsBusy: Bool {
-        keywordSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy || trashBusy || importCopyBusy || backupBusy
+        keywordSheetPhotoIDs != nil || infoSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy || trashBusy || importCopyBusy || backupBusy
     }
 
     /// The People sheet's scan: finds faces in the photos the Library is currently drawing from, then regroups ALL stored faces.
@@ -1478,6 +1495,7 @@ final class CatalogModel: ObservableObject {
         membershipsByPhotoID.removeValue(forKey: id)
         recomputeFolderPhotoCounts()
         keywordIDsByPhotoID.removeValue(forKey: id)
+        infoByPhotoID.removeValue(forKey: id)
         personIDsByPhotoID.removeValue(forKey: id)
         metadataByPhotoID.removeValue(forKey: id)
         invalidateThumbnail(for: URL(fileURLWithPath: photo.path))
@@ -1597,6 +1615,40 @@ final class CatalogModel: ObservableObject {
         let ids = selectedPhotos.compactMap(\.id)
         guard !ids.isEmpty else { return }
         keywordSheetPhotoIDs = ids
+    }
+
+    // MARK: - Info
+
+    /// Opens the Edit Info sheet over the selected photos that belong to the current source set (`selectedPhotos`), with the same
+    /// semantics as `beginEditingKeywords()`: photos the filters hide stay selected and are edited too (the sheet discloses it).
+    func beginEditingInfo() {
+        let ids = selectedPhotos.compactMap(\.id)
+        guard !ids.isEmpty else { return }
+        infoSheetPhotoIDs = ids
+    }
+
+    /// The Library info a photo shows: its own, or its master's when it is a virtual copy.
+    func info(for photo: Photo) -> PhotoInfo {
+        guard let id = photo.masterId ?? photo.id else { return PhotoInfo() }
+        return infoByPhotoID[id] ?? PhotoInfo()
+    }
+
+    /// Writes the `fields` of `info` to the photographs of `photoIDs` (a copy edits its master) — local-first like `setRating`:
+    /// the map changes at once, a failed write re-reads everything.
+    func setInfo(_ info: PhotoInfo, fields: InfoFields, for photoIDs: [Int64]) {
+        guard !fields.isEmpty, let database else { return }
+        let byID = Dictionary(photos.compactMap { photo in photo.id.map { ($0, photo) } }, uniquingKeysWith: { first, _ in first })
+        for photoID in photoIDs {
+            guard let photo = byID[photoID], let target = photo.masterId ?? photo.id else { continue }
+            let updated = (infoByPhotoID[target] ?? PhotoInfo()).applying(info, fields: fields)
+            if updated.isEmpty { infoByPhotoID.removeValue(forKey: target) } else { infoByPhotoID[target] = updated }
+        }
+        Task.detached { [weak self] in
+            do { try await database.setInfo(info, forPhotoIDs: photoIDs, fields: fields) } catch {
+                await MainActor.run { self?.importStatusMessage = "Couldn't save the info: \(error.localizedDescription)" }
+                await self?.refresh()
+            }
+        }
     }
 
     static func sortedKeywords(_ list: [Keyword]) -> [Keyword] {

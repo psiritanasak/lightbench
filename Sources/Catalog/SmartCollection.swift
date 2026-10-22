@@ -59,14 +59,15 @@ struct SmartCollectionCriteria: Equatable, Sendable {
     /// data never match a camera-data term, so such a collection fills in as the background scan reads files.
     func apply(
         to photos: [Photo], keywords: [Keyword], keywordIDsByPhotoID: [Int64: Set<Int64>],
-        keywordNamesByPhotoID: [Int64: [String]] = [:], metadataByPhotoID: [Int64: PhotoMetadata] = [:]
+        keywordNamesByPhotoID: [Int64: [String]] = [:], metadataByPhotoID: [Int64: PhotoMetadata] = [:],
+        infoByPhotoID: [Int64: PhotoInfo] = [:]
     ) -> [Photo] {
         if hasUnrecognizedCriterion { return [] }
         guard !isEmpty else { return photos }
         let kept = Set(LibraryFilterSort.apply(
             to: photos, sort: .dateOldest, minimumRating: minimumRating, flagFilter: flag, searchText: searchQuery,
             labelFilter: label, keywordFilter: keywordFilter(resolving: keywords), keywordIDsByPhotoID: keywordIDsByPhotoID,
-            keywordNamesByPhotoID: keywordNamesByPhotoID, metadataByPhotoID: metadataByPhotoID
+            keywordNamesByPhotoID: keywordNamesByPhotoID, metadataByPhotoID: metadataByPhotoID, infoByPhotoID: infoByPhotoID
         ).compactMap(\.id))
         // `apply` re-sorts; filtering the ORIGINAL array keeps the caller's order, so this stays a pure FILTER.
         return photos.filter { $0.id.map(kept.contains) ?? false }

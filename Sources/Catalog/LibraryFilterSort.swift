@@ -103,6 +103,7 @@ enum LibraryFilterSort {
     ///   - keywordFilter: the keyword ids a photo must carry (ANY of them
     ///     matches); `nil` (the default) means no keyword filter. A photo
     ///     with no entry in `keywordIDsByPhotoID` carries none.
+    ///   - infoByPhotoID: each photo's Library info (a virtual copy under its own id), for the plain-text and `title:`/`caption:`/`creator:`/`copyright:` search terms.
     ///   - personFilter: keep only photos with a face assigned to this person (`nil`: no person filter).
     ///   - keywordNamesByPhotoID: each photo's keyword display names, so
     ///     the search box also matches keywords (substring, case-insensitive,
@@ -116,7 +117,8 @@ enum LibraryFilterSort {
         keywordNamesByPhotoID: [Int64: [String]] = [:],
         personFilter: Int64? = nil,
         personIDsByPhotoID: [Int64: Set<Int64>] = [:],
-        metadataByPhotoID: [Int64: PhotoMetadata] = [:]
+        metadataByPhotoID: [Int64: PhotoMetadata] = [:],
+        infoByPhotoID: [Int64: PhotoInfo] = [:]
     ) -> [Photo] {
         var result = photos
         if let personFilter {
@@ -144,7 +146,8 @@ enum LibraryFilterSort {
                 let id = photo.id
                 return query.matches(
                     photo, metadata: id.flatMap { metadataByPhotoID[$0] },
-                    keywordNames: id.flatMap { keywordNamesByPhotoID[$0] } ?? []
+                    keywordNames: id.flatMap { keywordNamesByPhotoID[$0] } ?? [],
+                    info: id.flatMap { infoByPhotoID[$0] }
                 )
             }
         }

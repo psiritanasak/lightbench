@@ -16,3 +16,10 @@ Models/
 
 # R session history (stray)
 .Rhistory
+
+# Private project notes (kept locally, not published)
+CLAUDE.md
+PROGRESS.md
+docs/ROADMAP_HISTORY.md
+docs/PROGRESS_HISTORY.md
+docs/IMPROVEMENTS_HISTORY.md

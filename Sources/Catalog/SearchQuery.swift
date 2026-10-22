@@ -2,10 +2,10 @@ import Foundation
 
 /// The Library search box's query language: whitespace-separated terms that must ALL match.
 ///
-/// - a plain word, or a `"quoted phrase"`, matches a filename OR a keyword name (case-insensitive substring), as before;
+/// - a plain word, or a `"quoted phrase"`, matches a filename, a keyword name, or the Library title or caption (case-insensitive substring);
 /// - `field:value` filters on one attribute. Fields: `iso`, `focal` (mm), `aperture` (`f2.8`/`2.8`), `shutter`
 ///   (`1/250`, `0.5`, `2s`), `date` (`2023`, `2023-03`, `2023-03-14`), `rating`, `flag` (`pick|reject|none`),
-///   `label` (`red|yellow|green|blue|purple|none`), `keyword`, `name`, `camera` (make/model), `lens`;
+///   `label` (`red|yellow|green|blue|purple|none`), `keyword`, `name`, `camera` (make/model), `lens`, `title`, `caption`, `creator`, `copyright`;
 /// - numeric and date fields take `>`, `>=`, `<`, `<=`, `=` or a range `a..b` (`iso:>800`, `date:2023-01..2023-06`);
 ///   a date with fewer parts means the whole period (`date:2023-03` is every day of March) and a comparison uses the
 ///   period's edge (`date:>2023-03` is after March, `date:<=2023-03` through the end of March);
@@ -17,6 +17,7 @@ import Foundation
 struct SearchQuery: Equatable {
     enum Field: String, CaseIterable {
         case iso, focal, aperture, shutter, date, rating, flag, label, keyword, name, camera, lens
+        case title, caption, creator, copyright
     }
 
     enum Comparison: Equatable {
@@ -105,7 +106,7 @@ struct SearchQuery: Equatable {
 
     private static func fieldTerm(_ field: Field, value: String, raw: String) -> Term {
         switch field {
-        case .keyword, .name, .camera, .lens:
+        case .keyword, .name, .camera, .lens, .title, .caption, .creator, .copyright:
             return .contains(field, value)
         case .flag:
             switch value.lowercased() {
@@ -250,17 +251,20 @@ struct SearchQuery: Equatable {
 
     // MARK: - Matching
 
-    func matches(_ photo: Photo, metadata: PhotoMetadata?, keywordNames: [String]) -> Bool {
-        terms.allSatisfy { Self.matches($0, photo: photo, metadata: metadata, keywordNames: keywordNames) }
+    /// `info` is the photograph's Library info (a virtual copy passes its master's); nil = none.
+    func matches(_ photo: Photo, metadata: PhotoMetadata?, keywordNames: [String], info: PhotoInfo? = nil) -> Bool {
+        terms.allSatisfy { Self.matches($0, photo: photo, metadata: metadata, keywordNames: keywordNames, info: info) }
     }
 
-    private static func matches(_ term: Term, photo: Photo, metadata: PhotoMetadata?, keywordNames: [String]) -> Bool {
+    private static func matches(_ term: Term, photo: Photo, metadata: PhotoMetadata?, keywordNames: [String], info: PhotoInfo?) -> Bool {
         switch term {
         case .invalid:
             return false
         case .text(let text):
             return photo.filename.localizedCaseInsensitiveContains(text)
                 || keywordNames.contains { $0.localizedCaseInsensitiveContains(text) }
+                || info?.title.localizedCaseInsensitiveContains(text) == true
+                || info?.caption.localizedCaseInsensitiveContains(text) == true
         case .flag(let status):
             return photo.flagStatus == status
         case .label(let label):
@@ -269,6 +273,10 @@ struct SearchQuery: Equatable {
             switch field {
             case .keyword: return keywordNames.contains { $0.localizedCaseInsensitiveContains(text) }
             case .name: return photo.filename.localizedCaseInsensitiveContains(text)
+            case .title: return info?.title.localizedCaseInsensitiveContains(text) == true
+            case .caption: return info?.caption.localizedCaseInsensitiveContains(text) == true
+            case .creator: return info?.creator.localizedCaseInsensitiveContains(text) == true
+            case .copyright: return info?.copyright.localizedCaseInsensitiveContains(text) == true
             case .camera:
                 guard let metadata else { return false }
                 return [metadata.cameraName, metadata.cameraMake, metadata.cameraModel].contains {
@@ -334,7 +342,11 @@ enum SearchHelp {
         Row(field: "flag", meaning: "pick, reject or none", example: "flag:pick"),
         Row(field: "label", meaning: "Colour label", example: "label:red"),
         Row(field: "keyword", meaning: "Keyword", example: "keyword:mountains"),
-        Row(field: "name", meaning: "File name", example: "name:IMG_6")
+        Row(field: "name", meaning: "File name", example: "name:IMG_6"),
+        Row(field: "title", meaning: "Title (Edit Info)", example: "title:sunset"),
+        Row(field: "caption", meaning: "Caption (Edit Info)", example: "caption:\"golden hour\""),
+        Row(field: "creator", meaning: "Creator (Edit Info)", example: "creator:smith"),
+        Row(field: "copyright", meaning: "Copyright (Edit Info)", example: "copyright:2026")
     ]
 
     static let note = "Combine terms with spaces; all must match. Use > >= < <= or a..b for numbers and dates, and quotes for phrases."

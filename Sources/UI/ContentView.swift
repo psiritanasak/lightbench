@@ -1778,6 +1778,11 @@ struct ContentView: View {
                         }
                         .disabled(selectedPhotosVisibleInGrid.isEmpty || otherSheetIsPresented)
 
+                        Button("Edit Info (\(selectedPhotosVisibleInGrid.count))…") {
+                            catalog.infoSheetRequested = true
+                        }
+                        .disabled(selectedPhotosVisibleInGrid.isEmpty || otherSheetIsPresented)
+
                         // The merge acts on the selected photos the grid actually SHOWS (`selectedPhotosInDisplayedGrid`), so the label and the
                         // enabled state use that same set (`selectedPhotosVisibleInGrid` is the raw selection and includes filtered-out photos).
                         Button("Merge to HDR (\(catalog.selectedPhotosInDisplayedGrid.count))…") {

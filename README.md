@@ -6,7 +6,7 @@ A native macOS photo editor with a library, in the spirit of Lightroom. Edits ar
 
 ## What it does
 
-- **Library:** import folders (or copy photos from a card into your library), thumbnail grid, ratings, Pick/Reject flags, colour labels, keywords, collections and Smart Collections, search (`iso:>800 camera:d610 rating:>3 …`), duplicate detection, people grouping, batch rename, XMP sidecar read/write, catalog backup and restore.
+- **Library:** import folders (or copy photos from a card into your library), thumbnail grid, ratings, Pick/Reject flags, colour labels, keywords, editable title / caption / creator / copyright (⌘I, searchable, optionally written into exported files and `.xmp` sidecars), collections and Smart Collections, search (`iso:>800 camera:d610 rating:>3 …`), duplicate detection, people grouping, batch rename, XMP sidecar read/write, catalog backup and restore.
 - **Editor:** exposure, contrast, tone curve (with per-channel curves), white balance, colour, selective colour, point colour, black & white mix, colour grading wheels, texture, clarity, dehaze, noise reduction, sharpening, grain, vignette, defringe, crop, straighten, perspective, Auto Straighten and Upright, spot removal, red-eye, looks (including your own `.cube` LUTs), styles and presets.
 - **Local adjustments:** radial, linear, brush, luminance, colour, subject and depth masks, which can be combined.
 - **RAW:** decoded through Core Image's RAW engine (tested with Nikon D610 files).

@@ -29,7 +29,7 @@ final class ExportModel: ObservableObject {
 
     /// Opens the format/quality/resize options sheet. The destination
     /// folder is picked AFTER the user confirms those options, in
-    /// `runExport(photos:keywordsByPhotoID:)`.
+    /// `runExport(photos:keywordsByPhotoID:infoByPhotoID:)`.
     func beginExport() {
         isPresentingOptions = true
     }
@@ -38,7 +38,7 @@ final class ExportModel: ObservableObject {
     /// `photos` into it using the current `settings`. One photo failing
     /// to export doesn't abort the batch — each is attempted
     /// independently and the final status message reports both counts.
-    func runExport(photos: [Photo], keywordsByPhotoID: [Int64: [String]]) {
+    func runExport(photos: [Photo], keywordsByPhotoID: [Int64: [String]], infoByPhotoID: [Int64: PhotoInfo] = [:]) {
         guard !isExporting else { return }
         guard !photos.isEmpty else {
             statusMessage = "No photos to export."
@@ -119,7 +119,8 @@ final class ExportModel: ObservableObject {
                 do {
                     _ = try await PhotoExporter.export(
                         photo, editState: editState, to: destination, settings: settingsSnapshot, sequenceIndex: index,
-                        keywords: photo.id.flatMap { keywordsByPhotoID[$0] } ?? []
+                        keywords: photo.id.flatMap { keywordsByPhotoID[$0] } ?? [],
+                        info: photo.id.flatMap { infoByPhotoID[$0] } ?? PhotoInfo()
                     )
                     succeeded += 1
                 } catch {

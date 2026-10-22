@@ -71,6 +71,11 @@ enum XMPSidecarStore {
         }
         if let text = string(metadata, "xmp:Label"), let label = XMPLibraryFields.label(fromName: text) { out.label = label }
         if let words = bag(metadata, "dc:subject") { out.keywords = words }
+        out.title = langAlt(metadata, "dc:title")
+        out.caption = langAlt(metadata, "dc:description")
+        out.copyright = langAlt(metadata, "dc:rights")
+        // A file with several creators (an ordered array) is shown joined; `merge` leaves such an array alone when the Library value equals it.
+        out.creator = bag(metadata, "dc:creator").map { $0.joined(separator: ", ") }.flatMap { $0.isEmpty ? nil : $0 }
         return out
     }
 
@@ -113,6 +118,16 @@ enum XMPSidecarStore {
                       CGImageMetadataSetTagWithPath(mutable, nil, "dc:subject" as CFString, tag) else { throw WriteError.couldNotApply }
             }
         }
+        try setLangAlt(mutable, "title", fields.title)
+        try setLangAlt(mutable, "description", fields.caption)
+        try setLangAlt(mutable, "rights", fields.copyright)
+        if let creator = fields.creator, !creator.isEmpty,
+           // Normalised like the Library value: a Read followed by a Write must not collapse a multi-author array over a spacing difference.
+           InfoText.normalize((bag(mutable, "dc:creator") ?? []).joined(separator: ", "), field: .creator) != creator {
+            guard let tag = CGImageMetadataTagCreate(kCGImageMetadataNamespaceDublinCore, kCGImageMetadataPrefixDublinCore,
+                                                     "creator" as CFString, .arrayOrdered, [creator] as CFArray),
+                  CGImageMetadataSetTagWithPath(mutable, nil, "dc:creator" as CFString, tag) else { throw WriteError.couldNotApply }
+        }
         guard let data = CGImageMetadataCreateXMPData(mutable, nil) else {
             throw existing == nil ? WriteError.nothingToWrite : WriteError.couldNotSerialise
         }
@@ -150,6 +165,66 @@ enum XMPSidecarStore {
     private static func string(_ metadata: CGImageMetadata, _ path: String) -> String? {
         guard let tag = CGImageMetadataCopyTagWithPath(metadata, nil, path as CFString) else { return nil }
         return CGImageMetadataTagCopyValue(tag) as? String
+    }
+
+    /// The text of a language alternative: the `x-default` entry, else the first one. Empty text is nil (absent).
+    private static func langAlt(_ metadata: CGImageMetadata, _ path: String) -> String? {
+        let entries = langAltEntries(metadata, path)
+        let text = (entries.first { isDefaultLang($0.lang) } ?? entries.first)?.text
+        return text.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+    }
+
+    private static func langAltEntries(_ metadata: CGImageMetadata, _ path: String) -> [(lang: String?, text: String)] {
+        guard let tag = CGImageMetadataCopyTagWithPath(metadata, nil, path as CFString),
+              let values = CGImageMetadataTagCopyValue(tag) as? [CGImageMetadataTag] else { return [] }
+        return values.compactMap { entry in
+            guard let text = CGImageMetadataTagCopyValue(entry) as? String else { return nil }
+            let qualifiers = CGImageMetadataTagCopyQualifiers(entry) as? [CGImageMetadataTag]
+            let lang = qualifiers?.first { CGImageMetadataTagCopyName($0) as String? == "lang" }
+                .flatMap { CGImageMetadataTagCopyValue($0) as? String }
+            return (lang, text)
+        }
+    }
+
+    /// Sets the `x-default` entry of `dc:<name>` to `value`, keeping its other-language entries. nil or empty `value` leaves the tag
+    /// alone; so does a value equal to the current `x-default`. ImageIO has no working way to set a language alternative by path
+    /// (a plain set empties an existing one and a fresh one becomes a simple property: `XMPSidecarProbeTests`), so the alternative
+    /// is parsed from a small packet and its tag copied in.
+    private static func setLangAlt(_ metadata: CGMutableImageMetadata, _ name: String, _ value: String?) throws {
+        guard let value, !value.isEmpty else { return }
+        let path = "dc:\(name)"
+        let existing = langAltEntries(metadata, path)
+        if existing.first(where: { isDefaultLang($0.lang) })?.text == value { return }
+        var entries = ["<rdf:li xml:lang=\"x-default\">\(xmlEscaped(value))</rdf:li>"]
+        for other in existing where !isDefaultLang(other.lang) {
+            // An entry with no language is kept as it was (no attribute), not dropped.
+            let attribute = other.lang.map { " xml:lang=\"\(xmlEscaped($0))\"" } ?? ""
+            entries.append("<rdf:li\(attribute)>\(xmlEscaped(other.text))</rdf:li>")
+        }
+        let xml = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+            + "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:\(name)><rdf:Alt>"
+            + entries.joined() + "</rdf:Alt></dc:\(name)></rdf:Description></rdf:RDF></x:xmpmeta>"
+        guard let parsed = CGImageMetadataCreateFromXMPData(Data(xml.utf8) as CFData),
+              let tag = CGImageMetadataCopyTagWithPath(parsed, nil, path as CFString),
+              CGImageMetadataSetTagWithPath(metadata, nil, path as CFString, tag) else { throw WriteError.couldNotApply }
+    }
+
+    /// XMP language tags are case-insensitive (`X-Default` is the default entry too).
+    private static func isDefaultLang(_ lang: String?) -> Bool { lang?.lowercased() == "x-default" }
+
+    private static func xmlEscaped(_ text: String) -> String {
+        var out = ""
+        for ch in text {
+            switch ch {
+            case "&": out += "&amp;"
+            case "<": out += "&lt;"
+            case ">": out += "&gt;"
+            case "\"": out += "&quot;"
+            case "'": out += "&apos;"
+            default: out.append(ch)
+            }
+        }
+        return out
     }
 
     private static func bag(_ metadata: CGImageMetadata, _ path: String) -> [String]? {

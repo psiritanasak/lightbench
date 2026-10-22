@@ -875,9 +875,11 @@ final class CatalogDatabase: Sendable {
 
     /// Applies fields read from XMP sidecars, ONE transaction for the whole batch. `XMPImportPolicy` decides, per photo,
     /// what actually changes from the photo's current row and keywords. Ids that no longer exist are skipped. Returns the
-    /// ids whose rating / flag / label / keyword set really changed (so the caller refreshes only those).
+    /// ids whose rating / flag / label / keyword set / Info text really changed (so the caller refreshes only those).
+    /// Info text (title, caption, creator, copyright) is only read and stored through `info` (see `XMPInfoAccess`); without it the
+    /// Info values in the files are ignored.
     func applyLibraryFields(_ items: [(photoID: Int64, fields: XMPLibraryFields)],
-                            mode: XMPImportPolicy.Mode) async throws -> Set<Int64> {
+                            mode: XMPImportPolicy.Mode, info: XMPInfoAccess? = nil) async throws -> Set<Int64> {
         try await dbQueue.write { db in
             var changed = Set<Int64>()
             for item in items {
@@ -885,13 +887,17 @@ final class CatalogDatabase: Sendable {
                 let linkedIDs = try Int64.fetchAll(db, PhotoKeyword.filter(PhotoKeyword.Columns.photoId == item.photoID)
                     .select(PhotoKeyword.Columns.keywordId))
                 let currentKeys = Set(try Keyword.filter(linkedIDs.contains(Keyword.Columns.id)).fetchAll(db).map(\.nameKey))
-                let change = XMPImportPolicy.change(current: photo, currentKeywordKeys: currentKeys, fields: item.fields, mode: mode)
+                let currentInfo = try info?.load(db, item.photoID) ?? PhotoInfo()
+                var change = XMPImportPolicy.change(current: photo, currentKeywordKeys: currentKeys, fields: item.fields, mode: mode,
+                                                    currentInfo: currentInfo)
+                if info == nil { change.info = XMPImportPolicy.InfoUpdate() }
                 if change.isEmpty { continue }
                 if let rating = change.rating { photo.rating = min(max(rating, 0), 5) }
                 if let flag = change.flag { photo.flagStatus = flag }
                 if let label = change.label { photo.colorLabel = label }
                 if change.rating != nil || change.flag != nil || change.label != nil { try photo.update(db) }
                 if !change.keywordsToAdd.isEmpty { _ = try Self.attachKeywords(db, change.keywordsToAdd, to: [item.photoID]) }
+                if !change.info.isEmpty, let info { try info.store(db, item.photoID, change.info.applying(to: currentInfo)) }
                 changed.insert(item.photoID)
             }
             return changed

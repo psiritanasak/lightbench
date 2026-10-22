@@ -40,6 +40,16 @@ struct ExportOptionsView: View {
         }
     }
 
+    /// What the info toggle controls. Off by default: a caption can be private, so it is only written when asked for.
+    private var infoCaption: String {
+        switch exportModel.settings.metadata {
+        case .none:
+            return "Not available with No metadata — nothing is written."
+        case .all, .withoutLocation:
+            return "Writes the title, caption, creator and copyright you entered in the Library over the same fields in the file. Fields you left empty keep whatever the original file had. Off unless you switch it on."
+        }
+    }
+
     private var preview: ExportNamePreview? {
         ExportNamePreview.evaluate(
             template: exportModel.settings.namingTemplate, photo: previewPhoto,
@@ -154,6 +164,11 @@ struct ExportOptionsView: View {
                 Toggle("Add Library keywords", isOn: $exportModel.settings.includeKeywords)
                     .disabled(exportModel.settings.metadata == .none)
                 Text(keywordCaption)
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                Toggle("Add Library title, caption, creator and copyright", isOn: $exportModel.settings.includeInfo)
+                    .disabled(exportModel.settings.metadata == .none)
+                Text(infoCaption)
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
             }

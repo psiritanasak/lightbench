@@ -46,6 +46,10 @@ final class XMPModel: ObservableObject {
 
     private let folderAccess: SidecarFolderAccessing
 
+    /// The Info text (title, caption, creator, copyright) to write for these photos, keyed by photo id. nil (the default) means the
+    /// catalog's own, master-resolved (`CatalogModel.infoForExport`); tests inject another.
+    var infoProvider: (([Photo]) -> [Int64: PhotoInfo])?
+
     init(folderAccess: SidecarFolderAccessing = SidecarFolderAccess()) {
         self.folderAccess = folderAccess
     }
@@ -117,7 +121,8 @@ final class XMPModel: ObservableObject {
         case .write:
             let allPaths = Array(await catalog.cataloguedPathOwners().keys)
             let keywords = catalog.keywordNames(for: reachable)
-            let outcome = await Task.detached { Self.writeAll(photos: reachable, allPaths: allPaths, keywords: keywords) }.value
+            let info = (infoProvider ?? { catalog.infoForExport($0) })(reachable)
+            let outcome = await Task.detached { Self.writeAll(photos: reachable, allPaths: allPaths, keywords: keywords, info: info) }.value
             result.changed = outcome.written
             result.sharedWithRaw = outcome.shared
             result.unreadable = outcome.unreadable
@@ -144,7 +149,8 @@ final class XMPModel: ObservableObject {
     struct WriteOutcome: Equatable { var written = 0, shared = 0, unreadable = 0, failed = 0 }
     struct ReadOutcome { var items: [(photoID: Int64, fields: XMPLibraryFields)] = []; var noXMP = 0; var unreadable = 0 }
 
-    nonisolated static func writeAll(photos allPhotos: [Photo], allPaths: [String], keywords: [Int64: [String]]) -> WriteOutcome {
+    nonisolated static func writeAll(photos allPhotos: [Photo], allPaths: [String], keywords: [Int64: [String]],
+                                    info: [Int64: PhotoInfo] = [:]) -> WriteOutcome {
         var out = WriteOutcome()
         let photos = allPhotos.filter { !$0.isVirtualCopy } // masters only (see `request`)
         let urlByPhoto = photos.map { (photo: $0, url: URL(fileURLWithPath: $0.path)) }
@@ -154,7 +160,7 @@ final class XMPModel: ObservableObject {
         let writers = Set(split.writers.map { $0.standardizedFileURL.path })
         for entry in urlByPhoto where writers.contains(entry.url.standardizedFileURL.path) {
             let photo = entry.photo
-            let fields = libraryFields(for: photo, keywords: photo.id.flatMap { keywords[$0] } ?? [])
+            let fields = libraryFields(for: photo, keywords: photo.id.flatMap { keywords[$0] } ?? [], info: photo.id.flatMap { info[$0] })
             do {
                 if try XMPSidecarStore.write(fields, forPhotoAt: entry.url) != nil { out.written += 1 }
             } catch XMPSidecarStore.WriteError.unreadableExisting {
@@ -203,13 +209,18 @@ final class XMPModel: ObservableObject {
 
     /// What Write sends for `photo`. An EMPTY Library value never erases what a file already holds (keywords, label, rating set in another
     /// app); a non-empty one replaces it. A Reject writes -1; an un-rejected photo clears an existing -1 marker (see `XMPSidecarStore.merge`).
-    nonisolated static func libraryFields(for photo: Photo, keywords: [String]) -> XMPLibraryFields {
+    nonisolated static func libraryFields(for photo: Photo, keywords: [String], info: PhotoInfo? = nil) -> XMPLibraryFields {
         let rejected = photo.flagStatus == .rejected
         return XMPLibraryFields(
             rating: (photo.rating > 0 || rejected) ? photo.rating : nil,
             isRejected: rejected,
             label: photo.colorLabel == .none ? nil : photo.colorLabel,
-            keywords: keywords.isEmpty ? nil : keywords
+            keywords: keywords.isEmpty ? nil : keywords,
+            // An empty Info field is nil (not ""): it must never erase text another app put in the file.
+            title: info.flatMap { $0.title.isEmpty ? nil : $0.title },
+            caption: info.flatMap { $0.caption.isEmpty ? nil : $0.caption },
+            creator: info.flatMap { $0.creator.isEmpty ? nil : $0.creator },
+            copyright: info.flatMap { $0.copyright.isEmpty ? nil : $0.copyright }
         )
     }
 
@@ -248,13 +259,13 @@ final class XMPModel: ObservableObject {
     nonisolated static func confirmationMessage(_ request: Request) -> String {
         switch request.kind {
         case .write:
-            return "Writes each photo's rating, reject flag, colour label and keywords to a standard .xmp file next to it, "
+            return "Writes each photo's rating, reject flag, colour label, keywords, title, caption, creator and copyright to a standard .xmp file next to it, "
                 + "for other photo apps (darktable, digiKam, Bridge and Lightroom's RAW handling). An existing .xmp is updated in place and "
-                + "its other settings are kept, and a rating, label or keywords the Library doesn't have never erase ones already in the file; one that can't be read is left alone. A JPEG next to a RAW with the same name is skipped "
+                + "its other settings are kept, and a rating, label, keywords or text the Library doesn't have never erase ones already in the file (a creator the Library has replaces the file's whole list of authors); one that can't be read is left alone. A JPEG next to a RAW with the same name is skipped "
                 + "(the RAW owns that file). Pick flags and edits are not stored in XMP. Your photos are not changed."
         case .read:
-            return "Reads rating, reject flag, colour label and keywords from the .xmp next to each photo (or the XMP inside the photo). "
-                + "Ratings, labels and rejects from the file replace the Library's (a JPEG next to a RAW with the same name uses only the XMP inside the photo, since the RAW owns that file); keywords are added, never removed. Your photos and "
+            return "Reads rating, reject flag, colour label, keywords, title, caption, creator and copyright from the .xmp next to each photo (or the XMP inside the photo). "
+                + "Ratings, labels and rejects from the file replace the Library's (a JPEG next to a RAW with the same name uses only the XMP inside the photo, since the RAW owns that file); keywords are added, never removed, and text the file lacks never clears the Library's. Your photos and "
                 + "their edits are not changed."
         }
     }

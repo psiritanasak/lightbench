@@ -187,6 +187,8 @@ final class XMPSidecarProbeTests: XCTestCase {
                   let text = CGImageMetadataTagCopyValue(entry) as? String else { return nil }
             return (langValue, text)
         }
+        XCTAssertEqual(pairs.map(\.0), ["x-default", "de"],
+                       "measured: ImageIO lists x-default FIRST even though the packet had de first, so preferring it in the reader is defensive")
         XCTAssertEqual(pairs.map(\.0).sorted(), ["de", "x-default"])
         XCTAssertEqual(pairs.first { $0.0 == "x-default" }?.1, "Title")
         XCTAssertEqual(pairs.first { $0.0 == "de" }?.1, "Titel")

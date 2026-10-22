@@ -166,7 +166,7 @@ struct ExportOptionsView: View {
                 Text(keywordCaption)
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
-                Toggle("Add Library title, caption and copyright", isOn: $exportModel.settings.includeInfo)
+                Toggle("Add Library title, caption, creator and copyright", isOn: $exportModel.settings.includeInfo)
                     .disabled(exportModel.settings.metadata == .none)
                 Text(infoCaption)
                     .font(.caption)

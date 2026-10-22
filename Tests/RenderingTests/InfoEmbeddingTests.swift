@@ -187,6 +187,29 @@ final class InfoEmbeddingTests: XCTestCase {
         }
     }
 
+    // MARK: length (IPTC's own field limits are 64 / 32 / 128 bytes)
+
+    /// Measured: a 256-character title, 256-character creator, 512-character copyright and 2000-character caption read back in full from
+    /// the IPTC PROPERTIES ImageIO reports (which it may fill from XMP, so this does not prove the raw IPTC IIM bytes are uncut), from XMP and
+    /// from the TIFF dictionary, in every format. XMP carries the full text either way, so no cap or extra write is needed.
+    func testLongValuesSurviveInFullInIPTCAndXMPForEveryFormat() async throws {
+        let long = PhotoInfo(title: String(repeating: "t", count: 256), caption: String(repeating: "c", count: 2000),
+                             creator: String(repeating: "a", count: 256), copyright: String(repeating: "r", count: 512))
+        let photo = try makeSource()
+        for format in ExportFormat.allCases {
+            let url = try await PhotoExporter.export(photo, editState: .identity, to: dir, settings: settings(format, "long-\(format.rawValue)"), info: long)
+            let w = try read(url)
+            XCTAssertEqual(w.iptcTitle, long.title, "\(format) IPTC title")
+            XCTAssertEqual(w.iptcCaption, long.caption, "\(format) IPTC caption")
+            XCTAssertEqual(w.iptcCreator, [long.creator], "\(format) IPTC creator")
+            XCTAssertEqual(w.iptcCopyright, long.copyright, "\(format) IPTC copyright")
+            XCTAssertEqual(w.xmpTitle, long.title, "\(format) XMP title")
+            XCTAssertEqual(w.xmpDescription, long.caption, "\(format) XMP description")
+            XCTAssertEqual(w.xmpCreator, long.creator, "\(format) XMP creator")
+            XCTAssertEqual(w.xmpRights, long.copyright, "\(format) XMP rights")
+        }
+    }
+
     // MARK: settings
 
     func testIncludeInfoDefaultsOffAndDecodesWhenMissingAndRoundTrips() throws {

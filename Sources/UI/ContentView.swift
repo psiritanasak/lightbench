@@ -1297,7 +1297,8 @@ struct ContentView: View {
                     exportModel: exportModel, photoCount: photosToExport.count, previewPhoto: photosToExport.first
                 ) {
                     guard !renameModel.isWorking else { return }
-                    exportModel.runExport(photos: photosToExport, keywordsByPhotoID: catalog.keywordNames(for: photosToExport))
+                    exportModel.runExport(photos: photosToExport, keywordsByPhotoID: catalog.keywordNames(for: photosToExport),
+                                           infoByPhotoID: catalog.infoForExport(photosToExport))
                 }
             }
             .alert(

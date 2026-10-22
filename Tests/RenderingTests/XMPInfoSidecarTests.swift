@@ -122,4 +122,38 @@ final class XMPInfoSidecarTests: XCTestCase {
             XCTAssertFalse(fields.isEmpty)
         }
     }
+
+    func testASpacingDifferenceInTheCreatorDoesNotCollapseATwoAuthorArray() throws {
+        let url = photo()
+        let packet = """
+        <x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <dc:creator><rdf:Seq><rdf:li>Cafe\u{0301}  Ann</rdf:li><rdf:li>Bob</rdf:li></rdf:Seq></dc:creator>
+        </rdf:Description></rdf:RDF></x:xmpmeta>
+        """
+        try Data(packet.utf8).write(to: XMPSidecarStore.sidecarURL(for: url))
+        try XMPSidecarStore.write(XMPLibraryFields(creator: "Caf\u{00E9} Ann, Bob"), forPhotoAt: url)
+        XCTAssertTrue(try sidecarText(url).contains(">Bob<"), "the normalised Library creator equals the file's authors: leave the array")
+    }
+
+    func testTheDefaultLanguageMatchIsCaseInsensitiveAndAnEntryWithoutALanguageIsKept() throws {
+        let url = photo()
+        let packet = """
+        <x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <dc:title><rdf:Alt><rdf:li xml:lang="X-Default">Old</rdf:li><rdf:li xml:lang="de">Titel</rdf:li><rdf:li>Bare</rdf:li></rdf:Alt></dc:title>
+        </rdf:Description></rdf:RDF></x:xmpmeta>
+        """
+        try Data(packet.utf8).write(to: XMPSidecarStore.sidecarURL(for: url))
+        XCTAssertEqual(try readFields(url).title, "Old", "X-Default is the default entry")
+        try XMPSidecarStore.write(XMPLibraryFields(title: "New"), forPhotoAt: url)
+        let text = try sidecarText(url)
+        XCTAssertEqual(try readFields(url).title, "New")
+        XCTAssertEqual(text.components(separatedBy: "x-default").count - 1 + text.components(separatedBy: "X-Default").count - 1, 1, "one default entry, not two:\n\(text)")
+        XCTAssertTrue(text.contains("Titel"))
+        // Measured: ImageIO lower-cases "X-Default" and gives a language-less entry the tag "x-repair" when it parses, so the reader and
+        // the rewrite never see either case themselves; the code still matches case-insensitively and keeps a nil-language entry.
+        XCTAssertTrue(text.contains("Bare"), "an entry with no xml:lang is kept:\n\(text)")
+        XCTAssertTrue(text.contains("x-repair"))
+    }
 }

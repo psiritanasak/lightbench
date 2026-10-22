@@ -40,4 +40,18 @@ final class XMPInfoPolicyTests: XCTestCase {
         XCTAssertEqual(c.rating, 4)
         XCTAssertEqual(c.info.title, "T")
     }
+
+    func testAFileValueThatNormalisesToNothingNeverBeatsACatalogValue() {
+        let current = PhotoInfo(title: "Mine", caption: "Cap", creator: "Me", copyright: "(c)")
+        let c = change(current, XMPLibraryFields(title: "\u{2060}\u{FEFF}", caption: "\u{200B}", creator: "\u{0007}", copyright: " \u{2060} "), .replace)
+        XCTAssertTrue(c.isEmpty, "\(c)")
+    }
+
+    func testDifferencesThatNormalisationRemovesAreNoChangeAndTheNormalisedValueIsReturned() {
+        let current = PhotoInfo(title: "Caf\u{00E9} au lait", caption: "", creator: String(repeating: "a", count: 256), copyright: "")
+        let same = change(current, XMPLibraryFields(title: "Cafe\u{0301}  au   lait", creator: String(repeating: "a", count: 300)), .replace)
+        XCTAssertTrue(same.isEmpty, "NFD, double spaces and an over-cap tail are not a change: \(same)")
+        let changed = change(PhotoInfo(), XMPLibraryFields(title: "Cafe\u{0301}\u{200B} x"), .fillDefaults)
+        XCTAssertEqual(changed.info.title, "Caf\u{00E9} x")
+    }
 }

@@ -46,10 +46,9 @@ final class XMPModel: ObservableObject {
 
     private let folderAccess: SidecarFolderAccessing
 
-    /// SEAM: the Info text (title, caption, creator, copyright) to write for these photos, keyed by photo id (a virtual copy's
-    /// entry must be its master's; copies are not written anyway). The default provides none, so nothing of the Info is written until
-    /// the Library wires its own store in.
-    var infoProvider: ([Photo]) -> [Int64: PhotoInfo] = { _ in [:] }
+    /// The Info text (title, caption, creator, copyright) to write for these photos, keyed by photo id. nil (the default) means the
+    /// catalog's own, master-resolved (`CatalogModel.infoForExport`); tests inject another.
+    var infoProvider: (([Photo]) -> [Int64: PhotoInfo])?
 
     init(folderAccess: SidecarFolderAccessing = SidecarFolderAccess()) {
         self.folderAccess = folderAccess
@@ -122,7 +121,7 @@ final class XMPModel: ObservableObject {
         case .write:
             let allPaths = Array(await catalog.cataloguedPathOwners().keys)
             let keywords = catalog.keywordNames(for: reachable)
-            let info = infoProvider(reachable)
+            let info = (infoProvider ?? { catalog.infoForExport($0) })(reachable)
             let outcome = await Task.detached { Self.writeAll(photos: reachable, allPaths: allPaths, keywords: keywords, info: info) }.value
             result.changed = outcome.written
             result.sharedWithRaw = outcome.shared
@@ -262,7 +261,7 @@ final class XMPModel: ObservableObject {
         case .write:
             return "Writes each photo's rating, reject flag, colour label, keywords, title, caption, creator and copyright to a standard .xmp file next to it, "
                 + "for other photo apps (darktable, digiKam, Bridge and Lightroom's RAW handling). An existing .xmp is updated in place and "
-                + "its other settings are kept, and a rating, label, keywords or text the Library doesn't have never erase ones already in the file; one that can't be read is left alone. A JPEG next to a RAW with the same name is skipped "
+                + "its other settings are kept, and a rating, label, keywords or text the Library doesn't have never erase ones already in the file (a creator the Library has replaces the file's whole list of authors); one that can't be read is left alone. A JPEG next to a RAW with the same name is skipped "
                 + "(the RAW owns that file). Pick flags and edits are not stored in XMP. Your photos are not changed."
         case .read:
             return "Reads rating, reject flag, colour label, keywords, title, caption, creator and copyright from the .xmp next to each photo (or the XMP inside the photo). "

@@ -75,15 +75,20 @@ enum XMPImportPolicy {
         return out
     }
 
+    /// File text is normalised with the Library's own rules (`InfoText`) BEFORE it is compared or returned: text that normalises to
+    /// nothing (only invisible characters) never counts, a difference that normalisation removes (NFD vs NFC, double spaces, over-cap
+    /// tails) is no change, and what is returned is exactly what will be stored.
     static func infoUpdate(current: PhotoInfo, fields: XMPLibraryFields, mode: Mode) -> InfoUpdate {
-        func pick(_ file: String?, _ now: String) -> String? {
-            guard let value = file?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty, value != now else { return nil }
+        func pick(_ file: String?, _ now: String, _ field: InfoText.Field) -> String? {
+            guard let file else { return nil }
+            let value = InfoText.normalize(file, field: field)
+            guard !value.isEmpty, value != now else { return nil }
             switch mode {
             case .replace: return value
             case .fillDefaults: return now.isEmpty ? value : nil
             }
         }
-        return InfoUpdate(title: pick(fields.title, current.title), caption: pick(fields.caption, current.caption),
-                          creator: pick(fields.creator, current.creator), copyright: pick(fields.copyright, current.copyright))
+        return InfoUpdate(title: pick(fields.title, current.title, .title), caption: pick(fields.caption, current.caption, .caption),
+                          creator: pick(fields.creator, current.creator, .creator), copyright: pick(fields.copyright, current.copyright, .copyright))
     }
 }

@@ -818,9 +818,9 @@ final class CatalogModel: ObservableObject {
         guard let database else { throw CatalogDatabaseError(message: "The photo catalog isn't ready yet — try again in a moment.") }
         var changed = Set<Int64>()
         for start in stride(from: 0, to: items.count, by: 500) {
-            changed.formUnion(try await database.applyLibraryFields(Array(items[start..<min(start + 500, items.count)]), mode: mode))
+            changed.formUnion(try await database.applyLibraryFields(Array(items[start..<min(start + 500, items.count)]), mode: mode, info: CatalogDatabase.xmpInfoAccess))
         }
-        if !changed.isEmpty { await refresh() }
+        if !changed.isEmpty { await refresh() } // `refresh` reloads `infoByPhotoID`, so imported text reaches the sheet and search at once
         return changed
     }
 
@@ -1625,6 +1625,18 @@ final class CatalogModel: ObservableObject {
         let ids = selectedPhotos.compactMap(\.id)
         guard !ids.isEmpty else { return }
         infoSheetPhotoIDs = ids
+    }
+
+    /// The Library info to embed in / write beside each of `photos`, keyed by THE PHOTO'S OWN id: a virtual copy gets its master's.
+    func infoForExport(_ photos: [Photo]) -> [Int64: PhotoInfo] {
+        Self.exportInfo(for: photos, infoByPhotoID: infoByPhotoID)
+    }
+
+    nonisolated static func exportInfo(for photos: [Photo], infoByPhotoID: [Int64: PhotoInfo]) -> [Int64: PhotoInfo] {
+        let inherited = inheritingFromMasters(infoByPhotoID, photos: photos)
+        var out: [Int64: PhotoInfo] = [:]
+        for id in photos.compactMap(\.id) { if let info = inherited[id] { out[id] = info } }
+        return out
     }
 
     /// The Library info a photo shows: its own, or its master's when it is a virtual copy.

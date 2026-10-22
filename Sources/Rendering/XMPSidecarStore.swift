@@ -121,7 +121,9 @@ enum XMPSidecarStore {
         try setLangAlt(mutable, "title", fields.title)
         try setLangAlt(mutable, "description", fields.caption)
         try setLangAlt(mutable, "rights", fields.copyright)
-        if let creator = fields.creator, !creator.isEmpty, (bag(mutable, "dc:creator") ?? []).joined(separator: ", ") != creator {
+        if let creator = fields.creator, !creator.isEmpty,
+           // Normalised like the Library value: a Read followed by a Write must not collapse a multi-author array over a spacing difference.
+           InfoText.normalize((bag(mutable, "dc:creator") ?? []).joined(separator: ", "), field: .creator) != creator {
             guard let tag = CGImageMetadataTagCreate(kCGImageMetadataNamespaceDublinCore, kCGImageMetadataPrefixDublinCore,
                                                      "creator" as CFString, .arrayOrdered, [creator] as CFArray),
                   CGImageMetadataSetTagWithPath(mutable, nil, "dc:creator" as CFString, tag) else { throw WriteError.couldNotApply }
@@ -168,7 +170,7 @@ enum XMPSidecarStore {
     /// The text of a language alternative: the `x-default` entry, else the first one. Empty text is nil (absent).
     private static func langAlt(_ metadata: CGImageMetadata, _ path: String) -> String? {
         let entries = langAltEntries(metadata, path)
-        let text = (entries.first { $0.lang == "x-default" } ?? entries.first)?.text
+        let text = (entries.first { isDefaultLang($0.lang) } ?? entries.first)?.text
         return text.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
     }
 
@@ -192,11 +194,12 @@ enum XMPSidecarStore {
         guard let value, !value.isEmpty else { return }
         let path = "dc:\(name)"
         let existing = langAltEntries(metadata, path)
-        if existing.first(where: { $0.lang == "x-default" })?.text == value { return }
+        if existing.first(where: { isDefaultLang($0.lang) })?.text == value { return }
         var entries = ["<rdf:li xml:lang=\"x-default\">\(xmlEscaped(value))</rdf:li>"]
-        for other in existing where other.lang != "x-default" {
-            guard let lang = other.lang else { continue }
-            entries.append("<rdf:li xml:lang=\"\(xmlEscaped(lang))\">\(xmlEscaped(other.text))</rdf:li>")
+        for other in existing where !isDefaultLang(other.lang) {
+            // An entry with no language is kept as it was (no attribute), not dropped.
+            let attribute = other.lang.map { " xml:lang=\"\(xmlEscaped($0))\"" } ?? ""
+            entries.append("<rdf:li\(attribute)>\(xmlEscaped(other.text))</rdf:li>")
         }
         let xml = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
             + "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:\(name)><rdf:Alt>"
@@ -205,6 +208,9 @@ enum XMPSidecarStore {
               let tag = CGImageMetadataCopyTagWithPath(parsed, nil, path as CFString),
               CGImageMetadataSetTagWithPath(metadata, nil, path as CFString, tag) else { throw WriteError.couldNotApply }
     }
+
+    /// XMP language tags are case-insensitive (`X-Default` is the default entry too).
+    private static func isDefaultLang(_ lang: String?) -> Bool { lang?.lowercased() == "x-default" }
 
     private static func xmlEscaped(_ text: String) -> String {
         var out = ""

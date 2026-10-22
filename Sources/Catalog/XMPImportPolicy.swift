@@ -6,19 +6,39 @@ import Foundation
 ///   already set is never overwritten.
 /// Keywords are only ever ADDED (never removed) in both modes. Pick has no XMP field and is only changed by a Reject
 /// in the file (or by un-rejecting under `.replace`); an existing Pick is never touched by a non-reject rating.
+/// Info text (title, caption, creator, copyright): a NON-EMPTY file value wins under `.replace`; under `.fillDefaults` it only fills a
+/// field the catalog has empty. A value the file lacks (or holds blank) never clears the catalog's.
 enum XMPImportPolicy {
     enum Mode { case replace, fillDefaults }
+
+    /// The Info fields to change; nil = leave as is.
+    struct InfoUpdate: Equatable {
+        var title: String?
+        var caption: String?
+        var creator: String?
+        var copyright: String?
+        var isEmpty: Bool { title == nil && caption == nil && creator == nil && copyright == nil }
+
+        /// `info` with the changed fields replaced.
+        func applying(to info: PhotoInfo) -> PhotoInfo {
+            PhotoInfo(title: title ?? info.title, caption: caption ?? info.caption,
+                      creator: creator ?? info.creator, copyright: copyright ?? info.copyright)
+        }
+    }
 
     struct Change: Equatable {
         var rating: Int?
         var flag: FlagStatus?
         var label: ColorLabel?
         var keywordsToAdd: [String] = []
-        var isEmpty: Bool { rating == nil && flag == nil && label == nil && keywordsToAdd.isEmpty }
+        var info = InfoUpdate()
+        var isEmpty: Bool { rating == nil && flag == nil && label == nil && keywordsToAdd.isEmpty && info.isEmpty }
     }
 
-    /// `currentKeywordKeys` are `KeywordName.key(for:)` values of the photo's current keywords.
-    static func change(current: Photo, currentKeywordKeys: Set<String>, fields: XMPLibraryFields, mode: Mode) -> Change {
+    /// `currentKeywordKeys` are `KeywordName.key(for:)` values of the photo's current keywords. `currentInfo` is the photo's Info
+    /// (its master's, for a virtual copy); the default means "none", which makes every file value look new.
+    static func change(current: Photo, currentKeywordKeys: Set<String>, fields: XMPLibraryFields, mode: Mode,
+                       currentInfo: PhotoInfo = PhotoInfo()) -> Change {
         var out = Change()
 
         // Rating -1 is a Reject marker, not a star count: it carries no stars, so it never changes the photo's rating.
@@ -51,6 +71,19 @@ enum XMPImportPolicy {
                 out.keywordsToAdd.append(name)
             }
         }
+        out.info = infoUpdate(current: currentInfo, fields: fields, mode: mode)
         return out
+    }
+
+    static func infoUpdate(current: PhotoInfo, fields: XMPLibraryFields, mode: Mode) -> InfoUpdate {
+        func pick(_ file: String?, _ now: String) -> String? {
+            guard let value = file?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty, value != now else { return nil }
+            switch mode {
+            case .replace: return value
+            case .fillDefaults: return now.isEmpty ? value : nil
+            }
+        }
+        return InfoUpdate(title: pick(fields.title, current.title), caption: pick(fields.caption, current.caption),
+                          creator: pick(fields.creator, current.creator), copyright: pick(fields.copyright, current.copyright))
     }
 }

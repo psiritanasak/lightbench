@@ -8,6 +8,10 @@ import Foundation
 /// RAW, so a sidecar beside a JPEG is for darktable/digiKam-style tools. Keywords are half-synced: `dc:subject` is replaced
 /// but a stale `lr:hierarchicalSubject` is kept (Lightroom prefers it).
 /// Pick has no standard XMP field, so it is never exchanged.
+///
+/// Info panel text (`title` = `dc:title`, `caption` = `dc:description`, `copyright` = `dc:rights`, all language alternatives whose
+/// `x-default` entry we own, and `creator` = `dc:creator`, an ordered array): nil means absent (on read) / leave the tag alone (on write),
+/// and an EMPTY string on write ALSO leaves the tag alone, so an empty Library value never erases text another app put in the file.
 struct XMPLibraryFields: Equatable {
     /// 0...5.
     var rating: Int?
@@ -16,8 +20,39 @@ struct XMPLibraryFields: Equatable {
     /// `.none` means "explicitly no label"; nil means the file had no (recognised) label.
     var label: ColorLabel?
     var keywords: [String]?
+    var title: String?
+    var caption: String?
+    var creator: String?
+    var copyright: String?
 
-    var isEmpty: Bool { rating == nil && isRejected == nil && label == nil && keywords == nil }
+    var isEmpty: Bool {
+        rating == nil && isRejected == nil && label == nil && keywords == nil
+            && title == nil && caption == nil && creator == nil && copyright == nil
+    }
+
+    /// The Info panel values as non-nil strings. Empty strings (= nothing to write) are the Library's own "no value".
+    init(rating: Int? = nil, isRejected: Bool? = nil, label: ColorLabel? = nil, keywords: [String]? = nil, info: PhotoInfo) {
+        self.init(rating: rating, isRejected: isRejected, label: label, keywords: keywords,
+                  title: info.title, caption: info.caption, creator: info.creator, copyright: info.copyright)
+    }
+
+    init(rating: Int? = nil, isRejected: Bool? = nil, label: ColorLabel? = nil, keywords: [String]? = nil,
+         title: String? = nil, caption: String? = nil, creator: String? = nil, copyright: String? = nil) {
+        self.rating = rating
+        self.isRejected = isRejected
+        self.label = label
+        self.keywords = keywords
+        self.title = title
+        self.caption = caption
+        self.creator = creator
+        self.copyright = copyright
+    }
+
+    /// The Info values the file carried (absent ones are empty strings); nil when it carried none.
+    var info: PhotoInfo? {
+        guard title != nil || caption != nil || creator != nil || copyright != nil else { return nil }
+        return PhotoInfo(title: title ?? "", caption: caption ?? "", creator: creator ?? "", copyright: copyright ?? "")
+    }
 
     // MARK: Label names
 

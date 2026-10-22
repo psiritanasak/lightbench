@@ -154,4 +154,74 @@ final class XMPSidecarProbeTests: XCTestCase {
         XCTAssertEqual(string(md, "xmp:Label"), "Green")
         XCTAssertEqual(bag(md, "dc:subject"), ["Alpha"])
     }
+
+    // MARK: language alternatives and ordered arrays (Info panel: dc:title / dc:description / dc:rights / dc:creator)
+
+    private let infoPacket = """
+    <x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Temperature="5200">
+    <dc:title><rdf:Alt><rdf:li xml:lang="de">Titel</rdf:li><rdf:li xml:lang="x-default">Title</rdf:li></rdf:Alt></dc:title>
+    <dc:rights><rdf:Alt><rdf:li xml:lang="x-default">(c) Old</rdf:li></rdf:Alt></dc:rights>
+    <dc:creator><rdf:Seq><rdf:li>Ann</rdf:li><rdf:li>Bob</rdf:li></rdf:Seq></dc:creator>
+    </rdf:Description></rdf:RDF></x:xmpmeta>
+    """
+
+    /// A one-entry `x-default` language alternative, parsed from a packet (the only route found that writes one: see the next test).
+    private func altTag(_ name: String, _ text: String) throws -> CGImageMetadataTag {
+        let xml = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+            + "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:\(name)><rdf:Alt>"
+            + "<rdf:li xml:lang=\"x-default\">\(text)</rdf:li></rdf:Alt></dc:\(name)></rdf:Description></rdf:RDF></x:xmpmeta>"
+        let parsed = try XCTUnwrap(CGImageMetadataCreateFromXMPData(Data(xml.utf8) as CFData))
+        return try XCTUnwrap(CGImageMetadataCopyTagWithPath(parsed, nil, "dc:\(name)" as CFString))
+    }
+
+    func testALanguageAlternativeReadsAsTaggedEntriesWithTheirXMLLangQualifier() throws {
+        let md = try XCTUnwrap(parse(infoPacket))
+        let tag = try XCTUnwrap(CGImageMetadataCopyTagWithPath(md, nil, "dc:title" as CFString))
+        XCTAssertEqual(CGImageMetadataTagGetType(tag), .alternateText)
+        let entries = try XCTUnwrap(CGImageMetadataTagCopyValue(tag) as? [CGImageMetadataTag])
+        let pairs: [(String, String)] = entries.compactMap { entry in
+            let quals = CGImageMetadataTagCopyQualifiers(entry) as? [CGImageMetadataTag]
+            guard let lang = quals?.first(where: { CGImageMetadataTagCopyName($0) as String? == "lang" }),
+                  let langValue = CGImageMetadataTagCopyValue(lang) as? String,
+                  let text = CGImageMetadataTagCopyValue(entry) as? String else { return nil }
+            return (langValue, text)
+        }
+        XCTAssertEqual(pairs.map(\.0).sorted(), ["de", "x-default"])
+        XCTAssertEqual(pairs.first { $0.0 == "x-default" }?.1, "Title")
+        XCTAssertEqual(pairs.first { $0.0 == "de" }?.1, "Titel")
+    }
+
+    func testAPlainStringSetOnALanguageAlternativeEmptiesItAndOnAFreshPacketWritesASimpleProperty() throws {
+        // Measured: the obvious route must NOT be used for these tags.
+        let existing = try XCTUnwrap(CGImageMetadataCreateMutableCopy(try XCTUnwrap(parse(infoPacket))))
+        XCTAssertTrue(CGImageMetadataSetValueWithPath(existing, nil, "dc:title" as CFString, "Plain" as CFString))
+        let reparsed = try XCTUnwrap(CGImageMetadataCreateFromXMPData(try XCTUnwrap(CGImageMetadataCreateXMPData(existing, nil))))
+        XCTAssertNil(CGImageMetadataCopyStringValueWithPath(reparsed, nil, "dc:title" as CFString) as String?, "the existing rdf:Alt was emptied, not updated")
+
+        let fresh = CGImageMetadataCreateMutable()
+        XCTAssertTrue(CGImageMetadataSetValueWithPath(fresh, nil, "dc:title" as CFString, "Plain" as CFString))
+        let text = String(decoding: try XCTUnwrap(CGImageMetadataCreateXMPData(fresh, nil)) as Data, as: UTF8.self)
+        XCTAssertFalse(text.contains("rdf:Alt"), "a plain set writes a simple property, not a language alternative:\n\(text)")
+        // The path-with-qualifier route is refused outright.
+        XCTAssertFalse(CGImageMetadataSetValueWithPath(fresh, nil, "dc:title[?xml:lang=\"x-default\"]" as CFString, "X" as CFString))
+    }
+
+    func testACopiedAltTagWritesAnXDefaultLanguageAlternativeAndKeepsForeignTagsAndAnOrderedCreator() throws {
+        let mutable = try XCTUnwrap(CGImageMetadataCreateMutableCopy(try XCTUnwrap(parse(infoPacket))))
+        XCTAssertTrue(CGImageMetadataSetTagWithPath(mutable, nil, "dc:title" as CFString, try altTag("title", "New T\u{00E9}tle")))
+        XCTAssertTrue(CGImageMetadataSetTagWithPath(mutable, nil, "dc:rights" as CFString, try altTag("rights", "(c) New")))
+        let seq = try XCTUnwrap(CGImageMetadataTagCreate(kCGImageMetadataNamespaceDublinCore, kCGImageMetadataPrefixDublinCore,
+                                                        "creator" as CFString, .arrayOrdered, ["Zed", "Yan"] as CFArray))
+        XCTAssertTrue(CGImageMetadataSetTagWithPath(mutable, nil, "dc:creator" as CFString, seq))
+        let data = try XCTUnwrap(CGImageMetadataCreateXMPData(mutable, nil))
+        let text = String(decoding: data as Data, as: UTF8.self)
+        let reparsed = try XCTUnwrap(CGImageMetadataCreateFromXMPData(data))
+        XCTAssertEqual(CGImageMetadataCopyStringValueWithPath(reparsed, nil, "dc:title" as CFString) as String?, "New T\u{00E9}tle")
+        XCTAssertEqual(CGImageMetadataCopyStringValueWithPath(reparsed, nil, "dc:rights" as CFString) as String?, "(c) New")
+        XCTAssertEqual(bag(reparsed, "dc:creator"), ["Zed", "Yan"], "an ordered array keeps its order")
+        XCTAssertEqual(string(reparsed, "crs:Temperature"), "5200", "a foreign tag survives")
+        XCTAssertTrue(text.contains("<rdf:Seq>") && text.contains("xml:lang=\"x-default\""), "serialised packet:\n\(text)")
+        XCTAssertFalse(text.contains("Titel"), "a replaced alternative drops the other-language entry unless the caller re-adds it")
+    }
 }

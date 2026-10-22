@@ -90,13 +90,17 @@ struct ExportSettings: Sendable, Equatable {
     /// `ExportMetadataPolicy.none`. Default on: unlike location, keywords are descriptive text the user wrote
     /// to be shared; the toggle is in the options sheet.
     var includeKeywords = true
+    /// Embed the photo's Library title, caption, creator and copyright (IPTC + TIFF + XMP `dc:`) in the exported file.
+    /// Ignored under `ExportMetadataPolicy.none`. Default OFF: a caption can be private, so nothing is written
+    /// unless the user switches it on in the options sheet (the choice is remembered).
+    var includeInfo = false
 }
 
 /// Schema-tolerant persistence (the pattern `EditState` uses): a missing key decodes to that field's default, so
 /// adding a field in a later release never invalidates settings an older build stored. In an extension, not the
 /// struct body, so the memberwise initializer (used by tests and call sites) is kept.
 extension ExportSettings: Codable {
-    private enum CodingKeys: String, CodingKey { case format, quality, resize, namingTemplate, colorSpace, metadata, sharpening, watermark, includeKeywords }
+    private enum CodingKeys: String, CodingKey { case format, quality, resize, namingTemplate, colorSpace, metadata, sharpening, watermark, includeKeywords, includeInfo }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -113,6 +117,7 @@ extension ExportSettings: Codable {
         sharpening = (try? container.decodeIfPresent(ExportSharpening.self, forKey: .sharpening)) ?? defaults.sharpening
         watermark = (try? container.decodeIfPresent(ExportWatermark.self, forKey: .watermark)) ?? defaults.watermark
         includeKeywords = (try? container.decodeIfPresent(Bool.self, forKey: .includeKeywords)) ?? defaults.includeKeywords
+        includeInfo = (try? container.decodeIfPresent(Bool.self, forKey: .includeInfo)) ?? defaults.includeInfo
     }
 
     func encode(to encoder: Encoder) throws {
@@ -128,6 +133,7 @@ extension ExportSettings: Codable {
         try container.encode(sharpening, forKey: .sharpening)
         try container.encode(watermark, forKey: .watermark)
         try container.encode(includeKeywords, forKey: .includeKeywords)
+        try container.encode(includeInfo, forKey: .includeInfo)
     }
 }
 
@@ -265,6 +271,7 @@ enum PhotoExporter {
         settings: ExportSettings,
         sequenceIndex: Int = 0,
         keywords: [String] = [],
+        info: PhotoInfo = PhotoInfo(),
         logoStore: WatermarkLogoStore = .shared
     ) async throws -> URL {
         let sourceURL = URL(fileURLWithPath: photo.path)
@@ -297,9 +304,12 @@ enum PhotoExporter {
         let resizedPixels = WatermarkRenderer.apply(settings.watermark, to: sharpened, logoStore: logoStore)
         // The writer emits the image's own `properties`, so setting them IS applying the metadata policy.
         let resized = resizedPixels.settingProperties(
-            KeywordEmbedding.properties(
-                ExportMetadata.properties(from: oriented.properties, policy: settings.metadata),
-                addingKeywords: keywords, policy: settings.metadata, include: settings.includeKeywords
+            InfoEmbedding.properties(
+                KeywordEmbedding.properties(
+                    ExportMetadata.properties(from: oriented.properties, policy: settings.metadata),
+                    addingKeywords: keywords, policy: settings.metadata, include: settings.includeKeywords
+                ),
+                adding: info, policy: settings.metadata, include: settings.includeInfo
             )
         )
         let outputURL = Self.uniqueFileURL(

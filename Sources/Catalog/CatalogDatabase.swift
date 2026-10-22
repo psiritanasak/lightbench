@@ -125,6 +125,7 @@ final class CatalogDatabase: Sendable {
         Migration013Faces.register(in: &migrator)
         Migration014PhotoMetadata.register(in: &migrator)
         Migration015VirtualCopies.register(in: &migrator)
+        Migration016PhotoInfo.register(in: &migrator)
         return migrator
     }
 

@@ -179,7 +179,7 @@ struct DuplicatesSheetModifier: ViewModifier {
     }
 }
 
-/// The Library tool sheets (keywords, duplicates, people) as ONE modifier: `ContentView.body` is at the type-checker's limit, so
+/// The Library tool sheets (keywords, info, duplicates, people) as ONE modifier: `ContentView.body` is at the type-checker's limit, so
 /// each extra `.modifier` in its chain is not free. The sheets block each other; Photo Merge's dialog rides along.
 struct LibraryToolSheetsModifier: ViewModifier {
     @ObservedObject var catalog: CatalogModel
@@ -191,29 +191,30 @@ struct LibraryToolSheetsModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .modifier(KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
-            .modifier(DuplicatesSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
-            .modifier(PeopleSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
+            .modifier(KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
+            .modifier(InfoSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
+            .modifier(DuplicatesSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
+            .modifier(PeopleSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
             .modifier(MergeDialogModifier(
                 catalog: catalog, model: catalog.merge,
-                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.fileToolBusy
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.fileToolBusy
             ))
             .modifier(XMPDialogModifier(
                 catalog: catalog, model: catalog.xmp,
-                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy
             ))
             .modifier(TrashDialogModifier(
                 catalog: catalog, model: catalog.trash, providers: trashProviders,
-                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.xmpBusy
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.xmpBusy
             ))
             .modifier(ImportCopyDialogModifier(
                 catalog: catalog, model: catalog.importCopy, providers: importCopyProviders,
-                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy
                     || catalog.xmpBusy || catalog.trashBusy
             ))
             .modifier(CatalogBackupDialogModifier(
                 catalog: catalog, model: catalog.catalogBackup,
-                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+                blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
             ))
     }
 }

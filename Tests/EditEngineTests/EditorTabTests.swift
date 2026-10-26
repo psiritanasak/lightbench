@@ -19,12 +19,14 @@ final class EditorTabTests: XCTestCase {
     private let allModes: [EditorInteractionMode] = [
         .none, .pickingWhiteBalance, .placingRedEye, .paintingBrush(maskID: UUID()), .pickingColorRange(maskID: UUID()),
         .pickingPointColor(pointColorID: UUID()), .pickingSubject(maskID: UUID()), .placingRetouchSpot,
+        .targeted(.curve), .targeted(.selectiveColor(.luminance)), .targeted(.grayMix),
     ]
 
     func testEachModeIsOwnedByExactlyTheTabWhoseControlsArmIt() {
         XCTAssertNil(EditorInteractionMode.none.ownerTab)
         XCTAssertEqual(EditorInteractionMode.pickingWhiteBalance.ownerTab, .adjust)
         XCTAssertEqual(EditorInteractionMode.pickingPointColor(pointColorID: UUID()).ownerTab, .adjust)
+        XCTAssertEqual(EditorInteractionMode.targeted(.grayMix).ownerTab, .adjust)
         XCTAssertEqual(EditorInteractionMode.placingRedEye.ownerTab, .redEye)
         XCTAssertEqual(EditorInteractionMode.placingRetouchSpot.ownerTab, .retouch)
         XCTAssertEqual(EditorInteractionMode.paintingBrush(maskID: UUID()).ownerTab, .masks)
@@ -39,6 +41,9 @@ final class EditorTabTests: XCTestCase {
         XCTAssertTrue(EditorTab.adjust.switchEffects(armed: .placingRedEye).disarmsMode)
         XCTAssertFalse(EditorTab.redEye.switchEffects(armed: .placingRedEye).disarmsMode)
         XCTAssertFalse(EditorTab.adjust.switchEffects(armed: .pickingWhiteBalance).disarmsMode)
+        XCTAssertFalse(EditorTab.adjust.switchEffects(armed: .targeted(.curve)).disarmsMode)
+        XCTAssertTrue(EditorTab.looks.switchEffects(armed: .targeted(.curve)).disarmsMode)
+        XCTAssertTrue(EditorTab.crop.switchEffects(armed: .targeted(.grayMix)).disarmsMode)
         XCTAssertTrue(EditorTab.masks.switchEffects(armed: .pickingWhiteBalance).disarmsMode)
     }
 

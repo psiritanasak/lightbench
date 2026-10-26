@@ -32,6 +32,7 @@ final class EditorRailActionRulesTests: XCTestCase {
         m = EditorRailActionRules.ArmedModes(); m.pointColor = true; cases.append(("pointColor", m))
         m = EditorRailActionRules.ArmedModes(); m.subject = true; cases.append(("subject", m))
         m = EditorRailActionRules.ArmedModes(); m.retouchSpot = true; cases.append(("retouchSpot", m))
+        m = EditorRailActionRules.ArmedModes(); m.targeted = true; cases.append(("targeted", m))
         for (name, armed) in cases {
             XCTAssertTrue(armed.any, name)
             XCTAssertFalse(EditorRailActionRules.canCompare(hasImage: true, isCropping: false, armed: armed), name)

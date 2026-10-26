@@ -74,6 +74,13 @@ enum EditPipeline {
     /// `Mask.colorRange`'s scene-linear sampling.
     enum ColorSampleTruncation: Equatable {
         case pointColor(index: Int)
+        /// Stops with the image exactly as the composite point-curve stage would receive it (after the parametric curve and
+        /// Whites), perceptual domain. The Targeted adjustment tool samples here for the Curve.
+        case beforePointCurve
+        /// Stops with the image exactly as Selective Color would receive it (after global Hue), perceptual domain.
+        case beforeSelectiveColor
+        /// Stops with the colour image B&W Mix reads (after Vibrance, just before the forced desaturation), perceptual domain.
+        case beforeGrayMix
     }
 
     static func apply(
@@ -552,6 +559,7 @@ enum EditPipeline {
         // 0.0 on all three) — expected, since each pass writes only its
         // own channel, and confirmed rather than assumed. See
         // testPerChannelCurvesComposeIndependentlyOfTheirOwnOrder.
+        if truncation == .beforePointCurve { return img }
         if !state.toneCurvePoints.isEmpty {
             img = applyPointCurve(state.toneCurvePoints, channelMask: PointCurveChannelMask.all, to: img)
         }
@@ -570,6 +578,7 @@ enum EditPipeline {
         // choice) and before Vibrance/Saturation (those "final uniform
         // scalers" then act on the per-band-adjusted result). MEASURED
         // non-commuting with global Hue — see testSelectiveColorRunsAfterGlobalHue.
+        if truncation == .beforeSelectiveColor { return img }
         if selectiveColorActive(state) { img = applySelectiveColor(state, to: img) }
         // Point Color runs immediately after Selective Color, before
         // Vibrance/Saturation — same WYSIWYG reasoning Selective Color
@@ -627,6 +636,7 @@ enum EditPipeline {
         // luminance mapping for the B&W conversion (a real, if incidental,
         // photographic technique — akin to shooting B&W film through a
         // colored filter), not that they have no effect at all.
+        if truncation == .beforeGrayMix { return img }
         let saturationOverride = state.blackAndWhite ? -1.0 : effective.saturation
         if state.blackAndWhite || effective.saturation != 0 {
             let beforeGray = img

@@ -276,5 +276,47 @@ final class EditorInteractionModeTests: XCTestCase {
         mode.disarm(.placingRetouchSpot)
         XCTAssertEqual(mode, .none)
     }
-}
 
+    // MARK: - Targeted adjustment
+
+    func testTargetedProjectsItsToolOnly() {
+        let mode = EditorInteractionMode.targeted(.selectiveColor(.hue))
+        XCTAssertEqual(mode.targetedTool, .selectiveColor(.hue))
+        XCTAssertFalse(mode.isPickingWhiteBalance); XCTAssertFalse(mode.isPlacingRedEyeCorrections)
+        XCTAssertFalse(mode.isPlacingRetouchSpot)
+        XCTAssertNil(mode.brushPaintingMaskID); XCTAssertNil(mode.colorPickingMaskID)
+        XCTAssertNil(mode.subjectPickingMaskID); XCTAssertNil(mode.pointColorPickingID)
+        XCTAssertNil(EditorInteractionMode.none.targetedTool)
+        XCTAssertNil(EditorInteractionMode.placingRetouchSpot.targetedTool)
+    }
+
+    func testTargetedTogglesAndSwitchesLikeAnyOtherMode() {
+        var mode = EditorInteractionMode.pickingWhiteBalance
+        mode.toggle(.targeted(.curve))
+        XCTAssertEqual(mode, .targeted(.curve), "arming replaces the armed tool")
+        mode.toggle(.targeted(.grayMix))
+        XCTAssertEqual(mode, .targeted(.grayMix), "a different payload switches directly")
+        mode.toggle(.targeted(.grayMix))
+        XCTAssertEqual(mode, .none, "the same tool toggles off")
+    }
+
+    func testTargetedDisarmNeedsTheExactPayload() {
+        var mode = EditorInteractionMode.targeted(.selectiveColor(.saturation))
+        mode.disarm(.targeted(.selectiveColor(.hue)))
+        XCTAssertEqual(mode, .targeted(.selectiveColor(.saturation)))
+        mode.disarm(.targeted(.selectiveColor(.saturation)))
+        XCTAssertEqual(mode, .none)
+    }
+
+    func testMaskAndPointColorCleanupLeaveTargetedArmed() {
+        var mode = EditorInteractionMode.targeted(.curve)
+        mode.disarmMaskModes()
+        XCTAssertEqual(mode, .targeted(.curve))
+        mode.disarmPointColorPick()
+        XCTAssertEqual(mode, .targeted(.curve))
+    }
+
+    func testTargetedIsOwnedByAdjust() {
+        XCTAssertEqual(EditorInteractionMode.targeted(.curve).ownerTab, .adjust)
+    }
+}

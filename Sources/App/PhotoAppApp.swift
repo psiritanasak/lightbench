@@ -166,7 +166,7 @@ struct PhotoAppApp: App {
                     .disabled(
                         cull.isActive || showLibrary || document.currentImage == nil || document.isLoadInFlight || lightroomImport.isBusy
                             || catalog.mergeBusy || catalog.fileToolBusy || renameModel.isWorking || renameModel.isPresentingSheet
-                            || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+                            || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
                     )
                 // Virtual copies: another independent edit version of the same file (Lightroom's own ⌘'). Library: the selected visible
                 // photos, else the focused one; Editor: the open photo/version. Edits made so far in the Editor are flushed first.

@@ -159,7 +159,7 @@ struct PhotoAppApp: App {
                 .disabled(
                     cull.isActive || pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight || catalog.mergeBusy || catalog.fileToolBusy
                         || renameModel.isWorking || renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
-                        || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+                        || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
                 )
                 // Editor-only: acts on the OPEN photo (reads its Lightroom / Camera Raw .xmp). No shortcut. Only REQUESTS; the modifier confirms.
                 Button("Import Lightroom Settings…") { lightroomImport.request(for: document) }
@@ -181,7 +181,7 @@ struct PhotoAppApp: App {
                 .disabled(
                     cull.isActive || catalog.virtualCopyTargets(showLibrary: showLibrary, openEditKey: document.currentEditKey).isEmpty
                         || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight || catalog.mergeBusy
-                        || catalog.fileToolBusy || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+                        || catalog.fileToolBusy || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
                 )
                 Divider()
                 // Batch rename: no default shortcut (matches Enhance). These only REQUEST — `ContentView`
@@ -199,63 +199,85 @@ struct PhotoAppApp: App {
                     .keyboardShortcut("i", modifiers: [.command])
                     .disabled(
                         cull.isActive || !showLibrary || catalog.selectedPhotos.isEmpty || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
-                            || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.mergeBusy || catalog.fileToolBusy
+                            || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.mergeBusy || catalog.fileToolBusy
                             || renameModel.isWorking || renameModel.isPresentingSheet
+                    )
+                // Photo stacks (Library only; the grid ignores ⌘ chords, so these are menu items). Manual stack operations act on the whole
+                // SELECTION, including photos the filters hide (the result message says so); they move no files, so only the sheets that
+                // edit the selection or its stacks block them.
+                Button("Stack Selected") { Task { await catalog.stackSelected() } }
+                    .keyboardShortcut("g", modifiers: .command)
+                    .disabled(
+                        cull.isActive || !showLibrary || catalog.selectedPhotos.count < 2 || catalog.autoStackSheetPresented || catalog.autoStack.isWorking
+                            || catalog.trashBusy || renameModel.isWorking || renameModel.isPresentingSheet
+                    )
+                Button("Unstack") { Task { await catalog.unstackSelected() } }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                    .disabled(
+                        cull.isActive || !showLibrary || catalog.selectedPhotos.isEmpty || catalog.autoStackSheetPresented || catalog.autoStack.isWorking
+                            || catalog.trashBusy || renameModel.isWorking || renameModel.isPresentingSheet
+                    )
+                // Library-only; only REQUESTS (`AutoStackSheetModifier` drops it while another sheet is up). No default shortcut.
+                Button("Auto Stack…") { catalog.autoStackSheetRequested = true }
+                    .disabled(
+                        cull.isActive || !showLibrary || catalog.autoStackSheetPresented || catalog.autoStack.isWorking || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+                            || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.mergeBusy || catalog.fileToolBusy
+                            || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
                 // Library-only; only REQUESTS (`DuplicatesSheetModifier` drops it while another sheet is up).
                 Button("Find Duplicates…") { catalog.duplicatesSheetRequested = true }
                     .disabled(
-                        cull.isActive || !showLibrary || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
+                        cull.isActive || !showLibrary || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
                             || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
                 // Library-only; only REQUESTS (`PeopleSheetModifier` drops it while another sheet is up). No default shortcut.
                 Button("People…") { catalog.peopleSheetRequested = true }
                     .disabled(
-                        cull.isActive || !showLibrary || catalog.peopleSheetPresented || catalog.duplicatesSheetPresented
+                        cull.isActive || !showLibrary || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.duplicatesSheetPresented
                             || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
                 // Library-only; only REQUESTS (`MergeDialogModifier` drops it while another sheet is up). Needs 2+ visible selected photos.
                 Button("Merge Photos to HDR…") { catalog.mergeRequested = .hdr }
                     .disabled(
                         cull.isActive || !showLibrary || catalog.selectedPhotosInDisplayedGrid.count < 2 || catalog.mergeBusy
-                            || catalog.peopleSheetPresented || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
+                            || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
                             || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
                 Button("Merge Photos to Panorama…") { catalog.mergeRequested = .panorama }
                     .disabled(
                         cull.isActive || !showLibrary || catalog.selectedPhotosInDisplayedGrid.count < 2 || catalog.mergeBusy
-                            || catalog.peopleSheetPresented || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
+                            || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
                             || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
                 // Library-only; only REQUEST (`XMPDialogModifier` drops them while another sheet is up). Act on the selected visible photos.
                 Button("Write Metadata to XMP…") { catalog.xmpRequested = .write }
                     .disabled(
                         cull.isActive || !showLibrary || catalog.selectedPhotosInDisplayedGrid.isEmpty || catalog.fileToolBusy || catalog.mergeBusy
-                            || catalog.peopleSheetPresented || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
+                            || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
                             || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
                 Button("Read Metadata from XMP…") { catalog.xmpRequested = .read }
                     .disabled(
                         cull.isActive || !showLibrary || catalog.selectedPhotosInDisplayedGrid.isEmpty || catalog.fileToolBusy || catalog.mergeBusy
-                            || catalog.peopleSheetPresented || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
+                            || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
                             || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
                 Button("Rename Files…") { renameModel.request = .rename }
                     .disabled(
                         cull.isActive || catalog.selectedPhotos.isEmpty || renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy || catalog.fileToolBusy
-                            || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+                            || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
                     )
                 // Library-only, destructive: only REQUEST (`TrashDialogModifier` confirms, naming what the Library is showing).
                 Button("Move Rejected to Trash…") { catalog.trashRequested = .rejected }
                     .disabled(
-                        cull.isActive || !showLibrary || catalog.fileToolBusy || catalog.mergeBusy || catalog.peopleSheetPresented
+                        cull.isActive || !showLibrary || catalog.fileToolBusy || catalog.mergeBusy || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
                             || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || renameModel.isWorking
                             || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
                 Button("Undo Rename") { renameModel.request = .undo }
                     .disabled(
                         cull.isActive || !renameModel.canUndo || renameModel.isWorking || renameModel.isPresentingSheet || catalog.mergeBusy || catalog.fileToolBusy
-                            || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+                            || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
                     )
             }
         }

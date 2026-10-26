@@ -200,13 +200,21 @@ struct LibraryGridView: View {
                     // over the Library grid (precedent: `EditorFilmstripView`'s
                     // filmstrip) — lets arrow-key focus changes below scroll
                     // the newly-focused cell into view.
+                    // The cells and the resolved focus are built ONCE per body: a focused photo hidden inside a collapsed stack rings its
+                    // stack's cell (`StackFocus`).
+                    let items = catalog.gridPhotos
+                    let focusKey = catalog.resolvedFocusPath(in: items)
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVGrid(columns: columns, spacing: Self.gridSpacing) {
-                                ForEach(catalog.displayedPhotos) { photo in
+                                // `gridPhotos`, not `displayedPhotos`: one cell per collapsed stack (`CatalogModel+Stacks`). Keyboard focus,
+                                // arrows, scroll-to and focus advance below walk the SAME cells (`gridCellPhotos`); Cull, the Editor filmstrip
+                                // and every tool keep the flat list and ignore stacking in v1.
+                                ForEach(items) { item in
+                                    let photo = item.photo
                                     LibraryThumbnailCell(
-                                        catalog: catalog, photo: photo, cellSize: cellSize,
-                                        isFocused: catalog.focusedPhotoPath == photo.editKey,
+                                        catalog: catalog, item: item, cellSize: cellSize,
+                                        isFocused: focusKey == photo.editKey,
                                         thumbnailRevision: catalog.thumbnailRevisions[photo.editKey, default: 0]
                                     ) {
                                         onOpen(photo)
@@ -262,7 +270,7 @@ struct LibraryGridView: View {
                         .simultaneousGesture(TapGesture().onEnded { isGridFocused = true })
                         .onChange(of: catalog.focusedPhotoPath) { _, newPath in
                             if let newPath {
-                                withAnimation { proxy.scrollTo(newPath, anchor: .center) }
+                                withAnimation { proxy.scrollTo(catalog.resolvedFocusPath(in: catalog.gridPhotos) ?? newPath, anchor: .center) }
                             }
                         }
                     }
@@ -331,7 +339,7 @@ struct LibraryGridView: View {
     private func restoreInitialScrollPositionIfNeeded(_ proxy: ScrollViewProxy) {
         guard !hasRestoredInitialScrollPosition else { return }
         hasRestoredInitialScrollPosition = true
-        if let path = catalog.focusedPhotoPath {
+        if let path = catalog.resolvedFocusPath(in: catalog.gridPhotos) {
             proxy.scrollTo(path, anchor: .center)
         }
     }
@@ -367,7 +375,11 @@ struct LibraryGridView: View {
     private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
         let semanticModifiers: EventModifiers = [.command, .option, .control]
         guard keyPress.modifiers.isDisjoint(with: semanticModifiers) else { return .ignored }
-        let displayed = catalog.displayedPhotos
+        // The grid's CELLS (a collapsed stack is one), see `CatalogModel+Stacks`. Focus is normalised first, so every handler below (arrows,
+        // Return, rating / flag / label keys) acts on the stack's cell when the focused photo is hidden inside a collapsed stack.
+        let cells = catalog.gridPhotos
+        catalog.normalizeFocus(in: cells)
+        let displayed = cells.map(\.photo)
         switch keyPress.key {
         case .leftArrow: return moveFocus(by: -1, in: displayed)
         case .rightArrow: return moveFocus(by: 1, in: displayed)
@@ -469,7 +481,7 @@ struct LibraryGridView: View {
     /// rather than a jump back to the start. A no-op when the photo is
     /// still visible (the overwhelmingly common case).
     private func advanceFocusIfNoLongerVisible(previousPath: String, previousList: [Photo]) {
-        let freshList = catalog.displayedPhotos
+        let freshList = catalog.gridCellPhotos
         guard !freshList.contains(where: { $0.editKey == previousPath }) else { return }
         guard let previousIndex = previousList.firstIndex(where: { $0.editKey == previousPath }) else { return }
         let clampedIndex = min(previousIndex, freshList.count - 1)
@@ -585,7 +597,13 @@ private struct ThumbnailTaskKey: Equatable {
 /// at the view layer.
 private struct LibraryThumbnailCell: View {
     let catalog: CatalogModel
-    let photo: Photo
+    /// The cell: a plain photo, a COLLAPSED stack (its cover plus a count badge) or one member of an expanded stack.
+    let item: StackGridItem
+    private var photo: Photo { item.photo }
+    /// What the cell stands for is selected: a collapsed stack only when ALL its visible members are (`StackSelection`).
+    private var isCellSelected: Bool { catalog.isSelected(item) }
+    /// `.partial` (some, not all, visible members of a collapsed stack) draws a mixed checkbox.
+    private var selectionState: StackSelection.State { catalog.selectionState(of: item) }
     let cellSize: CGFloat
     /// D4 (IMPROVEMENTS.md): the grid's keyboard-focused photo, passed down
     /// as a plain `let` rather than read from `catalog` in here — this
@@ -700,24 +718,25 @@ private struct LibraryThumbnailCell: View {
                 // controls use); tapping anywhere else on the thumbnail
                 // still opens the photo, unchanged.
                 Button {
-                    catalog.toggleSelection(of: photo)
+                    catalog.toggleSelection(of: item)
                 } label: {
                     ZStack {
                         Circle()
                             .fill(.black.opacity(0.35))
                             .frame(width: 22, height: 22)
-                        Image(systemName: catalog.isSelected(photo) ? "checkmark.circle.fill" : "circle")
+                        Image(systemName: selectionState == .all ? "checkmark.circle.fill" : (selectionState == .partial ? "minus.circle.fill" : "circle"))
                             .font(.system(size: 18))
                             .foregroundStyle(.white)
                     }
                     // Dimmed (never hidden) until hover / selection: see `CellChrome`.
-                    .opacity(CellChrome.checkOpacity(isHovered: isHovered, isSelected: catalog.isSelected(photo),
+                    .opacity(CellChrome.checkOpacity(isHovered: isHovered, isSelected: selectionState != .none,
                                                      anySelected: !catalog.selectedPhotoIDs.isEmpty))
                 }
                 .buttonStyle(.plain)
                 .padding(6)
                 .accessibilityLabel("Select photo")
-                .accessibilityAddTraits(catalog.isSelected(photo) ? [.isSelected] : [])
+                .accessibilityValue(selectionState == .partial ? "Partly selected" : "")
+                .accessibilityAddTraits(isCellSelected ? [.isSelected] : [])
             }
             .frame(width: cellSize, height: cellSize)
             .clipped()
@@ -729,6 +748,11 @@ private struct LibraryThumbnailCell: View {
             .overlay(alignment: .topLeading) {
                 if photo.isVirtualCopy {
                     copyBadge
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if let stackID = item.stackID {
+                    stackBadge(stackID: stackID)
                 }
             }
             .overlay(alignment: .topTrailing) {
@@ -749,7 +773,7 @@ private struct LibraryThumbnailCell: View {
                     .stroke(Color.white, lineWidth: isFocused ? 2 : 0)
             )
 
-            Text(photo.versionName.map { "\(photo.filename) · \($0)" } ?? photo.filename)
+            Text(captionText)
                 .font(.caption)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -860,6 +884,13 @@ private struct LibraryThumbnailCell: View {
                         }
                     }
                     Divider()
+                    if item.stackID != nil {
+                        if !item.isCover {
+                            Button { Task { await catalog.makeCover(photo) } } label: { Label("Make Cover", systemImage: "star.square") }
+                        }
+                        Button { Task { await catalog.removeFromStack(photo) } } label: { Label("Remove from Stack", systemImage: "rectangle.stack.badge.minus") }
+                        Divider()
+                    }
                     Button {
                         catalog.createVirtualCopy(of: photo) // same open-version / flush hooks as the Photo menu (set by ContentView)
                     } label: {
@@ -909,7 +940,7 @@ private struct LibraryThumbnailCell: View {
             // Dimmed (never hidden, never resized) until hover / selection / focus, unless the photo carries a rating, flag or label:
             // see `CellChrome`. Opacity keeps the measured width budget, the hit areas and VoiceOver exactly as they were.
             .opacity(CellChrome.rowOpacity(
-                isHovered: isHovered, isSelected: catalog.isSelected(photo), isFocused: isFocused,
+                isHovered: isHovered, isSelected: isCellSelected, isFocused: isFocused,
                 hasRatingFlagOrLabel: photo.rating > 0 || photo.flagStatus != .none || photo.colorLabel != .none))
         }
         // Live-caught: only the thumbnail `ZStack` above constrained its
@@ -1021,6 +1052,8 @@ private struct LibraryThumbnailCell: View {
         var parts = [photo.filename]
         if let name = photo.versionName { parts.append(name) }
         if isMissing { parts.append("missing") }
+        if item.role == .collapsedStack { parts.append("stack of \(item.hiddenMemberCount + 1) photos") }
+        if item.role == .expandedMember { parts.append(item.isCover ? "stack cover" : "stack member") }
         if photo.colorLabel != .none { parts.append(photo.colorLabel.accessibilityName) }
         return parts.joined(separator: ", ")
     }
@@ -1056,6 +1089,39 @@ private struct LibraryThumbnailCell: View {
         .padding(.top, 22) // below the selection checkbox, which sits in the same corner
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(photo.versionName ?? "Virtual copy")
+    }
+
+    /// The caption: the file name (and version), plus the stack's size on a collapsed stack's cell.
+    private var captionText: String {
+        let name = photo.versionName.map { "\(photo.filename) · \($0)" } ?? photo.filename
+        return item.role == .collapsedStack ? "\(name) · \(item.hiddenMemberCount + 1) photos" : name
+    }
+
+    /// Bottom-leading (the selection checkbox owns top-leading, the copy badge sits below it, the edited badge is bottom-trailing). A
+    /// collapsed stack shows its size and expands on a tap; a member of an expanded stack shows the stack glyph and collapses it.
+    /// It sits on the thumbnail, not in the icon row below it, so the row's measured width budget (`CellChromeTests`) is untouched.
+    private func stackBadge(stackID: Int64) -> some View {
+        Button {
+            catalog.toggleExpanded(stackID: stackID)
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(.black.opacity(0.35))
+                    .frame(width: 22, height: 22)
+                if item.role == .collapsedStack {
+                    Text("\(item.hiddenMemberCount + 1)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                } else {
+                    Image(systemName: "square.stack")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(6)
+        .accessibilityLabel(item.role == .collapsedStack ? "Stack of \(item.hiddenMemberCount + 1) photos, expand" : "Stack member, collapse")
     }
 
     private var editedBadge: some View {

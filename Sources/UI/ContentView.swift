@@ -51,7 +51,7 @@ struct ContentView: View {
                     isImporting: catalog.isImporting,
                     hasPendingPaste: pasteModel.pendingTargets != nil,
                     hasModalPanel: NSApp.modalWindow != nil,
-                    isToolScanRunning: catalog.faces.isWorking || catalog.duplicates.isScanning,
+                    isToolScanRunning: catalog.faces.isWorking || catalog.duplicates.isScanning || catalog.autoStack.isWorking,
                     isMerging: catalog.mergeBusy,
                     isXMPBusy: catalog.xmpBusy,
                     isBackupBusy: catalog.backupBusy,
@@ -685,6 +685,7 @@ struct ContentView: View {
     /// Leaves culling for the Library, focused on the photo the pass ended on.
     private func exitCulling() {
         if let last = cull.end() { catalog.focusedPhotoPath = last.editKey }
+        catalog.normalizeFocus() // Cull ignores stacks: the last culled photo may be hidden inside a collapsed stack
         showLibrary = true
     }
 
@@ -1859,6 +1860,12 @@ struct ContentView: View {
                             catalog.infoSheetRequested = true
                         }
                         .disabled(selectedPhotosVisibleInGrid.isEmpty || otherSheetIsPresented)
+
+                        // Stacks act on the whole selection, hidden-by-filter photos included (the result message says so).
+                        Button("Stack Selected (\(selectedPhotosVisibleInGrid.count))") { Task { await catalog.stackSelected() } }
+                            .disabled(selectedPhotosVisibleInGrid.count < 2 || otherSheetIsPresented || catalog.autoStackSheetPresented || catalog.autoStack.isWorking)
+                        Button("Unstack (\(selectedPhotosVisibleInGrid.count))") { Task { await catalog.unstackSelected() } }
+                            .disabled(selectedPhotosVisibleInGrid.isEmpty || otherSheetIsPresented || catalog.autoStackSheetPresented || catalog.autoStack.isWorking)
 
                         // The merge acts on the selected photos the grid actually SHOWS (`selectedPhotosInDisplayedGrid`), so the label and the
                         // enabled state use that same set (`selectedPhotosVisibleInGrid` is the raw selection and includes filtered-out photos).

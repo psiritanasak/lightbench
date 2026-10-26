@@ -18,6 +18,17 @@ enum StackSelection {
         return !members.isEmpty && members.allSatisfy(selection.contains)
     }
 
+    enum State: Equatable, Sendable { case none, partial, all }
+
+    /// How much of the cell is selected: `.partial` (some but not all visible members, e.g. left over from an expanded stack) is drawn as a
+    /// mixed checkbox. A plain photo or an expanded member is never partial.
+    static func state(of item: StackGridItem, in selection: Set<Int64>) -> State {
+        let members = ids(for: item)
+        let selected = members.filter(selection.contains).count
+        if selected == 0 { return .none }
+        return selected == members.count ? .all : .partial
+    }
+
     /// The selection after a tick on `item`: unticked becomes ticked (all its ids added), ticked becomes unticked (all removed).
     static func toggled(_ item: StackGridItem, in selection: Set<Int64>) -> Set<Int64> {
         let members = ids(for: item)

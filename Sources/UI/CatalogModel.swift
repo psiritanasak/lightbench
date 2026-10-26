@@ -170,6 +170,15 @@ final class CatalogModel: ObservableObject {
     @Published var peopleSheetRequested = false
     @Published var peopleSheetPresented = false
     let faces = FacesModel()
+    /// Photo stacks (see `CatalogModel+Stacks.swift`): every stack with its member MASTER ids, and which ones the grid shows expanded
+    /// (in memory only: collapsed is the default after a relaunch). `stackByMasterID` is derived in `setStacks`.
+    @Published var stacks: [StackSnapshot] = []
+    @Published var expandedStackIDs: Set<Int64> = []
+    var stackByMasterID: [Int64: StackSnapshot] = [:]
+    /// Auto Stack sheet (Photo ▸ Auto Stack…): the menu only REQUESTS; `AutoStackSheetModifier` presents unless another sheet is up.
+    @Published var autoStackSheetRequested = false
+    @Published var autoStackSheetPresented = false
+    let autoStack = AutoStackModel()
     /// Photo Merge (see `MergeModel`): the Photo / selection menus set `mergeRequested`; `MergeDialogModifier` performs it. `mergeBusy` mirrors
     /// "a merge confirmation is up or a merge is running" so views observing only this model can block on it.
     @Published var mergeRequested: MergeModel.Kind?
@@ -314,7 +323,7 @@ final class CatalogModel: ObservableObject {
     /// never blocks the main thread". Instead `init()` kicks off a
     /// detached `Task` that does the open off-main and hops back only to
     /// publish the result.
-    private var database: CatalogDatabase? { didSet { connectFaces() } }
+    private(set) var database: CatalogDatabase? { didSet { connectFaces() } }
     /// The open catalog for `VirtualCopyModel` (same module-internal read access `freshPhotos`-style helpers use).
     var databaseForVirtualCopies: CatalogDatabase? { database }
 
@@ -595,6 +604,8 @@ final class CatalogModel: ObservableObject {
                 .mapValues { Set($0.map(\.keywordId)) }
             // Its own try?: a failed info read keeps the previous map.
             if let loadedInfo = try? await database.allInfo() { infoByPhotoID = loadedInfo }
+            // Its own try?: a failed stack read keeps the previous stacks (and never stops the reads below).
+            if let loadedStacks = try? await database.allStacks() { setStacks(loadedStacks) }
             // Its own do/catch: a failed face read must not stop the photos below from refreshing.
             do {
                 people = try await database.peopleSummaries()
@@ -630,6 +641,7 @@ final class CatalogModel: ObservableObject {
             if let loaded = try? await database.allMetadata() { metadataByPhotoID = Self.inheritingFromMasters(loaded, photos: photos) }
             personIDsByPhotoID = Self.inheritingFromMasters(personIDsByPhotoID, photos: photos)
             startMetadataScanIfNeeded()
+            normalizeFocus() // the photos or the stacks changed: focus must not name a member hidden inside a collapsed stack
         } catch {
             // Best-effort — a transient read failure shouldn't blank out
             // an otherwise-valid, already-displayed library.
@@ -801,6 +813,7 @@ final class CatalogModel: ObservableObject {
         }.map(\.editKey))
         try await database.deletePhotos(ids: ids)
         selectedPhotoIDs.subtract(ids)
+        pruneStacks(removingMasters: doomed) // the trigger dissolved small stacks; `refresh()` below re-reads, this keeps the gap short
         if let focused = focusedPhotoPath, paths.contains(focused) || doomedKeys.contains(focused) { focusedPhotoPath = nil }
         for path in paths { invalidateThumbnail(for: URL(fileURLWithPath: path)) }
         await refresh()
@@ -1317,6 +1330,10 @@ final class CatalogModel: ObservableObject {
         }
     }
 
+    /// Adds / removes ids from the checked set (the stacked cells' tick, `CatalogModel+Stacks`).
+    func select(_ ids: [Int64]) { selectedPhotoIDs.formUnion(ids) }
+    func deselect(_ ids: [Int64]) { selectedPhotoIDs.subtract(ids) }
+
     func isSelected(_ photo: Photo) -> Bool {
         guard let id = photo.id else { return false }
         return selectedPhotoIDs.contains(id)
@@ -1442,7 +1459,7 @@ final class CatalogModel: ObservableObject {
 
     /// True while a Library tool sheet (keywords, duplicates, people) is up or one of their scans runs; batch rename must not start then.
     var toolSheetIsBusy: Bool {
-        keywordSheetPhotoIDs != nil || infoSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || faces.isWorking || mergeBusy || xmpBusy || trashBusy || importCopyBusy || backupBusy
+        keywordSheetPhotoIDs != nil || infoSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || autoStackSheetPresented || autoStack.isWorking || faces.isWorking || mergeBusy || xmpBusy || trashBusy || importCopyBusy || backupBusy
     }
 
     /// The People sheet's scan: finds faces in the photos the Library is currently drawing from, then regroups ALL stored faces.
@@ -1498,9 +1515,14 @@ final class CatalogModel: ObservableObject {
         infoByPhotoID.removeValue(forKey: id)
         personIDsByPhotoID.removeValue(forKey: id)
         metadataByPhotoID.removeValue(forKey: id)
+        // The database trigger dissolves a stack left with fewer than two members; mirror that now, then re-read once the delete landed.
+        pruneStacks(removingMasters: photo.isVirtualCopy ? [] : [id])
         invalidateThumbnail(for: URL(fileURLWithPath: photo.path))
         Task.detached { [weak self] in
-            do { try await database.deletePhoto(id: id) } catch { await self?.refresh() }
+            do {
+                try await database.deletePhoto(id: id)
+                await self?.reloadStacks()
+            } catch { await self?.refresh() }
         }
     }
 

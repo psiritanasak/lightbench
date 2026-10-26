@@ -222,7 +222,7 @@ final class MergeWiringTests: XCTestCase {
         XCTAssertTrue(app.contains("renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy"), "Rename Files")
         XCTAssertTrue(app.contains("renameModel.isPresentingSheet || catalog.mergeBusy"), "Undo Rename")
         let sheets = try text("Sources/UI/DuplicatesSheetView.swift")
-        XCTAssertEqual(sheets.components(separatedBy: "catalog.mergeBusy").count - 1, 7, "keyword, info, duplicates and people sheets block on a merge, and so do the XMP, Trash and Copy Photos dialogs")
+        XCTAssertEqual(sheets.components(separatedBy: "catalog.mergeBusy").count - 1, 8, "keyword, info, duplicates, people and Auto Stack sheets block on a merge, and so do the XMP, Trash and Copy Photos dialogs")
         XCTAssertTrue(sheets.contains("MergeDialogModifier(") && sheets.contains("model: catalog.merge,"))
         let model = try text("Sources/UI/CatalogModel.swift")
         XCTAssertTrue(model.contains("faces.isWorking || mergeBusy"), "batch rename must not start under a merge")

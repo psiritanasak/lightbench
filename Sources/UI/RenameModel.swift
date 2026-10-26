@@ -52,7 +52,7 @@ struct RenameBusyState {
         if isImportCopyBusy { return "Photos are being copied into the Library — wait for it to finish." }
         if isXMPBusy { return "XMP metadata is being read or written — wait for it to finish." }
         if isImporting { return "An import is running — wait for it to finish." }
-        if isToolScanRunning { return "A face or duplicate scan is still running — wait for it to finish." }
+        if isToolScanRunning { return "A face, duplicate or Auto Stack scan is still running — wait for it to finish." }
         if hasPendingPaste { return "Finish or cancel the Paste Settings prompt first." }
         return nil
     }

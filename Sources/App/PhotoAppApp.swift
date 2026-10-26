@@ -33,6 +33,9 @@ struct PhotoAppApp: App {
     /// history) while culling, and "Cull Photos" starts it.
     @StateObject private var cull = CullModel()
 
+    /// Photo ▸ Import Lightroom Settings… (Editor-only; reads a Camera Raw `.xmp`, applies one undo step).
+    @StateObject private var lightroomImport = LightroomImportModel()
+
     /// Whether the window is showing the Library grid instead of the Editor.
     /// Presentation-only, and `ContentView`'s own `@State` until the Photo
     /// menu below needed it: prev/next is EDITOR navigation, so it must
@@ -58,6 +61,7 @@ struct PhotoAppApp: App {
             )
             // Drag a folder or photo onto the window, or open one from Finder / the Dock.
             .modifier(DropAndOpenModifier(document: document, catalog: catalog, renameModel: renameModel, cull: cull, showLibrary: $showLibrary))
+            .modifier(LightroomImportModifier(model: lightroomImport, document: document))
             // Flat window buttons instead of the system's glass ones (see `WindowChrome.swift`). To go back to the system buttons,
             // delete this one line.
             .background(WindowChromeInstaller())
@@ -157,6 +161,13 @@ struct PhotoAppApp: App {
                         || renameModel.isWorking || renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
                         || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
                 )
+                // Editor-only: acts on the OPEN photo (reads its Lightroom / Camera Raw .xmp). No shortcut. Only REQUESTS; the modifier confirms.
+                Button("Import Lightroom Settings…") { lightroomImport.request(for: document) }
+                    .disabled(
+                        cull.isActive || showLibrary || document.currentImage == nil || document.isLoadInFlight || lightroomImport.isBusy
+                            || catalog.mergeBusy || catalog.fileToolBusy || renameModel.isWorking || renameModel.isPresentingSheet
+                            || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
+                    )
                 // Virtual copies: another independent edit version of the same file (Lightroom's own ⌘'). Library: the selected visible
                 // photos, else the focused one; Editor: the open photo/version. Edits made so far in the Editor are flushed first.
                 Button("Create Virtual Copy") {

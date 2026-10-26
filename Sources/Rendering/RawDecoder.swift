@@ -233,7 +233,7 @@ enum RawDecoder {
     /// value was actually read — never used to overwrite an already-correct
     /// default with a wrong guess for a RAW container ImageIO parses
     /// differently than Core Image's RAW decoder does.
-    private static func readExifOrientation(of url: URL) -> CGImagePropertyOrientation? {
+    static func readExifOrientation(of url: URL) -> CGImagePropertyOrientation? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
               let raw = properties[kCGImagePropertyOrientation as String] as? UInt32,

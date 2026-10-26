@@ -6,10 +6,11 @@ A native macOS photo editor with a library, in the spirit of Lightroom. Edits ar
 
 ## What it does
 
-- **Library:** import folders (or copy photos from a card into your library), thumbnail grid, ratings, Pick/Reject flags, colour labels, keywords, editable title / caption / creator / copyright (⌘I, searchable, optionally written into exported files and `.xmp` sidecars), collections and Smart Collections, search (`iso:>800 camera:d610 rating:>3 …`), duplicate detection, people grouping, batch rename, XMP sidecar read/write, catalog backup and restore.
-- **Editor:** exposure, contrast, tone curve (with per-channel curves), white balance, colour, selective colour, point colour, black & white mix, colour grading wheels, texture, clarity, dehaze, noise reduction, sharpening, grain, vignette, defringe, crop, straighten, perspective, Auto Straighten and Upright, spot removal, red-eye, looks (including your own `.cube` LUTs), styles and presets.
+- **Library:** import folders (or copy photos from a card into your library), thumbnail grid, ratings, Pick/Reject flags, colour labels, keywords, editable title / caption / creator / copyright (⌘I, searchable, optionally written into exported files and `.xmp` sidecars), collections and Smart Collections, search (`iso:>800 camera:d610 rating:>3 …`), duplicate detection, Auto Stack (bursts and near-identical shots collapse into stacks), people grouping, batch rename, XMP sidecar read/write, catalog backup and restore.
+- **Editor:** exposure, contrast, tone curve (with per-channel curves, plus a targeted drag-on-the-photo tool for the curve, Selective Color and B&W Mix), white balance, colour, selective colour, point colour, black & white mix, colour grading wheels, texture, clarity, dehaze, noise reduction, sharpening, grain, vignette, defringe, crop, straighten, perspective, Auto Straighten and Upright, spot removal, red-eye, looks (including your own `.cube` LUTs), styles and presets.
 - **Local adjustments:** radial, linear, brush, luminance, colour, subject and depth masks, which can be combined.
 - **RAW:** decoded through Core Image's RAW engine (tested with Nikon D610 files).
+- **Lightroom settings import:** read a Lightroom/Camera Raw `.xmp` into the open photo as one undo step (approximate: only Exposure has been checked against Lightroom).
 - **Virtual copies:** several edit versions of one photo, sharing one file.
 - **Cull mode:** single photo, compare and survey views for fast picking.
 - **Merge and export:** HDR and panorama merge, super-resolution enhance, and export to JPEG, HEIC, PNG or TIFF with colour space, sharpening, metadata, text or logo watermark and naming templates.

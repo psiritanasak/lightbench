@@ -1752,6 +1752,19 @@ final class ImageDocumentModel: ObservableObject {
         applyHistoryState(history.current)
     }
 
+    /// Applies imported Lightroom / Camera Raw settings (`LightroomMapping.plan`) as ONE undo step, committed exactly like
+    /// `applyPreset`. Only the fields the file carries change (`LightroomMapping.merge`); geometry, masks, spots and the RAW-decode
+    /// fields stay, and the crop changes only when the plan includes it. False (and no history step) when nothing would change.
+    @discardableResult
+    func applyLightroomSettings(_ plan: LightroomMapping.Plan) -> Bool {
+        finalizePendingCommit()
+        let merged = LightroomMapping.merge(plan, onto: editState)
+        guard merged != editState else { return false }
+        history.commit(merged, summary: "Lightroom Settings")
+        applyHistoryState(history.current)
+        return true
+    }
+
     /// Picks a Style preset (`""` = None). Its own atomic, labelled undo step (`applyPreset`'s reasoning: the debounced
     /// `editState` path could merge a follow-up pad drag into the same step). Choosing None restores the strength to its
     /// identity (1) ONLY when that leaves the style contributing nothing (pad at the centre): then a leftover

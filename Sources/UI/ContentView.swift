@@ -221,7 +221,7 @@ struct ContentView: View {
         // reasoning, same un-zoomed assumption in its own tap-capture layer.
         document.currentImage != nil && !isCroppingActive && !isPickingWhiteBalance
             && !isPlacingRedEyeCorrections && !isEditingOverlayMask && !isPaintingBrush && !isPickingColorRange
-            && !isPickingPointColor && !isPickingSubject
+            && !isPickingPointColor && !isPickingSubject && !isTargetedArmed
     }
 
     /// Spot removal: whether a spot is selected on the Retouch tab at identity geometry — the only
@@ -410,6 +410,10 @@ struct ContentView: View {
     private var isPlacingRedEyeCorrections: Bool { interactionMode.isPlacingRedEyeCorrections }
     /// The Retouch tab's Place Spots tool is armed (every click on the photo adds a spot).
     private var isPlacingRetouchSpot: Bool { interactionMode.isPlacingRetouchSpot }
+    /// The Adjust tab's Targeted adjustment tool is armed (drag up/down on the photo). Gates `canZoom` like every picker: its drag
+    /// math assumes the un-zoomed `currentFitRect`.
+    private var targetedTool: TargetedTool? { interactionMode.targetedTool }
+    private var isTargetedArmed: Bool { targetedTool != nil }
 
     /// D8 (IMPROVEMENTS.md): the keyboard-driven crosshair's current
     /// position — normalized 0...1, SwiftUI-local/y-DOWN, the SAME
@@ -426,6 +430,40 @@ struct ContentView: View {
     /// keypress after a mouse click could silently act on a stale
     /// position instead of where the user just clicked.
     @State private var crosshairPosition = CGPoint(x: 0.5, y: 0.5)
+    /// A Targeted drag whose start was refused (neutral pixel, unreadable sample): ignored until the mouse is released.
+    @State private var targetedBeginSpent = false
+    /// True while the Targeted layer's pointer is down (a `GestureState`, so it also resets when the gesture is cancelled).
+    @GestureState private var targetedPressing = false
+    /// Whether this layer currently holds a pushed `NSCursor` (every push is paired with exactly one pop).
+    @State private var targetedCursorPushed = false
+
+    /// Whether the Targeted drag-capture layer may exist: the tool is armed, its section is open, and nothing that makes the
+    /// exact stage-input sampling wrong or ambiguous is on (crop, another armed mode, Compare, non-identity geometry).
+    private var targetedLayerActive: Bool {
+        isTargetedArmed && targetedSectionOpen && !isCroppingActive && !isPickingWhiteBalance && !isPlacingRedEyeCorrections
+            && !isPaintingBrush && !isPickingColorRange && !isPickingPointColor && !isPickingSubject && compareMode == .off
+            && document.editState.isGeometryAtIdentity
+    }
+
+    /// The armed tool's own section is expanded: its Stop button is only visible then, so collapsing it must disarm
+    /// (like Point Color's section-collapse disarm).
+    private var targetedSectionOpen: Bool {
+        TargetedAdjustmentRules.sectionIsOpen(
+            tool: targetedTool, curveExpanded: adjustPanel.isCurveSectionExpanded,
+            selectiveColorExpanded: adjustPanel.isSelectiveColorSectionExpanded,
+            blackAndWhiteExpanded: adjustPanel.isBlackAndWhiteSectionExpanded)
+    }
+
+    /// Pushes/pops the crosshair exactly once per transition (a stray pop would pop someone else's cursor).
+    private func setTargetedCursor(_ inside: Bool) {
+        if inside, !targetedCursorPushed {
+            NSCursor.crosshair.push()
+            targetedCursorPushed = true
+        } else if !inside, targetedCursorPushed {
+            NSCursor.pop()
+            targetedCursorPushed = false
+        }
+    }
 
     /// D8 (IMPROVEMENTS.md): whether the image pane itself (as opposed to
     /// a sidebar slider, the search field, or nothing) currently holds
@@ -557,6 +595,13 @@ struct ContentView: View {
         // fails closed (falls through to the pan branch, or `.ignored`)
         // instead of committing a point against a crop-mode `fitRect`
         // with no crosshair even drawn.
+        // Targeted adjustment: Escape COMMITS a drag in progress as its one history step (same as every other way a drag ends) and
+        // disarms, in this one handler; other keys fall through.
+        if !isCroppingActive, isTargetedArmed, keyPress.key == .escape {
+            document.endTargetedDrag()
+            interactionMode = .none
+            return .handled
+        }
         if !isCroppingActive,
            isPickingWhiteBalance || isPlacingRedEyeCorrections || isPickingPointColor || isPickingColorRange
             || isPickingSubject {
@@ -1525,6 +1570,37 @@ struct ContentView: View {
         .onChange(of: isPlacingRetouchSpot) { _, isArmed in
             if isArmed { isImagePaneFocused = true }
         }
+        // Targeted adjustment: arming grabs image-pane focus (Escape works at once); any disarm COMMITS a drag still in flight
+        // (the tool switched, a tab/Compare/photo change cleared the mode), exactly like the layer's own gate closing and a photo
+        // switch do, so every route gives the same outcome whichever `onChange` runs first. A no-op once the drag has ended.
+        .onChange(of: targetedTool) { _, tool in
+            document.endTargetedDrag()   // every change commits a drag in flight, incl. re-arming for another property
+            if tool != nil { isImagePaneFocused = true }
+        }
+        // The pointer going up ends the drag even when `onEnded` never runs (gesture cancelled, layer removed under it).
+        .onChange(of: targetedPressing) { _, pressing in
+            if !pressing {
+                targetedBeginSpent = false
+                document.endTargetedDrag()
+            }
+        }
+        // The layer's own gate turning false (crop, another mode, Compare, geometry changed by Undo, the fit rect vanishing)
+        // ends a drag in flight and releases the cursor. Armed-but-gated-off keeps the mode; only the layer goes.
+        .onChange(of: targetedLayerActive) { _, active in
+            if !active {
+                // (`targetedBeginSpent` is NOT reset here: it belongs to the press, and resets when the press ends.)
+                document.endTargetedDrag()
+                setTargetedCursor(false)
+            }
+        }
+        // Collapsing the armed tool's section disarms it (its Stop button is hidden then).
+        .onChange(of: targetedSectionOpen) { _, open in
+            if !open, isTargetedArmed { interactionMode = .none }
+        }
+        // B&W Mix targeting means nothing once Black & White is off: disarm so no capture layer stays up with no control behind it.
+        .onChange(of: document.editState.blackAndWhite) { _, isOn in
+            if !isOn, targetedTool == .grayMix { interactionMode = .none }
+        }
         .onChange(of: isPlacingRedEyeCorrections) { _, isArmed in
             if isArmed {
                 crosshairPosition = CGPoint(x: 0.5, y: 0.5)
@@ -1664,7 +1740,7 @@ struct ContentView: View {
         .onChange(of: showLibrary) { _, isShowingLibrary in
             if !isShowingLibrary,
                isPickingWhiteBalance || isPlacingRedEyeCorrections || isEditingOverlayMask
-                || isPaintingBrush || isPickingColorRange || isPickingPointColor || isPickingSubject {
+                || isPaintingBrush || isPickingColorRange || isPickingPointColor || isPickingSubject || isTargetedArmed {
                 isImagePaneFocused = true
             }
         }
@@ -1945,7 +2021,8 @@ struct ContentView: View {
         let hasImage = document.currentImage != nil
         let armed = EditorRailActionRules.ArmedModes(
             whiteBalance: isPickingWhiteBalance, redEye: isPlacingRedEyeCorrections, colorRange: isPickingColorRange,
-            pointColor: isPickingPointColor, subject: isPickingSubject, retouchSpot: isPlacingRetouchSpot)
+            pointColor: isPickingPointColor, subject: isPickingSubject, retouchSpot: isPlacingRetouchSpot,
+            targeted: isTargetedArmed)
         return EditorRailActions(
             document: document, compareMode: $compareMode, splitOrientation: $splitOrientation,
             isHistoryPresented: $isHistoryPresented, isFilmstripVisible: $isFilmstripVisible,
@@ -2069,6 +2146,7 @@ struct ContentView: View {
                             : isPickingColorRange ? "Color range picker"
                             : isPickingSubject ? "Subject picker"
                             : isPlacingRetouchSpot ? "Spot placement"
+                            : isTargetedArmed ? "Targeted adjustment"
                             : isPickingPointColor ? "Point color picker"
                             // Phase 7 slice 5: narrowed to overlay-owning
                             // kinds — with no overlay, nothing about the
@@ -2352,6 +2430,43 @@ struct ContentView: View {
                 .accessibilityHidden(true)
         }
         depthSelectionOverlay
+        // Targeted adjustment: a drag-capture layer over the photo. Mirrors the Point Color layer's gating (cumulative exclusion of
+        // every other armed mode) plus identity geometry, which the exact stage-input sampling needs. The press point chooses the
+        // control (sampled ONCE, in `beginTargetedDrag`); the vertical drag distance over the pane height sets the value.
+        if targetedLayerActive, let tool = targetedTool, let fitRect = currentFitRect {
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(width: fitRect.width, height: fitRect.height)
+                .position(x: fitRect.midX, y: fitRect.midY)
+                .onHover { inside in setTargetedCursor(inside) }
+                .onDisappear { setTargetedCursor(false) }
+                .gesture(
+                    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                        // `onEnded` does NOT run when the gesture is cancelled or its view is removed; this state resets in
+                        // every case, and its falling edge (see the `onChange` below) ends the drag.
+                        .updating($targetedPressing) { _, pressing, _ in pressing = true }
+                        .onChanged { drag in
+                            if !document.isTargetedDragActive {
+                                // AT MOST ONE begin per press, whether it succeeded or was refused: a drag ended from outside
+                                // (another edit, a disarm) while the mouse is still down must not restart, re-sample the
+                                // already-dragged values and apply the full delta again. Reset only when the press ends.
+                                guard !targetedBeginSpent else { return }
+                                targetedBeginSpent = true
+                                // Both are top-down fractions of the fit rect, like every other sampler call here.
+                                guard document.beginTargetedDrag(
+                                    tool: tool, normalizedX: drag.startLocation.x / fitRect.width,
+                                    normalizedY: drag.startLocation.y / fitRect.height) else { return }
+                            }
+                            document.updateTargetedDrag(delta: TargetedAdjustmentMath.delta(
+                                upwardDrag: drag.startLocation.y - drag.location.y, paneHeight: Double(containerSize.height)))
+                        }
+                        .onEnded { _ in
+                            targetedBeginSpent = false
+                            document.endTargetedDrag()
+                        }
+                )
+                .accessibilityHidden(true)
+        }
         // Point Color Slice B: this eyedropper's tap-capture layer —
         // mirrors the WB eyedropper's own capture layer above almost
         // exactly (same `Color.clear`/crosshair-cursor/`SpatialTapGesture`

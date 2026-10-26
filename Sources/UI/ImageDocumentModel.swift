@@ -304,6 +304,7 @@ final class ImageDocumentModel: ObservableObject {
     }
 
     func load(from url: URL, versionKey: String? = nil) async {
+        endTargetedDrag() // commit to the photo being left, before its state is replaced
         willSwitchPhoto?()
         loadGeneration += 1
         let myGeneration = loadGeneration
@@ -1005,6 +1006,182 @@ final class ImageDocumentModel: ObservableObject {
         editState.pointColors[index] = pointColor
     }
 
+    // MARK: - Targeted adjustment
+
+    /// What a Targeted adjustment drag needs, fixed at drag start (the sample is read ONCE: no per-move render). Only the fields the
+    /// tool touches are ever written, always onto the CURRENT `editState`, so no other edit is ever overwritten by a stale snapshot.
+    private struct TargetedDrag {
+        let tool: TargetedTool
+        var curve: TargetedAdjustmentMath.CurveDrag?
+        var bandWeights: [Double] = []
+        var bandKeyPaths: [WritableKeyPath<EditState, Double>] = []
+        /// The touched bands' values when the drag began.
+        var startBandValues: [Double] = []
+        /// What the last update wrote into the touched fields (nil until the first write): `cancelTargetedDrag` restores the
+        /// start values only while the fields still hold exactly this.
+        var lastWrittenPoints: [ToneCurvePoint]?
+        var lastWrittenBands: [Double]?
+        var hasWritten: Bool { lastWrittenPoints != nil || lastWrittenBands != nil }
+    }
+
+    /// While non-nil, mid-drag history coalescing is suppressed (`recordEditChange`). Cleared by `endTargetedDrag`,
+    /// `cancelTargetedDrag`, `resetHistory` and, through `finalizePendingCommit`, by every other edit path.
+    private var targetedDrag: TargetedDrag?
+
+    /// True from a successful `beginTargetedDrag` until `endTargetedDrag`/`cancelTargetedDrag`.
+    var isTargetedDragActive: Bool { targetedDrag != nil }
+
+    /// Test seam: replaces the pixel read of `beginTargetedDrag`. Receives the stage to stop at and the normalized tap
+    /// (fractions of the displayed photo, y top-down, like every other sampler here); returns the PERCEPTUAL sample or nil.
+    var targetSampler: ((EditPipeline.ColorSampleTruncation, Double, Double) -> (r: Double, g: Double, b: Double)?)?
+
+    /// Starts a Targeted adjustment drag at a normalized point of the displayed photo. Samples once, through the real pipeline
+    /// stopped at the target stage's own input (exact only at identity geometry, so it refuses otherwise), and chooses what the
+    /// drag will change. Returns false (and changes nothing) when there is no photo, a load is in flight, a drag is already
+    /// running, the geometry is not identity, B&W Mix is asked for while Black & White is off, the pixel can't be read, or
+    /// (colour tools) the pixel is neutral so no band owns it. A refused start is silent: there is no lightweight status channel
+    /// here (`whiteBalanceSampleMessage` is a modal alert, too heavy to raise on every press).
+    ///
+    /// Any pending coalesced burst is committed first so it stays its own undo step, and mid-drag history coalescing is
+    /// suppressed so a slow drag is exactly ONE step (`endTargetedDrag`).
+    @discardableResult
+    func beginTargetedDrag(tool: TargetedTool, normalizedX u: Double, normalizedY v: Double) -> Bool {
+        guard targetedDrag == nil, !isLoadInFlight, editState.isGeometryAtIdentity else { return false }
+        if tool == .grayMix, !editState.blackAndWhite { return false }
+        let sample: (r: Double, g: Double, b: Double)?
+        if let targetSampler {
+            sample = targetSampler(tool.sampleTruncation, u, v)
+        } else {
+            sample = sampleForTargetedDrag(tool: tool, normalizedX: u, normalizedY: v)
+        }
+        guard let sample, sample.r.isFinite, sample.g.isFinite, sample.b.isFinite else { return false }
+
+        finalizePendingCommit()
+        // A coalescing item scheduled before this drag must not fire into it.
+        historyCommitWorkItem?.cancel()
+        var drag = TargetedDrag(tool: tool)
+        switch tool {
+        case .curve:
+            let x = TargetedAdjustmentMath.curveX(forPerceptualRGB: sample.r, sample.g, sample.b)
+            guard let curve = TargetedAdjustmentMath.CurveDrag(points: editState.toneCurvePoints, x: x) else { return false }
+            drag.curve = curve
+        case .selectiveColor(let property):
+            let (hue, saturation) = PointColorSelection.hueSaturation(forPerceptualRGB: sample.r, sample.g, sample.b)
+            guard hue.isFinite, saturation.isFinite else { return false }
+            drag.bandWeights = SelectiveColorBandWeights.selectiveColorWeights(
+                hue: hue, saturation: saturation, range: editState.selectiveColorRange)
+            drag.bandKeyPaths = SelectiveColorBandWeights.selectiveColorKeyPaths(for: property)
+        case .grayMix:
+            let (hue, saturation) = PointColorSelection.hueSaturation(forPerceptualRGB: sample.r, sample.g, sample.b)
+            guard hue.isFinite, saturation.isFinite else { return false }
+            drag.bandWeights = SelectiveColorBandWeights.grayMixWeights(hue: hue, saturation: saturation)
+            drag.bandKeyPaths = SelectiveColorBandWeights.grayMixKeyPaths
+        }
+        if tool != .curve {
+            guard TargetedAdjustmentMath.bandDeltas(weights: drag.bandWeights, delta: 1) != nil else { return false }
+            drag.startBandValues = drag.bandKeyPaths.map { editState[keyPath: $0] }
+        }
+        targetedDrag = drag
+        return true
+    }
+
+    /// Real sampling for `beginTargetedDrag`: the same truncated render and 5x5 average `pickPointColorTarget` uses.
+    private func sampleForTargetedDrag(tool: TargetedTool, normalizedX u: Double, normalizedY v: Double) -> (r: Double, g: Double, b: Double)? {
+        guard let currentImage else { return nil }
+        let sampled = EditPipeline.apply(editState, to: currentImage, truncatingColorAt: tool.sampleTruncation)
+        let extent = sampled.extent
+        guard extent.width > 0, extent.height > 0 else { return nil }
+        let point = CGPoint(x: extent.minX + CGFloat(u) * extent.width, y: extent.minY + CGFloat(1 - v) * extent.height)
+        guard let color = PixelSampler.averageColor(in: sampled, at: point) else { return nil }
+        return (Double(color.r), Double(color.g), Double(color.b))
+    }
+
+    /// Applies a drag of `delta` (upward positive, in the control's own units: curve y or a -1...1 slider). The result depends
+    /// only on the current delta and the values the touched fields had at drag start (not on the path), and ONLY those fields
+    /// are written, onto the current `editState`. No history entry is made here.
+    func updateTargetedDrag(delta: Double) {
+        guard var drag = targetedDrag, delta.isFinite else { return }
+        var next = editState
+        switch drag.tool {
+        case .curve:
+            guard let curve = drag.curve else { return }
+            let points = curve.points(forDelta: delta)
+            next.toneCurvePoints = points
+            drag.lastWrittenPoints = points
+        case .selectiveColor, .grayMix:
+            guard let deltas = TargetedAdjustmentMath.bandDeltas(weights: drag.bandWeights, delta: delta) else { return }
+            let values = TargetedAdjustmentMath.bandValues(start: drag.startBandValues, deltas: deltas)
+            for (keyPath, value) in zip(drag.bandKeyPaths, values) { next[keyPath: keyPath] = value }
+            drag.lastWrittenBands = values
+        }
+        targetedDrag = drag
+        if next != editState { editState = next }
+    }
+
+    /// Ends the drag with ONE labelled history step ("Targeted Curve", "Targeted Saturation", ...), or none when it netted no
+    /// change, and schedules the sidecar save so the persisted `_history` includes the step. Every other edit path (undo, redo,
+    /// History jump, Revert, preset, paste, Auto Tone, photo switch, flush) ends an active drag first through
+    /// `finalizePendingCommit`/`load`/`flushPendingSidecarSave`, so a drag never straddles another edit.
+    ///
+    /// The step holds ONLY the drag's own fields: a change to any other field that landed mid-drag without passing through
+    /// `finalizePendingCommit` (an async writer such as Fix Color Cast) is not folded into the "Targeted ..." row; it is left as
+    /// a pending burst and committed as its own step.
+    func endTargetedDrag() {
+        guard let drag = targetedDrag else { return }
+        targetedDrag = nil
+        if drag.hasWritten {
+            var dragOnly = history.current
+            copyTargetedFields(of: drag, from: editState, to: &dragOnly)
+            if dragOnly != history.current {
+                history.commit(dragOnly, summary: drag.tool.historySummary)
+                refreshHistoryState()
+                scheduleSidecarSave()
+            }
+        }
+        recordUncommittedChangeIfAny()
+    }
+
+    /// Abandons the drag (Esc is NOT this: it ends the drag; this is for callers that must discard it): puts the touched fields
+    /// back to their drag-start values with no history step, but ONLY while they still hold what the drag last wrote. Anything
+    /// else changed them since, so the later edit wins and nothing is restored. The other fields are never touched. Whatever
+    /// differs from the history afterwards (a later edit made while the drag suppressed coalescing) is recorded as its own burst.
+    func cancelTargetedDrag() {
+        guard let drag = targetedDrag else { return }
+        targetedDrag = nil
+        defer { recordUncommittedChangeIfAny() }
+        var restored = editState
+        switch drag.tool {
+        case .curve:
+            guard let written = drag.lastWrittenPoints, editState.toneCurvePoints == written, let curve = drag.curve else { return }
+            restored.toneCurvePoints = curve.startPoints
+        case .selectiveColor, .grayMix:
+            guard let written = drag.lastWrittenBands, drag.bandKeyPaths.map({ editState[keyPath: $0] }) == written else { return }
+            for (keyPath, value) in zip(drag.bandKeyPaths, drag.startBandValues) { restored[keyPath: keyPath] = value }
+        }
+        isApplyingHistoryChange = true
+        editState = restored
+        isApplyingHistoryChange = false
+    }
+
+    /// Copies the fields a drag touches (and only those) between two states.
+    private func copyTargetedFields(of drag: TargetedDrag, from source: EditState, to target: inout EditState) {
+        switch drag.tool {
+        case .curve:
+            target.toneCurvePoints = source.toneCurvePoints
+        case .selectiveColor, .grayMix:
+            for keyPath in drag.bandKeyPaths { target[keyPath: keyPath] = source[keyPath: keyPath] }
+        }
+    }
+
+    /// While a drag runs, `recordEditChange` is suppressed, so an edit that landed meanwhile has no pending burst. Once the drag
+    /// is over, make sure any state that differs from the history is committed (as its own step) instead of being left unrecorded.
+    private func recordUncommittedChangeIfAny() {
+        if editState != history.current, !isBurstPending {
+            recordEditChange()
+            scheduleSidecarSave()   // so the later commit of this change is saved WITH its history
+        }
+    }
+
     // MARK: - Color Cast
 
     /// Analyzes the WHOLE image's gray-world average color and sets
@@ -1578,10 +1755,12 @@ final class ImageDocumentModel: ObservableObject {
     /// `finalizePendingCommit()` after `historyCoalesceInterval` of
     /// inactivity, coalescing the whole burst into one undo step.
     private func recordEditChange() {
+        // A Targeted drag is committed as ONE step by `endTargetedDrag`; a slow drag must not coalesce into several.
+        guard targetedDrag == nil else { return }
         isBurstPending = true
 
         historyCommitWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in self?.finalizePendingCommit() }
+        let workItem = DispatchWorkItem { [weak self] in self?.finalizePendingCommit(endsTargetedDrag: false) }
         historyCommitWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.historyCoalesceInterval, execute: workItem)
     }
@@ -1589,7 +1768,10 @@ final class ImageDocumentModel: ObservableObject {
     /// Settles the in-progress burst (if any) into one `EditHistory` commit.
     /// `EditHistory.commit`'s own `== current` guard drops a burst that
     /// netted no actual change (e.g. a slider dragged back to its start).
-    private func finalizePendingCommit() {
+    /// `endsTargetedDrag`: every edit path funnels through here first, so an active Targeted drag is committed before it can
+    /// straddle another edit; only the debounce timer (which can fire during a drag by design) opts out.
+    private func finalizePendingCommit(endsTargetedDrag: Bool = true) {
+        if endsTargetedDrag { endTargetedDrag() }
         guard isBurstPending else { return }
         isBurstPending = false
         history.commit(editState)
@@ -1638,6 +1820,7 @@ final class ImageDocumentModel: ObservableObject {
     /// identity — labeling that first History row "Original" would
     /// misdescribe an already-edited photo's own starting point.
     private func resetHistory(restoring persisted: (archive: HistoryArchive, encoder: HistoryArchive.Encoder)? = nil) {
+        targetedDrag = nil
         historyCommitWorkItem?.cancel()
         historyCommitWorkItem = nil
         isBurstPending = false
@@ -2046,6 +2229,7 @@ final class ImageDocumentModel: ObservableObject {
     /// up to date by the time the grid appears, rather than possibly
     /// still sitting in the ~1s debounce window.
     func flushPendingSidecarSave() {
+        endTargetedDrag() // schedules the save below when it committed a step
         guard sidecarSaveWorkItem != nil else { return }
         sidecarSaveWorkItem?.cancel()
         sidecarSaveWorkItem = nil

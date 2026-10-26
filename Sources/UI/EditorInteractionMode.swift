@@ -39,6 +39,9 @@ enum EditorInteractionMode: Equatable {
     /// The Retouch tab's "Place Spots" tool: stays armed so every click on the photo adds a spot (Lightroom's spot-removal
     /// tool). No payload — spot selection is `AdjustPanelState.selectedRetouchSpotID`, not part of the mode.
     case placingRetouchSpot
+    /// The Adjust tab's Targeted adjustment tool (drag up/down on the photo to change the control under the pixel). Stays armed
+    /// until toggled off or Esc, like spot placement; the payload names WHICH control a drag changes.
+    case targeted(TargetedTool)
 
     /// Read-only projections matching the 5 stored properties this type
     /// replaces, by name and type — every existing read site (`canZoom`,
@@ -69,6 +72,12 @@ enum EditorInteractionMode: Equatable {
 
     var isPlacingRetouchSpot: Bool {
         self == .placingRetouchSpot
+    }
+
+    /// The armed Targeted adjustment tool, or nil.
+    var targetedTool: TargetedTool? {
+        if case .targeted(let tool) = self { return tool }
+        return nil
     }
 
     var pointColorPickingID: UUID? {
@@ -107,7 +116,7 @@ enum EditorInteractionMode: Equatable {
         switch self {
         case .paintingBrush, .pickingColorRange, .pickingSubject:
             self = .none
-        case .none, .pickingWhiteBalance, .placingRedEye, .pickingPointColor, .placingRetouchSpot:
+        case .none, .pickingWhiteBalance, .placingRedEye, .pickingPointColor, .placingRetouchSpot, .targeted:
             break
         }
     }
@@ -124,12 +133,12 @@ enum EditorInteractionMode: Equatable {
 
 extension EditorInteractionMode {
     /// The tab whose controls arm and disarm this mode (`nil` for `.none`). Used by `EditorTab.switchEffects`: leaving that tab
-    /// disarms it. White balance and Point Color picking belong to Adjust; red-eye and spot placement to their own tabs; brush
+    /// disarms it. White balance, Point Color picking and the Targeted tool belong to Adjust; red-eye and spot placement to their own tabs; brush
     /// painting, colour-range picking and subject picking to Masks.
     var ownerTab: EditorTab? {
         switch self {
         case .none: return nil
-        case .pickingWhiteBalance, .pickingPointColor: return .adjust
+        case .pickingWhiteBalance, .pickingPointColor, .targeted: return .adjust
         case .placingRedEye: return .redEye
         case .placingRetouchSpot: return .retouch
         case .paintingBrush, .pickingColorRange, .pickingSubject: return .masks

@@ -24,8 +24,9 @@ enum EditorRailActionRules {
         var pointColor = false
         var subject = false
         var retouchSpot = false
+        var targeted = false
 
-        var any: Bool { whiteBalance || redEye || colorRange || pointColor || subject || retouchSpot }
+        var any: Bool { whiteBalance || redEye || colorRange || pointColor || subject || retouchSpot || targeted }
     }
 
     static func canCompare(hasImage: Bool, isCropping: Bool, armed: ArmedModes) -> Bool {

@@ -36,6 +36,9 @@ struct AdjustPanelState {
     var isColorGradingSectionExpanded = false
     var isEffectsSectionExpanded = false
 
+    /// Which Selective Color property the Targeted tool changes (presentation state, like the band selection).
+    var targetedSelectiveProperty: SelectiveColorProperty = .saturation
+
     var selectedRetouchSpotID: UUID?
 
     /// The radius a plain click gives a spot placed with the Place Spots tool: the last size the user dragged out (or resized
@@ -426,6 +429,13 @@ struct AdjustTabView: View {
         }
     }
 
+    /// The shared Targeted button for `tool`.
+    private func targetedButton(_ tool: TargetedTool) -> some View {
+        TargetedAdjustmentButton(
+            tool: tool, hasImage: document.currentImage != nil, geometryAtIdentity: document.editState.isGeometryAtIdentity,
+            interactionMode: $interactionMode, onEnter: onEnterPointPickingMode)
+    }
+
     /// Curves v2 slice 2B: the interactive point-curve editor. Its own
     /// section, separate from `lightSection`'s Shadows/Highlights/Black
     /// Point sliders — those are the PARAMETRIC layer; this is the
@@ -439,6 +449,7 @@ struct AdjustTabView: View {
             Text("Applies on top of the Light sliders.")
                 .font(.caption2)
                 .foregroundStyle(Theme.textSecondary)
+            targetedButton(.curve)
             // Curves v2 slice 3: which of the four curves the canvas below
             // shows/edits. A segmented `Picker`, matching `lightSection`'s
             // own `histogramDisplayMode` picker one section above — NOT
@@ -632,6 +643,7 @@ struct AdjustTabView: View {
             EditToggleRow(label: "Black & White", value: $document.editState.blackAndWhite)
             // B&W Mix: how bright each colour becomes in the grey. Only meaningful (and only rendered) while B&W is on.
             if document.editState.blackAndWhite {
+                targetedButton(.grayMix)
                 ForEach(SelectiveColorBand.allCases, id: \.self) { band in
                     EditSliderRow(
                         label: band.label, value: grayMixBinding(for: band),
@@ -1875,6 +1887,20 @@ struct AdjustTabView: View {
     /// `AdjustSectionContainer`, not this section's own former 8).
     private var selectiveColorSection: some View {
         Group {
+            // Targeted adjustment: which property a drag on the photo changes, then the arming button.
+            Picker("", selection: $panel.targetedSelectiveProperty) {
+                ForEach(SelectiveColorProperty.allCases, id: \.self) { property in
+                    Text(property.label).tag(property)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityLabel("Targeted property")
+            .onChange(of: panel.targetedSelectiveProperty) { _, newProperty in
+                // Switching property while the tool is armed re-arms it for the new property (never leaves it armed on the old one).
+                if case .selectiveColor = interactionMode.targetedTool { interactionMode = .targeted(.selectiveColor(newProperty)) }
+            }
+            targetedButton(.selectiveColor(panel.targetedSelectiveProperty))
             // 22pt circles + 6pt spacing = 8*22 + 7*6 = 218pt — fits the
             // sidebar's own MINIMUM width (260pt, ~228pt usable after
             // horizontal padding) with ~10pt to spare. The original

@@ -228,7 +228,9 @@ struct LibraryGridView: View {
                                             photoPendingRemoval = photo
                                         }
                                     }
-                                    .id(photo.editKey)
+                                    // The cell's identity includes its stack role: a photo that becomes a stack cover (or stops being
+                                    // one) gets a NEW cell view, so its badge and caption never go stale. Scroll-to targets this same id.
+                                    .id(item.cellID)
                                 }
                             }
                             .padding(Self.gridPadding)
@@ -270,7 +272,7 @@ struct LibraryGridView: View {
                         .simultaneousGesture(TapGesture().onEnded { isGridFocused = true })
                         .onChange(of: catalog.focusedPhotoPath) { _, newPath in
                             if let newPath {
-                                withAnimation { proxy.scrollTo(catalog.resolvedFocusPath(in: catalog.gridPhotos) ?? newPath, anchor: .center) }
+                                withAnimation { proxy.scrollTo(StackCellPresentation.scrollTarget(forFocusedKey: newPath, in: catalog.gridPhotos) ?? newPath, anchor: .center) }
                             }
                         }
                     }
@@ -339,7 +341,7 @@ struct LibraryGridView: View {
     private func restoreInitialScrollPositionIfNeeded(_ proxy: ScrollViewProxy) {
         guard !hasRestoredInitialScrollPosition else { return }
         hasRestoredInitialScrollPosition = true
-        if let path = catalog.resolvedFocusPath(in: catalog.gridPhotos) {
+        if let path = StackCellPresentation.scrollTarget(forFocusedKey: catalog.focusedPhotoPath, in: catalog.gridPhotos) {
             proxy.scrollTo(path, anchor: .center)
         }
     }
@@ -1094,7 +1096,7 @@ private struct LibraryThumbnailCell: View {
     /// The caption: the file name (and version), plus the stack's size on a collapsed stack's cell.
     private var captionText: String {
         let name = photo.versionName.map { "\(photo.filename) · \($0)" } ?? photo.filename
-        return item.role == .collapsedStack ? "\(name) · \(item.hiddenMemberCount + 1) photos" : name
+        return StackCellPresentation.caption(name: name, item: item)
     }
 
     /// Bottom-leading (the selection checkbox owns top-leading, the copy badge sits below it, the edited badge is bottom-trailing). A
@@ -1108,20 +1110,25 @@ private struct LibraryThumbnailCell: View {
                 Circle()
                     .fill(.black.opacity(0.35))
                     .frame(width: 22, height: 22)
-                if item.role == .collapsedStack {
-                    Text("\(item.hiddenMemberCount + 1)")
+                switch StackCellPresentation.badge(for: item) {
+                case .count(let count):
+                    Text("\(count)")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
-                } else {
+                case .marker:
                     Image(systemName: "square.stack")
                         .font(.system(size: 11))
                         .foregroundStyle(.white)
+                case .none:
+                    EmptyView()
                 }
             }
+            .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .padding(6)
-        .accessibilityLabel(item.role == .collapsedStack ? "Stack of \(item.hiddenMemberCount + 1) photos, expand" : "Stack member, collapse")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(StackCellPresentation.badgeAccessibilityLabel(for: item))
     }
 
     private var editedBadge: some View {

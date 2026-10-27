@@ -174,7 +174,8 @@ final class VirtualCopyDocumentTests: XCTestCase {
             return try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
         }
         let grid = try text("Sources/UI/LibraryGridView.swift")
-        XCTAssertTrue(grid.contains(".id(photo.editKey)"))
+        XCTAssertTrue(grid.contains(".id(item.cellID)"), "the cell identity is the stack-aware cell id, which is built from the edit key (StackCellPresentation)")
+        XCTAssertTrue(try text("Sources/Catalog/StackCellPresentation.swift").contains("editKey"), "...so two versions of one file still get distinct cells")
         XCTAssertTrue(grid.contains("catalog.thumbnailRevisions[photo.editKey"))
         XCTAssertTrue(grid.contains("ThumbnailTaskKey(path: photo.editKey"))
         XCTAssertFalse(grid.contains(".id(photo.path)"))

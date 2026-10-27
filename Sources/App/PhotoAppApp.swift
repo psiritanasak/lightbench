@@ -168,6 +168,16 @@ struct PhotoAppApp: App {
                             || catalog.mergeBusy || catalog.fileToolBusy || renameModel.isWorking || renameModel.isPresentingSheet
                             || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
                     )
+                // Editor-only 90° turns of the open photo (one undo step each; the crop follows the picture).
+                let canRotate = RotateAvailability.isEnabled(
+                    hasImage: document.currentImage != nil, loadInFlight: document.isLoadInFlight,
+                    renameWorking: renameModel.isWorking, cullActive: cull.isActive, showLibrary: showLibrary)
+                Button("Rotate Left") { document.rotate(.left) }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(!canRotate)
+                Button("Rotate Right") { document.rotate(.right) }
+                    .keyboardShortcut("]", modifiers: .command)
+                    .disabled(!canRotate)
                 // Virtual copies: another independent edit version of the same file (Lightroom's own ⌘'). Library: the selected visible
                 // photos, else the focused one; Editor: the open photo/version. Edits made so far in the Editor are flushed first.
                 Button("Create Virtual Copy") {

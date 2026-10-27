@@ -14,6 +14,12 @@ final class EditStateGeometryIdentityTests: XCTestCase {
         XCTAssertTrue(EditState.identity.isGeometryAtIdentity)
     }
 
+    func testFalseWhenRotationQuarterTurnsIsNonZero() {
+        var s = EditState.identity
+        s.rotationQuarterTurns = 1
+        XCTAssertFalse(s.isGeometryAtIdentity)
+    }
+
     func testFalseWhenStraightenAngleIsNonZero() {
         var s = EditState.identity
         s.straightenAngle = 5
@@ -102,6 +108,7 @@ final class EditStateGeometryIdentityTests: XCTestCase {
     /// and no less.
     func testGeometryOnlySamplingStateCopiesExactlyTheGeometryFields() {
         var full = EditState.identity
+        full.rotationQuarterTurns = 3
         full.straightenAngle = 5
         full.verticalPerspective = 0.1
         full.horizontalPerspective = 0.1
@@ -121,6 +128,7 @@ final class EditStateGeometryIdentityTests: XCTestCase {
         full.boostAmount = 0.2
 
         var expected = EditState.identity
+        expected.rotationQuarterTurns = 3
         expected.straightenAngle = 5
         expected.verticalPerspective = 0.1
         expected.horizontalPerspective = 0.1

@@ -1077,6 +1077,7 @@ struct ContentView: View {
     /// "Reset" button. (The tab's "Auto" button is Auto Straighten only —
     /// it sets the angle from the detected horizon and does not auto-crop.)
     private func resetCropTab() {
+        document.editState.rotationQuarterTurns = 0
         document.editState.straightenAngle = 0
         document.editState.verticalPerspective = 0
         document.editState.horizontalPerspective = 0
@@ -1458,6 +1459,7 @@ struct ContentView: View {
         // filenames adjacent.
         .onAppear { syncEditorMeta() }
         .onChange(of: document.isLoadInFlight) { _, _ in syncEditorMeta() }
+        .modifier(CropAspectFollowsRotation(turns: document.editState.rotationQuarterTurns, preset: $selectedAspect, customRatio: $customAspectRatio))
         // The grid's own row for the open photo (rating changed elsewhere, a failed write's refresh, the catalog finishing loading).
         .onChange(of: openPhotoGridRow) { _, _ in syncEditorMeta() }
         .onChange(of: document.currentEditKey) { _, _ in // not currentURL: a master and its virtual copy are one URL
@@ -2220,6 +2222,9 @@ struct ContentView: View {
                 cropInsetRight: $document.editState.cropInsetRight,
                 aspectRatio: effectiveAspectRatio
             )
+            // A rotation (button, undo, import) mid-drag would leave the overlay's start-of-drag insets stale: a new identity
+            // per turn count recreates the view, which ends any drag in progress.
+            .id(document.editState.rotationQuarterTurns)
         }
         // WB eyedropper tap-capture. Gated on `!isCroppingActive` (on top
         // of `isPickingWhiteBalance` itself only ever being armable from
@@ -2655,7 +2660,10 @@ struct ContentView: View {
                         document: document,
                         selectedAspect: selectedAspect,
                         onSelectAspect: { selectAspect($0) },
-                        onReset: { resetCropTab() }
+                        onReset: { resetCropTab() },
+                        rotateEnabled: RotateAvailability.isEnabled(
+                            hasImage: document.currentImage != nil, loadInFlight: document.isLoadInFlight,
+                            renameWorking: renameModel.isWorking, cullActive: false, showLibrary: false)
                     )
                 case .looks:
                     LooksTabView(document: document, catalog: catalog, previews: lookPreviews, panel: $adjustPanel)

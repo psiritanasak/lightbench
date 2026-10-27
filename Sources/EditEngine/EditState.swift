@@ -516,6 +516,18 @@ struct EditState: Equatable, Codable {
     /// enforce it.
     var transformAspect: Double = 0
 
+    // MARK: - Rotation (90°)
+
+    /// Clockwise quarter turns of the picture, 0...3 (identity 0): the Rotate Left / Rotate Right edit. The FIRST
+    /// geometry stage (before straighten / perspective / scale / flip / crop), so everything after it — crop insets,
+    /// flips, the crop UI — works in the rotated, visual frame. A separate pipeline stage, NOT the EXIF orientation
+    /// (which defines the source frame the retouch spots, subject/depth rasters and RAW white-balance fast path live
+    /// in). Rotated with the buttons through `rotated(byQuarterTurns:)` (QuarterTurn.swift), which also moves the crop
+    /// insets with the content. Masks and red-eye points (post-crop fractions) do NOT follow a rotation, like crop and
+    /// flip today. Not carried by Presets / Paste (geometry); kept on both Compare sides; reset by Revert.
+    /// `EditPipeline` normalises with `QuarterTurn.normalized`, so an out-of-range value still renders.
+    var rotationQuarterTurns: Int = 0
+
     // MARK: - Flip
 
     /// Mirror the image horizontally (left-right) / vertically (top-bottom).
@@ -1411,7 +1423,8 @@ struct EditState: Equatable, Codable {
     /// tap maps 1:1 onto RAW-native pixel coordinates (see
     /// `rawWhiteBalanceNeutralPoints`'s own doc comment).
     var isGeometryAtIdentity: Bool {
-        straightenAngle == 0
+        rotationQuarterTurns == 0
+            && straightenAngle == 0
             && verticalPerspective == 0
             && horizontalPerspective == 0
             && transformScale == 1
@@ -1437,6 +1450,7 @@ struct EditState: Equatable, Codable {
     /// field list, which `autoTone` would otherwise have had to duplicate.
     func geometryOnlySamplingState() -> EditState {
         var s = EditState()
+        s.rotationQuarterTurns = rotationQuarterTurns
         s.straightenAngle = straightenAngle
         s.verticalPerspective = verticalPerspective
         s.horizontalPerspective = horizontalPerspective
@@ -1520,7 +1534,7 @@ struct EditState: Equatable, Codable {
     var isLookAndStyleAtIdentity: Bool { self == resettingLookAndStyle() }
 
     /// The "original" side for the Compare feature: the CURRENT geometry
-    /// (crop/straighten/perspective/transformScale/transformAspect/flip) is
+    /// (rotation/crop/straighten/perspective/transformScale/transformAspect/flip) is
     /// KEPT — copied via `var s =
     /// self` below — so both compared images share one extent and align
     /// pixel-for-pixel, while every color/tone adjustment is reset to its
@@ -1624,7 +1638,7 @@ struct EditState: Equatable, Codable {
         // so clearing it here is safe by the same pixel-alignment
         // argument this method's own doc comment makes for masks.
         s.pointColors.removeAll()
-        // geometry (cropInset*, straightenAngle, verticalPerspective,
+        // geometry (rotationQuarterTurns, cropInset*, straightenAngle, verticalPerspective,
         // horizontalPerspective, transformScale, transformAspect,
         // flipHorizontal, flipVertical) is left untouched — inherited from
         // `self` via `var s = self` above.
@@ -1644,7 +1658,7 @@ struct EditState: Equatable, Codable {
     /// Applies `self` as a saved preset onto `target`, returning the merged
     /// result. Every field `comparisonOriginal()` resets to identity gets
     /// copied from `self` (the preset) instead; everything that method
-    /// leaves untouched — crop/straighten/perspective/transformScale/
+    /// leaves untouched — rotation/crop/straighten/perspective/transformScale/
     /// transformAspect/flip geometry, and `redEyePoints` itself — is
     /// preserved from `target`, since both are
     /// specific to ONE photo's composition/face positions, never part of a
@@ -1737,7 +1751,7 @@ struct EditState: Equatable, Codable {
         // corrections sit) stays `target`'s own, untouched.
         result.redEyeSize = redEyeSize
         result.redEyeStrength = redEyeStrength
-        // geometry (cropInset*, straightenAngle, verticalPerspective,
+        // geometry (rotationQuarterTurns, cropInset*, straightenAngle, verticalPerspective,
         // horizontalPerspective, transformScale, transformAspect,
         // flipHorizontal, flipVertical), redEyePoints, retouchSpots, AND masks are NOT
         // copied — they stay `target`'s own via `var result = target`
@@ -1821,6 +1835,7 @@ extension EditState {
         case highlightHue, highlightSaturation, highlightLuminance
         case colorGradingBlending, colorGradingBalance
         case globalHue, globalSaturation, globalLuminance
+        case rotationQuarterTurns
         case straightenAngle
         case verticalPerspective, horizontalPerspective
         case transformScale, transformAspect
@@ -1958,6 +1973,9 @@ extension EditState {
         globalHue = try container.decodeIfPresent(Double.self, forKey: .globalHue) ?? 0
         globalSaturation = try container.decodeIfPresent(Double.self, forKey: .globalSaturation) ?? 0
         globalLuminance = try container.decodeIfPresent(Double.self, forKey: .globalLuminance) ?? 0
+        // Tolerant, unlike its neighbours: a wrong JSON type (a string, a float) must not fail the whole sidecar for
+        // a rotation; junk decodes to 0 and any integer is folded into 0...3.
+        rotationQuarterTurns = QuarterTurn.normalized((try? container.decodeIfPresent(Int.self, forKey: .rotationQuarterTurns)) ?? 0)
         straightenAngle = try container.decodeIfPresent(Double.self, forKey: .straightenAngle) ?? 0
         verticalPerspective = try container.decodeIfPresent(Double.self, forKey: .verticalPerspective) ?? 0
         horizontalPerspective = try container.decodeIfPresent(Double.self, forKey: .horizontalPerspective) ?? 0

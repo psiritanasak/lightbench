@@ -14,7 +14,7 @@ import GRDB
 /// extension) survive new fields being added across sessions, reused as-is.
 ///
 /// Only ever applies its COLOR/TONE fields to a target photo — never crop/
-/// straighten/perspective/transformScale/transformAspect/flip or the placed
+/// rotation/straighten/perspective/transformScale/transformAspect/flip or the placed
 /// `redEyePoints`/`retouchSpots`/`masks`, all specific to one photo's composition. See
 /// `EditState.applyingPreset(onto:)`.
 struct Preset: Codable, Equatable, Identifiable, Sendable {

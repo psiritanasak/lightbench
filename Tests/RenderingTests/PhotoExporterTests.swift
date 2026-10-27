@@ -45,6 +45,27 @@ final class PhotoExporterTests: XCTestCase {
         return (width, height)
     }
 
+    // MARK: - Rotation (90 degrees)
+
+    /// A rotation edit swaps the exported pixel dimensions and leaves no stale Orientation tag on the turned pixels.
+    func testExportOfARotatedPhotoHasSwappedDimensionsAndNoOrientationTag() async throws {
+        let image = CIImage(color: .red).cropped(to: CGRect(x: 0, y: 0, width: 60, height: 30))
+        let url = tempDir.appendingPathComponent("wide.jpg")
+        try CIContext().writeJPEGRepresentation(of: image, to: url, colorSpace: CGColorSpaceCreateDeviceRGB())
+        let photo = Photo(id: 1, path: url.path, filename: "wide.jpg", fileSize: nil, importedAt: Date())
+        var edit = EditState.identity
+        edit.rotationQuarterTurns = 1
+        let out = try await PhotoExporter.export(photo, editState: edit, to: tempDir,
+                                                 settings: ExportSettings(namingTemplate: "rotated", metadata: .all))
+        let size = try readPixelSize(of: out)
+        XCTAssertEqual(size.width, 30)
+        XCTAssertEqual(size.height, 60)
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(out as CFURL, nil))
+        let props = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any])
+        let orientation = (props[kCGImagePropertyOrientation as String] as? Int) ?? 1
+        XCTAssertEqual(orientation, 1)
+    }
+
     // MARK: - resized
 
     func testResizedScalesDownToFitMaxLongEdge() {

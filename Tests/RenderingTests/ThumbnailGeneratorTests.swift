@@ -103,6 +103,17 @@ final class ThumbnailGeneratorTests: XCTestCase {
         XCTAssertEqual(g, b)
     }
 
+    func testRotationEditSwapsTheThumbnailsAspect() async throws {
+        let image = CIImage(color: .red).cropped(to: CGRect(x: 0, y: 0, width: 200, height: 100))
+        let url = tempDir.appendingPathComponent("wide.png")
+        try CIContext().writePNGRepresentation(of: image, to: url, format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        var edit = EditState()
+        edit.rotationQuarterTurns = 3
+        let result = await ThumbnailGenerator.thumbnail(for: url, maxPixelSize: 200, editState: edit)
+        let thumbnail = try XCTUnwrap(result)
+        XCTAssertGreaterThan(thumbnail.height, thumbnail.width, "a landscape photo turned 90 degrees is portrait")
+    }
+
     func testEditAwareThumbnailOfNonexistentFileReturnsNil() async {
         let missing = tempDir.appendingPathComponent("does-not-exist.png")
         let thumbnail = await ThumbnailGenerator.thumbnail(for: missing, maxPixelSize: 200, editState: .identity)

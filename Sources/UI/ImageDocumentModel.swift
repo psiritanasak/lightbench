@@ -773,18 +773,7 @@ final class ImageDocumentModel: ObservableObject {
             return
         }
 
-        var samplingState = EditState()
-        samplingState.straightenAngle = editState.straightenAngle
-        samplingState.verticalPerspective = editState.verticalPerspective
-        samplingState.horizontalPerspective = editState.horizontalPerspective
-        samplingState.transformScale = editState.transformScale
-        samplingState.transformAspect = editState.transformAspect
-        samplingState.flipHorizontal = editState.flipHorizontal
-        samplingState.flipVertical = editState.flipVertical
-        samplingState.cropInsetTop = editState.cropInsetTop
-        samplingState.cropInsetBottom = editState.cropInsetBottom
-        samplingState.cropInsetLeft = editState.cropInsetLeft
-        samplingState.cropInsetRight = editState.cropInsetRight
+        let samplingState = editState.geometryOnlySamplingState()
 
         let geometryOnly = EditPipeline.apply(samplingState, to: currentImage)
         let extent = geometryOnly.extent
@@ -1335,15 +1324,22 @@ final class ImageDocumentModel: ObservableObject {
         isAutoStraightening = true
         let detector = horizonDetector
         let myGeneration = analysisGeneration
+        // Straighten acts on the ROTATED frame, so the horizon is measured there (a 90° turn swaps the axes).
+        let measuredTurns = editState.rotationQuarterTurns
+        let source = QuarterTurn.apply(measuredTurns, to: currentImage)
         return Task { @MainActor [weak self] in
             let detection = await Task.detached(priority: .userInitiated) { () -> HorizonDetector.Result in
-                detector(currentImage)
+                detector(source)
             }.value
             guard let self else { return }
             self.isAutoStraightening = false
             // A photo load in flight means `currentImage`/`editState` are about to be replaced (the generation only
             // bumps when the load finishes), so this result belongs to the outgoing photo.
             guard self.analysisGeneration == myGeneration, !self.isLoadInFlight else { return }
+            guard self.editState.rotationQuarterTurns == measuredTurns else {
+                self.straightenMessage = StraightenMessages.rotatedMeanwhile
+                return
+            }
             let outcome: StraightenSolver.Outcome
             switch detection {
             case .failed(let reason):
@@ -1374,6 +1370,32 @@ final class ImageDocumentModel: ObservableObject {
             self.history.commit(next, summary: "Auto Straighten")
             self.applyHistoryState(self.history.current)
         }
+    }
+
+    // MARK: - Rotate 90°
+
+    enum RotateDirection { case left, right }
+
+    /// One-line note after a rotation that leaves masks / red-eye points where they were (they are post-crop
+    /// fractions, like crop and flip: they do not follow the picture). Nil otherwise.
+    @Published var rotationHint: String?
+
+    /// Rotate Left / Rotate Right: ONE undo step ("Rotate Left" / "Rotate Right"), saved like every direct commit.
+    /// The turn count, the crop insets (they follow the content) and — when exactly one flip is on — the stored
+    /// direction are all handled by `EditState.rotated(byQuarterTurns:)`. Refused (no step) with no photo or while a
+    /// load is in flight (the step would land on the outgoing photo). Four presses return to the identical state.
+    func rotate(_ direction: RotateDirection) {
+        guard currentImage != nil, !isLoadInFlight else { return }
+        finalizePendingCommit()
+        let next = editState.rotated(byQuarterTurns: direction == .right ? 1 : -1)
+        history.commit(next, summary: direction == .right ? "Rotate Right" : "Rotate Left")
+        applyHistoryState(history.current)
+        var notes: [String] = []
+        if !next.masks.isEmpty || !next.redEyePoints.isEmpty { notes.append("Masks and red-eye points do not turn with the picture.") }
+        if next.verticalPerspective != 0 || next.horizontalPerspective != 0 || next.transformAspect != 0 {
+            notes.append("Perspective and Stretch now act on the rotated picture.")
+        }
+        rotationHint = notes.isEmpty ? nil : notes.joined(separator: " ")   // after applyHistoryState, which clears it
     }
 
     // MARK: - Spot removal
@@ -1425,7 +1447,7 @@ final class ImageDocumentModel: ObservableObject {
             return false
         }
         guard editState.isGeometryAtIdentity else {
-            retouchMessage = "Reset crop, straighten, perspective, scale and flip to add or move spots. Existing spots still apply."
+            retouchMessage = "Reset crop, straighten, rotation, perspective, scale and flip to add or move spots. Existing spots still apply."
             return false
         }
         guard editState.retouchSpots.count < EditState.maxRetouchSpots else {
@@ -1692,13 +1714,20 @@ final class ImageDocumentModel: ObservableObject {
         runningUprightMode = mode
         let detector = uprightDetector
         let myGeneration = analysisGeneration
+        // Straighten / perspective act on the ROTATED frame, so the lines are measured there.
+        let measuredTurns = editState.rotationQuarterTurns
+        let source = QuarterTurn.apply(measuredTurns, to: currentImage)
         return Task { @MainActor [weak self] in
             let detection = await Task.detached(priority: .userInitiated) { () -> UprightDetector.Result in
-                detector(currentImage)
+                detector(source)
             }.value
             guard let self else { return }
             self.runningUprightMode = nil
             guard self.analysisGeneration == myGeneration, !self.isLoadInFlight else { return }
+            guard self.editState.rotationQuarterTurns == measuredTurns else {
+                self.uprightMessage = StraightenMessages.rotatedMeanwhile
+                return
+            }
             let lines: UprightLineDetector.Lines
             switch detection {
             case .failed(let reason):
@@ -1798,6 +1827,7 @@ final class ImageDocumentModel: ObservableObject {
     /// operation that can change `history`'s shape or cursor (`commit` via
     /// `finalizePendingCommit`, `applyHistoryState`, `resetHistory`).
     private func refreshHistoryState() {
+        rotationHint = nil   // a note about the last rotate press; any load, revert, undo, redo or jump makes it stale
         canUndo = history.canUndo
         canRedo = history.canRedo
         historyEntries = history.entries

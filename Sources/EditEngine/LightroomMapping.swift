@@ -50,6 +50,11 @@ enum LightroomMapping {
         var refusal: String?
         /// Non-nil: a requested crop was refused (the rest still imports).
         var cropRefusal: String?
+        /// Non-nil (1...3, clockwise): the file's `tiff:Orientation` differs from the photo's own EXIF orientation by this many
+        /// quarter turns (rotation-only values 1/3/6/8), and `merge` sets `EditState.rotationQuarterTurns` to it. Nil when the file
+        /// agrees with the photo, or carries no orientation; also nil (and named in `ignored`, as "Orientation (mirrored)" or
+        /// "Orientation (photo's unreadable)") when an orientation is mirrored or the photo's own cannot be read. A file that agrees NEVER resets a rotation the user made by hand.
+        var rotationQuarterTurns: Int?
     }
 
     /// Largest crop inset accepted (this app's own limit); a larger one is refused rather than silently shrunk.
@@ -212,9 +217,24 @@ enum LightroomMapping {
             }
         }
 
+        // Rotation: the packet's orientation relative to the photo's own (both must be rotation-only values).
+        var orientationIgnored = false
+        var photoOrientationUnreadable = false
+        if let packet = settings.tiffOrientation, photoOrientation == nil, packet != 1 { photoOrientationUnreadable = true }
+        if let packet = settings.tiffOrientation, let photo = photoOrientation, packet != photo {
+            if let turns = QuarterTurn.relativeTurns(packetOrientation: packet, photoOrientation: photo) {
+                // Two different rotation-only orientations always differ by 1...3 turns, so this is never 0.
+                plan.rotationQuarterTurns = turns
+                plan.mapped.append("Orientation")
+            } else {
+                orientationIgnored = true
+            }
+        }
+
         var cropRequested = includeCrop && settings.flag("HasCrop") == true
         if cropRequested {
-            if let refusal = cropProblem(settings, cropAllowed: cropAllowed, photoOrientation: photoOrientation, target: target) {
+            if let refusal = cropProblem(settings, cropAllowed: cropAllowed, photoOrientation: photoOrientation, target: target,
+                                         rotating: plan.rotationQuarterTurns != nil) {
                 plan.cropRefusal = refusal
                 cropRequested = false
             } else {
@@ -225,6 +245,8 @@ enum LightroomMapping {
         }
 
         plan.ignored = ignoredNames(in: settings, handled: handled, cropImported: plan.includesCrop, cropRefused: plan.cropRefusal != nil)
+        if orientationIgnored { plan.ignored = (plan.ignored + ["Orientation (mirrored)"]).sorted() }
+        if photoOrientationUnreadable { plan.ignored = (plan.ignored + ["Orientation (photo's unreadable)"]).sorted() }
         plan.mapped.sort()
         plan.appliedNominal.sort()
         return plan
@@ -250,6 +272,9 @@ enum LightroomMapping {
         for rule in rules where plan.presentRules.contains(rule.key) { result[keyPath: rule.path] = plan.state[keyPath: rule.path] }
         for curve in curveTargets where plan.presentCurves.contains(curve.key) { result[keyPath: curve.path] = plan.state[keyPath: curve.path] }
         if plan.hasGrayscaleKey { result.blackAndWhite = plan.state.blackAndWhite }
+        // Rotation first, so the CURRENT crop follows the picture; an included crop is then written over it (the importer
+        // refuses a crop while it rotates, so the two never combine).
+        if let turns = plan.rotationQuarterTurns { result = result.settingStoredQuarterTurns(turns) }
         if plan.includesCrop {
             result.cropInsetLeft = plan.state.cropInsetLeft
             result.cropInsetTop = plan.state.cropInsetTop
@@ -260,6 +285,13 @@ enum LightroomMapping {
     }
 
     // MARK: - What a merge changes
+
+    /// The clockwise on-screen turn (1...3) that setting the stored count to `stored` makes to `target`, or nil when it already has it.
+    static func screenTurns(settingStored stored: Int, onto target: EditState) -> Int? {
+        let delta = QuarterTurn.normalized(stored - target.rotationQuarterTurns)
+        guard delta != 0 else { return nil }
+        return target.flipHorizontal != target.flipVertical ? QuarterTurn.normalized(-delta) : delta
+    }
 
     /// What merging `plan` onto an edit actually changes, for the result message.
     struct Changes: Equatable {
@@ -272,7 +304,12 @@ enum LightroomMapping {
         /// A full-frame crop in the file removed a crop the photo had.
         var clearedCrop = false
         var resetBlackAndWhite = false
-        var isEmpty: Bool { setNames.isEmpty && resetSliders.isEmpty && resetCurves.isEmpty && !resetBlackAndWhite && !clearedCrop }
+        /// The turn the import makes ON SCREEN, clockwise quarter turns 1...3, relative to the current edit (nil when the edit already
+        /// has the file's rotation). Not the stored count: with exactly one flip on, the stored direction is inverted.
+        var rotationScreenTurns: Int?
+        var isEmpty: Bool {
+            setNames.isEmpty && resetSliders.isEmpty && resetCurves.isEmpty && !resetBlackAndWhite && !clearedCrop && rotationScreenTurns == nil
+        }
     }
 
     static func changes(of plan: Plan, onto target: EditState) -> Changes {
@@ -296,6 +333,7 @@ enum LightroomMapping {
             != (target.cropInsetLeft, target.cropInsetTop, target.cropInsetRight, target.cropInsetBottom) {
             if cropInsetsPresent(plan.state) { out.setNames.append("Crop") } else { out.clearedCrop = true }
         }
+        if let turns = plan.rotationQuarterTurns { out.rotationScreenTurns = screenTurns(settingStored: turns, onto: target) }
         out.setNames.sort(); out.resetSliders.sort(); out.resetCurves.sort()
         return out
     }
@@ -344,7 +382,11 @@ enum LightroomMapping {
     }
 
     /// Why a requested crop cannot be imported faithfully, or nil. Refused, never clamped to a different region.
-    private static func cropProblem(_ s: AdobeCameraRawSettings, cropAllowed: Bool, photoOrientation: Int?, target: EditState?) -> String? {
+    private static func cropProblem(_ s: AdobeCameraRawSettings, cropAllowed: Bool, photoOrientation: Int?, target: EditState?,
+                                    rotating: Bool = false) -> String? {
+        if rotating {
+            return "The crop was not imported: this import also rotates the picture (the file's orientation differs from the photo's), and Camera Raw's crop edges are unvalidated for a rotated photo."
+        }
         if !cropAllowed {
             return "The crop was not imported: this photo is rotated by its own orientation, and Camera Raw's crop edges are unvalidated for that."
         }
@@ -365,7 +407,7 @@ enum LightroomMapping {
 
     /// True when the edit has a flip, straighten, perspective, scale or aspect change (crop insets are not counted).
     static func geometryIsActive(_ state: EditState) -> Bool {
-        state.flipHorizontal || state.flipVertical || state.straightenAngle != 0 || state.verticalPerspective != 0
+        state.rotationQuarterTurns != 0 || state.flipHorizontal || state.flipVertical || state.straightenAngle != 0 || state.verticalPerspective != 0
             || state.horizontalPerspective != 0 || state.transformScale != 1 || state.transformAspect != 0
     }
 

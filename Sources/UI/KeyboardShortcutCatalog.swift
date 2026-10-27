@@ -54,6 +54,8 @@ enum KeyboardShortcutCatalog {
             ShortcutEntry(keys: "\u{2318}I", action: "Edit the title, caption, creator and copyright of the selected photos (Library)", source: .menu("cmd+i")),
             ShortcutEntry(keys: "\u{2318}G  \u{21E7}\u{2318}G", action: "Stack the selected photos / unstack them (Library; Photo \u{25B8} Auto Stack\u{2026} finds bursts)",
                           sources: [.menu("cmd+g"), .menu("cmd+shift+g")]),
+            ShortcutEntry(keys: "\u{2318}[  \u{2318}]", action: "Rotate the open photo 90\u{00B0} left / right (Editor)",
+                          sources: [.menu("cmd+["), .menu("cmd+]")]),
             ShortcutEntry(keys: "\u{2318}'", action: "Create a virtual copy: another independent edit version of the photo (selected or open)", source: .menu("cmd+'")),
         ]),
         ShortcutSection(title: "Rating, flags and labels (Library, Editor, Culling)", entries: [

@@ -14,6 +14,8 @@ struct CropTabView: View {
     let selectedAspect: CropAspectPreset
     let onSelectAspect: (CropAspectPreset) -> Void
     let onReset: () -> Void
+    /// Same rule as the Photo-menu items (`RotateAvailability`).
+    let rotateEnabled: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -72,6 +74,7 @@ struct CropTabView: View {
                 label: "Stretch", value: $document.editState.transformAspect,
                 range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
+            rotateRow
             EditToggleRow(label: "Flip Horizontal", value: $document.editState.flipHorizontal)
             EditToggleRow(label: "Flip Vertical", value: $document.editState.flipVertical)
 
@@ -100,6 +103,34 @@ struct CropTabView: View {
                 .buttonStyle(.flat)
                 .disabled(document.currentImage == nil)
         }
+    }
+
+    /// Rotate Left / Rotate Right (90°): each press is one undo step; the crop follows the picture.
+    private var rotateRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                rotateButton(.left, title: "Rotate Left", symbol: "rotate.left", help: "Turn the picture 90° counter-clockwise (⌘[)")
+                rotateButton(.right, title: "Rotate Right", symbol: "rotate.right", help: "Turn the picture 90° clockwise (⌘])")
+            }
+            if let hint = document.rotationHint {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+            }
+        }
+    }
+
+    private func rotateButton(_ direction: ImageDocumentModel.RotateDirection, title: String, symbol: String, help: String) -> some View {
+        Button {
+            document.rotate(direction)
+        } label: {
+            Label(title, systemImage: symbol)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.flat)
+        .disabled(!rotateEnabled)
+        .help(help)
+        .accessibilityLabel(title)
     }
 
     private func uprightButton(_ mode: UprightMode, title: String, help: String) -> some View {

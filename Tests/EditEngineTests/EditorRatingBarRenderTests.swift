@@ -9,8 +9,8 @@ import XCTest
 final class EditorRatingBarRenderTests: XCTestCase {
     private let size = CGSize(width: 600, height: 36)
 
-    private func render(_ meta: EditorPhotoMeta) -> NSBitmapImageRep {
-        let view = EditorRatingBar(meta: meta, canCopy: true, onCopy: {}).frame(width: size.width, height: size.height)
+    private func render(_ meta: EditorPhotoMeta, info: EditorInfoModel? = nil) -> NSBitmapImageRep {
+        let view = EditorRatingBar(meta: meta, canCopy: true, onCopy: {}, info: info).frame(width: size.width, height: size.height)
         let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
         hosting.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -78,6 +78,21 @@ final class EditorRatingBarRenderTests: XCTestCase {
         let ringPlain = count(render(await meta()), isWhite)
         let ringLabelled = count(render(await meta(label: .red)), isWhite)
         XCTAssertGreaterThan(ringLabelled, ringPlain, "the selected label dot is ringed")
+    }
+
+    // MARK: Info button
+
+    func testTheInfoButtonIsDrawnOnlyWhenAnInfoModelIsGiven() async {
+        let m = await meta()
+        let without = count(render(m), isWhite)
+        let with = count(render(m, info: EditorInfoModel()), isWhite)
+        XCTAssertGreaterThan(with, without, "the Info label and icon add white pixels")
+    }
+
+    func testTheInfoButtonIsDimWithoutACatalogRow() async {
+        let resolved = count(render(await meta(), info: EditorInfoModel()), isWhite)
+        let unresolved = count(render(await meta(resolved: false), info: EditorInfoModel()), isWhite)
+        XCTAssertGreaterThan(resolved, unresolved, "no row: the button is disabled (grey), so fewer white pixels")
     }
 
     /// The lookup finding nothing leaves no row (the bar then draws its empty, disabled state — the render of that state is

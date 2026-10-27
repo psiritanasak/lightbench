@@ -254,6 +254,16 @@ final class CatalogDatabase: Sendable {
         }
     }
 
+    /// The row for an EDIT KEY (`Photo.editKey`): a master by its path, a virtual copy by path + version key. Used by the Editor to
+    /// resolve the open VERSION even when it is a copy outside the grid's current collection.
+    func photo(editKey: String) async throws -> Photo? {
+        let parts = Photo.splitEditKey(editKey)
+        guard let versionKey = parts.versionKey else { return try await photo(atPath: parts.path) }
+        return try await dbQueue.read { db in
+            try Photo.filter(Photo.Columns.path == parts.path).filter(Photo.Columns.versionKey == versionKey).fetchOne(db)
+        }
+    }
+
     func photoCount() async throws -> Int {
         try await dbQueue.read { db in
             try Photo.fetchCount(db)

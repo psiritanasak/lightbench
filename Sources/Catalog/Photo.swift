@@ -73,6 +73,13 @@ struct Photo: Codable, Equatable, Identifiable, Sendable {
         guard let versionKey else { return path }
         return path + "\u{1F}" + versionKey
     }
+
+    /// The inverse of `editKey(path:versionKey:)`: a key with the unit separator is a copy's (path, version key); anything else is a
+    /// master's path. The LAST separator wins, which is the one `editKey` appends.
+    static func splitEditKey(_ key: String) -> (path: String, versionKey: String?) {
+        guard let separator = key.lastIndex(of: "\u{1F}") else { return (key, nil) }
+        return (String(key[..<separator]), String(key[key.index(after: separator)...]))
+    }
 }
 
 // MARK: - GRDB conformances

@@ -31,6 +31,10 @@ final class LightroomImportModel: ObservableObject {
         let nominalApplied: [String]
         /// Why a crop could not be imported right now (nil: it can, or the file has none).
         let cropRefusal: String?
+        /// The rotation (clockwise quarter turns, 1...3) the file asks for relative to the photo's own orientation, or nil.
+        let rotationQuarterTurns: Int?
+        /// The on-screen clockwise turn that importing would make to the edit open NOW (nil: none, e.g. it already has the rotation).
+        let rotationScreenTurns: Int?
     }
 
     /// What reading one file gave.
@@ -151,7 +155,7 @@ final class LightroomImportModel: ObservableObject {
         let photoOrientation = orientation(photoURL)
         let cropAllowed = photoOrientation == .up
         let photoOrientationValue = photoOrientation.map { Int($0.rawValue) }
-        let plan = LightroomMapping.plan(from: settings, includeCrop: false, cropAllowed: cropAllowed)
+        let plan = LightroomMapping.plan(from: settings, includeCrop: false, cropAllowed: cropAllowed, photoOrientation: photoOrientationValue)
         if let refusal = plan.refusal {
             resultMessage = refusal
             return
@@ -160,7 +164,9 @@ final class LightroomImportModel: ObservableObject {
         let cropRefusal = hasCrop ? LightroomMapping.plan(from: settings, includeCrop: true, cropAllowed: cropAllowed,
                                                           photoOrientation: photoOrientationValue, target: document.editState).cropRefusal : nil
         pending = Pending(sourceName: source.name, settings: settings, hasCrop: hasCrop, editKey: editKey, cropAllowed: cropAllowed,
-                          photoOrientation: photoOrientationValue, ignoredNames: plan.ignored, nominalApplied: plan.appliedNominal, cropRefusal: cropRefusal)
+                          photoOrientation: photoOrientationValue, ignoredNames: plan.ignored, nominalApplied: plan.appliedNominal, cropRefusal: cropRefusal,
+                          rotationQuarterTurns: plan.rotationQuarterTurns,
+                          rotationScreenTurns: plan.rotationQuarterTurns.flatMap { LightroomMapping.screenTurns(settingStored: $0, onto: document.editState) })
     }
 
     // MARK: - Confirm
@@ -212,7 +218,10 @@ final class LightroomImportModel: ObservableObject {
 
     static func confirmationMessage(_ request: Pending) -> String {
         var text = "This applies the sliders and curves the file carries, as one Undo step; settings it does not mention are left alone. "
-            + replaceNote + " Geometry, masks, spots and RAW decode settings are kept. Nothing is written to the .xmp."
+            + replaceNote + " Masks, spots, flips, straighten and RAW decode settings are kept (a rotation turns your crop with the picture). Nothing is written to the .xmp."
+        if let turns = request.rotationScreenTurns {
+            text += " The file also turns the picture \(QuarterTurn.phrase(forTurns: turns)) on screen (its orientation differs from the photo's); your crop turns with it."
+        }
         if request.hasCrop {
             if let refusal = request.cropRefusal { text += " The file also has a crop. " + refusal } else {
                 text += " The file also has a crop; choose Import with Crop to use it (unvalidated)."
@@ -243,6 +252,7 @@ final class LightroomImportModel: ObservableObject {
             text += "; also reset " + joined
         }
         if changes.clearedCrop { text += "; cleared the crop" }
+        if let turns = changes.rotationScreenTurns { text += "; turned the picture \(QuarterTurn.phrase(forTurns: turns)) on screen" }
         text += ". Ignored \(ignored.count)."
         if !ignored.isEmpty {
             let shown = ignored.prefix(6).joined(separator: ", ")

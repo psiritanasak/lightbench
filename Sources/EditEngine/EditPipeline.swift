@@ -135,6 +135,7 @@ enum EditPipeline {
     /// Pure geometry (reads no color field), so applying it to a mask image is exact, not approximate.
     private static func applyGeometry(_ state: EditState, to input: CIImage) -> CIImage {
         var image = input
+        image = QuarterTurn.apply(state.rotationQuarterTurns, to: image)  // geometric, exact 90° turn, FIRST: every later stage works in the rotated frame
         image = applyStraighten(state, to: image)             // geometric, before perspective
         image = applyPerspective(state, to: image)            // geometric, before transform scale/aspect
         image = applyTransformScale(state, to: image)         // geometric, before flip

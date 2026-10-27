@@ -1,3 +1,4 @@
+import SwiftUI
 import CoreGraphics
 
 /// The aspect-ratio preset list, matching CLAUDE.md's Crop-panel backlog
@@ -168,5 +169,39 @@ enum CropAspectMath {
 
     private static func clamp(_ value: Double, _ lower: Double, _ upper: Double) -> Double {
         min(max(value, lower), upper)
+    }
+}
+
+/// The aspect lock after the picture turns by `quarterTurns` (any integer; only an ODD count swaps width and height).
+/// Freeform, Original (resolved from the displayed frame) and Square are unchanged; Custom inverts its captured ratio; a fixed
+/// preset becomes Custom with its inverted ratio (the presets have no portrait/landscape twin), so the lock keeps meaning
+/// "this shape" on the turned picture.
+enum CropAspectRotation {
+    static func lock(after quarterTurns: Int, preset: CropAspectPreset, customRatio: Double?) -> (preset: CropAspectPreset, customRatio: Double?) {
+        guard QuarterTurn.normalized(quarterTurns) % 2 == 1 else { return (preset, customRatio) }
+        switch preset {
+        case .freeform, .original, .square:
+            return (preset, customRatio)
+        case .custom:
+            return (.custom, customRatio.map { $0 > 0 ? 1 / $0 : $0 })
+        default:
+            guard let ratio = preset.fixedRatio, ratio > 0 else { return (preset, customRatio) }
+            return (.custom, 1 / ratio)
+        }
+    }
+}
+
+/// Keeps the crop aspect lock in step with the picture's rotation count, however it changed (buttons, menu, undo, Lightroom import).
+struct CropAspectFollowsRotation: ViewModifier {
+    let turns: Int
+    @Binding var preset: CropAspectPreset
+    @Binding var customRatio: Double?
+
+    func body(content: Content) -> some View {
+        content.onChange(of: turns) { old, new in
+            let next = CropAspectRotation.lock(after: new - old, preset: preset, customRatio: customRatio)
+            preset = next.preset
+            customRatio = next.customRatio
+        }
     }
 }

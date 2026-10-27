@@ -38,4 +38,5 @@ enum StraightenMessages {
     static let noHorizon = "No clear horizon was found in this photo. Use the Straighten slider instead."
     static let alreadyLevel = "The horizon already looks level."
     static let alreadyApplied = "Straighten is already set to the detected horizon angle."
+    static let rotatedMeanwhile = "The photo was rotated while it was being analysed, so nothing was changed. Try again."
 }

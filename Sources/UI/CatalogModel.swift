@@ -150,6 +150,11 @@ final class CatalogModel: ObservableObject {
     @Published var infoSheetPhotoIDs: [Int64]?
     /// Set by the Photo menu's "Edit Info…"; `InfoSheetModifier` performs it (or drops it while another sheet is up) and clears it.
     @Published var infoSheetRequested = false
+    /// True while the Editor's Info popover is open (`ContentView` mirrors `EditorInfoModel.isOpen` here, because the menus observe
+    /// this model). The Photo menu disables everything that would act on the photo or the selection while the user types in it.
+    @Published var editorInfoOpen = false
+    /// Set by the Photo menu's ⌘I in the Editor; `ContentView` toggles the Info popover and clears it.
+    @Published var editorInfoToggleRequested = false
     /// The keyword the grid is filtered to; `nil` = no keyword filter.
     @Published var keywordFilterID: Int64?
     /// Faces and people (see `FacesModel`): the people list, which photos each person is in, and the Library's Person filter.
@@ -672,6 +677,15 @@ final class CatalogModel: ObservableObject {
             throw CatalogDatabaseError(message: "The photo catalog isn't ready yet — try again in a moment.")
         }
         return try await database.photo(atPath: path)
+    }
+
+    /// The catalog row of an EDIT KEY (a master's path, or a virtual copy's path + version key); throws while the catalog is not open,
+    /// nil when nothing is catalogued under that key. The Editor's bar resolves the open version with this when the grid lacks the row.
+    func catalogedPhoto(editKey: String) async throws -> Photo? {
+        guard let database else {
+            throw CatalogDatabaseError(message: "The photo catalog isn't ready yet — try again in a moment.")
+        }
+        return try await database.photo(editKey: editKey)
     }
 
     /// Registers `url` (a freshly-written `PhotoEnhancer` output) as a
@@ -1677,8 +1691,26 @@ final class CatalogModel: ObservableObject {
             let updated = (infoByPhotoID[target] ?? PhotoInfo()).applying(info, fields: fields)
             if updated.isEmpty { infoByPhotoID.removeValue(forKey: target) } else { infoByPhotoID[target] = updated }
         }
+        persistInfo(database, info, ids: photoIDs, fields: fields)
+    }
+
+    /// Like `setInfo(_:fields:for:)`, but for photos the CALLER holds (the Editor's open photo may be outside the current collection, so
+    /// it is not in `photos`): the in-memory map changes for every resolved MASTER (a copy edits its master; each master once), whether
+    /// or not the photo is in `photos`, then the same database write and failure path run.
+    func setInfo(_ info: PhotoInfo, fields: InfoFields, forPhotos targets: [Photo]) {
+        guard !fields.isEmpty, let database else { return }
+        var seen = Set<Int64>()
+        for photo in targets {
+            guard let target = photo.masterId ?? photo.id, seen.insert(target).inserted else { continue }
+            let updated = (infoByPhotoID[target] ?? PhotoInfo()).applying(info, fields: fields)
+            if updated.isEmpty { infoByPhotoID.removeValue(forKey: target) } else { infoByPhotoID[target] = updated }
+        }
+        persistInfo(database, info, ids: targets.compactMap(\.id), fields: fields)
+    }
+
+    private func persistInfo(_ database: CatalogDatabase, _ info: PhotoInfo, ids: [Int64], fields: InfoFields) {
         Task.detached { [weak self] in
-            do { try await database.setInfo(info, forPhotoIDs: photoIDs, fields: fields) } catch {
+            do { try await database.setInfo(info, forPhotoIDs: ids, fields: fields) } catch {
                 await MainActor.run { self?.importStatusMessage = "Couldn't save the info: \(error.localizedDescription)" }
                 await self?.refresh()
             }

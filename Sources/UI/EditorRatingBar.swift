@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The compact row under the Editor's photo: stars, Pick / Reject, colour label, and Copy Settings. Same controls, symbols and
+/// The compact row under the Editor's photo: stars, Pick / Reject, colour label, Info and Copy Settings. Same controls, symbols and
 /// accessibility text as the Library grid's cells (`StarRatingRow`, `FlagStatus`, `ColorLabel` presentation). Without a catalog row
 /// for the open photo (opened with File > Open and never imported) the rating controls are disabled and say why; Copy Settings
 /// does not need the catalog.
@@ -8,6 +8,9 @@ struct EditorRatingBar: View {
     @ObservedObject var meta: EditorPhotoMeta
     let canCopy: Bool
     let onCopy: () -> Void
+    /// The Info popover's state and its button action (⌘I does the same). Without a model there is no Info button.
+    var info: EditorInfoModel?
+    var onInfo: () -> Void = {}
 
     var body: some View {
         let photo = meta.photo
@@ -20,6 +23,7 @@ struct EditorRatingBar: View {
                 Text("Not in your Library").font(.caption).foregroundStyle(Theme.textSecondary)
             }
             Spacer(minLength: 8)
+            if let info { infoButton(info) }
             Button(action: onCopy) { Label("Copy Settings", systemImage: "doc.on.doc").lineLimit(1) }
                 .buttonStyle(.borderless)
                 // Same size as the bar's other text ("Not in your Library"); the default control font was larger and wrapped.
@@ -34,6 +38,21 @@ struct EditorRatingBar: View {
         .frame(maxWidth: .infinity)
         .background(Theme.panel)
         .overlay(alignment: .top) { Divider() }
+    }
+
+    /// "Info": the title / caption / creator / copyright popover for the open photo. Disabled (with the reason) when the photo has no
+    /// catalog row, since Info is catalog data; an open popover stays closable.
+    private func infoButton(_ info: EditorInfoModel) -> some View {
+        let enabled = meta.photo != nil || info.isOpen
+        return Button(action: onInfo) { Label("Info", systemImage: "info.circle").lineLimit(1) }
+            .buttonStyle(.borderless)
+            .font(.caption)
+            .foregroundStyle(enabled ? Color.primary : Theme.textSecondary)
+            .disabled(!enabled)
+            .help(meta.photo == nil && !info.isOpen ? "Not in your Library" : "Edit this photo's title, caption, creator and copyright (⌘I)")
+            .popover(isPresented: Binding(get: { info.isOpen }, set: { if !$0 { info.commit() } }), arrowEdge: .top) {
+                EditorInfoPopover(model: info)
+            }
     }
 
     /// Pick or Reject: clicking the photo's current state clears it back to unflagged.

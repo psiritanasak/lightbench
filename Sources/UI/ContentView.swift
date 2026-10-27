@@ -68,6 +68,8 @@ struct ContentView: View {
     @StateObject private var exportModel = ExportModel()
     /// The open photo's catalog row (rating / flag / label) for the bar under the photo and the editor's rating keys.
     @StateObject private var editorMeta = EditorPhotoMeta()
+    /// The Editor's Info popover (title / caption / creator / copyright of the open photo); see `EditorInfoModel`.
+    @StateObject private var editorInfo = EditorInfoModel()
 
     /// Enhance/Super Resolution. Same scoping reasoning as `exportModel`
     /// — v1 deliberately has no Photo-menu item (unlike `pasteModel`'s
@@ -655,12 +657,18 @@ struct ContentView: View {
         return .ignored
     }
 
-    /// The rating / flag / label / Copy Settings bar under the photo (outside the image `GeometryReader`, so the fit rect simply
+    /// The rating / flag / label / Info / Copy Settings bar under the photo (outside the image `GeometryReader`, so the fit rect simply
     /// shrinks). Extracted from `editorSplitView` — this file's type-checker ceiling.
     private var editorRatingBar: some View {
-        EditorRatingBar(meta: editorMeta, canCopy: document.currentImage != nil) {
+        EditorRatingBar(meta: editorMeta, canCopy: document.currentImage != nil, onCopy: {
             pasteModel.copy(document.editState, fileName: document.currentFileName ?? "photo")
-        }
+        }, info: editorInfo, onInfo: toggleEditorInfo)
+    }
+
+    /// The Info button / ⌘I: closes the popover (saving) or opens it on the open photo's catalog row.
+    private func toggleEditorInfo() {
+        guard !showLibrary else { return }
+        editorInfo.toggle(photo: editorMeta.photo, currentInfo: { catalog.info(for: $0) })
     }
 
     /// The grid's own row for the open photo. The path is read ONCE (not per element: `URL.path` in the closure measured ~70x
@@ -706,11 +714,13 @@ struct ContentView: View {
         editorMeta.configure(
             resolve: { key in
                 if let row = catalog.photos.first(where: { $0.editKey == key }) { return row }
-                return try await catalog.catalogedPhoto(atPath: key) // a master's edit key IS its path; a copy's key matches no path
+                // A master's edit key is its path; a copy's is path + version key (a copy outside the current collection is not in `photos`).
+                return try await catalog.catalogedPhoto(editKey: key)
             },
             setRating: { catalog.setRating($0, for: $1) },
             setFlagStatus: { catalog.setFlagStatus($0, for: $1) },
             setColorLabel: { catalog.setColorLabel($0, for: $1) })
+        editorInfo.configure { info, fields, photos in catalog.setInfo(info, fields: fields, forPhotos: photos) }
         editorMeta.sync(path: document.currentEditKey, isLoading: document.isLoadInFlight)
     }
 
@@ -1495,6 +1505,8 @@ struct ContentView: View {
             }
         }
         .onChange(of: showLibrary) { _, _ in isHistoryPresented = false }
+        .modifier(EditorInfoLifecycle(model: editorInfo, catalog: catalog, editKey: document.currentEditKey, showLibrary: showLibrary,
+                                      toggle: toggleEditorInfo, focusImagePane: { isImagePaneFocused = true }))
         // Turning Compare on clears every armed mode and the overlay/detail selections (masks stay APPLIED — Compare is the best way
         // to see what a mask did; only the SELECTION goes). The Compare control disables itself while a mode is armed, but
         // `compareMode` is a plain `@State` this observes however it changed (reviewer-caught: this was once missing, so Point

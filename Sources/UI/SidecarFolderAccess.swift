@@ -17,11 +17,10 @@ protocol SidecarFolderAccessing {
 /// purpose: a planned batch "paste settings onto other photos" feature will
 /// need to request/reuse the SAME persisted grants `ImageDocumentModel`
 /// already uses for photos it never opened in the Editor, rather than
-/// duplicating the bookmark store or — worse — silently reusing
-/// `CatalogModel`'s SEPARATE `PhotoApp.libraryFolderBookmarks` scope, which
-/// would break the load-bearing invariant "a sidecar exists ⇒ a sidecar
-/// bookmark exists for its folder" that `ImageDocumentModel.
-/// loadSidecarIfReachable` depends on.
+/// duplicating the bookmark store. NOTE (D81): this store is separate from `CatalogModel`'s
+/// `PhotoApp.libraryFolderBookmarks`, and "a sidecar exists => a sidecar bookmark exists" is NOT an invariant: a folder
+/// imported by drop / Finder-open / Import has only the catalog's bookmark. `ImageDocumentModel` therefore also reads
+/// without a resolved bookmark and refuses to overwrite a sidecar it did not load.
 ///
 /// Two independent instances (one per consumer) share state correctly,
 /// since the only real state is `UserDefaults` — this type is otherwise

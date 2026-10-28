@@ -204,6 +204,37 @@ final class ImageDocumentModel: ObservableObject {
     /// Whose history `history` is (the photo it was reset/restored for) — so a save can never embed one photo's history in
     /// ANOTHER photo's sidecar (the one window where they differ: `load(from:)` between `currentURL = url` and the reset).
     private var historyEditKey: String?
+
+    /// D81: the edit key (`Photo.editKey`) of the open photo whose on-disk sidecar THIS load decoded or this model has
+    /// since written. `saveSidecarNow` refuses to replace an existing sidecar unless this matches: a sidecar the Editor
+    /// never loaded (unreachable at open, undecodable, written by someone else meanwhile) must never be overwritten.
+    /// Reset on every successful `load`. Consequence (accepted): a photo whose sidecar could not be loaded (undecodable, or
+    /// unreadable at open) stays UNSAVEABLE until it is reopened and the file loads; the user is told once per load.
+    /// Narrow, accepted window (pre-existing): the file is read at the START of a load, before its decode awaits, so a
+    /// foreign write inside that gap is still overwritable. A save also re-checks ownership after the access panel (a
+    /// same-photo reload inside it clears ownership), but a reload that wins the race against the save is the only
+    /// residual stale window.
+    private var sidecarOwnedEditKey: String?
+    /// Test seam for `sidecarOwnedEditKey` (simulates a load finishing while the folder-access panel is up). Never call
+    /// from production code.
+    var sidecarOwnedEditKey_forTesting: String? {
+        get { sidecarOwnedEditKey }
+        set { sidecarOwnedEditKey = newValue }
+    }
+    /// Test seam: what a finished `load` of `url` leaves behind (current photo + ownership). Never call from production code.
+    func simulateLoadFinishedForTesting(url: URL, ownedKey: String?) {
+        currentURL = url
+        currentVersionKey = nil
+        sidecarOwnedEditKey = ownedKey
+    }
+    /// Test seam: settles any pending history burst, then saves immediately (what `flushPendingSidecarSave` does).
+    func saveSidecarNowForTesting(suppressErrorMessage: Bool = false) {
+        finalizePendingCommit()
+        saveSidecarNow(suppressErrorMessage: suppressErrorMessage)
+    }
+    /// The edit key whose save was already refused this load: the alert is shown ONCE; later saves for that key stay
+    /// silent and skip the write (and the disk re-read). Cleared on every successful `load`.
+    private var refusedEditKey: String?
     /// Caches each history entry's encoded form across saves (see `HistoryArchive.Encoder`).
     private var historyEncoder = HistoryArchive.Encoder()
 
@@ -482,6 +513,8 @@ final class ImageDocumentModel: ObservableObject {
         currentFileName = url.lastPathComponent
         currentURL = url
         currentVersionKey = versionKey
+        refusedEditKey = nil
+        sidecarOwnedEditKey = existingSidecarState == nil ? nil : Photo.editKey(path: url.path, versionKey: versionKey)
         refreshDepthAvailability()
         currentRawOrientationIsUp = isRawOrientationUp
         currentRawAdjustmentSupport = rawAdjustmentSupport
@@ -2298,19 +2331,23 @@ final class ImageDocumentModel: ObservableObject {
     /// would silently clobber an existing sidecar it couldn't parse; see
     /// `SidecarStore.ReadResult`'s own doc comment.
     private func loadSidecarIfReachable(for url: URL, versionKey: String? = nil) -> EditState? {
-        guard let folderURL = folderAccess.resolvedURL(for: url.deletingLastPathComponent()) else { return nil }
-        guard folderURL.startAccessingSecurityScopedResource() else { return nil }
-        defer { folderURL.stopAccessingSecurityScopedResource() }
+        // D81: no sidecar-save bookmark does NOT mean unreachable — a folder imported by drop / Finder-open / Import only
+        // has the catalog's bookmark, whose scope is already active for a catalog-driven load. Read silently, without
+        // starting a scope: it succeeds when some scope covers the folder and fails harmlessly otherwise.
+        let folderURL = folderAccess.resolvedURL(for: url.deletingLastPathComponent())
+        let scoped = folderURL?.startAccessingSecurityScopedResource() ?? false
+        defer { if scoped { folderURL?.stopAccessingSecurityScopedResource() } }
         guard case .decoded(let state) = SidecarStore.read(forPhotoAt: url, versionKey: versionKey) else { return nil }
         return state
     }
 
-    /// `SidecarStore.readHistory` for `url`, run off the main thread inside the folder's security scope. nil when the folder
-    /// is not reachable (load must stay silent) or the photo has no usable persisted history.
+    /// `SidecarStore.readHistory` for `url`, run off the main thread (inside the folder's security scope when a sidecar
+    /// bookmark resolves; otherwise silently without one, see `loadSidecarIfReachable`). nil when the photo has no usable
+    /// persisted history or the folder cannot be read (load must stay silent).
     private func loadPersistedHistory(for url: URL, versionKey: String? = nil) async -> (archive: HistoryArchive, encoder: HistoryArchive.Encoder)? {
-        guard let folderURL = folderAccess.resolvedURL(for: url.deletingLastPathComponent()),
-              folderURL.startAccessingSecurityScopedResource() else { return nil }
-        defer { folderURL.stopAccessingSecurityScopedResource() }
+        let folderURL = folderAccess.resolvedURL(for: url.deletingLastPathComponent())
+        let scoped = folderURL?.startAccessingSecurityScopedResource() ?? false
+        defer { if scoped { folderURL?.stopAccessingSecurityScopedResource() } }
         return await Task.detached(priority: .userInitiated) {
             guard let archive = SidecarStore.readHistory(forPhotoAt: url, versionKey: versionKey) else { return nil }
             // Warm the encoder's per-entry cache HERE: a fresh one would re-encode (base64 + SHA-256 of every mask blob) the
@@ -2380,6 +2417,9 @@ final class ImageDocumentModel: ObservableObject {
         let versionKey = currentVersionKey
         let editKey = Photo.editKey(path: url.path, versionKey: versionKey)
         let snapshot = editState
+        // Ownership is captured WITH the snapshot: a load of another photo finishing while the access panel is up must not
+        // make this photo's own last save look foreign (D81 x D28).
+        let ownsTarget = sidecarOwnedEditKey == editKey
         // The history rides in the same snapshot (a value type): written only when it belongs to THIS photo and is exactly
         // in step with the saved state — otherwise the sidecar is written without `_history` (never a stale one).
         let historySnapshot = history
@@ -2410,12 +2450,42 @@ final class ImageDocumentModel: ObservableObject {
             return
         }
         defer { folderURL.stopAccessingSecurityScopedResource() }
+        // D81 guard: never replace a sidecar this model did not load (or write itself). Read AFTER the scope started.
+        // A reload of the SAME photo inside the panel may have cleared ownership (its file could not be decoded): then the
+        // captured value is stale, so re-evaluate. Another photo's load (D28) leaves this photo's captured ownership alone.
+        let stillOwned = ownsTarget
+            && !(currentURL == url && currentVersionKey == versionKey && sidecarOwnedEditKey != editKey)
+        if !stillOwned {
+            if refusedEditKey == editKey { return } // the user was already told this load
+            let message: String
+            switch SidecarStore.read(forPhotoAt: url, versionKey: versionKey) {
+            case .missing:
+                message = ""
+            case .decoded:
+                message = "Couldn't save edits: this photo already has a saved edit file that wasn't loaded. "
+                    + "Close and reopen the photo, then edit again."
+            case .undecodable:
+                let name = SidecarStore.versionedSidecarURL(for: url, versionKey: versionKey)?.lastPathComponent ?? "its edit file"
+                message = "Couldn't save edits: this photo's saved edit file can't be read, so it was left untouched. "
+                    + "Fix or remove \(name), then reopen the photo."
+            }
+            if !message.isEmpty {
+                // Deliberately not `declinedFolders` (that would also silence every later save in the folder). A silent
+                // (automatic) save neither alerts nor arms the once-flag, so the user's own next edit still tells them.
+                if !suppressErrorMessage {
+                    sidecarSaveErrorMessage = message
+                    refusedEditKey = editKey
+                }
+                return
+            }
+        }
         do {
             if historyBelongsHere, let historyObject = historyEncoder.jsonObject(for: HistoryArchive(historySnapshot)) {
                 try SidecarStore.write(snapshot, historyObject: historyObject, forPhotoAt: url, versionKey: versionKey)
             } else {
                 try SidecarStore.write(snapshot, forPhotoAt: url, versionKey: versionKey)
             }
+            if currentURL == url, currentVersionKey == versionKey { sidecarOwnedEditKey = editKey }
             if let versionKey { onVersionSidecarSaved?(url, versionKey) } else { onSidecarSaved?(url) }
         } catch {
             if !suppressErrorMessage {
@@ -2502,6 +2572,10 @@ final class ImageDocumentModel: ObservableObject {
         // this photo's state immediately, not up to a second later).
         flushPendingSidecarSave()
         if let currentURL, declinedFolders.contains(currentURL.deletingLastPathComponent().path) {
+            return .skipped
+        }
+        // D81: a save the guard refused wrote nothing (and does not decline the folder) — never report it as written.
+        if let currentURL, refusedEditKey == Photo.editKey(path: currentURL.path, versionKey: currentVersionKey) {
             return .skipped
         }
         return .written

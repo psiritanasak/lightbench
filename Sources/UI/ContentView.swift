@@ -687,13 +687,15 @@ struct ContentView: View {
             setRating: { catalog.setRating($0, for: $1) },
             setFlag: { catalog.setFlagStatus($0, for: $1) },
             setLabel: { catalog.setColorLabel($0, for: $1) },
-            thumbnail: { await catalog.thumbnail(for: $0) }))
+            thumbnail: { await catalog.thumbnail(for: $0) },
+            stacks: { catalog.stacks },
+            expandedStackIDs: { catalog.expandedStackIDs }))
     }
 
     /// Leaves culling for the Library, focused on the photo the pass ended on.
     private func exitCulling() {
         if let last = cull.end() { catalog.focusedPhotoPath = last.editKey }
-        catalog.normalizeFocus() // Cull ignores stacks: the last culled photo may be hidden inside a collapsed stack
+        catalog.normalizeFocus() // the pass may have expanded a stack the grid shows collapsed, so the last culled photo can be hidden in it
         showLibrary = true
     }
 

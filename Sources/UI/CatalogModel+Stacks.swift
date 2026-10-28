@@ -3,9 +3,10 @@ import Foundation
 /// Photo stacks in the Library (`StackPlanner` / `StackDisplay` / `StackSelection` are the pure parts; the database writes live in
 /// `CatalogDatabase+Stacks`).
 ///
-/// Stacking is a VIEW over the flat list, never a filter on it: `displayedPhotos` stays the flat, filtered and sorted list that Cull, the
-/// Editor filmstrip, ⌘←/⌘→, Export's empty-selection fallback, Trash, Rename and every scan read, so those tools IGNORE stacking in v1
-/// (a collapsed stack's hidden members are still in them). Only the Library GRID draws `gridPhotos`.
+/// Stacking is a VIEW over the flat list, never a filter on it: `displayedPhotos` stays the flat, filtered and sorted list that Export's
+/// empty-selection fallback, Trash, Rename, Keywords, Merge, XMP and every scan read, so those tools IGNORE stacking (a collapsed stack's
+/// hidden members are still in them). Three places fold it into cells: the Library GRID (`gridPhotos`), the Editor filmstrip with ⌘←/⌘→
+/// (`filmstripItems`) and Cull (`CullSession`, which stacks `displayedPhotos` itself).
 extension CatalogModel {
     // MARK: - What the grid draws
 
@@ -19,6 +20,21 @@ extension CatalogModel {
     /// The photos of the grid's cells, in cell order: what keyboard focus, arrow movement, scroll-to and "advance focus" walk. A photo
     /// hidden inside a collapsed stack is not a cell, so it can never hold keyboard focus.
     var gridCellPhotos: [Photo] { gridPhotos.map(\.photo) }
+
+    /// The Editor filmstrip's cells (also what ⌘←/⌘→ walk): the grid's cells, except that the stack of the OPEN photo is expanded here (so
+    /// the open photo is always a cell of its own, never hidden behind a collapsed stack). The grid's `expandedStackIDs` is not changed.
+    func filmstripItems(openEditKey: String?) -> [StackGridItem] {
+        let displayed = displayedPhotos
+        // No stacks: every photo is its own cell (cheap path; the view and ⌘←/⌘→ build this on every body pass).
+        if stacks.isEmpty {
+            return displayed.map { StackGridItem(photo: $0, role: .plain, stackID: nil, visibleMembers: [], hiddenMemberCount: 0, isCover: false) }
+        }
+        var expanded = expandedStackIDs
+        if let openEditKey, !stackByMasterID.isEmpty, let open = displayed.first(where: { $0.editKey == openEditKey }), let owner = stack(of: open) {
+            expanded.insert(owner.id)
+        }
+        return StackDisplay.apply(displayed: displayed, stacks: stacks, expandedIDs: expanded)
+    }
 
     // MARK: - Stack state
 

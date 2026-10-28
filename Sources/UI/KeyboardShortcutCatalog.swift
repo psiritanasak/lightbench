@@ -117,6 +117,7 @@ enum KeyboardShortcutCatalog {
             ShortcutEntry(keys: "\u{2191}", action: "Compare: swap the two photos", source: .cull(.upArrow)),
             ShortcutEntry(keys: "\u{2193}", action: "Compare: make this photo the one to compare against", source: .cull(.downArrow)),
             ShortcutEntry(keys: "/", action: "Survey: take the focused photo off the page", source: .cull(.character("/"))),
+            ShortcutEntry(keys: "S", action: "Open / close the photo's stack (the photo keys act on the one cell shown)", source: .cull(.character("s"))),
             ShortcutEntry(keys: "Return", action: "Open the photo in the Editor", source: .cull(.returnKey)),
             ShortcutEntry(keys: "Esc", action: "Leave Compare / Survey, then leave culling", source: .cull(.escape)),
         ]),

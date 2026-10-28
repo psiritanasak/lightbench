@@ -97,14 +97,34 @@ final class StackWiringTests: XCTestCase {
         XCTAssertTrue(grid.contains("Make Cover") && grid.contains("Remove from Stack"))
     }
 
-    func testCullFilmstripNavigationAndExportKeepTheFlatList() throws {
-        for path in ["Sources/UI/CullView.swift", "Sources/UI/CullModel.swift", "Sources/UI/EditorFilmstripView.swift", "Sources/UI/CullSession.swift"] {
-            let text = try source(path)
-            XCTAssertFalse(text.contains("gridPhotos") || text.contains("gridCellPhotos") || text.contains("StackDisplay"),
-                           "\(path) ignores stacking in v1 (a collapsed stack's members are still in it)")
-        }
+    /// Cull, the Editor filmstrip and ⌘←/⌘→ walk the stack-aware CELLS (`StackDisplay`); every tool that acts on "the photos in view" keeps
+    /// the flat list.
+    func testCullFilmstripAndNavigationUseTheCells() throws {
+        XCTAssertTrue(try source("Sources/UI/CullSession.swift").contains("StackDisplay.apply("), "the pass is built over the cells")
+        XCTAssertTrue(try source("Sources/UI/CullModel.swift").contains("environment.stacks()"))
+        XCTAssertTrue(try source("Sources/UI/CatalogModel+Stacks.swift").contains("func filmstripItems(openEditKey:"))
+        XCTAssertTrue(try source("Sources/UI/EditorFilmstripView.swift").contains("catalog.filmstripItems(openEditKey:"))
         let app = try source("Sources/App/PhotoAppApp.swift")
-        XCTAssertFalse(app.contains("gridPhotos"), "⌘←/⌘→ walk the flat displayed list")
+        XCTAssertTrue(app.contains("catalog.filmstripItems(openEditKey: currentKey)"), "⌘←/⌘→ walk the cells")
+        XCTAssertFalse(app.contains("gridPhotos"))
+        // The Cull environment still hands over the FLAT displayed list (the session stacks it itself).
+        XCTAssertTrue(try source("Sources/UI/ContentView.swift").contains("photos: { catalog.displayedPhotos }"))
+        for path in ["Sources/UI/CullModel.swift", "Sources/UI/CullSession.swift", "Sources/UI/CullView.swift"] {
+            let text = try source(path)
+            XCTAssertFalse(text.contains("toggleExpanded") || text.contains("expandedStackIDs.insert") || text.contains("gridPhotos"),
+                           "\(path) never changes the grid's expansion")
+        }
+    }
+
+    func testExportTrashRenameAndTheOtherToolsKeepTheFlatList() throws {
+        for path in ["Sources/UI/ExportModel.swift", "Sources/UI/TrashModel.swift", "Sources/UI/RenameModel.swift", "Sources/UI/KeywordSheetView.swift",
+                     "Sources/UI/MergeModel.swift", "Sources/UI/XMPModel.swift", "Sources/UI/AutoStackModel.swift"] {
+            let text = try source(path)
+            XCTAssertFalse(text.contains("gridPhotos") || text.contains("gridCellPhotos") || text.contains("filmstripItems") || text.contains("StackDisplay"),
+                           "\(path) acts on the flat list")
+        }
+        let stacks = try source("Sources/UI/CatalogModel+Stacks.swift")
+        XCTAssertTrue(stacks.contains("var autoStackScopePhotos: [Photo] { displayedPhotos.filter { !$0.isVirtualCopy } }"))
     }
 
     // MARK: The sheet's promises
@@ -123,7 +143,7 @@ final class StackWiringTests: XCTestCase {
         let model = try source("Sources/UI/AutoStackModel.swift")
         XCTAssertTrue(model.contains("DuplicateScanner.scan("))
         XCTAssertTrue(model.contains("hash: { _ in nil }"))
-        XCTAssertTrue(try source("Sources/UI/ContentView.swift").contains("catalog.normalizeFocus() // Cull ignores stacks"), "leaving Cull normalises focus")
+        XCTAssertTrue(try source("Sources/UI/ContentView.swift").contains("catalog.normalizeFocus() // the pass may have expanded"), "leaving Cull normalises focus")
         // refresh() and applyAutoStack call normalizeFocus explicitly; their behaviour tests also pass through setStacks (which normalises
         // too), so these two calls are pinned by source rather than by a discriminating behaviour test.
         XCTAssertTrue(try source("Sources/UI/CatalogModel.swift").contains("normalizeFocus() // the photos or the stacks changed"))

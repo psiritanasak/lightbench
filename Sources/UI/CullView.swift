@@ -137,6 +137,7 @@ struct CullView: View {
             HStack(spacing: 6) {
                 if let caption { Text(caption).font(.caption.weight(.semibold)) }
                 Text(photo?.filename ?? "").font(.caption).lineLimit(1)
+                if let badge = model.session?.stackBadgeText(for: id) { Text("· \(badge)").font(.caption).lineLimit(1) }
                 if let rating = photo?.rating, rating > 0 { Text(String(repeating: "★", count: rating)).font(.caption) }
             }
             .padding(.horizontal, 8).padding(.vertical, 3)
@@ -164,6 +165,7 @@ struct CullView: View {
                 .aspectRatio(contentMode: .fit)
                 .opacity(!ready ? 0.3 : (photo?.flagStatus == .rejected ? 0.45 : 1))
                 .overlay(alignment: .topLeading) { if ready { flagBadge(photo?.flagStatus ?? .none) } }
+                .overlay(alignment: .topTrailing) { stackChip(for: photo?.id) }
                 .overlay(alignment: .bottomTrailing) {
                     if model.isPlaceholder || !ready { ProgressView().controlSize(.small).padding(10) }
                 }
@@ -174,10 +176,24 @@ struct CullView: View {
         }
     }
 
+    /// "Stack of 4" / "Stack 2 of 4" on the loupe's photo when it belongs to a stack.
+    @ViewBuilder
+    private func stackChip(for id: Int64?) -> some View {
+        if let id, let text = model.session?.stackBadgeText(for: id) {
+            Label(text, systemImage: "square.stack")
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Color.black.opacity(0.55))
+                .foregroundStyle(.white)
+                .padding(10)
+        }
+    }
+
     /// "IMG_0042.jpg, picked, 3 stars" for VoiceOver.
     private func photoDescription(_ photo: Photo?) -> String {
         guard let photo else { return "Photo" }
         var parts = [photo.filename]
+        if let id = photo.id, let badge = model.session?.stackBadgeText(for: id) { parts.append(badge.lowercased()) }
         if photo.flagStatus != .none { parts.append(photo.flagStatus.accessibilityValue.lowercased()) }
         if photo.rating > 0 { parts.append("\(photo.rating) star\(photo.rating == 1 ? "" : "s")") }
         if photo.colorLabel != .none { parts.append(photo.colorLabel.accessibilityName) }
@@ -213,7 +229,7 @@ struct CullView: View {
 
     private var hint: String {
         switch model.session?.mode ?? .loupe {
-        case .loupe: return "← → move · P pick · X reject · U clear · 0–5 rate · 6–9 label · C compare · N survey · ⌘Z undo · Return opens in Editor"
+        case .loupe: return "← → move · P pick · X reject · U clear · 0–5 rate · 6–9 label · S stack · C compare · N survey · ⌘Z undo · Return opens in Editor"
         case .compare: return "← → candidate · ↑ swap · ↓ make select · P X U 0–5 6–9 act on the candidate · C / Esc back · ⌘Z undo"
         case .survey: return "← → focus · / remove from page · P X U 0–5 6–9 act on the focused photo · N / Esc back · ⌘Z undo"
         }

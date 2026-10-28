@@ -11,6 +11,8 @@ enum CullKey: Equatable {
 /// clears the rating — there is no "reset zoom" here).
 enum CullKeyAction: Equatable {
     case previous, next, exit, openInEditor
+    /// S opens / closes the current photo's stack in place (Loupe only).
+    case toggleStack
     /// C / N toggle Compare / Survey; ↑ swaps select and candidate (Compare), ↓ makes the candidate the select; `/` takes the focused photo off the survey page.
     case toggleCompare, toggleSurvey, swapCompare, makeSelect, removeFromSurvey
     case command(PhotoKeyCommand)
@@ -28,6 +30,7 @@ enum CullKeyAction: Equatable {
             case "c", "C": return .toggleCompare
             case "n", "N": return .toggleSurvey
             case "/": return .removeFromSurvey
+            case "s", "S": return .toggleStack
             default: return PhotoKeyCommand.command(for: character, allowsZero: true).map { .command($0) }
             }
         }
@@ -45,6 +48,9 @@ struct CullEnvironment {
     var setLabel: (ColorLabel, Photo) -> Void = { _, _ in }
     /// The grid thumbnail (already cached in practice): shown at once while the full preview decodes.
     var thumbnail: (Photo) async -> CGImage? = { _ in nil }
+    /// The catalog's stacks and the ones the grid shows expanded: the pass folds `photos` into the grid's cells with them (and only READS them).
+    var stacks: () -> [StackSnapshot] = { [] }
+    var expandedStackIDs: () -> Set<Int64> = { [] }
 }
 
 /// What the view should do after a key: nothing more, leave, or leave and open the photo in the Editor.
@@ -129,7 +135,8 @@ final class CullModel: ObservableObject {
         if unflagged, let id = startID, let at = photos.firstIndex(where: { $0.id == id }), photos[at].flagStatus != .none {
             startID = photos[at...].first { $0.flagStatus == .none }?.id ?? photos.first { $0.flagStatus == .none }?.id
         }
-        guard var fresh = CullSession(photos: photos, onlyUnflagged: unflagged, startingAt: startID) else { return false }
+        guard var fresh = CullSession(photos: photos, onlyUnflagged: unflagged, startingAt: startID, stacks: environment.stacks(),
+                                      expandedStackIDs: environment.expandedStackIDs()) else { return false }
         fresh.autoAdvance = preferences.cullAutoAdvance
         session = fresh
         slots = [:]
@@ -182,6 +189,8 @@ final class CullModel: ObservableObject {
             modeEdit({ $0.makeSelect() }, refused: "Make Select works in Compare")
         case .removeFromSurvey:
             modeEdit({ $0.removeFromSurvey() }, refused: "Remove works in Survey, and keeps one photo")
+        case .toggleStack:
+            toggleStack()
         case .openInEditor:
             if let photo = current { return .openInEditor(photo) }
         case .command(let command):
@@ -230,6 +239,22 @@ final class CullModel: ObservableObject {
         loadCurrent()
     }
 
+    /// `S`: expands / collapses the current photo's stack in the pass (never the grid's). Says what happened, or why not.
+    private func toggleStack() {
+        guard var s = session else { return }
+        let before = s.currentID
+        switch s.toggleStack() {
+        case .notLoupe: flash("Stacks open in the loupe")
+        case .notInStack: flash("Not in a stack")
+        case .expanded, .collapsed:
+            let expanded = s.currentID.flatMap { s.stackInfo(for: $0) }?.isExpanded ?? false
+            session = s
+            endReached = false
+            flash(expanded ? "Stack expanded" : "Stack collapsed")
+            if s.currentID != before { loadCurrent() }
+        }
+    }
+
     private func modeEdit(_ edit: (inout CullSession) -> Bool, refused: String) {
         guard var s = session else { return }
         if edit(&s) {
@@ -246,7 +271,10 @@ final class CullModel: ObservableObject {
 
     private func apply(_ command: PhotoKeyCommand) {
         // Only while the picture on screen IS the current photo (see `imagePhotoID`).
-        guard canActOnCurrent, var s = session, let photo = current, let change = s.apply(command, to: photo) else { return }
+        guard canActOnCurrent, var s = session, let photo = current else { return }
+        // Keys act on the CELL's photo only (a collapsed stack's cover); the note says how many others of the stack were left alone.
+        let others = photo.id.map { s.hiddenMemberCount(of: $0) } ?? 0
+        guard let change = s.apply(command, to: photo) else { return }
         session = s
         if let rating = change.rating { environment.setRating(rating, photo) }
         if let flag = change.flag { environment.setFlag(flag, photo) }
@@ -254,8 +282,13 @@ final class CullModel: ObservableObject {
         let reachedEnd: Bool
         if case .flag = command { reachedEnd = s.autoAdvance && !change.advanced && s.isAtEnd } else { reachedEnd = false }
         endReached = reachedEnd
-        flash(reachedEnd ? endText : Self.noteText(for: command, photo: photo, change: change))
+        flash(reachedEnd ? endText : Self.noteText(for: command, photo: photo, change: change) + Self.othersSuffix(others))
         if change.advanced { loadCurrent() }
+    }
+
+    /// " · 2 others in this stack unchanged" (empty when nothing is hidden behind the cell).
+    static func othersSuffix(_ others: Int) -> String {
+        others > 0 ? " · \(others) other\(others == 1 ? "" : "s") in this stack unchanged" : ""
     }
 
     private static func noteText(for command: PhotoKeyCommand, photo: Photo, change: CullChange) -> String {
@@ -266,7 +299,8 @@ final class CullModel: ObservableObject {
         }
     }
 
-    /// ⌘Z while culling: puts the last action's values back and returns to its photo.
+    /// ⌘Z while culling: puts the last action's values back and makes its photo current (opening its stack in the pass if it was hidden in
+    /// a collapsed one), so the photo that changed is always the one on screen.
     func undo() {
         guard var s = session, let action = s.undo() else { return }
         session = s
@@ -296,7 +330,7 @@ final class CullModel: ObservableObject {
     /// The "Unflagged only" toggle: rebuilds the snapshot from the Library's current photos, staying on this photo when it is still listed.
     func setOnlyUnflagged(_ value: Bool) {
         guard var s = session else { return }
-        guard s.rebuild(photos: environment.photos(), onlyUnflagged: value) else {
+        guard s.rebuild(photos: environment.photos(), onlyUnflagged: value, stacks: environment.stacks()) else {
             flash(value ? "Nothing unflagged" : "Nothing to show")
             return
         }

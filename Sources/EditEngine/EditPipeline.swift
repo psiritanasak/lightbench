@@ -1642,8 +1642,8 @@ enum EditPipeline {
     /// composited to black by `ImageRenderer`'s existing black background —
     /// the standard "rotate reveals corners" behavior, same tradeoff
     /// philosophy as curves' headroom clamp or black point's soft overshoot.
-    /// No auto-fit-to-inscribed-rectangle in v1; the already-shipped Crop
-    /// tool is the documented way to remove the resulting gaps.
+    /// Straighten itself never crops; the Crop
+    /// tab's Auto Crop (`AutoCropSolver`) removes the resulting gaps on request.
     private static func applyStraighten(_ state: EditState, to image: CIImage) -> CIImage {
         guard state.straightenAngle != 0 else { return image }
 

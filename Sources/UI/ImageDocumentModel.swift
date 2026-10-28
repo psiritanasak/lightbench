@@ -185,6 +185,11 @@ final class ImageDocumentModel: ObservableObject {
     /// here.
     private var analysisGeneration = 0
 
+    /// Shown by the Crop tab's own alert: `autoCrop` outcomes that changed nothing (no empty corners, too large, failure).
+    @Published var autoCropMessage: String?
+    /// True while the empty corners are being measured (single-flight: disables the Crop tab's Auto Crop, Auto and Upright buttons).
+    @Published private(set) var isAutoCropping = false
+
     /// Shown by the Crop tab's own alert: Upright outcomes that changed nothing (no lines, already upright, failure).
     @Published var uprightMessage: String?
     /// The Upright mode being measured right now (nil when idle): the pressed button shows its progress label.
@@ -1316,7 +1321,7 @@ final class ImageDocumentModel: ObservableObject {
     /// `autoTone()`. Returns the work for tests; the UI ignores it.
     @discardableResult
     func autoStraighten() -> Task<Void, Never>? {
-        guard !isAutoStraightening, !isAutoUprighting else { return nil }
+        guard !isAutoStraightening, !isAutoUprighting, !isAutoCropping else { return nil }
         guard let currentImage, !isLoadInFlight else {
             straightenMessage = "Wait for the photo to finish loading, then try again."
             return nil
@@ -1368,6 +1373,74 @@ final class ImageDocumentModel: ObservableObject {
             var next = self.editState
             next.straightenAngle = target
             self.history.commit(next, summary: "Auto Straighten")
+            self.applyHistoryState(self.history.current)
+        }
+    }
+
+    // MARK: - Auto Crop
+
+    /// Test seam: measures which pixels of the photo's post-geometry frame are opaque. Runs off the main actor on the
+    /// photo's UNEDITED source (`currentImage`) with the edit state at the press (only its geometry matters).
+    var autoCropMaskProvider: @Sendable (CIImage, EditState) async -> AutoCropMask? = { await AutoCropMaskRenderer.measure(image: $0, state: $1) }
+
+    /// Sets the four crop insets to the largest axis-aligned rectangle that contains no transparent pixel after the photo's
+    /// current geometry (rotation, straighten, perspective, scale / stretch, flip), as ONE undo step ("Auto Crop"). It REPLACES
+    /// any existing crop (the measurement ignores it). `aspectRatio` (width / height of the post-geometry frame) fits that ratio
+    /// centred inside the found rectangle. Never automatic: only the Crop tab's button calls it. Same guards as
+    /// `autoStraighten()`: single-flight (also against Auto Straighten / Upright), `analysisGeneration` and `isLoadInFlight`
+    /// staleness, plus: nothing changes if the geometry was edited while measuring. Returns the work for tests.
+    @discardableResult
+    func autoCrop(aspectRatio: Double?) -> Task<Void, Never>? {
+        guard !isAutoCropping, !isAutoStraightening, !isAutoUprighting else { return nil }
+        guard let currentImage, !isLoadInFlight else {
+            autoCropMessage = "Wait for the photo to finish loading, then try again."
+            return nil
+        }
+        isAutoCropping = true
+        let provider = autoCropMaskProvider
+        let myGeneration = analysisGeneration
+        let measuredState = editState
+        let measuredGeometry = AutoCropMaskRenderer.measuringState(for: measuredState)
+        return Task { @MainActor [weak self] in
+            let measured = await Task.detached(priority: .userInitiated) { () -> AutoCropMask? in
+                await provider(currentImage, measuredState)
+            }.value
+            guard let self else { return }
+            self.isAutoCropping = false
+            guard self.analysisGeneration == myGeneration, !self.isLoadInFlight else { return }
+            guard AutoCropMaskRenderer.measuringState(for: self.editState) == measuredGeometry else {
+                self.autoCropMessage = AutoCropMessages.changedMeanwhile
+                return
+            }
+            guard let measured else {
+                self.autoCropMessage = AutoCropMessages.unmeasurable
+                return
+            }
+            let insets: AutoCropSolver.Insets
+            switch AutoCropSolver.solve(measured, aspectRatio: aspectRatio) {
+            case .nothingToCrop:
+                self.autoCropMessage = AutoCropMessages.nothingToCrop
+                return
+            case .tooLarge:
+                self.autoCropMessage = AutoCropMessages.tooLarge
+                return
+            case .empty:
+                self.autoCropMessage = AutoCropMessages.unmeasurable
+                return
+            case .cropped(let found):
+                insets = found
+            }
+            self.finalizePendingCommit()
+            var next = self.editState
+            next.cropInsetTop = insets.top
+            next.cropInsetBottom = insets.bottom
+            next.cropInsetLeft = insets.left
+            next.cropInsetRight = insets.right
+            guard next != self.editState else {
+                self.autoCropMessage = AutoCropMessages.alreadyApplied
+                return
+            }
+            self.history.commit(next, summary: "Auto Crop")
             self.applyHistoryState(self.history.current)
         }
     }
@@ -1706,7 +1779,7 @@ final class ImageDocumentModel: ObservableObject {
     /// `autoTone()`: single-flight, `analysisGeneration` and `isLoadInFlight` staleness. Returns the work for tests.
     @discardableResult
     func autoUpright(_ mode: UprightMode) -> Task<Void, Never>? {
-        guard !isAutoUprighting, !isAutoStraightening else { return nil }
+        guard !isAutoUprighting, !isAutoStraightening, !isAutoCropping else { return nil }
         guard let currentImage, !isLoadInFlight else {
             uprightMessage = "Wait for the photo to finish loading, then try again."
             return nil
@@ -1871,6 +1944,7 @@ final class ImageDocumentModel: ObservableObject {
         straightenMessage = nil // and a late "no horizon found"
         skinProtectionMessage = nil // and a late "no people found"
         uprightMessage = nil // and a late "no lines found"
+        autoCropMessage = nil // and a late "nothing to crop"
     }
 
     /// Undoes the most recent undo step. First flushes any in-progress burst

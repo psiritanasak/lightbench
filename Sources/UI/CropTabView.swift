@@ -14,6 +14,8 @@ struct CropTabView: View {
     let selectedAspect: CropAspectPreset
     let onSelectAspect: (CropAspectPreset) -> Void
     let onReset: () -> Void
+    /// The selected aspect preset's width / height (nil for Freeform): Auto Crop fits it centred inside the filled area.
+    let autoCropAspectRatio: () -> Double?
     /// Same rule as the Photo-menu items (`RotateAvailability`).
     let rotateEnabled: Bool
 
@@ -26,7 +28,7 @@ struct CropTabView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.flat)
-            .disabled(document.currentImage == nil || document.isAutoStraightening || document.isAutoUprighting)
+            .disabled(document.currentImage == nil || document.isAutoStraightening || document.isAutoUprighting || document.isAutoCropping)
             .help("Find the horizon and set Straighten to level it")
             .alert(
                 "Auto Straighten",
@@ -53,6 +55,26 @@ struct CropTabView: View {
                 Button("OK") {}
             } message: {
                 Text(document.uprightMessage ?? "")
+            }
+            Button {
+                document.autoCrop(aspectRatio: autoCropAspectRatio())
+            } label: {
+                Label(document.isAutoCropping ? "Measuring…" : "Auto Crop", systemImage: "crop")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.flat)
+            .disabled(document.currentImage == nil || document.isAutoCropping || document.isAutoStraightening || document.isAutoUprighting)
+            .help("Crop to the largest rectangle with no empty corners (replaces the current crop; keeps the selected Aspect)")
+            .alert(
+                "Auto Crop",
+                isPresented: Binding(
+                    get: { document.autoCropMessage != nil },
+                    set: { if !$0 { document.autoCropMessage = nil } }
+                )
+            ) {
+                Button("OK") {}
+            } message: {
+                Text(document.autoCropMessage ?? "")
             }
             EditSliderRow(
                 label: "Straighten", value: $document.editState.straightenAngle,
@@ -141,7 +163,7 @@ struct CropTabView: View {
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.flat)
-        .disabled(document.currentImage == nil || document.isAutoUprighting || document.isAutoStraightening)
+        .disabled(document.currentImage == nil || document.isAutoUprighting || document.isAutoStraightening || document.isAutoCropping)
         .help(help)
     }
 

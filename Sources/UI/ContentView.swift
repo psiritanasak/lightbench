@@ -1085,7 +1085,8 @@ struct ContentView: View {
     /// rectangle, and the aspect lock. A real, implementable analog to the
     /// screenshot's
     /// "Reset" button. (The tab's "Auto" button is Auto Straighten only —
-    /// it sets the angle from the detected horizon and does not auto-crop.)
+    /// it sets the angle from the detected horizon and never crops; the
+    /// separate "Auto Crop" button sets the crop from the current geometry.)
     private func resetCropTab() {
         document.editState.rotationQuarterTurns = 0
         document.editState.straightenAngle = 0
@@ -2673,6 +2674,7 @@ struct ContentView: View {
                         selectedAspect: selectedAspect,
                         onSelectAspect: { selectAspect($0) },
                         onReset: { resetCropTab() },
+                        autoCropAspectRatio: { effectiveAspectRatio },
                         rotateEnabled: RotateAvailability.isEnabled(
                             hasImage: document.currentImage != nil, loadInFlight: document.isLoadInFlight,
                             renameWorking: renameModel.isWorking, cullActive: false, showLibrary: false)

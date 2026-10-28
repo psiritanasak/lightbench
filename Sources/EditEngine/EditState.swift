@@ -444,8 +444,8 @@ struct EditState: Equatable, Codable {
     /// resulting corners outside the actual rotated content render as black
     /// (the existing renderer's black background composite) — this is the
     /// standard "rotate reveals corners" behavior every photo editor
-    /// produces before cropping. No auto-fit-to-inscribed-rectangle in v1;
-    /// use the already-shipped Crop tool to remove the gaps. Not
+    /// produces before cropping. Straighten itself never crops;
+    /// the Crop tab's Auto Crop (`AutoCropSolver`) removes the gaps on request. Not
     /// runtime-clamped (matches `exposureEV`/`hslHue`'s convention — only
     /// crop's insets and factor-style color params are clamped where
     /// mathematically required).

@@ -21,6 +21,7 @@ struct EditorRatingBar: View {
             labelDots(current: photo?.colorLabel ?? .none)
             if photo == nil {
                 Text("Not in your Library").font(.caption).foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1).truncationMode(.tail).layoutPriority(-1)
             }
             Spacer(minLength: 8)
             if let info { infoButton(info) }
@@ -30,6 +31,7 @@ struct EditorRatingBar: View {
                 .font(.caption)
                 // White (primary) text, not the accent blue a borderless button takes by default.
                 .foregroundStyle(canCopy ? Color.primary : Theme.textSecondary)
+                .fixedSize()
                 .disabled(!canCopy)
                 .help("Copy this photo's edit settings (⇧⌘C)")
         }
@@ -46,6 +48,7 @@ struct EditorRatingBar: View {
         let enabled = meta.photo != nil || info.isOpen
         return Button(action: onInfo) { Label("Info", systemImage: "info.circle").lineLimit(1) }
             .buttonStyle(.borderless)
+            .fixedSize()
             .font(.caption)
             .foregroundStyle(enabled ? Color.primary : Theme.textSecondary)
             .disabled(!enabled)

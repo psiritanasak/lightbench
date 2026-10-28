@@ -153,6 +153,8 @@ final class CatalogModel: ObservableObject {
     /// True while the Editor's Info popover is open (`ContentView` mirrors `EditorInfoModel.isOpen` here, because the menus observe
     /// this model). The Photo menu disables everything that would act on the photo or the selection while the user types in it.
     @Published var editorInfoOpen = false
+    /// Whether the Editor's open photo has a catalog row (mirrored from `EditorPhotoMeta` by `EditorInfoLifecycle`); gates the Edit Info menu item.
+    @Published var editorPhotoInCatalog = false
     /// Set by the Photo menu's ⌘I in the Editor; `ContentView` toggles the Info popover and clears it.
     @Published var editorInfoToggleRequested = false
     /// The keyword the grid is filtered to; `nil` = no keyword filter.

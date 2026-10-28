@@ -309,7 +309,8 @@ struct PhotoAppApp: App {
     }
 
     /// What ⌘← and ⌘→ would open, both resolved from ONE pass over
-    /// `displayedPhotos` — see the call site for why that matters. Either side
+    /// the filmstrip's cells (`filmstripItems`: `displayedPhotos` folded by stacks,
+    /// the open photo's own stack expanded) — see the call site for why that matters. Either side
     /// is `nil` when that direction is unavailable; see
     /// `LibraryNavigation.neighbor(of:in:offset:)` for the cases it covers.
     /// Walking `displayedPhotos` (not `photos`) is what makes navigation follow
@@ -319,7 +320,10 @@ struct PhotoAppApp: App {
         // "browsing the grid" cases never touch the filter+sort at all.
         guard !showLibrary, !cull.isActive, let currentKey = document.currentEditKey else { return (nil, nil) }
         // By EDIT KEY: with a virtual copy open, its master (same path) must not be mistaken for the open photo.
-        return LibraryNavigation.neighbors(ofEditKey: currentKey, in: catalog.displayedPhotos)
+        // No stacks (the common case): the cells ARE the flat list, so skip building them (a Debug-build measurement at 10,000 photos: the
+        // flat walk 3.0 ms, the cell walk 10.4 ms without stacks and 17.6 ms with 1,000 stacks of three; this runs on every body pass).
+        let walked = catalog.stacks.isEmpty ? catalog.displayedPhotos : catalog.filmstripItems(openEditKey: currentKey).map(\.photo)
+        return LibraryNavigation.neighbors(ofEditKey: currentKey, in: walked)
     }
 
     /// Deliberately goes through the SAME `load(from:)` the Library grid's own

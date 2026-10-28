@@ -10,7 +10,7 @@ import SwiftUI
 /// non-`Equatable` and SwiftUI can't prove it unchanged when unrelated
 /// state (e.g. `document.editState`, on every slider tick) publishes; its
 /// `body` likely still re-runs then. The cost of that is small regardless
-/// (`LazyHStack` diffing over `catalog.displayedPhotos` is cheap, each
+/// (`LazyHStack` diffing over `catalog.filmstripItems` is cheap, each
 /// `FilmstripCell`'s `.task(id:)` only re-fires if `photo.path` changes,
 /// and `@State private var image` persists across re-renders), so this
 /// wasn't worth chasing further — see the D1(b) review that caught this
@@ -31,32 +31,40 @@ struct EditorFilmstripView: View {
         // filmstrip tap OR via ⌘←/⌘→ (both funnel through
         // `ImageDocumentModel.load(from:)`, which is the sole writer of
         // `currentURL`).
+        // The cells, not the flat list: a collapsed stack is one cell with a count, and the open photo's own stack is expanded here
+        // (`CatalogModel.filmstripItems`). The scroll id is the stack-aware `cellID`, so a photo that changes role gets a fresh cell view.
+        let items = catalog.filmstripItems(openEditKey: currentEditKey)
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 8) {
-                    ForEach(catalog.displayedPhotos) { photo in
+                    ForEach(items, id: \.cellID) { item in
                         FilmstripCell(
                             catalog: catalog,
-                            photo: photo,
-                            isCurrent: photo.editKey == currentEditKey,
+                            photo: item.photo,
+                            isCurrent: item.photo.editKey == currentEditKey,
+                            badge: StackCellPresentation.badge(for: item),
+                            badgeLabel: StackCellPresentation.badgeAccessibilityLabel(for: item),
                             cellSize: cellSize,
-                            onTap: { onSelect(photo) }
+                            onTap: { onSelect(item.photo) }
                         )
-                        .id(photo.editKey)
+                        .id(item.cellID)
                     }
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 8)
             }
             .onAppear {
-                if let path = currentEditKey {
-                    proxy.scrollTo(path, anchor: .center)
+                if let target = StackCellPresentation.scrollTarget(forFocusedKey: currentEditKey, in: items) {
+                    proxy.scrollTo(target, anchor: .center)
                 }
             }
             .onChange(of: currentEditKey) { _, newKey in
-                if let path = newKey {
+                // Resolved against the cells of the NEW open photo (its stack may have just expanded).
+                // The body pass that saw the new key already built them; reuse unless the strip changed meanwhile.
+                let fresh = newKey == currentEditKey ? items : catalog.filmstripItems(openEditKey: newKey)
+                if let target = StackCellPresentation.scrollTarget(forFocusedKey: newKey, in: fresh) {
                     withAnimation {
-                        proxy.scrollTo(path, anchor: .center)
+                        proxy.scrollTo(target, anchor: .center)
                     }
                 }
             }
@@ -78,6 +86,8 @@ private struct FilmstripCell: View {
     let catalog: CatalogModel
     let photo: Photo
     let isCurrent: Bool
+    var badge: StackCellPresentation.Badge = .none
+    var badgeLabel = ""
     let cellSize: CGFloat
     let onTap: () -> Void
 
@@ -129,6 +139,7 @@ private struct FilmstripCell: View {
             RoundedRectangle(cornerRadius: 4)
                 .stroke(Theme.selectedOutline, lineWidth: isCurrent ? 2 : 0)
         )
+        .overlay(alignment: .topTrailing) { stackBadge }
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         // D6 (IMPROVEMENTS.md): same gap as `LibraryThumbnailCell` — an
@@ -138,7 +149,7 @@ private struct FilmstripCell: View {
         // .ignore` (not `.contain`) since this cell, unlike the Library
         // grid's, has no child controls of its own to preserve.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(isMissing ? "\(photo.filename), missing" : photo.filename)
+        .accessibilityLabel((isMissing ? "\(photo.filename), missing" : photo.filename) + (badgeLabel.isEmpty ? "" : ", \(badgeLabel)"))
         .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : [.isButton])
         .accessibilityAction { onTap() }
         .task(id: photo.editKey) {
@@ -159,6 +170,31 @@ private struct FilmstripCell: View {
             guard !Task.isCancelled else { return }
             image = thumb
             isMissing = missing
+        }
+    }
+}
+
+extension FilmstripCell {
+    /// A collapsed stack's size, or the stack glyph on an expanded member (the Library grid's convention, smaller).
+    @ViewBuilder
+    fileprivate var stackBadge: some View {
+        switch badge {
+        case .count(let count):
+            Text("\(count)")
+                .font(.system(size: 10, weight: .bold)).monospacedDigit()
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(Theme.raised, in: Capsule())
+                .foregroundStyle(Theme.textPrimary)
+                .padding(3)
+        case .marker:
+            Image(systemName: "square.stack")
+                .font(.system(size: 9, weight: .bold))
+                .padding(3)
+                .background(Theme.raised, in: Circle())
+                .foregroundStyle(Theme.textPrimary)
+                .padding(3)
+        case .none:
+            EmptyView()
         }
     }
 }

@@ -208,8 +208,8 @@ struct LibraryGridView: View {
                         ScrollView {
                             LazyVGrid(columns: columns, spacing: Self.gridSpacing) {
                                 // `gridPhotos`, not `displayedPhotos`: one cell per collapsed stack (`CatalogModel+Stacks`). Keyboard focus,
-                                // arrows, scroll-to and focus advance below walk the SAME cells (`gridCellPhotos`); Cull, the Editor filmstrip
-                                // and every tool keep the flat list and ignore stacking in v1.
+                                // arrows, scroll-to and focus advance below walk the SAME cells (`gridCellPhotos`); Cull and the Editor filmstrip
+                                // fold stacks with their own cells (`CullSession`, `filmstripItems`); every other tool keeps the flat list.
                                 ForEach(items) { item in
                                     let photo = item.photo
                                     LibraryThumbnailCell(

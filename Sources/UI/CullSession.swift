@@ -48,16 +48,57 @@ struct CullSession: Equatable {
     /// A survey page holds at most this many photos (the grid stays readable and the preview cache bounded).
     static let surveyLimit = 12
 
-    /// A session over `photos` (in the order given — pass `displayedPhotos`). `onlyUnflagged` keeps just the photos with no flag yet.
-    /// Starts at `startingAt` if that photo is in the list, else at the first. `nil` when the list is empty.
-    init?(photos: [Photo], onlyUnflagged: Bool, startingAt id: Int64? = nil) {
-        let list = photos.compactMap { photo -> Int64? in
-            guard let photoID = photo.id else { return nil }
-            return (!onlyUnflagged || photo.flagStatus == .none) ? photoID : nil
+    /// Every photo of the pass (collapsed stacks' hidden members included), in list order. `ids` is the CELLS drawn from it.
+    private(set) var passIDs: [Int64]
+    /// Stack id -> its VISIBLE members (after the Unflagged filter) in list order. Only stacks with two or more distinct visible originals.
+    private(set) var stackMembers: [Int64: [Int64]] = [:]
+    /// Photo id -> the stack it belongs to (every member, hidden or not).
+    private var stackOfPhoto: [Int64: Int64] = [:]
+    /// Stack id -> the photo that stands for it while collapsed (the stack's cover when visible, else its first visible member).
+    private var coverOfStack: [Int64: Int64] = [:]
+    /// The stacks shown expanded in this pass (seeded from the grid's expansion; never written back to it).
+    private(set) var expandedInPass: Set<Int64> = []
+
+    /// A session over `photos` (in the order given — pass `displayedPhotos`). `onlyUnflagged` keeps just the photos with no flag yet, THEN
+    /// `stacks` fold what is left into the grid's cells (`StackDisplay`): a collapsed stack is one cell showing its cover, and `ids` are the
+    /// cells' photo ids. Starts at `startingAt` if that photo is in the pass, else at the first cell; a start photo hidden inside a collapsed
+    /// stack expands that stack. `nil` when the list is empty.
+    init?(photos: [Photo], onlyUnflagged: Bool, startingAt id: Int64? = nil, stacks: [StackSnapshot] = [], expandedStackIDs: Set<Int64> = []) {
+        let kept = photos.filter { photo in
+            photo.id != nil && (!onlyUnflagged || photo.flagStatus == .none)
         }
-        guard !list.isEmpty else { return nil }
-        ids = list
-        index = id.flatMap { list.firstIndex(of: $0) } ?? 0
+        guard !kept.isEmpty else { return nil }
+        passIDs = kept.compactMap(\.id)
+        ids = []
+        index = 0
+        let items = StackDisplay.apply(displayed: kept, stacks: stacks, expandedIDs: expandedStackIDs)
+        for item in items {
+            guard let stackID = item.stackID else { continue }
+            stackMembers[stackID] = item.visibleMembers.compactMap(\.id)
+            for member in item.visibleMembers { if let memberID = member.id { stackOfPhoto[memberID] = stackID } }
+            if item.isCover, let coverID = item.photo.id { coverOfStack[stackID] = coverID }
+        }
+        expandedInPass = expandedStackIDs.intersection(Set(stackMembers.keys))
+        ids = items.compactMap(\.photo.id)
+        if let id, !ids.contains(id), let stackID = stackOfPhoto[id], !expandedInPass.contains(stackID) {
+            expandedInPass.insert(stackID)
+            ids = Self.cells(passIDs: passIDs, stackMembers: stackMembers, stackOfPhoto: stackOfPhoto, coverOfStack: coverOfStack, expanded: expandedInPass)
+        }
+        index = id.flatMap { ids.firstIndex(of: $0) } ?? 0
+    }
+
+    /// The cell ids of the pass for a given set of expanded stacks (the same shape `StackDisplay` produces: a stack sits at its first visible
+    /// member's position, expanded as a run of its members in list order, collapsed as its stand-in).
+    private static func cells(passIDs: [Int64], stackMembers: [Int64: [Int64]], stackOfPhoto: [Int64: Int64],
+                              coverOfStack: [Int64: Int64], expanded: Set<Int64>) -> [Int64] {
+        var result: [Int64] = []
+        var emitted = Set<Int64>()
+        for id in passIDs {
+            guard let stackID = stackOfPhoto[id] else { result.append(id); continue }
+            guard emitted.insert(stackID).inserted else { continue }
+            if expanded.contains(stackID) { result.append(contentsOf: stackMembers[stackID] ?? [id]) } else { result.append(coverOfStack[stackID] ?? id) }
+        }
+        return result
     }
 
     // MARK: Position
@@ -69,7 +110,10 @@ struct CullSession: Equatable {
     /// "37 of 412" in the loupe; "Candidate 37 of 412" in Compare; "Survey 3 of 12" (the focused cell) in Survey.
     var positionText: String {
         switch mode {
-        case .loupe: return "\(index + 1) of \(ids.count)"
+        case .loupe:
+            let base = "\(index + 1) of \(ids.count)"
+            guard let id = currentID, let info = stackInfo(for: id) else { return base }
+            return info.isExpanded ? "\(base) · Stack \(info.position) of \(info.size) (S collapses)" : "\(base) · Stack of \(info.size) (S expands)"
         case .compare: return "Candidate \(index + 1) of \(ids.count)"
         case .survey: return "Survey \((currentID.flatMap { surveyIDs.firstIndex(of: $0) } ?? 0) + 1) of \(surveyIDs.count)"
         }
@@ -206,6 +250,52 @@ struct CullSession: Equatable {
         return true
     }
 
+    // MARK: Stacks
+
+    struct StackInfo: Equatable {
+        var stackID: Int64
+        /// Visible members of the stack.
+        var size: Int
+        /// 1-based place of the photo among the visible members.
+        var position: Int
+        var isExpanded: Bool
+    }
+
+    /// The stack `id` belongs to (nil for a photo in no stack, or one whose stack has a single visible original).
+    func stackInfo(for id: Int64) -> StackInfo? {
+        guard let stackID = stackOfPhoto[id], let members = stackMembers[stackID], let at = members.firstIndex(of: id) else { return nil }
+        return StackInfo(stackID: stackID, size: members.count, position: at + 1, isExpanded: expandedInPass.contains(stackID))
+    }
+
+    /// "Stack of 4" on a collapsed stack's cell, "Stack 2 of 4" on an expanded member; nil outside stacks.
+    func stackBadgeText(for id: Int64) -> String? {
+        guard let info = stackInfo(for: id) else { return nil }
+        return info.isExpanded ? "Stack \(info.position) of \(info.size)" : "Stack of \(info.size)"
+    }
+
+    /// How many other photos of its stack hide behind `id`'s cell (0 for an expanded member or a photo in no stack): the photos a key
+    /// pressed on this cell does NOT touch.
+    func hiddenMemberCount(of id: Int64) -> Int {
+        guard let info = stackInfo(for: id), !info.isExpanded else { return 0 }
+        return info.size - 1
+    }
+
+    enum StackToggle: Equatable { case expanded, collapsed, notInStack, notLoupe }
+
+    /// `S`: opens the current photo's stack in place (its members as a run at the cell's position, current stays) or closes it (back to its
+    /// one cell, current moves to it). Loupe only; the grid's own expansion is never touched.
+    @discardableResult
+    mutating func toggleStack() -> StackToggle {
+        guard mode == .loupe else { return .notLoupe }
+        guard let id = currentID, let stackID = stackOfPhoto[id] else { return .notInStack }
+        let expanding = !expandedInPass.contains(stackID)
+        if expanding { expandedInPass.insert(stackID) } else { expandedInPass.remove(stackID) }
+        ids = Self.cells(passIDs: passIDs, stackMembers: stackMembers, stackOfPhoto: stackOfPhoto, coverOfStack: coverOfStack, expanded: expandedInPass)
+        let target = expanding ? id : (coverOfStack[stackID] ?? id)
+        index = ids.firstIndex(of: target) ?? min(index, ids.count - 1)
+        return expanding ? .expanded : .collapsed
+    }
+
     // MARK: Progress
 
     struct Counts: Equatable {
@@ -217,7 +307,7 @@ struct CullSession: Equatable {
     /// Flag counts over the snapshot, read from the live rows (ids with no row, e.g. removed meanwhile, are skipped).
     func counts(rows: [Int64: Photo]) -> Counts {
         var result = Counts()
-        for id in ids {
+        for id in passIDs {
             switch rows[id]?.flagStatus {
             case .picked?: result.picked += 1
             case .rejected?: result.rejected += 1
@@ -257,8 +347,9 @@ struct CullSession: Equatable {
 
     var canUndo: Bool { !undoStack.isEmpty }
 
-    /// Pops the last action and returns to its photo when that photo is still in the list (after a rebuild it may not be: the position
-    /// then stays where it is); the caller writes the recorded previous values back. `nil` when there is nothing to undo.
+    /// Pops the last action and makes its photo current so it is on screen: a photo hidden in a collapsed stack OPENS that stack in the pass
+    /// first (like a hidden start photo). If the photo is in no cell at all (after a rebuild) the position stays where it is; the caller
+    /// writes the recorded previous values back. `nil` when there is nothing to undo.
     mutating func undo() -> CullAction? {
         guard let action = undoStack.popLast() else { return nil }
         // Undo returns to the photo it changed; if Compare / Survey is not showing it, fall back to the loupe so it is on screen.
@@ -269,14 +360,21 @@ struct CullSession: Equatable {
             swapCompare()
         } else if let target = ids.firstIndex(of: action.photoID) {
             index = target
+        } else if let stackID = stackOfPhoto[action.photoID], !expandedInPass.contains(stackID) {
+            // Hidden in a collapsed stack: open the stack so the undone photo is current and visible.
+            expandedInPass.insert(stackID)
+            ids = Self.cells(passIDs: passIDs, stackMembers: stackMembers, stackOfPhoto: stackOfPhoto, coverOfStack: coverOfStack, expanded: expandedInPass)
+            if let target = ids.firstIndex(of: action.photoID) { index = target }
         }
         return action
     }
 
-    /// Rebuilds the snapshot (the "Unflagged only" toggle) keeping the auto-advance setting and the undo stack; stays on the current
-    /// photo if it is still in the new list, else starts at the first. Returns false (the session is unchanged) when the new list would be empty.
-    mutating func rebuild(photos: [Photo], onlyUnflagged: Bool) -> Bool {
-        guard var fresh = CullSession(photos: photos, onlyUnflagged: onlyUnflagged, startingAt: currentID) else { return false }
+    /// Rebuilds the snapshot (the "Unflagged only" toggle) keeping the auto-advance setting, the undo stack and which stacks are open in
+    /// this pass (`stacks` are the catalog's current ones); stays on the current photo if it is still in the new list, else starts at the
+    /// first. Returns false (the session is unchanged) when the new list would be empty.
+    mutating func rebuild(photos: [Photo], onlyUnflagged: Bool, stacks: [StackSnapshot] = []) -> Bool {
+        guard var fresh = CullSession(photos: photos, onlyUnflagged: onlyUnflagged, startingAt: currentID, stacks: stacks,
+                                      expandedStackIDs: expandedInPass) else { return false }
         fresh.autoAdvance = autoAdvance
         fresh.undoStack = undoStack
         self = fresh

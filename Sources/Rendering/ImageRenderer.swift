@@ -169,6 +169,8 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
     private var interaction = ProxyInteraction()
     private var lastDrawnEditState: EditState?
     private weak var lastDrawnView: MTKView?
+    /// Called after each renderer-internal `setNeedsDisplay` (settle / proxy-ready redraws) so `DrawWatchdog` covers them too (D82).
+    var onInternalRedraw: (() -> Void)?
     private var settleWorkItem: DispatchWorkItem?
     private static let settleInterval: TimeInterval = 0.25 // feel, not measured —
         // between the histogram debounce (0.15s) and the history coalesce
@@ -275,6 +277,7 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
             let needsRedraw = self.interaction.settle()
             if needsRedraw, let view = self.lastDrawnView {
                 view.setNeedsDisplay(view.bounds)
+                self.onInternalRedraw?()
             }
         }
         settleWorkItem = workItem
@@ -327,6 +330,7 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
                 self.cachedProxyScale = scale
                 if let view = self.lastDrawnView {
                     view.setNeedsDisplay(view.bounds)
+                    self.onInternalRedraw?()
                 }
             }
         }
@@ -368,7 +372,11 @@ final class ImageRenderer: NSObject, MTKViewDelegate {
         return cachedProxy ?? image
     }
 
+    /// Counts every `draw(in:)` ATTEMPT (before the guards), so `DrawWatchdog` can tell whether the display cycle ran at all.
+    private(set) var drawCount = 0
+
     func draw(in view: MTKView) {
+        drawCount += 1
         guard let image,
               let drawable = view.currentDrawable,
               let commandBuffer = commandQueue.makeCommandBuffer()

@@ -11,6 +11,9 @@ struct EditorRatingBar: View {
     /// The Info popover's state and its button action (⌘I does the same). Without a model there is no Info button.
     var info: EditorInfoModel?
     var onInfo: () -> Void = {}
+    /// The "Edits not saved" chip (nil = edits are reaching disk) and what its button does.
+    var saveStatus: SidecarSaveStatusPresentation?
+    var onSaveAction: (SidecarSaveStatusPresentation.Action) -> Void = { _ in }
 
     var body: some View {
         let photo = meta.photo
@@ -19,6 +22,7 @@ struct EditorRatingBar: View {
             flagButton(.picked, current: photo?.flagStatus ?? .none)
             flagButton(.rejected, current: photo?.flagStatus ?? .none)
             labelDots(current: photo?.colorLabel ?? .none)
+            if let saveStatus { saveStatusChip(saveStatus) }
             if photo == nil {
                 Text("Not in your Library").font(.caption).foregroundStyle(Theme.textSecondary)
                     .lineLimit(1).truncationMode(.tail).layoutPriority(-1)
@@ -40,6 +44,30 @@ struct EditorRatingBar: View {
         .frame(maxWidth: .infinity)
         .background(Theme.panel)
         .overlay(alignment: .top) { Divider() }
+    }
+
+    /// Amber warning + one action: the edits on screen are not being written to the photo's edit file. Shrinks in steps when the bar
+    /// is tight (`ViewThatFits`): triangle + caption + action button, then triangle + action button, then the triangle alone (itself
+    /// the action button). What is actually claimed is render-tested at the Editor pane's 480 pt minimum, with the Info button.
+    private func saveStatusChip(_ status: SidecarSaveStatusPresentation) -> some View {
+        let warning = Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning)
+        let button = Button(status.actionTitle) { onSaveAction(status.action) }
+            .buttonStyle(FlatButtonStyle(compact: true))
+            .lineLimit(1).fixedSize()
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                warning
+                Text(status.title).font(.caption).foregroundStyle(Theme.warning).lineLimit(1).fixedSize()
+                button
+            }
+            HStack(spacing: 6) { warning; button }
+            Button { onSaveAction(status.action) } label: { warning }.buttonStyle(.plain)
+                .accessibilityLabel(status.actionTitle)
+                .help("\(status.help) Click to \(status.actionTitle).")
+        }
+        .help(status.help)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(status.title). \(status.help)")
     }
 
     /// "Info": the title / caption / creator / copyright popover for the open photo. Disabled (with the reason) when the photo has no

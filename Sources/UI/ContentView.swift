@@ -660,7 +660,7 @@ struct ContentView: View {
     /// The rating / flag / label / Info / Copy Settings bar under the photo (outside the image `GeometryReader`, so the fit rect simply
     /// shrinks). Extracted from `editorSplitView` — this file's type-checker ceiling.
     private var editorRatingBar: some View {
-        EditorRatingBar(meta: editorMeta, canCopy: document.currentImage != nil, onCopy: {
+        EditorRatingBarHost(document: document, meta: editorMeta, canCopy: document.currentImage != nil, onCopy: {
             pasteModel.copy(document.editState, fileName: document.currentFileName ?? "photo")
         }, info: editorInfo, onInfo: toggleEditorInfo)
     }

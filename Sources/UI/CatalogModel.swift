@@ -352,14 +352,12 @@ final class CatalogModel: ObservableObject {
     /// catalog is still opening wait for this instead of being refused (`DropAndOpenModifier`).
     @Published private(set) var openSettled = false
 
-    /// Read-only security-scoped bookmarks for imported folders — kept in
-    /// their OWN store (a distinct `UserDefaults` key) rather than reusing
-    /// `ImageDocumentModel`'s sidecar-save bookmark store, so this new,
-    /// less-tested path can't interfere with that already-shipped one. A
-    /// folder ending up with two independently-stored bookmarks (one here
-    /// for browsing, one there for sidecar-saving) is an accepted,
-    /// harmless redundancy — same underlying `NSOpenPanel` grant, recorded
-    /// twice.
+    /// Security-scoped bookmarks for imported folders — kept in their OWN store (a distinct `UserDefaults` key) rather than
+    /// reusing `ImageDocumentModel`'s sidecar-save bookmark store. They are NOT read-only: same `.withSecurityScope` options
+    /// and the same read-write entitlement, so a folder's scope activated from here also lets the Editor read (and write) its
+    /// sidecars (D81). The two stores differ only in key and purpose; a folder may end up with a bookmark in each, which is
+    /// harmless redundancy.
+    ///
     /// Internal, not `private`: `CatalogModelTests` reads/seeds this
     /// directly to exercise `ensureAccessActive(forPhotoAt:)`'s decision
     /// logic — same testability-motivated widening `activeFolders` below

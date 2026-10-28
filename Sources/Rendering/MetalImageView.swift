@@ -43,6 +43,9 @@ struct MetalImageView: NSViewRepresentable {
         let metalLayer = view.layer as? CAMetalLayer
         assert(metalLayer != nil, "MTKView's backing layer was expected to be a CAMetalLayer")
         metalLayer?.colorspace = renderer.outputColorSpace
+        // D82: the renderer is reached through a weak capture, so the view -> watchdog -> closure chain holds no cycle.
+        view.drawCount = { [weak renderer] in renderer?.drawCount ?? 0 }
+        renderer.onInternalRedraw = { [weak view] in view?.watchdog.requested() }
         return view
     }
 
@@ -78,6 +81,7 @@ struct MetalImageView: NSViewRepresentable {
         (nsView as? ResizingMTKView)?.onScrollZoom = onScrollZoom
         (nsView as? ResizingMTKView)?.zoomEnabled = zoomEnabled
         nsView.setNeedsDisplay(nsView.bounds)
+        (nsView as? ResizingMTKView)?.watchdog.requested()
     }
 
     func makeCoordinator() -> ImageRenderer {
@@ -107,9 +111,27 @@ private final class ResizingMTKView: MTKView {
     /// `NSEvent` monitor (or similar legacy-API handle) from `deinit`.
     nonisolated(unsafe) private var scrollMonitor: Any?
 
+    /// Set in `makeNSView`: the renderer's draw counter (see `DrawWatchdog`).
+    var drawCount: () -> Int = { 0 }
+
+    /// D82: forces a draw when a requested redraw never happens. Only fires while the view is in a visible window.
+    private(set) lazy var watchdog = DrawWatchdog(
+        drawCount: { [weak self] in self?.drawCount() ?? 0 },
+        canDraw: { [weak self] in
+            guard let window = self?.window else { return false }
+            // Deliberately NOT the window occlusion visible bit: in the failing launch it read 8192 (no .visible bit) while the
+            // window was on screen, and forcing a draw worked.
+            guard let self else { return false }
+            return window.isVisible && !window.isMiniaturized && !self.isHiddenOrHasHiddenAncestor
+                && self.bounds.width > 0 && self.bounds.height > 0
+        },
+        forceDraw: { [weak self] in self?.draw() }
+    )
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         setNeedsDisplay(bounds)
+        watchdog.requested()
     }
 
     /// Explicitly opt OUT of intrinsic sizing — this view should always be

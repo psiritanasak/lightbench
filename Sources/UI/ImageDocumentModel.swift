@@ -235,6 +235,43 @@ final class ImageDocumentModel: ObservableObject {
     /// The edit key whose save was already refused this load: the alert is shown ONCE; later saves for that key stay
     /// silent and skip the write (and the disk re-read). Cleared on every successful `load`.
     private var refusedEditKey: String?
+    /// Whether the open photo's edits are reaching disk — the persistent counterpart of the once-per-load alert. Set wherever a
+    /// save fails to land (both D81 refusals, silent or not; a declined folder; a write error) and cleared by the next successful
+    /// write for the open photo or a load, which recomputes it for the NEW photo (`declinedFolders` outlives photo switches).
+    @Published private(set) var sidecarSaveStatus: SidecarSaveStatus = .ok
+    /// Sets the status only while `url`/`versionKey` is still the open photo: a save snapshot can outlive a photo switch (the
+    /// access panel pumps the run loop), and its outcome must not overwrite the NEW photo's status.
+    private func publishSaveStatus(_ status: SidecarSaveStatus, forPhotoAt url: URL, versionKey: String?) {
+        guard currentURL == url, currentVersionKey == versionKey else { return }
+        sidecarSaveStatus = status
+    }
+    /// The status a freshly opened (or re-granted) photo starts with: only a declined folder is known without attempting a save.
+    private func baselineSaveStatus() -> SidecarSaveStatus {
+        guard let currentURL, declinedFolders.contains(currentURL.deletingLastPathComponent().path) else { return .ok }
+        return .folderDeclined
+    }
+    /// The open photo's edit file (master or virtual copy), for the status chip's help and Show in Finder.
+    var currentSidecarURL: URL? {
+        currentURL.flatMap { SidecarStore.versionedSidecarURL(for: $0, versionKey: currentVersionKey) }
+    }
+    /// The chip's "Try Again": settles any pending burst and saves now (a pending debounced save is superseded).
+    func retrySidecarSave() {
+        endTargetedDrag() // may schedule a save: do it BEFORE cancelling so no redundant delayed save fires afterwards
+        sidecarSaveWorkItem?.cancel()
+        sidecarSaveWorkItem = nil
+        finalizePendingCommit()
+        saveSidecarNow()
+    }
+    /// The chip's "Grant Access…": forgets this session's decline for the open photo's folder, then saves (which asks again).
+    func grantAccessAndRetrySidecarSave() {
+        if let currentURL { clearDeclinedFolder(currentURL.deletingLastPathComponent().path) }
+        retrySidecarSave()
+    }
+    /// The chip's "Reload": re-reads the open photo's edit file, discarding in-memory edits made since it was opened.
+    func reloadCurrentPhotoFromSidecar() async {
+        guard let url = currentURL else { return }
+        await load(from: url, versionKey: currentVersionKey)
+    }
     /// Caches each history entry's encoded form across saves (see `HistoryArchive.Encoder`).
     private var historyEncoder = HistoryArchive.Encoder()
 
@@ -515,6 +552,7 @@ final class ImageDocumentModel: ObservableObject {
         currentVersionKey = versionKey
         refusedEditKey = nil
         sidecarOwnedEditKey = existingSidecarState == nil ? nil : Photo.editKey(path: url.path, versionKey: versionKey)
+        sidecarSaveStatus = baselineSaveStatus()
         refreshDepthAvailability()
         currentRawOrientationIsUp = isRawOrientationUp
         currentRawAdjustmentSupport = rawAdjustmentSupport
@@ -2307,6 +2345,8 @@ final class ImageDocumentModel: ObservableObject {
     /// folder.
     func clearDeclinedFolder(_ folderPath: String) {
         declinedFolders.remove(folderPath)
+        // The status is deliberately NOT recomputed here: forgetting a decline writes nothing, so only an actual save outcome
+        // (`publishSaveStatus`) or a load may clear a problem. An unchanged paste right after this call flushes nothing.
     }
 
     /// The sidecar path for a given photo URL — same directory, original
@@ -2425,13 +2465,17 @@ final class ImageDocumentModel: ObservableObject {
         let historySnapshot = history
         let historyBelongsHere = historyEditKey == editKey && historySnapshot.entries.count > 1 && historySnapshot.current == snapshot
         let folder = url.deletingLastPathComponent()
-        guard !declinedFolders.contains(folder.path) else { return }
+        guard !declinedFolders.contains(folder.path) else {
+            publishSaveStatus(.folderDeclined, forPhotoAt: url, versionKey: versionKey)
+            return
+        }
         let folderURL: URL
         switch folderAccess.resolveOrRequest(for: folder, message: Self.sidecarFolderAccessMessage) {
         case .granted(let granted):
             folderURL = granted
         case .declined:
             declinedFolders.insert(folder.path)
+            publishSaveStatus(.folderDeclined, forPhotoAt: url, versionKey: versionKey)
             return
         case .failed(let error):
             // Matches the original `requestFolderAccess`'s own behavior:
@@ -2441,12 +2485,14 @@ final class ImageDocumentModel: ObservableObject {
             // error, not the "opening a photo shouldn't itself produce an
             // error" case `suppressErrorMessage` exists for.
             sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"
+            publishSaveStatus(.writeFailed(error.localizedDescription), forPhotoAt: url, versionKey: versionKey)
             return
         }
         guard folderURL.startAccessingSecurityScopedResource() else {
             if !suppressErrorMessage {
                 sidecarSaveErrorMessage = "Couldn't save edits: access to the containing folder is no longer available."
             }
+            publishSaveStatus(.writeFailed("access to the containing folder is no longer available"), forPhotoAt: url, versionKey: versionKey)
             return
         }
         defer { folderURL.stopAccessingSecurityScopedResource() }
@@ -2462,9 +2508,11 @@ final class ImageDocumentModel: ObservableObject {
             case .missing:
                 message = ""
             case .decoded:
+                publishSaveStatus(.refusedNotLoaded, forPhotoAt: url, versionKey: versionKey)
                 message = "Couldn't save edits: this photo already has a saved edit file that wasn't loaded. "
                     + "Close and reopen the photo, then edit again."
             case .undecodable:
+                publishSaveStatus(.refusedUnreadable, forPhotoAt: url, versionKey: versionKey)
                 let name = SidecarStore.versionedSidecarURL(for: url, versionKey: versionKey)?.lastPathComponent ?? "its edit file"
                 message = "Couldn't save edits: this photo's saved edit file can't be read, so it was left untouched. "
                     + "Fix or remove \(name), then reopen the photo."
@@ -2486,11 +2534,13 @@ final class ImageDocumentModel: ObservableObject {
                 try SidecarStore.write(snapshot, forPhotoAt: url, versionKey: versionKey)
             }
             if currentURL == url, currentVersionKey == versionKey { sidecarOwnedEditKey = editKey }
+            publishSaveStatus(.ok, forPhotoAt: url, versionKey: versionKey)
             if let versionKey { onVersionSidecarSaved?(url, versionKey) } else { onSidecarSaved?(url) }
         } catch {
             if !suppressErrorMessage {
                 sidecarSaveErrorMessage = "Couldn't save edits: \(error.localizedDescription)"
             }
+            publishSaveStatus(.writeFailed(error.localizedDescription), forPhotoAt: url, versionKey: versionKey)
         }
     }
 

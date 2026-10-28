@@ -50,7 +50,9 @@ final class VirtualCopyReviewTests: XCTestCase {
     func testTheMenuNeighbourLookupAndNoOtherVersionIdentitySiteStillUsesThePath() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let app = try String(contentsOf: root.appendingPathComponent("Sources/App/PhotoAppApp.swift"), encoding: .utf8)
-        XCTAssertTrue(app.contains("LibraryNavigation.neighbors(ofEditKey: currentKey, in: catalog.displayedPhotos)"))
+        // By EDIT KEY, over the flat list (no stacks) or the filmstrip's cells (stacks) — both of which are lists of the SAME photos.
+        XCTAssertTrue(app.contains("LibraryNavigation.neighbors(ofEditKey: currentKey, in: walked)"))
+        XCTAssertTrue(app.contains("catalog.stacks.isEmpty ? catalog.displayedPhotos : catalog.filmstripItems(openEditKey: currentKey).map(\\.photo)"))
         XCTAssertTrue(app.contains("cull.begin(startingAtPath: showLibrary ? catalog.focusedPhotoPath : document.currentEditKey)"))
         let neighbours = try XCTUnwrap(app.range(of: "private var photoNeighbors"))
         XCTAssertFalse(app[neighbours.lowerBound...].prefix(900).contains("currentURL?.path"))

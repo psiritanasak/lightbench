@@ -120,9 +120,15 @@ final class EditorInfoModelTests: XCTestCase {
     }
 
     func testTheMenuItemIsEnabledInTheEditorOnlyWithAnOpenLoadedPhotoAndNeverDuringCulling() {
-        func disabled(lib: Bool, cull: Bool = false, blocked: Bool = false, open: Bool = true, loading: Bool = false) -> Bool {
-            EditorInfoMenuRules.isDisabled(showLibrary: lib, cullActive: cull, libraryBlocked: blocked, hasOpenPhoto: open, loadInFlight: loading)
+        func disabled(lib: Bool, cull: Bool = false, blocked: Bool = false, open: Bool = true, loading: Bool = false,
+                      row: Bool = true, popover: Bool = false) -> Bool {
+            EditorInfoMenuRules.isDisabled(showLibrary: lib, cullActive: cull, libraryBlocked: blocked, hasOpenPhoto: open, loadInFlight: loading,
+                                           hasCatalogRow: row, popoverOpen: popover)
         }
+        XCTAssertTrue(disabled(lib: false, row: false), "no catalog row: Info has nothing to edit")
+        XCTAssertFalse(disabled(lib: false, row: false, popover: true), "an open popover stays closable with the key")
+        XCTAssertFalse(disabled(lib: true, row: false), "the Library ignores the Editor photo's row")
+        XCTAssertTrue(disabled(lib: false, cull: true, popover: true))
         XCTAssertFalse(disabled(lib: false))
         XCTAssertTrue(disabled(lib: false, open: false))
         XCTAssertTrue(disabled(lib: false, loading: true))
@@ -271,6 +277,9 @@ final class EditorInfoWiringTests: XCTestCase {
         XCTAssertTrue(app.contains("catalog.editorInfoToggleRequested = true"))
         XCTAssertTrue(app.contains("catalog.infoSheetRequested = true"))
         XCTAssertTrue(app.contains("EditorInfoMenuRules.isDisabled("))
+        XCTAssertTrue(app.contains("hasCatalogRow: catalog.editorPhotoInCatalog"))
+        XCTAssertTrue(app.contains("popoverOpen: catalog.editorInfoOpen"))
+        XCTAssertTrue(try source("Sources/UI/EditorInfoPopover.swift").contains("catalog.editorPhotoInCatalog ="))
     }
 
     func testContentViewWiresThePopoverCopyResolutionAndTheWriter() throws {

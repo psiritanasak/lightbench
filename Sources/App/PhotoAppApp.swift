@@ -215,7 +215,8 @@ struct PhotoAppApp: App {
                 .keyboardShortcut("i", modifiers: [.command])
                 .disabled(EditorInfoMenuRules.isDisabled(
                     showLibrary: showLibrary, cullActive: cull.isActive, libraryBlocked: infoLibraryBlocked,
-                    hasOpenPhoto: document.currentEditKey != nil, loadInFlight: document.isLoadInFlight))
+                    hasOpenPhoto: document.currentEditKey != nil, loadInFlight: document.isLoadInFlight,
+                    hasCatalogRow: catalog.editorPhotoInCatalog, popoverOpen: catalog.editorInfoOpen))
                 // Photo stacks (Library only; the grid ignores ⌘ chords, so these are menu items). Manual stack operations act on the whole
                 // SELECTION, including photos the filters hide (the result message says so); they move no files, so only the sheets that
                 // edit the selection or its stacks block them.

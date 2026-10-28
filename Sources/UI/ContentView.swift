@@ -1505,7 +1505,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: showLibrary) { _, _ in isHistoryPresented = false }
-        .modifier(EditorInfoLifecycle(model: editorInfo, catalog: catalog, editKey: document.currentEditKey, showLibrary: showLibrary,
+        .modifier(EditorInfoLifecycle(model: editorInfo, catalog: catalog, meta: editorMeta, editKey: document.currentEditKey, showLibrary: showLibrary,
                                       toggle: toggleEditorInfo, focusImagePane: { isImagePaneFocused = true }))
         // Turning Compare on clears every armed mode and the overlay/detail selections (masks stay APPLIED — Compare is the best way
         // to see what a mask did; only the SELECTION goes). The Compare control disables itself while a mode is armed, but

@@ -40,13 +40,15 @@ struct EditorInfoPopover: View {
 
 // MARK: - Lifecycle
 
-/// Ties the Info popover to the Editor: mirrors `isOpen` to the menus (`catalog.editorInfoOpen`), performs the menu's ⌘I request, saves
+/// Ties the Info popover to the Editor: mirrors `isOpen` (`catalog.editorInfoOpen`) and whether the open photo has a catalog row
+/// (`catalog.editorPhotoInCatalog`) to the menus, performs the menu's ⌘I request, saves
 /// (never discards) what was typed when the open photo changes or the Editor is left, and hands keyboard focus back to the image pane
 /// after the popover closes, exactly like the History popover (not when the dismissing click landed on a text field, an `NSTextView`
 /// first responder, checked one run-loop turn later).
 struct EditorInfoLifecycle: ViewModifier {
     @ObservedObject var model: EditorInfoModel
     @ObservedObject var catalog: CatalogModel
+    @ObservedObject var meta: EditorPhotoMeta
     let editKey: String?
     let showLibrary: Bool
     let toggle: () -> Void
@@ -54,6 +56,7 @@ struct EditorInfoLifecycle: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .onChange(of: meta.photo != nil, initial: true) { _, hasRow in catalog.editorPhotoInCatalog = hasRow }
             .onChange(of: model.isOpen) { _, open in
                 catalog.editorInfoOpen = open
                 guard !open, !showLibrary else { return }

@@ -9,7 +9,8 @@ import XCTest
 final class EditorRatingBarRenderTests: XCTestCase {
     private let size = CGSize(width: 600, height: 36)
 
-    private func render(_ meta: EditorPhotoMeta, info: EditorInfoModel? = nil) -> NSBitmapImageRep {
+    private func render(_ meta: EditorPhotoMeta, info: EditorInfoModel? = nil, size: CGSize? = nil) -> NSBitmapImageRep {
+        let size = size ?? self.size
         let view = EditorRatingBar(meta: meta, canCopy: true, onCopy: {}, info: info).frame(width: size.width, height: size.height)
         let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
         hosting.frame = NSRect(origin: .zero, size: size)
@@ -90,9 +91,30 @@ final class EditorRatingBarRenderTests: XCTestCase {
     }
 
     func testTheInfoButtonIsDimWithoutACatalogRow() async {
-        let resolved = count(render(await meta(), info: EditorInfoModel()), isWhite)
-        let unresolved = count(render(await meta(resolved: false), info: EditorInfoModel()), isWhite)
-        XCTAssertGreaterThan(resolved, unresolved, "no row: the button is disabled (grey), so fewer white pixels")
+        // Isolate the button: its own white pixels = (with an info model) - (without), per state.
+        let resolvedMeta = await meta(), unresolvedMeta = await meta(resolved: false)
+        let resolvedDelta = count(render(resolvedMeta, info: EditorInfoModel()), isWhite) - count(render(resolvedMeta), isWhite)
+        let unresolvedDelta = count(render(unresolvedMeta, info: EditorInfoModel()), isWhite) - count(render(unresolvedMeta), isWhite)
+        XCTAssertGreaterThan(resolvedDelta, 20, "an enabled Info button draws white label and icon pixels")
+        XCTAssertLessThan(unresolvedDelta, resolvedDelta / 4, "no row: the button is dim grey and adds almost no white")
+    }
+
+    func testCopySettingsKeepsItsFullLabelAtTheNarrowDefaultWidth() async {
+        // At a narrow width the "Not in your Library" hint must give way, not Copy Settings: the trailing (right-aligned) strip
+        // holding Copy Settings renders identically whether or not the hint is present.
+        let narrow = CGSize(width: 440, height: 36)
+        let strip = 90
+        func rightStrip(_ m: EditorPhotoMeta) -> [UInt8] {
+            let rep = render(m, size: narrow)
+            var out: [UInt8] = []
+            for y in 0..<rep.pixelsHigh { for x in (rep.pixelsWide - strip)..<rep.pixelsWide {
+                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                out.append(UInt8(c.redComponent * 255)); out.append(UInt8(c.greenComponent * 255)); out.append(UInt8(c.blueComponent * 255))
+            } }
+            return out
+        }
+        let inLibrary = rightStrip(await meta()), notInLibrary = rightStrip(await meta(resolved: false))
+        XCTAssertTrue(inLibrary == notInLibrary, "Copy Settings is not truncated by the hint")
     }
 
     /// The lookup finding nothing leaves no row (the bar then draws its empty, disabled state — the render of that state is

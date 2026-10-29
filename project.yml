@@ -31,8 +31,8 @@ targets:
         ENABLE_HARDENED_RUNTIME: true
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon # Sources/App/Assets.xcassets (placeholder art from scripts/make_app_icon.swift)
-        MARKETING_VERSION: "1.1.0" # CFBundleShortVersionString — bump per release
-        CURRENT_PROJECT_VERSION: "2" # CFBundleVersion — must increase with every notarized/uploaded build
+        MARKETING_VERSION: "1.2.0" # CFBundleShortVersionString — bump per release
+        CURRENT_PROJECT_VERSION: "3" # CFBundleVersion — must increase with every notarized/uploaded build
     info:
       path: Sources/App/Info.plist
       properties:

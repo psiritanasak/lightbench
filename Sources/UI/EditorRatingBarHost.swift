@@ -11,6 +11,10 @@ struct EditorRatingBarHost: View {
     let onCopy: () -> Void
     var info: EditorInfoModel?
     var onInfo: () -> Void = {}
+    /// The Keywords popover (see `EditorRatingBar.keywords`), forwarded unchanged.
+    var keywords: EditorKeywordsModel?
+    var onKeywords: () -> Void = {}
+    var allKeywords: [Keyword] = []
 
     @State private var confirmReload = false
 
@@ -20,7 +24,8 @@ struct EditorRatingBarHost: View {
             saveStatus: SidecarSaveStatusPresentation.make(
                 for: document.sidecarSaveStatus,
                 sidecarFileName: document.currentSidecarURL?.lastPathComponent ?? "its edit file"),
-            onSaveAction: perform)
+            onSaveAction: perform,
+            keywords: keywords, onKeywords: onKeywords, allKeywords: allKeywords)
             .confirmationDialog("Reload edits from the saved file?", isPresented: $confirmReload, titleVisibility: .visible) {
                 Button("Reload", role: .destructive) { Task { await document.reloadCurrentPhotoFromSidecar() } }
                 Button("Cancel", role: .cancel) {}

@@ -87,10 +87,10 @@ struct PhotoAppApp: App {
                 // While culling, ⌘Z undoes the last CULL action (flag / rating / label) and never reaches the Editor's edit history.
                 Button("Undo") { if cull.isActive { cull.undo() } else { document.undo() } }
                     .keyboardShortcut("z", modifiers: .command)
-                    .disabled(catalog.editorInfoOpen || (cull.isActive ? !cull.canUndo : !document.canUndo))
+                    .disabled(catalog.editorPopoverOpen || (cull.isActive ? !cull.canUndo : !document.canUndo))
                 Button("Redo") { document.redo() }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(catalog.editorInfoOpen || cull.isActive || !document.canRedo)
+                    .disabled(catalog.editorPopoverOpen || cull.isActive || !document.canRedo)
             }
             // Move between photos without a round-trip through the Library
             // grid. Same pattern as the Edit menu above: the Scene-level
@@ -120,10 +120,10 @@ struct PhotoAppApp: App {
                 let neighbors = photoNeighbors
                 Button("Previous Photo") { open(neighbors.previous) }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
-                    .disabled(catalog.editorInfoOpen || neighbors.previous == nil || renameModel.isWorking)
+                    .disabled(catalog.editorPopoverOpen || neighbors.previous == nil || renameModel.isWorking)
                 Button("Next Photo") { open(neighbors.next) }
                     .keyboardShortcut(.rightArrow, modifiers: .command)
-                    .disabled(catalog.editorInfoOpen || neighbors.next == nil || renameModel.isWorking)
+                    .disabled(catalog.editorPopoverOpen || neighbors.next == nil || renameModel.isWorking)
                 Divider()
                 // Culling: a full-window Pick / Reject review of the photos the Library is showing.
                 Button("Cull Photos") {
@@ -132,7 +132,7 @@ struct PhotoAppApp: App {
                 }
                 .keyboardShortcut("c", modifiers: [.command, .option])
                 .help("Review photos one by one. Esc returns to the Library.")
-                .disabled(catalog.editorInfoOpen || cull.isActive || catalog.photos.isEmpty || renameModel.isWorking || document.isLoadInFlight)
+                .disabled(catalog.editorPopoverOpen || cull.isActive || catalog.photos.isEmpty || renameModel.isWorking || document.isLoadInFlight)
                 Divider()
                 // Copy/Paste Edit Settings — Lightroom's own Photo-menu
                 // placement and shortcuts. "Paste Settings" here shows the
@@ -146,7 +146,7 @@ struct PhotoAppApp: App {
                     pasteModel.copy(document.editState, fileName: document.currentFileName ?? "photo")
                 }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
-                .disabled(catalog.editorInfoOpen || cull.isActive || document.currentImage == nil)
+                .disabled(catalog.editorPopoverOpen || cull.isActive || document.currentImage == nil)
                 Button("Paste Settings") {
                     pasteModel.requestPaste(onto: catalog.selectedPhotos)
                 }
@@ -157,14 +157,14 @@ struct PhotoAppApp: App {
                 // scoped to the Library pane, so it needs the SAME guard
                 // independently, not just the toolbar button's copy of it.
                 .disabled(
-                    catalog.editorInfoOpen || cull.isActive || pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight || catalog.mergeBusy || catalog.fileToolBusy
+                    catalog.editorPopoverOpen || cull.isActive || pasteModel.copied == nil || catalog.selectedPhotos.isEmpty || document.isLoadInFlight || catalog.mergeBusy || catalog.fileToolBusy
                         || renameModel.isWorking || renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
                         || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
                 )
                 // Editor-only: acts on the OPEN photo (reads its Lightroom / Camera Raw .xmp). No shortcut. Only REQUESTS; the modifier confirms.
                 Button("Import Lightroom Settings…") { lightroomImport.request(for: document) }
                     .disabled(
-                        catalog.editorInfoOpen || cull.isActive || showLibrary || document.currentImage == nil || document.isLoadInFlight || lightroomImport.isBusy
+                        catalog.editorPopoverOpen || cull.isActive || showLibrary || document.currentImage == nil || document.isLoadInFlight || lightroomImport.isBusy
                             || catalog.mergeBusy || catalog.fileToolBusy || renameModel.isWorking || renameModel.isPresentingSheet
                             || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
                     )
@@ -174,10 +174,10 @@ struct PhotoAppApp: App {
                     renameWorking: renameModel.isWorking, cullActive: cull.isActive, showLibrary: showLibrary)
                 Button("Rotate Left") { document.rotate(.left) }
                     .keyboardShortcut("[", modifiers: .command)
-                    .disabled(!canRotate || catalog.editorInfoOpen)
+                    .disabled(!canRotate || catalog.editorPopoverOpen)
                 Button("Rotate Right") { document.rotate(.right) }
                     .keyboardShortcut("]", modifiers: .command)
-                    .disabled(!canRotate || catalog.editorInfoOpen)
+                    .disabled(!canRotate || catalog.editorPopoverOpen)
                 // Virtual copies: another independent edit version of the same file (Lightroom's own ⌘'). Library: the selected visible
                 // photos, else the focused one; Editor: the open photo/version. Edits made so far in the Editor are flushed first.
                 Button("Create Virtual Copy") {
@@ -189,7 +189,7 @@ struct PhotoAppApp: App {
                 }
                 .keyboardShortcut("'", modifiers: .command)
                 .disabled(
-                    catalog.editorInfoOpen || cull.isActive || catalog.virtualCopyTargets(showLibrary: showLibrary, openEditKey: document.currentEditKey).isEmpty
+                    catalog.editorPopoverOpen || cull.isActive || catalog.virtualCopyTargets(showLibrary: showLibrary, openEditKey: document.currentEditKey).isEmpty
                         || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight || catalog.mergeBusy
                         || catalog.fileToolBusy || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
                 )
@@ -198,12 +198,18 @@ struct PhotoAppApp: App {
                 // performs the request with its own selection and busy-state providers.
                 // Library-only: it edits the Library SELECTION, which in the Editor may not include the open photo.
                 // Only REQUESTS — `KeywordSheetModifier` drops it while another sheet/dialog is up.
-                Button("Edit Keywords…") { catalog.keywordSheetRequested = true }
-                    .keyboardShortcut("k", modifiers: [.command])
-                    .disabled(
-                        cull.isActive || !showLibrary || catalog.selectedPhotos.isEmpty || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
-                            || renameModel.isWorking || renameModel.isPresentingSheet
-                    )
+                // Context-aware. Library: the sheet over the SELECTION (only REQUESTS; `KeywordSheetModifier` drops it while another sheet/dialog
+                // is up). Editor: toggles the Keywords popover on the OPEN photo (`ContentView` performs it; see `EditorKeywordsMenuRules`).
+                let keywordsLibraryBlocked = catalog.selectedPhotos.isEmpty || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
+                    || renameModel.isWorking || renameModel.isPresentingSheet
+                Button("Edit Keywords…") {
+                    if showLibrary { catalog.keywordSheetRequested = true } else { catalog.editorKeywordsToggleRequested = true }
+                }
+                .keyboardShortcut("k", modifiers: [.command])
+                .disabled(EditorKeywordsMenuRules.isDisabled(
+                    showLibrary: showLibrary, cullActive: cull.isActive, libraryBlocked: keywordsLibraryBlocked,
+                    hasOpenPhoto: document.currentEditKey != nil, loadInFlight: document.isLoadInFlight,
+                    hasCatalogRow: catalog.editorPhotoInCatalog, popoverOpen: catalog.editorKeywordsOpen, infoOpen: catalog.editorInfoOpen))
                 // Context-aware. Library: the sheet over the SELECTION (only REQUESTS; `InfoSheetModifier` drops it while another sheet/dialog
                 // is up). Editor: toggles the Info popover on the OPEN photo (`ContentView` performs it; see `EditorInfoMenuRules`).
                 let infoLibraryBlocked = catalog.selectedPhotos.isEmpty || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
@@ -216,20 +222,21 @@ struct PhotoAppApp: App {
                 .disabled(EditorInfoMenuRules.isDisabled(
                     showLibrary: showLibrary, cullActive: cull.isActive, libraryBlocked: infoLibraryBlocked,
                     hasOpenPhoto: document.currentEditKey != nil, loadInFlight: document.isLoadInFlight,
-                    hasCatalogRow: catalog.editorPhotoInCatalog, popoverOpen: catalog.editorInfoOpen))
+                    hasCatalogRow: catalog.editorPhotoInCatalog, popoverOpen: catalog.editorInfoOpen,
+                    keywordsOpen: catalog.editorKeywordsOpen))
                 // Photo stacks (Library only; the grid ignores ⌘ chords, so these are menu items). Manual stack operations act on the whole
                 // SELECTION, including photos the filters hide (the result message says so); they move no files, so only the sheets that
                 // edit the selection or its stacks block them.
                 Button("Stack Selected") { Task { await catalog.stackSelected() } }
                     .keyboardShortcut("g", modifiers: .command)
                     .disabled(
-                        catalog.editorInfoOpen || cull.isActive || !showLibrary || catalog.selectedPhotos.count < 2 || catalog.autoStackSheetPresented || catalog.autoStack.isWorking
+                        catalog.editorPopoverOpen || cull.isActive || !showLibrary || catalog.selectedPhotos.count < 2 || catalog.autoStackSheetPresented || catalog.autoStack.isWorking
                             || catalog.trashBusy || renameModel.isWorking || renameModel.isPresentingSheet
                     )
                 Button("Unstack") { Task { await catalog.unstackSelected() } }
                     .keyboardShortcut("g", modifiers: [.command, .shift])
                     .disabled(
-                        catalog.editorInfoOpen || cull.isActive || !showLibrary || catalog.selectedPhotos.isEmpty || catalog.autoStackSheetPresented || catalog.autoStack.isWorking
+                        catalog.editorPopoverOpen || cull.isActive || !showLibrary || catalog.selectedPhotos.isEmpty || catalog.autoStackSheetPresented || catalog.autoStack.isWorking
                             || catalog.trashBusy || renameModel.isWorking || renameModel.isPresentingSheet
                     )
                 // Library-only; only REQUESTS (`AutoStackSheetModifier` drops it while another sheet is up). No default shortcut.

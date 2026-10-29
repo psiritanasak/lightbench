@@ -70,6 +70,7 @@ struct ContentView: View {
     @StateObject private var editorMeta = EditorPhotoMeta()
     /// The Editor's Info popover (title / caption / creator / copyright of the open photo); see `EditorInfoModel`.
     @StateObject private var editorInfo = EditorInfoModel()
+    @StateObject private var editorKeywords = EditorKeywordsModel()
 
     /// Enhance/Super Resolution. Same scoping reasoning as `exportModel`
     /// — v1 deliberately has no Photo-menu item (unlike `pasteModel`'s
@@ -662,13 +663,20 @@ struct ContentView: View {
     private var editorRatingBar: some View {
         EditorRatingBarHost(document: document, meta: editorMeta, canCopy: document.currentImage != nil, onCopy: {
             pasteModel.copy(document.editState, fileName: document.currentFileName ?? "photo")
-        }, info: editorInfo, onInfo: toggleEditorInfo)
+        }, info: editorInfo, onInfo: toggleEditorInfo,
+           keywords: editorKeywords, onKeywords: toggleEditorKeywords, allKeywords: catalog.keywords)
     }
 
     /// The Info button / ⌘I: closes the popover (saving) or opens it on the open photo's catalog row.
     private func toggleEditorInfo() {
-        guard !showLibrary else { return }
+        guard !showLibrary, !editorKeywords.isOpen else { return } // never two popovers at once
         editorInfo.toggle(photo: editorMeta.photo, currentInfo: { catalog.info(for: $0) })
+    }
+
+    /// The Keywords button / ⌘K: closes the popover (saving) or opens it on the open photo's own catalog row (a virtual copy has its own keywords).
+    private func toggleEditorKeywords() {
+        guard !showLibrary, !editorInfo.isOpen else { return } // never two popovers at once
+        editorKeywords.toggle(photo: editorMeta.photo, current: { catalog.keywords(for: $0) }, known: catalog.keywords)
     }
 
     /// The grid's own row for the open photo. The path is read ONCE (not per element: `URL.path` in the closure measured ~70x
@@ -723,6 +731,7 @@ struct ContentView: View {
             setFlagStatus: { catalog.setFlagStatus($0, for: $1) },
             setColorLabel: { catalog.setColorLabel($0, for: $1) })
         editorInfo.configure { info, fields, photos in catalog.setInfo(info, fields: fields, forPhotos: photos) }
+        editorKeywords.configure { adding, removing, photo in catalog.applyKeywordEdits(adding: adding, removing: removing, for: photo) }
         editorMeta.sync(path: document.currentEditKey, isLoading: document.isLoadInFlight)
     }
 
@@ -1500,6 +1509,8 @@ struct ContentView: View {
         .onChange(of: showLibrary) { _, _ in isHistoryPresented = false }
         .modifier(EditorInfoLifecycle(model: editorInfo, catalog: catalog, meta: editorMeta, editKey: document.currentEditKey, showLibrary: showLibrary,
                                       toggle: toggleEditorInfo, focusImagePane: { isImagePaneFocused = true }))
+        .modifier(EditorKeywordsLifecycle(model: editorKeywords, catalog: catalog, editKey: document.currentEditKey, showLibrary: showLibrary,
+                                          toggle: toggleEditorKeywords, focusImagePane: { isImagePaneFocused = true }))
         // Turning Compare on clears every armed mode and the overlay/detail selections (masks stay APPLIED — Compare is the best way
         // to see what a mask did; only the SELECTION goes). The Compare control disables itself while a mode is armed, but
         // `compareMode` is a plain `@State` this observes however it changed (reviewer-caught: this was once missing, so Point

@@ -34,7 +34,7 @@ final class CullWiringTests: XCTestCase {
         let text = app.joined(separator: "\n")
         for (title, needle) in [("Copy Settings", "cull.isActive || document.currentImage == nil"),
                                 ("Paste Settings", "cull.isActive || pasteModel.copied == nil"),
-                                ("Edit Keywords", "cull.isActive || !showLibrary || catalog.selectedPhotos.isEmpty"),
+                                ("Edit Keywords", "cullActive: cull.isActive, libraryBlocked: keywordsLibraryBlocked"),
                                 ("Find Duplicates", "cull.isActive || !showLibrary || catalog.duplicatesSheetPresented"),
                                 ("Rename Files", "cull.isActive || catalog.selectedPhotos.isEmpty"),
                                 ("Undo Rename", "cull.isActive || !renameModel.canUndo")] {

@@ -95,3 +95,14 @@ enum KeywordName {
         return names
     }
 }
+
+/// Why `CatalogDatabase.setKeywords` wrote nothing.
+enum KeywordEditError: LocalizedError {
+    case photoMissing
+
+    var errorDescription: String? {
+        switch self {
+        case .photoMissing: return "the photo is no longer in the Library"
+        }
+    }
+}

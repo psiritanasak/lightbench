@@ -289,7 +289,7 @@ final class VirtualCopyReviewTests: XCTestCase {
 
     // MARK: 9. Merge input
 
-    func testAMergeNeverTakesVirtualCopiesAsInput() {
+    func testAMergeNeverTakesVirtualCopiesAsInput() async {
         let merge = MergeModel(folderAccess: StubAccess(dir))
         let catalog = CatalogModel(database: try! CatalogDatabase(inMemory: true), defaults: isolatedDefaults()) // swiftlint:disable:this force_try
         let master = row("/p/a.jpg", id: 1)
@@ -300,6 +300,7 @@ final class VirtualCopyReviewTests: XCTestCase {
         let other = row("/p/b.jpg", id: 3, name: "b.jpg")
         merge.statusMessage = nil
         merge.request(.hdr, photos: [master, copy, other], catalog: catalog)
+        await merge.checkTask?.value
         XCTAssertEqual(merge.pending?.photos.map(\.id), [1, 3])
     }
 

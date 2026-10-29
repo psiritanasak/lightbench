@@ -226,4 +226,83 @@ final class PhotoMergerTests: XCTestCase {
             XCTAssertEqual(name, "dark.jpg")
         }
     }
+
+    // MARK: Orientation (turn / flip edits)
+
+    /// Baseline merge (no orientation) of the aligned bracket, as the reference every orientation test is compared with.
+    private func baseline(_ urls: [URL]) async throws -> (pixels: [Float], width: Int, height: Int) {
+        try await readOutput(PhotoMerger.mergeHDR(sourceURLs: urls, align: false, into: folder).url)
+    }
+
+    /// Mean absolute difference of the red channel between `out` and `expected(x, y)` over the whole picture.
+    private func meanDiff(_ out: (pixels: [Float], width: Int, height: Int), _ expected: (Int, Int) -> Float) -> Float {
+        var sum: Float = 0
+        for y in 0..<out.height { for x in 0..<out.width { sum += abs(out.pixels[(y * out.width + x) * 4] - expected(x, y)) } }
+        return sum / Float(out.width * out.height)
+    }
+
+    func testAllFramesTurnedOneQuarterTurnGiveTheTurnedBaseline() async throws {
+        let urls = try bracket(shifted: false)
+        let base = try await baseline(urls)
+        let turned = try await readOutput(PhotoMerger.mergeHDR(sourceURLs: urls, align: false, orientations: Array(repeating: PhotoOrientation(quarterTurns: 1), count: 3), into: folder).url)
+        XCTAssertEqual(turned.width, base.height)
+        XCTAssertEqual(turned.height, base.width)
+        guard turned.width == base.height, turned.height == base.width else { return } // the indexing below needs swapped dimensions
+        // clockwise: new(x', y') = old(x: y', y: H - 1 - x')
+        let diff = meanDiff(turned) { x, y in base.pixels[((base.height - 1 - x) * base.width + y) * 4] }
+        XCTAssertLessThan(diff, 0.01, "the merge of turned frames is the turned merge")
+        XCTAssertGreaterThan(meanDiff(turned) { x, y in base.pixels[(min(y, base.height - 1) * base.width + min(x, base.width - 1)) * 4] }, 0.05, "and it is NOT the unturned picture")
+    }
+
+    func testFlippedFramesGiveTheFlippedBaseline() async throws {
+        let urls = try bracket(shifted: false)
+        let base = try await baseline(urls)
+        let flipped = try await readOutput(PhotoMerger.mergeHDR(sourceURLs: urls, align: false, orientations: Array(repeating: PhotoOrientation(flipHorizontal: true), count: 3), into: folder).url)
+        XCTAssertEqual(flipped.width, base.width)
+        XCTAssertLessThan(meanDiff(flipped) { x, y in base.pixels[(y * base.width + (base.width - 1 - x)) * 4] }, 0.01)
+    }
+
+    /// Turn first, flip later (the pipeline's order): the two orders give different pictures.
+    func testATurnAndAFlipApplyInThePipelinesOrder() async throws {
+        let urls = try bracket(shifted: false)
+        let base = try await baseline(urls)
+        let o = PhotoOrientation(quarterTurns: 1, flipHorizontal: true)
+        let out = try await readOutput(PhotoMerger.mergeHDR(sourceURLs: urls, align: false, orientations: Array(repeating: o, count: 3), into: folder).url)
+        XCTAssertEqual(out.width, base.height)
+        guard out.width == base.height, out.height == base.width else { return }
+        // turned(x', y') = base(y', H - 1 - x'); then mirrored left-right: out(x', y') = turned(W' - 1 - x', y')
+        let diff = meanDiff(out) { x, y in base.pixels[((base.height - 1 - (out.width - 1 - x)) * base.width + y) * 4] }
+        XCTAssertLessThan(diff, 0.01)
+    }
+
+    /// The turn happens BEFORE the size check: one frame turned makes it a different size from the others.
+    func testTheSizeCheckSeesTheTurnedFrames() async throws {
+        let urls = try bracket(shifted: false)
+        do {
+            _ = try await PhotoMerger.mergeHDR(sourceURLs: urls, align: false, orientations: [.identity, PhotoOrientation(quarterTurns: 1), .identity], into: folder)
+            XCTFail("expected a size mismatch")
+        } catch PhotoMergeError.sizeMismatch(let name) {
+            XCTAssertEqual(name, "dark.jpg")
+            XCTAssertFalse((PhotoMergeError.sizeMismatch(name).errorDescription ?? "").contains("HDR"), "the wording is shared with panoramas")
+        }
+    }
+
+    func testAnOrientationListOfTheWrongLengthIsRefusedNotIgnored() async throws {
+        let urls = try bracket(shifted: false)
+        let before = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+        do {
+            _ = try await PhotoMerger.mergeHDR(sourceURLs: urls, align: false, orientations: [PhotoOrientation(quarterTurns: 1)], into: folder)
+            XCTFail("expected a refusal")
+        } catch PhotoMergeError.orientationCountMismatch {
+            XCTAssertFalse((PhotoMergeError.orientationCountMismatch.errorDescription ?? "").isEmpty)
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted(), before, "nothing written")
+    }
+
+    func testNoOrientationsMeansTheSameAsAllIdentity() async throws {
+        let urls = try bracket(shifted: false)
+        let base = try await baseline(urls)
+        let same = try await readOutput(PhotoMerger.mergeHDR(sourceURLs: urls, align: false, orientations: Array(repeating: .identity, count: 3), into: folder).url)
+        XCTAssertEqual(same.pixels, base.pixels)
+    }
 }

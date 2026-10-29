@@ -17,7 +17,7 @@ enum PanoramaMerger {
     static let filenameSuffix = "-Pano"
     static let proxyLongEdge: CGFloat = 1600
 
-    static func mergePanorama(sourceURLs: [URL], cropToFill: Bool = true, into folder: URL) async throws -> MergeOutcome {
+    static func mergePanorama(sourceURLs: [URL], cropToFill: Bool = true, orientations: [PhotoOrientation]? = nil, into folder: URL) async throws -> MergeOutcome {
         guard sourceURLs.count >= 2 else { throw PhotoMergeError.panorama(.tooFewFrames) }
         guard sourceURLs.count <= PanoramaPlan.maxFrames else { throw PhotoMergeError.panorama(.tooManyFrames(limit: PanoramaPlan.maxFrames)) }
         for url in sourceURLs where SourceIntegrity.verdict(forFileAt: url) == .truncated {
@@ -26,11 +26,16 @@ enum PanoramaMerger {
         let order = PanoramaPlan.shootingOrder(dates: sourceURLs.map { captureDate(of: $0) }, names: sourceURLs.map(\.lastPathComponent))
         let urls = order.map { sourceURLs[$0] }
 
+        // `orientations` come in the CALLER's order; they follow their files through the shooting-order sort. A count that does not match is refused (`orientationCountMismatch`).
+        if let orientations, orientations.count != sourceURLs.count { throw PhotoMergeError.orientationCountMismatch }
+        let frameOrientations = orientations.map { given in order.map { given[$0] } }
         var frames: [CIImage] = []
-        for url in urls {
+        for (i, url) in urls.enumerated() {
             // The camera's own look (default decode): a panorama is a picture, not radiance data.
             guard let decoded = await RawDecoder.decode(contentsOf: url, editState: EditState()) else { throw PhotoMergeError.unreadableSource(url.lastPathComponent) }
-            frames.append(decoded.transformed(by: CGAffineTransform(translationX: -decoded.extent.minX, y: -decoded.extent.minY)))
+            let origin = decoded.transformed(by: CGAffineTransform(translationX: -decoded.extent.minX, y: -decoded.extent.minY))
+            // Turned/flipped before the size check, the proxies and every homography, so those all live in the orientation the Library shows.
+            frames.append(frameOrientations.map { $0[i].apply(to: origin) } ?? origin)
         }
         let frameRect = CGRect(origin: .zero, size: frames[0].extent.size)
         for (i, f) in frames.enumerated() where f.extent.size != frameRect.size { throw PhotoMergeError.sizeMismatch(urls[i].lastPathComponent) }

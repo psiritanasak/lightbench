@@ -161,6 +161,41 @@ final class PanoramaMergerTests: XCTestCase {
         }
     }
 
+    // MARK: Orientation (turn / flip edits)
+
+    /// Every frame is stored landscape but turned a quarter turn in the Library: the sweep becomes vertical, so the panorama is TALL.
+    func testFramesTurnedInTheLibraryMakeATallPanorama() async throws {
+        let urls = [try writeFrame(2, as: "c_last.jpg"), try writeFrame(0, as: "b_first.jpg"), try writeFrame(1, as: "a_mid.jpg")]
+        let outcome = try await PanoramaMerger.mergePanorama(sourceURLs: urls, orientations: Array(repeating: PhotoOrientation(quarterTurns: 1), count: 3), into: folder)
+        let out = try await readOutput(outcome.url)
+        XCTAssertGreaterThan(out.height, 880)
+        XCTAssertLessThanOrEqual(out.height, 920)
+        XCTAssertGreaterThan(out.width, 330)
+        XCTAssertLessThan(out.width, 360)
+        XCTAssertEqual(outcome.referenceName, "a_mid.jpg")
+    }
+
+    /// `orientations` follow the files as the caller listed them, NOT the shooting order: turning only the FIRST LISTED file (the last shot) makes
+    /// THAT file the one whose size no longer matches. Without the reordering the first shot would be blamed instead.
+    func testOrientationsFollowTheirFilesThroughTheShootingOrder() async throws {
+        let urls = [try writeFrame(2, as: "c_last.jpg"), try writeFrame(0, as: "b_first.jpg"), try writeFrame(1, as: "a_mid.jpg")]
+        do {
+            _ = try await PanoramaMerger.mergePanorama(sourceURLs: urls, orientations: [PhotoOrientation(quarterTurns: 1), .identity, .identity], into: folder)
+            XCTFail("expected a size mismatch")
+        } catch PhotoMergeError.sizeMismatch(let name) {
+            XCTAssertEqual(name, "c_last.jpg")
+        }
+    }
+
+    func testAnOrientationListOfTheWrongLengthIsRefusedNotIgnored() async throws {
+        let urls = [try writeFrame(0, as: "a.jpg"), try writeFrame(1, as: "b.jpg"), try writeFrame(2, as: "c.jpg")]
+        do {
+            _ = try await PanoramaMerger.mergePanorama(sourceURLs: urls, orientations: [PhotoOrientation(quarterTurns: 1)], into: folder)
+            XCTFail("expected a refusal")
+        } catch PhotoMergeError.orientationCountMismatch {
+        }
+    }
+
     // MARK: Pure helpers
 
     func testFeatherMaskRampsFromZeroAtTheEdgesToOneInTheMiddle() {

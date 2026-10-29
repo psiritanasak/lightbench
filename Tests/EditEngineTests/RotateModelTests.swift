@@ -141,25 +141,48 @@ final class RotateModelTests: XCTestCase {
         XCTAssertEqual(stored.rotationQuarterTurns, 1)
     }
 
-    func testHintAppearsOnlyWhenMasksOrRedEyePointsExist() async throws {
+    /// Masks and red-eye points now turn with the picture, so they no longer produce a "do not turn" note.
+    func testMasksAndRedEyePointsTurnWithThePictureAndGiveNoHint() async throws {
         let model = try await makeModel()
+        let mask = Mask(kind: .radial, centerX: 0.25, centerY: 0.3, radiusX: 0.2, radiusY: 0.35)
+        model.editState.masks = [mask]
+        model.editState.redEyePoints = [RedEyePoint(x: 0.2, y: 0.7)]
+        let before = model.editState
         model.rotate(.right)
-        XCTAssertNil(model.rotationHint)
-        model.editState.masks = [Mask()]
-        model.rotate(.right)
-        XCTAssertNotNil(model.rotationHint)
-        model.editState.masks = []
-        model.editState.redEyePoints = [RedEyePoint(x: 0.3, y: 0.3)]
-        model.rotate(.left)
-        XCTAssertNotNil(model.rotationHint)
-        model.editState.redEyePoints = []
+        XCTAssertNil(model.rotationHint, "nothing is left behind, so there is nothing to warn about")
+        XCTAssertEqual(model.editState.masks[0], mask.rotatedOnScreen(byQuarterTurns: 1))
+        XCTAssertEqual(model.editState.redEyePoints[0], RedEyePoint(x: 0.2, y: 0.7).rotatedOnScreen(byQuarterTurns: 1))
         model.rotate(.left)
         XCTAssertNil(model.rotationHint)
+        XCTAssertEqual(model.editState.masks[0].centerX, 0.25, accuracy: 1e-9)
+        XCTAssertEqual(model.editState.masks[0].radiusX, 0.2)
+        XCTAssertEqual(model.editState.redEyePoints[0].y, 0.7, accuracy: 1e-9)
+        // One undo step restores the masks and points exactly, not merely approximately.
+        model.undo()
+        XCTAssertEqual(model.editState.masks[0], mask.rotatedOnScreen(byQuarterTurns: 1))
+        model.undo()
+        XCTAssertEqual(model.editState.masks, before.masks)
+        XCTAssertEqual(model.editState.redEyePoints, before.redEyePoints)
+        XCTAssertEqual(model.editState.rotationQuarterTurns, 0)
+    }
+
+    func testFourRotatePressesLeaveTheMasksWhereTheyWereWithinFloatingPoint() async throws {
+        let model = try await makeModel()
+        let mask = Mask(kind: .linear, centerX: 0.6, centerY: 0.4, rotationDegrees: 20, width: 0.3)
+        model.editState.masks = [mask]
+        model.rotate(.right)
+        let steps = model.historyEntries.count
+        for _ in 0..<3 { model.rotate(.right) }
+        XCTAssertEqual(model.editState.rotationQuarterTurns, 0)
+        XCTAssertEqual(model.editState.masks[0].centerX, 0.6, accuracy: 1e-9)
+        XCTAssertEqual(model.editState.masks[0].centerY, 0.4, accuracy: 1e-9)
+        XCTAssertEqual(model.editState.masks[0].rotationDegrees, 20, accuracy: 1e-9)
+        XCTAssertEqual(model.historyEntries.count, steps + 3, "every press is its own step, the fourth included")
     }
 
     func testHintIsClearedByRevertUndoRedoAndLoad() async throws {
         let model = try await makeModel()
-        model.editState.masks = [Mask()]
+        model.editState.verticalPerspective = 0.2
         model.rotate(.right)
         XCTAssertNotNil(model.rotationHint)
         model.undo()
@@ -170,7 +193,7 @@ final class RotateModelTests: XCTestCase {
         XCTAssertNotNil(model.rotationHint)
         model.revertToOriginal()
         XCTAssertNil(model.rotationHint, "revert")
-        model.editState.masks = [Mask()]
+        model.editState.verticalPerspective = 0.2
         model.rotate(.left)
         XCTAssertNotNil(model.rotationHint)
         await model.load(from: dir.appendingPathComponent("a.png"))
@@ -188,7 +211,7 @@ final class RotateModelTests: XCTestCase {
         model.editState.verticalPerspective = 0.2
         model.editState.masks = [Mask()]
         model.rotate(.right)
-        XCTAssertTrue(model.rotationHint?.contains("Masks") == true && model.rotationHint?.contains("Perspective and Stretch") == true)
+        XCTAssertEqual(model.rotationHint, "Perspective and Stretch now act on the rotated picture.", "masks add no second sentence")
     }
 
     func testRotateAvailabilityRule() {
@@ -354,7 +377,12 @@ final class RotateModelTests: XCTestCase {
         let text = try source("Sources/UI/ContentView.swift")
         let start = try XCTUnwrap(text.range(of: "private func resetCropTab()"))
         let body = String(text[start.lowerBound...].prefix(600))
-        XCTAssertTrue(body.contains("document.editState.rotationQuarterTurns = 0"))
+        XCTAssertTrue(body.contains("document.editState = document.editState.resettingCropTab()"),
+                      "Reset goes through the pure helper, which turns masks back with the picture")
+        XCTAssertFalse(body.contains("rotationQuarterTurns = 0"), "no direct write that would strand the masks")
+        let helper = try source("Sources/EditEngine/QuarterTurn.swift")
+        let h = try XCTUnwrap(helper.range(of: "func resettingCropTab()"))
+        XCTAssertTrue(String(helper[h.lowerBound...].prefix(300)).contains("settingStoredQuarterTurns(0)"))
     }
 
     func testCropTabHasBothRotateButtonsAndTheMenuItemsExist() throws {

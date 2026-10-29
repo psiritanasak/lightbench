@@ -264,7 +264,7 @@ enum LightroomMapping {
     /// `plan` laid over `target`: ONLY the fields the file actually CARRIES are taken (a present zero replaces, like a preset; an
     /// ABSENT key never erases the user's value), plus the crop insets when `plan.includesCrop`. Everything else stays `target`'s own:
     /// the groups this import does not map (white balance, Looks/Styles, Levels, Color Grading, point colours...), geometry (crop
-    /// unless included), masks, spots, red-eye and the RAW-decode fields. A deliberate difference from `applyingPreset(onto:)`, which
+    /// unless included), spots and the RAW-decode fields. Masks and red-eye points stay too, but an imported rotation turns them with the picture. A deliberate difference from `applyingPreset(onto:)`, which
     /// would reset every unmapped group (it assumes a complete look; a `crs:` file, or a preset exported from Lightroom, is not).
     static func merge(_ plan: Plan, onto target: EditState) -> EditState {
         guard plan.refusal == nil else { return target }

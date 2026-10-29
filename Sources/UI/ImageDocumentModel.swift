@@ -1520,14 +1520,15 @@ final class ImageDocumentModel: ObservableObject {
 
     enum RotateDirection { case left, right }
 
-    /// One-line note after a rotation that leaves masks / red-eye points where they were (they are post-crop
-    /// fractions, like crop and flip: they do not follow the picture). Nil otherwise.
+    /// One-line note after a rotation that is only approximate for perspective / Stretch (they act on the rotated
+    /// picture; radial / linear / brush masks and red-eye points DO turn with it). Nil otherwise.
     @Published var rotationHint: String?
 
     /// Rotate Left / Rotate Right: ONE undo step ("Rotate Left" / "Rotate Right"), saved like every direct commit.
-    /// The turn count, the crop insets (they follow the content) and — when exactly one flip is on — the stored
-    /// direction are all handled by `EditState.rotated(byQuarterTurns:)`. Refused (no step) with no photo or while a
-    /// load is in flight (the step would land on the outgoing photo). Four presses return to the identical state.
+    /// The turn count, the crop insets, radial / linear / brush masks and red-eye points (they follow the content)
+    /// and — when exactly one flip is on — the stored direction are all handled by `EditState.rotated(byQuarterTurns:)`.
+    /// Refused (no step) with no photo or while a load is in flight (the step would land on the outgoing photo). Four
+    /// presses return the same turn count and crop; masks / points return to within floating point.
     func rotate(_ direction: RotateDirection) {
         guard currentImage != nil, !isLoadInFlight else { return }
         finalizePendingCommit()
@@ -1535,7 +1536,6 @@ final class ImageDocumentModel: ObservableObject {
         history.commit(next, summary: direction == .right ? "Rotate Right" : "Rotate Left")
         applyHistoryState(history.current)
         var notes: [String] = []
-        if !next.masks.isEmpty || !next.redEyePoints.isEmpty { notes.append("Masks and red-eye points do not turn with the picture.") }
         if next.verticalPerspective != 0 || next.horizontalPerspective != 0 || next.transformAspect != 0 {
             notes.append("Perspective and Stretch now act on the rotated picture.")
         }
@@ -2112,7 +2112,8 @@ final class ImageDocumentModel: ObservableObject {
 
     /// Applies imported Lightroom / Camera Raw settings (`LightroomMapping.plan`) as ONE undo step, committed exactly like
     /// `applyPreset`. Only the fields the file carries change (`LightroomMapping.merge`); geometry, masks, spots and the RAW-decode
-    /// fields stay, and the crop changes only when the plan includes it. False (and no history step) when nothing would change.
+    /// fields stay (an imported rotation turns masks and red-eye points with the picture), and the crop changes only when
+    /// the plan includes it. False (and no history step) when nothing would change.
     @discardableResult
     func applyLightroomSettings(_ plan: LightroomMapping.Plan) -> Bool {
         finalizePendingCommit()

@@ -48,6 +48,8 @@ enum PhotoMergeError: LocalizedError {
     case sizeMismatch(String)
     case alignmentFailed(String)
     case mergeFailed
+    /// The caller passed a different number of orientations than sources (a programming error: refused, never merged unturned).
+    case orientationCountMismatch
 
     var errorDescription: String? {
         switch self {
@@ -69,9 +71,10 @@ enum PhotoMergeError: LocalizedError {
             case .canvasTooLarge: return "The panorama would be too large to write."
             }
         case .noOverlap(let a, let b): return "Couldn't match “\(a)” with “\(b)”: they need to overlap by at least about half and share detail. Photos taken in a different order, or with too little overlap, can't be joined."
-        case .sizeMismatch(let name): return "\"\(name)\" has a different size than the others; HDR merge needs photos of identical dimensions."
+        case .sizeMismatch(let name): return "\"\(name)\" has a different size than the others (after any turning); merging needs photos of identical dimensions."
         case .alignmentFailed(let name): return "Couldn't align \"\(name)\" with the others (not enough matching detail). If the camera was on a tripod, turn off Auto-align."
         case .mergeFailed: return "Couldn't merge these photos."
+        case .orientationCountMismatch: return "Couldn't work out how each photo is turned, so nothing was merged."
         }
     }
 }
@@ -86,13 +89,16 @@ enum PhotoMergeError: LocalizedError {
 ///
 /// RAW sources are decoded with their tone-shaping fields neutralised (`linearDecodeState`); that is NOT yet measured on a real RAW.
 ///
-/// Sources are never opened for writing and no sidecar is touched or created (the new file is a fresh photo to this app).
+/// Sources are never opened for writing and no sidecar is touched or created (the new file is a fresh photo to this app). The engine itself reads
+/// no edit files: a caller may pass each photo's turn/flip (`PhotoOrientation`), which is baked into the output pixels (no Orientation tag); no other
+/// edit is applied.
 enum PhotoMerger {
     static let filenameSuffix = "-HDR"
     static let proxyLongEdge: CGFloat = 960
 
-    /// `sourceURLs`: 2...`HDRMergeFilter.maxFrames` photos of identical pixel size. `align: false` skips registration (tripod brackets).
-    static func mergeHDR(sourceURLs: [URL], align: Bool = true, into folder: URL) async throws -> MergeOutcome {
+    /// `sourceURLs`: 2...`HDRMergeFilter.maxFrames` photos of identical pixel size AFTER `orientations` (one per source, in the same order: each
+    /// photo's turn/flip edit, applied exactly after decoding; nil = as stored). `align: false` skips registration (tripod brackets).
+    static func mergeHDR(sourceURLs: [URL], align: Bool = true, orientations: [PhotoOrientation]? = nil, into folder: URL) async throws -> MergeOutcome {
         for url in sourceURLs where SourceIntegrity.verdict(forFileAt: url) == .truncated {
             throw PhotoMergeError.incompleteSource(url.lastPathComponent)
         }
@@ -103,11 +109,16 @@ enum PhotoMerger {
         }
 
         var frames: [CIImage] = []
-        for url in sourceURLs {
+        // `orientations` (one per source, same order) turn/flip each frame exactly, right after decode, so the size check, the proxies, the
+        // alignment and the warp all work in the orientation the Library shows. A count that does not match is refused (`orientationCountMismatch`), never merged unturned.
+        if let orientations, orientations.count != sourceURLs.count { throw PhotoMergeError.orientationCountMismatch }
+        let frameOrientations = orientations
+        for (i, url) in sourceURLs.enumerated() {
             guard let decoded = await RawDecoder.decode(contentsOf: url, editState: linearDecodeState) else {
                 throw PhotoMergeError.unreadableSource(url.lastPathComponent)
             }
-            frames.append(decoded.transformed(by: CGAffineTransform(translationX: -decoded.extent.minX, y: -decoded.extent.minY)))
+            let origin = decoded.transformed(by: CGAffineTransform(translationX: -decoded.extent.minX, y: -decoded.extent.minY))
+            frames.append(frameOrientations.map { $0[i].apply(to: origin) } ?? origin)
         }
         let extent = frames[plan.referenceIndex].extent
         for (i, f) in frames.enumerated() where f.extent.size != extent.size {

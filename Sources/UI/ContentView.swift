@@ -1090,18 +1090,8 @@ struct ContentView: View {
     /// it sets the angle from the detected horizon and never crops; the
     /// separate "Auto Crop" button sets the crop from the current geometry.)
     private func resetCropTab() {
-        document.editState.rotationQuarterTurns = 0
-        document.editState.straightenAngle = 0
-        document.editState.verticalPerspective = 0
-        document.editState.horizontalPerspective = 0
-        document.editState.transformScale = 1.0
-        document.editState.transformAspect = 0
-        document.editState.flipHorizontal = false
-        document.editState.flipVertical = false
-        document.editState.cropInsetTop = 0
-        document.editState.cropInsetBottom = 0
-        document.editState.cropInsetLeft = 0
-        document.editState.cropInsetRight = 0
+        // One assignment: the rotation resets through `settingStoredQuarterTurns(0)` so masks turn back with the picture.
+        document.editState = document.editState.resettingCropTab()
         selectedAspect = .freeform
         customAspectRatio = nil
     }

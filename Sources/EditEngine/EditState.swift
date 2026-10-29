@@ -523,8 +523,8 @@ struct EditState: Equatable, Codable {
     /// flips, the crop UI — works in the rotated, visual frame. A separate pipeline stage, NOT the EXIF orientation
     /// (which defines the source frame the retouch spots, subject/depth rasters and RAW white-balance fast path live
     /// in). Rotated with the buttons through `rotated(byQuarterTurns:)` (QuarterTurn.swift), which also moves the crop
-    /// insets with the content. Masks and red-eye points (post-crop fractions) do NOT follow a rotation, like crop and
-    /// flip today. Not carried by Presets / Paste (geometry); kept on both Compare sides; reset by Revert.
+    /// insets, radial / linear / brush masks and red-eye points (display-frame fractions) with the content; a crop or
+    /// flip edit itself does not move masks. Not carried by Presets / Paste (geometry); kept on both Compare sides; reset by Revert.
     /// `EditPipeline` normalises with `QuarterTurn.normalized`, so an out-of-range value still renders.
     var rotationQuarterTurns: Int = 0
 

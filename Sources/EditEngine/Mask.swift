@@ -112,6 +112,10 @@ struct BrushPoint: Equatable, Codable {
 /// source. Absolute pixels would render at the wrong place/size on every
 /// proxied drag frame, every Library thumbnail, and every non-native-size
 /// export — silently, and visually only.
+///
+/// Because the frame is the DISPLAY frame (after rotation and crop), Rotate Left / Right turns radial / linear /
+/// brush geometry with the picture (`rotatedOnScreen(byQuarterTurns:)` in QuarterTurn.swift); crop, flip and
+/// straighten edits do not move it.
 struct Mask: Identifiable, Equatable, Codable {
     /// Stable across the mask's lifetime — round-trips through `Codable` so
     /// reloading a sidecar doesn't look like a spurious identity change,

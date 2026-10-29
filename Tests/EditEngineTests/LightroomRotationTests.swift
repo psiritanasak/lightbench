@@ -78,6 +78,23 @@ final class LightroomRotationTests: XCTestCase {
         XCTAssertEqual(merged.exposureEV, 0.5)
     }
 
+    /// The import's rotation moves existing masks and red-eye points with the picture, by the SCREEN turn (one flip on:
+    /// the stored count the file asks for is a screen turn the other way).
+    func testMergeTurnsExistingMasksAndRedEyeWithThePicture() {
+        var target = EditState.identity
+        target.masks = [Mask(kind: .radial, centerX: 0.25, centerY: 0.3, radiusX: 0.2, radiusY: 0.35)]
+        target.redEyePoints = [RedEyePoint(x: 0.2, y: 0.7)]
+        let plan = LightroomMapping.plan(from: settings(orientation: 6), photoOrientation: 1)
+        let merged = LightroomMapping.merge(plan, onto: target)
+        XCTAssertEqual(merged.masks[0], target.masks[0].rotatedOnScreen(byQuarterTurns: 1))
+        XCTAssertEqual(merged.redEyePoints[0], target.redEyePoints[0].rotatedOnScreen(byQuarterTurns: 1))
+        target.flipHorizontal = true
+        let flipped = LightroomMapping.merge(plan, onto: target)
+        XCTAssertEqual(flipped.rotationQuarterTurns, 1)
+        XCTAssertEqual(flipped.masks[0], target.masks[0].rotatedOnScreen(byQuarterTurns: 3), "one flip: stored +1 is a screen turn left")
+        XCTAssertEqual(LightroomMapping.merge(plan, onto: merged).masks, merged.masks, "idempotent: a second merge turns nothing")
+    }
+
     func testAnAgreeingFileNeverResetsAHandMadeRotation() {
         var target = EditState.identity
         target.rotationQuarterTurns = 2
@@ -185,6 +202,7 @@ final class LightroomRotationTests: XCTestCase {
         let request = try XCTUnwrap(model.pending)
         XCTAssertEqual(request.rotationQuarterTurns, 3)
         XCTAssertTrue(LightroomImportModel.confirmationMessage(request).contains("turns the picture 90° left on screen"))
+        XCTAssertTrue(LightroomImportModel.confirmationMessage(request).contains("a rotation turns your crop, masks and red-eye points with the picture"))
         XCTAssertNotNil(request.cropRefusal, "the file has a crop; it is refused while the import rotates")
         let before = doc.editState
         let steps = doc.historyEntries.count

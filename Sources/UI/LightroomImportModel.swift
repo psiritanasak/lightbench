@@ -218,7 +218,7 @@ final class LightroomImportModel: ObservableObject {
 
     static func confirmationMessage(_ request: Pending) -> String {
         var text = "This applies the sliders and curves the file carries, as one Undo step; settings it does not mention are left alone. "
-            + replaceNote + " Masks, spots, flips, straighten and RAW decode settings are kept (a rotation turns your crop with the picture). Nothing is written to the .xmp."
+            + replaceNote + " Masks, spots, flips, straighten and RAW decode settings are kept (a rotation turns your crop, masks and red-eye points with the picture). Nothing is written to the .xmp."
         if let turns = request.rotationScreenTurns {
             text += " The file also turns the picture \(QuarterTurn.phrase(forTurns: turns)) on screen (its orientation differs from the photo's); your crop turns with it."
         }

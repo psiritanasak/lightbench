@@ -253,7 +253,7 @@ final class EditorInfoWiringTests: XCTestCase {
     }
 
     /// The Photo-menu items that act on the open photo, the selection or the photo's undo history. While the Info popover is open the
-    /// user is typing and menu shortcuts still fire (⌘Z, ⌘←, ⌘[ ...), so every one must name `catalog.editorInfoOpen`.
+    /// user is typing and menu shortcuts still fire (⌘Z, ⌘←, ⌘[ ...), so every one must name `catalog.editorPopoverOpen` (Info OR Keywords).
     private let guardedItems = [
         "Button(\"Undo\")", "Button(\"Redo\")", "Button(\"Previous Photo\")", "Button(\"Next Photo\")", "Button(\"Cull Photos\")",
         "Button(\"Copy Settings\")", "Button(\"Paste Settings\")", "Button(\"Import Lightroom Settings…\")", "Button(\"Rotate Left\")",
@@ -268,7 +268,7 @@ final class EditorInfoWiringTests: XCTestCase {
             let rest = app[start.upperBound...]
             let end = rest.range(of: "Button(")?.lowerBound ?? rest.endIndex
             let block = String(rest[..<end])
-            XCTAssertTrue(block.contains("catalog.editorInfoOpen"), "\(item) must be disabled while the Info popover is open")
+            XCTAssertTrue(block.contains("catalog.editorPopoverOpen"), "\(item) must be disabled while the Info or Keywords popover is open")
         }
     }
 

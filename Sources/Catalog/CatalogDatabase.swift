@@ -970,6 +970,28 @@ final class CatalogDatabase: Sendable {
         return result
     }
 
+    /// The Editor popover's write: attaches `names` to ONE photo (find-or-create, existing spelling wins, as `addKeywords`) and detaches the
+    /// keywords `removing` from it, in a SINGLE transaction, so a failure leaves both halves undone and there is no add/remove ordering race.
+    /// Removal runs last (a keyword named in both ends up detached; the draft never produces that). Throws `KeywordEditError.photoMissing`
+    /// (writing nothing, creating no keyword) when the photo no longer exists. A virtual copy is its own row, so it keeps its own keywords.
+    /// Returns the photo's keywords afterwards, sorted by name.
+    @discardableResult
+    func setKeywords(adding names: [String], removing: Set<Int64>, for photoID: Int64) async throws -> [Keyword] {
+        try await dbQueue.write { db in
+            guard try Photo.filter(Photo.Columns.id == photoID).fetchCount(db) == 1 else { throw KeywordEditError.photoMissing }
+            _ = try Self.attachKeywords(db, names, to: [photoID])
+            if !removing.isEmpty {
+                _ = try PhotoKeyword
+                    .filter(PhotoKeyword.Columns.photoId == photoID)
+                    .filter(removing.contains(PhotoKeyword.Columns.keywordId))
+                    .deleteAll(db)
+            }
+            let linked = try Int64.fetchAll(db, PhotoKeyword.filter(PhotoKeyword.Columns.photoId == photoID).select(PhotoKeyword.Columns.keywordId))
+            return try Keyword.filter(linked.contains(Keyword.Columns.id)).fetchAll(db)
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        }
+    }
+
     /// Detaches keyword `id` from `photoIDs` (the keyword itself stays, even if no photo uses it any more).
     func removeKeyword(id: Int64, from photoIDs: [Int64]) async throws {
         try await dbQueue.write { db in

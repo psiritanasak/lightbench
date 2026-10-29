@@ -65,13 +65,14 @@ final class EditorInfoModel: ObservableObject {
 
 /// When the Photo menu's "Edit Info…" (⌘I) is unavailable. One item, two meanings: in the Library it opens the sheet over the selection
 /// (`libraryBlocked` carries that item's long list of other-sheet / busy conditions, unchanged); in the Editor it toggles the popover on the
-/// open photo, which needs a loaded photo with a catalog row (Info is catalog data) and is never blocked while the popover is open (⌘I is how it closes from the keyboard).
+/// open photo, which needs a loaded photo with a catalog row (Info is catalog data) and is never blocked while the popover is open (⌘I is how it closes from the keyboard), but is off while the Keywords popover is open.
 enum EditorInfoMenuRules {
     static func isDisabled(showLibrary: Bool, cullActive: Bool, libraryBlocked: Bool, hasOpenPhoto: Bool, loadInFlight: Bool,
-                           hasCatalogRow: Bool, popoverOpen: Bool) -> Bool {
+                           hasCatalogRow: Bool, popoverOpen: Bool, keywordsOpen: Bool = false) -> Bool {
         if cullActive { return true }
         if showLibrary { return libraryBlocked }
         if popoverOpen { return false }
+        if keywordsOpen { return true } // never two popovers at once
         return !hasOpenPhoto || !hasCatalogRow || loadInFlight
     }
 }

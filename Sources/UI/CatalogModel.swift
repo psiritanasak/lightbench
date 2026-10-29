@@ -157,6 +157,13 @@ final class CatalogModel: ObservableObject {
     @Published var editorPhotoInCatalog = false
     /// Set by the Photo menu's ⌘I in the Editor; `ContentView` toggles the Info popover and clears it.
     @Published var editorInfoToggleRequested = false
+    /// True while the Editor's Keywords popover is open (mirrored by `EditorKeywordsLifecycle`, like `editorInfoOpen`).
+    @Published var editorKeywordsOpen = false
+    /// Set by the Photo menu's ⌘K in the Editor; `ContentView` toggles the Keywords popover and clears it.
+    @Published var editorKeywordsToggleRequested = false
+    /// Either Editor popover (Info or Keywords) is open: the user is typing, so every menu item that would act on the photo, the selection or
+    /// the undo history is off (the 13 guarded items in `PhotoAppApp`). The two popovers are never open together.
+    var editorPopoverOpen: Bool { editorInfoOpen || editorKeywordsOpen }
     /// The keyword the grid is filtered to; `nil` = no keyword filter.
     @Published var keywordFilterID: Int64?
     /// Faces and people (see `FacesModel`): the people list, which photos each person is in, and the Library's Person filter.
@@ -1760,6 +1767,33 @@ final class CatalogModel: ObservableObject {
             await self?.refresh()
         }
         return names
+    }
+
+    /// The keywords `photo` itself carries (sorted by name). Keywords belong to each VERSION: a virtual copy's own id, never its master's.
+    func keywords(for photo: Photo) -> [Keyword] {
+        guard let id = photo.id, let ids = keywordIDsByPhotoID[id] else { return [] }
+        return keywords.filter { ids.contains($0.id ?? -1) }
+    }
+
+    /// The Editor popover's save: attaches `adding` and detaches `removing` on `photo` ITSELF (the open version's own id, never `masterId`,
+    /// and no lookup in `photos`, since the open photo may be outside the current collection), in one database transaction. The maps follow
+    /// from the write's own result (find-or-create gives the ids only now), then `refresh()` re-reads everything. A failure is reported
+    /// in `importStatusMessage` and the refresh puts the real state back.
+    func applyKeywordEdits(adding: [String], removing: Set<Int64>, for photo: Photo) {
+        guard let database, let photoID = photo.id, !adding.isEmpty || !removing.isEmpty else { return }
+        Task { [weak self] in
+            do {
+                let result = try await database.setKeywords(adding: adding, removing: removing, for: photoID)
+                guard let self else { return }
+                if result.isEmpty { keywordIDsByPhotoID.removeValue(forKey: photoID) } else { keywordIDsByPhotoID[photoID] = Set(result.compactMap(\.id)) }
+                let known = Set(keywords.compactMap(\.id))
+                let created = result.filter { !known.contains($0.id ?? -1) }
+                if !created.isEmpty { keywords = Self.sortedKeywords(keywords + created) }
+            } catch {
+                self?.importStatusMessage = "Couldn't save keywords: \(error.localizedDescription)"
+            }
+            await self?.refresh()
+        }
     }
 
     /// Detaches `keywordID` from `photoIDs` — local-first like `setRating`.

@@ -11,6 +11,11 @@ struct EditorRatingBar: View {
     /// The Info popover's state and its button action (⌘I does the same). Without a model there is no Info button.
     var info: EditorInfoModel?
     var onInfo: () -> Void = {}
+    /// The Keywords popover's state, its button action (⌘K does the same) and the Library's keywords (the suggestion pool). Without a
+    /// model there is no Keywords button.
+    var keywords: EditorKeywordsModel?
+    var onKeywords: () -> Void = {}
+    var allKeywords: [Keyword] = []
 
     var body: some View {
         let photo = meta.photo
@@ -24,7 +29,8 @@ struct EditorRatingBar: View {
                     .lineLimit(1).truncationMode(.tail).layoutPriority(-1)
             }
             Spacer(minLength: 8)
-            if let info { infoButton(info) }
+            if let info { infoButton(info, otherOpen: keywords?.isOpen ?? false) }
+            if let keywords { keywordsButton(keywords, otherOpen: info?.isOpen ?? false) }
             Button(action: onCopy) { Label("Copy Settings", systemImage: "doc.on.doc").lineLimit(1) }
                 .buttonStyle(.borderless)
                 // Same size as the bar's other text ("Not in your Library"); the default control font was larger and wrapped.
@@ -44,8 +50,8 @@ struct EditorRatingBar: View {
 
     /// "Info": the title / caption / creator / copyright popover for the open photo. Disabled (with the reason) when the photo has no
     /// catalog row, since Info is catalog data; an open popover stays closable.
-    private func infoButton(_ info: EditorInfoModel) -> some View {
-        let enabled = meta.photo != nil || info.isOpen
+    private func infoButton(_ info: EditorInfoModel, otherOpen: Bool) -> some View {
+        let enabled = (meta.photo != nil || info.isOpen) && !otherOpen
         return Button(action: onInfo) { Label("Info", systemImage: "info.circle").lineLimit(1) }
             .buttonStyle(.borderless)
             .fixedSize()
@@ -55,6 +61,25 @@ struct EditorRatingBar: View {
             .help(meta.photo == nil && !info.isOpen ? "Not in your Library" : "Edit this photo's title, caption, creator and copyright (⌘I)")
             .popover(isPresented: Binding(get: { info.isOpen }, set: { if !$0 { info.commit() } }), arrowEdge: .top) {
                 EditorInfoPopover(model: info)
+            }
+    }
+
+    /// "Keywords": the open photo's own keywords as a popover. Disabled (with the reason) without a catalog row, and while the Info popover
+    /// is open (never two at once); an open popover stays closable.
+    private func keywordsButton(_ keywords: EditorKeywordsModel, otherOpen: Bool) -> some View {
+        let enabled = (meta.photo != nil || keywords.isOpen) && !otherOpen
+        return Button(action: onKeywords) { Label("Keywords", systemImage: "tag").labelStyle(.iconOnly) }
+            // Icon only: with its text the bar measured 509 pt wide against the image pane's 480 pt minimum (373 pt without Info and
+            // Keywords, 426 pt with Info) — measured with a temporary harness (since deleted). The name stays in the tooltip and for VoiceOver.
+            .accessibilityLabel("Keywords")
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .font(.caption)
+            .foregroundStyle(enabled ? Color.primary : Theme.textSecondary)
+            .disabled(!enabled)
+            .help(meta.photo == nil && !keywords.isOpen ? "Not in your Library" : "Edit this photo's keywords (⌘K)")
+            .popover(isPresented: Binding(get: { keywords.isOpen }, set: { if !$0 { keywords.commit() } }), arrowEdge: .top) {
+                EditorKeywordsPopover(model: keywords, allKeywords: allKeywords)
             }
     }
 

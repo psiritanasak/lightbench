@@ -237,7 +237,7 @@ final class RotateModelTests: XCTestCase {
         XCTAssertTrue(text.contains("rotateEnabled: RotateAvailability.isEnabled("))
         let app = try source("Sources/App/PhotoAppApp.swift")
         XCTAssertTrue(app.contains("RotateAvailability.isEnabled("))
-        XCTAssertEqual(app.components(separatedBy: ".disabled(!canRotate || catalog.editorInfoOpen)").count - 1, 2, "both menu items use the shared rule (and stay off while the Info popover is open)")
+        XCTAssertEqual(app.components(separatedBy: ".disabled(!canRotate || catalog.editorPopoverOpen)").count - 1, 2, "both menu items use the shared rule (and stay off while the Info or Keywords popover is open)")
         XCTAssertTrue(try source("Sources/UI/CropTabView.swift").contains(".disabled(!rotateEnabled)"))
         XCTAssertTrue(try source("Sources/UI/CropAspectMath.swift").contains("content.onChange(of: turns)"))
     }

@@ -134,6 +134,67 @@ final class KeywordDatabaseTests: XCTestCase {
         XCTAssertEqual(left, 0)
     }
 
+    // MARK: setKeywords (the Editor popover's single write)
+
+    func testSetKeywordsAddsAndRemovesInOneTransactionAndReturnsTheFinalSet() async throws {
+        let (db, ids) = try await makeDatabase()
+        try await db.addKeywords(["Old", "Keep"], to: [ids[0]])
+        let oldRows = try await db.allKeywords()
+        let old = try XCTUnwrap(oldRows.first { $0.name == "Old" }?.id)
+        let result = try await db.setKeywords(adding: ["New", "keep"], removing: [old], for: ids[0])
+        XCTAssertEqual(Set(result.map(\.name)), ["Keep", "New"], "existing spelling wins; Old is gone")
+        let links = try await db.allKeywordLinks().filter { $0.photoId == ids[0] }
+        XCTAssertEqual(links.count, 2)
+        let names = try await db.allKeywords()
+        XCTAssertTrue(names.contains { $0.name == "Old" }, "the keyword itself stays")
+        XCTAssertFalse(names.contains { $0.name == "keep" })
+    }
+
+    func testSetKeywordsFailureRollsBackBothHalves() async throws {
+        let (db, ids) = try await makeDatabase()
+        try await db.addKeywords(["Old"], to: [ids[0]])
+        let oldRows = try await db.allKeywords()
+        let old = try XCTUnwrap(oldRows.first?.id)
+        do {
+            _ = try await db.setKeywords(adding: ["New"], removing: [old], for: 987_654)
+            XCTFail("a photo that does not exist must throw")
+        } catch {}
+        let keywords = try await db.allKeywords()
+        XCTAssertEqual(keywords.map(\.name), ["Old"], "nothing was created")
+        let links = try await db.allKeywordLinks()
+        XCTAssertEqual(links.count, 1, "nothing was removed")
+    }
+
+    func testSetKeywordsTouchesOnlyTheGivenPhoto() async throws {
+        let (db, ids) = try await makeDatabase()
+        try await db.addKeywords(["Sky"], to: ids)
+        let skyRows = try await db.allKeywords()
+        let sky = try XCTUnwrap(skyRows.first?.id)
+        _ = try await db.setKeywords(adding: ["Sea"], removing: [sky], for: ids[1])
+        let links = try await db.allKeywordLinks()
+        XCTAssertEqual(links.filter { $0.keywordId == sky }.count, 2)
+        XCTAssertFalse(links.contains { $0.keywordId == sky && $0.photoId == ids[1] })
+    }
+
+    func testSetKeywordsOnAVirtualCopyKeepsTheMastersKeywordsApart() async throws {
+        let (db, ids) = try await makeDatabase()
+        let found = try await db.photo(atPath: "/tmp/k0.jpg")
+        let master = try XCTUnwrap(found)
+        let copy = try await db.createVirtualCopy(of: master, versionKey: "aaaaaaaa")
+        let copyID = try XCTUnwrap(copy.id)
+        _ = try await db.setKeywords(adding: ["Only Copy"], removing: [], for: copyID)
+        let links = try await db.allKeywordLinks()
+        XCTAssertEqual(links.filter { $0.photoId == copyID }.count, 1)
+        XCTAssertTrue(links.filter { $0.photoId == master.id }.isEmpty, "the master is not touched")
+        _ = ids
+    }
+
+    func testSetKeywordsWithNothingToDoIsAnEmptyOKWrite() async throws {
+        let (db, ids) = try await makeDatabase()
+        let result = try await db.setKeywords(adding: ["  ", ""], removing: [], for: ids[0])
+        XCTAssertTrue(result.isEmpty)
+    }
+
     func testDeleteKeywordCascadesItsLinksOnly() async throws {
         let (db, ids) = try await makeDatabase()
         let made = try await db.addKeywords(["Sky", "Sea"], to: ids)

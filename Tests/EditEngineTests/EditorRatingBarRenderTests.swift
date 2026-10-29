@@ -9,9 +9,9 @@ import XCTest
 final class EditorRatingBarRenderTests: XCTestCase {
     private let size = CGSize(width: 600, height: 36)
 
-    private func render(_ meta: EditorPhotoMeta, info: EditorInfoModel? = nil, size: CGSize? = nil) -> NSBitmapImageRep {
+    private func render(_ meta: EditorPhotoMeta, info: EditorInfoModel? = nil, keywords: EditorKeywordsModel? = nil, size: CGSize? = nil) -> NSBitmapImageRep {
         let size = size ?? self.size
-        let view = EditorRatingBar(meta: meta, canCopy: true, onCopy: {}, info: info).frame(width: size.width, height: size.height)
+        let view = EditorRatingBar(meta: meta, canCopy: true, onCopy: {}, info: info, keywords: keywords).frame(width: size.width, height: size.height)
         let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
         hosting.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -115,6 +115,38 @@ final class EditorRatingBarRenderTests: XCTestCase {
         }
         let inLibrary = rightStrip(await meta()), notInLibrary = rightStrip(await meta(resolved: false))
         XCTAssertTrue(inLibrary == notInLibrary, "Copy Settings is not truncated by the hint")
+    }
+
+    // MARK: Keywords button
+
+    func testTheKeywordsButtonIsDrawnOnlyWhenAModelIsGivenAndDimWithoutACatalogRow() async {
+        let resolvedMeta = await meta(), unresolvedMeta = await meta(resolved: false)
+        let resolvedDelta = count(render(resolvedMeta, keywords: EditorKeywordsModel()), isWhite) - count(render(resolvedMeta), isWhite)
+        let unresolvedDelta = count(render(unresolvedMeta, keywords: EditorKeywordsModel()), isWhite) - count(render(unresolvedMeta), isWhite)
+        XCTAssertGreaterThan(resolvedDelta, 20, "an enabled Keywords button draws white label and icon pixels")
+        XCTAssertLessThan(unresolvedDelta, resolvedDelta / 4, "no row: the button is dim grey")
+    }
+
+    func testCopySettingsKeepsItsFullLabelAtTheMinimumWidthWithBothButtons() async {
+        let narrow = CGSize(width: 480, height: 36)
+        let strip = 90
+        func rightStrip(_ m: EditorPhotoMeta, keywords: Bool = true) -> [UInt8] {
+            let rep = render(m, info: EditorInfoModel(), keywords: keywords ? EditorKeywordsModel() : nil, size: narrow)
+            var out: [UInt8] = []
+            for y in 0..<rep.pixelsHigh { for x in (rep.pixelsWide - strip)..<rep.pixelsWide {
+                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                out.append(UInt8(c.redComponent * 255)); out.append(UInt8(c.greenComponent * 255)); out.append(UInt8(c.blueComponent * 255))
+            } }
+            return out
+        }
+        let inLibrary = rightStrip(await meta()), notInLibrary = rightStrip(await meta(resolved: false))
+        XCTAssertTrue(inLibrary == notInLibrary, "Copy Settings is not truncated by the hint")
+        let m = await meta()
+        XCTAssertTrue(rightStrip(m) == rightStrip(m, keywords: false), "adding the Keywords button does not move or clip Copy Settings")
+        // And the Info and Keywords buttons both fit: the stars (left) are not squeezed out either.
+        let five = await meta(rating: 5), zero = await meta(rating: 0)
+        XCTAssertGreaterThan(count(render(five, info: EditorInfoModel(), keywords: EditorKeywordsModel(), size: narrow), isMarkGrey),
+                             count(render(zero, info: EditorInfoModel(), keywords: EditorKeywordsModel(), size: narrow), isMarkGrey))
     }
 
     /// The lookup finding nothing leaves no row (the bar then draws its empty, disabled state — the render of that state is

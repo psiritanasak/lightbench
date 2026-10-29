@@ -10,8 +10,8 @@ import ImageIO
 /// (frame count, output size, tripod vs auto-align) -> `confirm` resolves write access to the output folder (the first selected photo's folder),
 /// runs `PhotoMerger` detached, and registers the new file with the catalog. Nothing is written if any step is refused. Originals and sidecars
 /// are never touched. Each photo is merged as TURNED and FLIPPED in the Library: `confirm` reads each master's edit file (`SidecarStore.read`) and
-/// passes only the orientation fields on; an unreadable edit file, or photos turned/flipped differently from one another, are refused before any
-/// folder prompt. No other edit (crop, straighten, tone) is applied.
+/// passes only the orientation fields on; an unreadable edit file, or photos turned/flipped differently from one another, are refused — first in
+/// `request` (before the dialog opens), again in `confirm` before any folder prompt, and a third time in `run` with the folder grant active. No other edit (crop, straighten, tone) is applied.
 @MainActor
 final class MergeModel: ObservableObject {
     enum Kind: Equatable {
@@ -36,9 +36,16 @@ final class MergeModel: ObservableObject {
 
     @Published var pending: Request? { didSet { publishBusy() } }
     @Published private(set) var isMerging = false { didSet { publishBusy() } }
+    /// True while `request` is reading the photos' orientations (before any dialog exists). Counts as busy so a second request is ignored.
+    @Published private(set) var isChecking = false { didSet { publishBusy() } }
     @Published var statusMessage: String?
 
-    var isBusy: Bool { isMerging || pending != nil }
+    var isBusy: Bool { isMerging || isChecking || pending != nil }
+
+    /// Identifies the check in flight; `cancel()` and a new check replace it, so a finished check whose token no longer matches is dropped.
+    private var checkToken: UUID?
+    /// The in-flight orientation check of `request` (tests await it; the app never needs to).
+    private(set) var checkTask: Task<Void, Never>?
 
     /// Mirrors `isBusy` into the catalog (a plain `@Published` there), so views that only observe `CatalogModel` — the Photo menu, the other
     /// sheets' `blocked` flags — see it change.
@@ -64,7 +71,11 @@ final class MergeModel: ObservableObject {
     // MARK: - Request
 
     /// Asks for a merge of `photos` (already filtered to what the Library shows). Refuses with a message rather than opening a dialog that
-    /// could not succeed.
+    /// could not succeed: the selection size is checked at once, then the photos' orientations (an unreadable edit file, or photos turned or
+    /// flipped differently from one another) are read OFF the main thread inside the catalog's folder access, and only a passing check sets
+    /// `pending` (the dialog). The same check runs again in `confirm` and in `run` (after the folder grant), because the edit files can change
+    /// between steps. While the check runs `isBusy` is true, so a second request is ignored; `cancel()` or a rename starting meanwhile drops
+    /// the result.
     func request(_ kind: Kind, photos allPhotos: [Photo], catalog: CatalogModel) {
         self.catalog = catalog
         // MASTERS only: a virtual copy is the same frame as its master, which would otherwise be fed to the merge twice.
@@ -72,10 +83,29 @@ final class MergeModel: ObservableObject {
         guard !isBusy else { return }
         guard !catalog.isRenameInProgress else { statusMessage = CatalogModel.renameInProgressMessage; return }
         if let problem = Self.selectionProblem(kind, count: photos.count) { statusMessage = problem; return }
-        pending = Request(kind: kind, photos: photos, estimatedBytes: Self.estimatedOutputBytes(forFileAt: URL(fileURLWithPath: photos[0].path)))
+        let token = UUID()
+        checkToken = token
+        isChecking = true
+        let resolver = orientationResolver
+        checkTask = Task {
+            // Like Export: make sure the sandbox can read the sidecars of every photo's folder before reading them.
+            for photo in photos { await catalog.ensureAccessActive(forPhotoAt: photo.path) }
+            let urls = photos.map { URL(fileURLWithPath: $0.path) }
+            let check = await Task.detached { resolver(urls) }.value
+            guard checkToken == token else { return } // cancelled or replaced: drop the late result
+            checkToken = nil
+            isChecking = false
+            guard !catalog.isRenameInProgress else { statusMessage = CatalogModel.renameInProgressMessage; return }
+            if let problem = Self.orientationProblemMessage(check) { statusMessage = problem; return }
+            pending = Request(kind: kind, photos: photos, estimatedBytes: Self.estimatedOutputBytes(forFileAt: urls[0]))
+        }
     }
 
-    func cancel() { pending = nil }
+    func cancel() {
+        checkToken = nil
+        isChecking = false
+        pending = nil
+    }
 
     // MARK: - Run
 

@@ -62,8 +62,11 @@ final class MergeModelTests: XCTestCase {
         XCTAssertTrue(model.statusMessage?.contains("at most 9") ?? false)
     }
 
-    func testAValidRequestOpensTheConfirmationAndMarksTheCatalogBusyUntilCancelled() {
+    func testAValidRequestOpensTheConfirmationAndMarksTheCatalogBusyUntilCancelled() async {
         model.request(.hdr, photos: [photo("a.jpg", id: 1), photo("b.jpg", id: 2)], catalog: catalog)
+        XCTAssertNil(model.pending, "the dialog opens only after the orientation check")
+        XCTAssertTrue(catalog.mergeBusy, "busy while the check runs")
+        await model.checkTask?.value
         XCTAssertEqual(model.pending?.photos.count, 2)
         XCTAssertTrue(catalog.mergeBusy, "other sheets and menu items must see the pending merge")
         XCTAssertTrue(catalog.toolSheetIsBusy, "batch rename must not start under a pending merge")
@@ -73,7 +76,7 @@ final class MergeModelTests: XCTestCase {
         XCTAssertFalse(catalog.toolSheetIsBusy)
     }
 
-    func testPanoramaRequestsFollowTheirOwnLimitsAndText() {
+    func testPanoramaRequestsFollowTheirOwnLimitsAndText() async {
         model.request(.panorama, photos: [photo("a.jpg", id: 1)], catalog: catalog)
         XCTAssertNil(model.pending)
         XCTAssertEqual(model.statusMessage, "Select at least two overlapping photos to make a panorama.")
@@ -87,6 +90,7 @@ final class MergeModelTests: XCTestCase {
         XCTAssertNil(MergeModel.selectionProblem(.panorama, count: 10))
         XCTAssertNotNil(MergeModel.selectionProblem(.hdr, count: 10))
         model.request(.panorama, photos: ten, catalog: catalog)
+        await model.checkTask?.value
         XCTAssertEqual(model.pending?.kind, .panorama)
         let request = try! XCTUnwrap(model.pending)
         XCTAssertEqual(MergeModel.confirmationTitle(request), "Stitch 10 photos into a panorama?")
@@ -112,11 +116,78 @@ final class MergeModelTests: XCTestCase {
         XCTAssertTrue(MergeModel.summary(outcome).contains("edges kept."))
     }
 
-    func testASecondRequestWhileOneIsPendingIsIgnored() {
+    func testASecondRequestWhileOneIsPendingIsIgnored() async {
         model.request(.hdr, photos: [photo("a.jpg", id: 1), photo("b.jpg", id: 2)], catalog: catalog)
+        await model.checkTask?.value
         let first = model.pending
         model.request(.hdr, photos: [photo("c.jpg", id: 3), photo("d.jpg", id: 4), photo("e.jpg", id: 5)], catalog: catalog)
         XCTAssertEqual(model.pending, first)
+    }
+
+    // MARK: Orientation check in request
+
+    private func checkingModel(_ results: [MergeModel.OrientationCheck]) -> (MergeModel, ScriptedResolver) {
+        let resolver = ScriptedResolver(results)
+        return (MergeModel(folderAccess: access, orientationResolver: { _ in resolver.next() }, startAccess: { _ in true }), resolver)
+    }
+
+    private var pair: [Photo] { [photo("a.jpg", id: 1), photo("b.jpg", id: 2)] }
+
+    func testRequestWithMixedOrientationsRefusesWithoutOpeningTheDialog() async {
+        let (m, _) = checkingModel([.mixed("b.jpg")])
+        m.request(.hdr, photos: pair, catalog: catalog)
+        await m.checkTask?.value
+        XCTAssertNil(m.pending)
+        XCTAssertEqual(m.statusMessage, MergeModel.orientationProblemMessage(.mixed("b.jpg")))
+        XCTAssertFalse(m.isBusy)
+        XCTAssertFalse(catalog.mergeBusy)
+    }
+
+    func testRequestWithAnUndecodableEditFileNamesTheFileAndOpensNoDialog() async {
+        let (m, _) = checkingModel([.undecodable("a.jpg")])
+        m.request(.panorama, photos: pair, catalog: catalog)
+        await m.checkTask?.value
+        XCTAssertNil(m.pending)
+        XCTAssertTrue(m.statusMessage?.contains("“a.jpg”") ?? false)
+        XCTAssertFalse(m.isBusy)
+    }
+
+    func testRequestWithMatchingOrientationsOpensTheDialog() async {
+        let (m, resolver) = checkingModel([.ok([.identity, .identity])])
+        m.request(.hdr, photos: pair, catalog: catalog)
+        await m.checkTask?.value
+        XCTAssertEqual(m.pending?.photos.count, 2)
+        XCTAssertNil(m.statusMessage)
+        XCTAssertEqual(resolver.calls, 1)
+    }
+
+    func testASecondRequestWhileTheCheckRunsIsIgnored() async {
+        let (m, resolver) = checkingModel([.ok([.identity, .identity])])
+        m.request(.hdr, photos: pair, catalog: catalog)
+        XCTAssertTrue(m.isChecking)
+        m.request(.panorama, photos: [photo("c.jpg", id: 3), photo("d.jpg", id: 4)], catalog: catalog)
+        await m.checkTask?.value
+        XCTAssertEqual(m.pending?.kind, .hdr)
+        XCTAssertEqual(resolver.calls, 1, "the second request must not start its own check")
+    }
+
+    func testCancelDuringTheCheckDropsTheLateResult() async {
+        let (m, _) = checkingModel([.ok([.identity, .identity])])
+        m.request(.hdr, photos: pair, catalog: catalog)
+        m.cancel()
+        XCTAssertFalse(m.isChecking)
+        await m.checkTask?.value
+        XCTAssertNil(m.pending, "a result for a cancelled request must not open the dialog late")
+        XCTAssertFalse(catalog.mergeBusy)
+    }
+
+    func testRenameStartingDuringTheCheckDropsTheResult() async {
+        let (m, _) = checkingModel([.ok([.identity, .identity])])
+        m.request(.hdr, photos: pair, catalog: catalog)
+        catalog.isRenameInProgress = true
+        await m.checkTask?.value
+        XCTAssertNil(m.pending)
+        XCTAssertEqual(m.statusMessage, CatalogModel.renameInProgressMessage)
     }
 
     func testRequestIsRefusedWhileARenameRuns() {

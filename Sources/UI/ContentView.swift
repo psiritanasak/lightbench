@@ -2664,6 +2664,22 @@ struct ContentView: View {
     }
 
     private var editControls: some View {
+        // The histogram + EXIF header is pinned ABOVE the scroll (Edit tab only); `.tabScrollMemory` stays on the ScrollView itself.
+        VStack(spacing: 0) {
+            if EditorHistogramHeader.isShown(on: selectedTab) {
+                EditorHistogramHeader(
+                    data: document.histogramData,
+                    channels: adjustPanel.histogramDisplayMode == .rgb ? .allChannels : .luminanceOnly,
+                    cameraInfo: document.cameraInfo)
+                Divider()
+            }
+            editScroll
+        }
+        .disabled(document.currentImage == nil)
+        .background(Theme.panel)
+    }
+
+    private var editScroll: some View {
         ScrollView {
             Group {
                 switch selectedTab {
@@ -2725,8 +2741,6 @@ struct ContentView: View {
         // visible track/thumb (and the ability to drag it directly) is
         // gone.
         .scrollIndicators(.hidden)
-        .disabled(document.currentImage == nil)
-        .background(Theme.panel)
         .tabScrollMemory(tab: selectedTab, memory: $tabMemory)
     }
 

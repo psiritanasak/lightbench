@@ -41,9 +41,12 @@ struct PhotoMetadata: Codable, Equatable, Hashable, Sendable {
 
     /// "Make Model" for search and display, without repeating the make when the model already starts with it
     /// (Nikon writes `NIKON CORPORATION` / `NIKON D610`; Canon writes `Canon` / `Canon EOS R5`).
-    var cameraName: String? {
-        let make = cameraMake?.trimmingCharacters(in: .whitespaces) ?? ""
-        let model = cameraModel?.trimmingCharacters(in: .whitespaces) ?? ""
+    var cameraName: String? { PhotoMetadata.cameraName(make: cameraMake, model: cameraModel) }
+
+    /// The make/model de-duplication, shared with the Editor's EXIF strip so both show the same name.
+    static func cameraName(make rawMake: String?, model rawModel: String?) -> String? {
+        let make = rawMake?.trimmingCharacters(in: .whitespaces) ?? ""
+        let model = rawModel?.trimmingCharacters(in: .whitespaces) ?? ""
         if model.isEmpty { return make.isEmpty ? nil : make }
         if make.isEmpty { return model }
         // Drop the make only when the model already STARTS WITH THE SAME WORD (a whole word, any case).

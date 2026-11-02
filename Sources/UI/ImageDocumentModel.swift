@@ -158,6 +158,9 @@ final class ImageDocumentModel: ObservableObject {
     @Published var depthMaskMessage: String?
     /// True while a depth map is being read or computed (single-flight: disables the Depth buttons).
     @Published private(set) var isGeneratingDepth = false
+    /// EXIF of the PHOTO CURRENTLY DISPLAYED for the pinned strip (nil when unreadable or nothing open). Cleared at the commit point of a load
+    /// (not at its start: a failed or slow load leaves the old photo on screen), then refilled by `refreshCameraInfo`.
+    @Published private(set) var cameraInfo: PhotoMetadataReader.Fields?
     /// Which depth sources exist for the open photo (embedded iPhone depth in its file; the bundled model). Refreshed when a photo loads.
     @Published private(set) var depthAvailability = DepthMapGenerator.Availability(embedded: false, model: DepthModelRunner.isInstalled)
 
@@ -554,6 +557,9 @@ final class ImageDocumentModel: ObservableObject {
         sidecarOwnedEditKey = existingSidecarState == nil ? nil : Photo.editKey(path: url.path, versionKey: versionKey)
         sidecarSaveStatus = baselineSaveStatus()
         refreshDepthAvailability()
+        // Commit point: the displayed photo changes here, so the EXIF strip must change with it (never B's pixels with A's EXIF).
+        cameraInfo = nil
+        refreshCameraInfo()
         currentRawOrientationIsUp = isRawOrientationUp
         currentRawAdjustmentSupport = rawAdjustmentSupport
         isLoadingPhoto = true
@@ -1768,6 +1774,21 @@ final class ImageDocumentModel: ObservableObject {
                     completion?(affected)
                 }
             }
+        }
+    }
+
+    // MARK: - Camera info (pinned EXIF strip)
+
+    /// Re-reads the open photo's EXIF header for the Editor's pinned strip. Header-only ImageIO read off the main thread (same shape as
+    /// `refreshDepthAvailability`); a result for a photo that is no longer open is dropped. An unreadable file leaves `cameraInfo` nil.
+    @discardableResult
+    func refreshCameraInfo(read: @escaping @Sendable (URL) -> PhotoMetadataReader.Fields? = { PhotoMetadataReader.read(from: $0) }) -> Task<Void, Never> {
+        let url = currentURL
+        return Task { @MainActor [weak self] in
+            guard let url else { return }
+            let fields = await Task.detached(priority: .utility) { read(url) }.value
+            guard let self, self.currentURL == url else { return }
+            self.cameraInfo = fields
         }
     }
 

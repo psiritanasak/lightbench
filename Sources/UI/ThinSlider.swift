@@ -74,12 +74,20 @@ struct ThinSliderThumb: View {
     let width: CGFloat
     let height: CGFloat
     let isFocused: Bool
+    /// A thin dark hairline just inside the thumb's edge, used only over a colour-gradient track so the white thumb stays
+    /// visible on a pale end (amber, yellow). Off by default: the plain thumb is drawn exactly as before.
+    var hasHairline: Bool = false
 
     var body: some View {
         // No shadow on the thumb: flat, like the rest of the editor.
         Capsule()
             .fill(Color.white)
             .frame(width: width, height: height)
+            .overlay {
+                if hasHairline {
+                    Capsule().strokeBorder(Color.black.opacity(0.55), lineWidth: 0.75)
+                }
+            }
             .overlay(Capsule().stroke(Theme.selectedOutline, lineWidth: 1.5).padding(-3).opacity(isFocused ? 1 : 0))
     }
 }
@@ -106,6 +114,10 @@ struct ThinSlider: View {
     /// keeps the previous percent behavior — additive, no call-site changes
     /// required elsewhere.
     var valueDescription: ((Double) -> String)? = nil
+    /// D58-2: colour stops (left to right) for a gradient track. `nil` keeps the plain grey track with the dimmer filled part.
+    /// A gradient replaces the filled part (a bar filled up to the thumb would muddy a bipolar ramp; the thumb alone marks the
+    /// value) and gives the thumb a hairline outline.
+    var track: [Color]? = nil
 
     /// The filled part of the track is a dimmer white than the thumb, so the thumb is the one bright mark.
     static let filledTrackOpacity = 0.55
@@ -129,10 +141,19 @@ struct ThinSlider: View {
                 Capsule()
                     .fill(Color.white.opacity(0.15))
                     .frame(height: trackHeight)
-                Capsule()
-                    .fill(Color.white.opacity(Self.filledTrackOpacity))
-                    .frame(width: thumbX, height: trackHeight)
-                ThinSliderThumb(width: thumbWidth, height: thumbHeight, isFocused: isFocused)
+                if let track, track.count >= 2 {
+                    Capsule()
+                        .fill(LinearGradient(colors: track, startPoint: .leading, endPoint: .trailing))
+                        .frame(height: trackHeight)
+                } else {
+                    Capsule()
+                        .fill(Color.white.opacity(Self.filledTrackOpacity))
+                        .frame(width: thumbX, height: trackHeight)
+                }
+                ThinSliderThumb(
+                    width: thumbWidth, height: thumbHeight, isFocused: isFocused,
+                    hasHairline: (track?.count ?? 0) >= 2
+                )
                     .offset(x: thumbX - thumbWidth / 2)
             }
             .frame(maxHeight: .infinity, alignment: .center)

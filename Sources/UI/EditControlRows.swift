@@ -21,6 +21,8 @@ struct EditSliderRow: View {
     /// degree/plain-decimal row — only percent-formatted rows need to
     /// pass `100` explicitly.
     var displayMultiplier: Double = 1
+    /// D58-2: optional colour stops for the slider's gradient track (`SliderTrackPalette`). `nil` = the plain track.
+    var track: [Color]? = nil
     let format: (Double) -> String
 
     @State private var isEditingText = false
@@ -102,7 +104,7 @@ struct EditSliderRow: View {
                 .disabled(value == identity)
                 .accessibilityLabel("Reset \(label)")
             }
-            ThinSlider(value: $value, range: range, valueDescription: format)
+            ThinSlider(value: $value, range: range, valueDescription: format, track: track)
                 .accessibilityLabel(label)
         }
     }

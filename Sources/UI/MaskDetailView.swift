@@ -203,18 +203,18 @@ struct MaskDetailView: View {
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Saturation", value: $mask.saturation,
-                range: -1...1, identity: 0, displayMultiplier: 100
+                range: -1...1, identity: 0, displayMultiplier: 100, track: SliderTrackPalette.maskSaturation
             ) { String(format: "%+.0f%%", $0 * 100) }
             // A Kelvin OFFSET from wherever white balance already left the
             // image, NOT an absolute value like the global Temperature row
             // -- see Mask.temperature's own doc comment.
             EditSliderRow(
                 label: "Temperature", value: $mask.temperature,
-                range: -2000...2000, identity: 0
+                range: -2000...2000, identity: 0, track: SliderTrackPalette.maskTemperature
             ) { String(format: "%+.0fK", $0) }
             EditSliderRow(
                 label: "Tint", value: $mask.tint,
-                range: -100...100, identity: 0
+                range: -100...100, identity: 0, track: SliderTrackPalette.maskTint
             ) { String(format: "%+.0f", $0) }
         }
     }

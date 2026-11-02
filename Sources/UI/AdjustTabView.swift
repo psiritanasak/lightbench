@@ -583,11 +583,11 @@ struct AdjustTabView: View {
         Group {
             EditSliderRow(
                 label: "Temperature", value: $document.editState.whiteBalanceTemperature,
-                range: 3500...9500, identity: 6500
+                range: 3500...9500, identity: 6500, track: SliderTrackPalette.temperature
             ) { String(format: "%.0fK", $0) }
             EditSliderRow(
                 label: "Tint", value: $document.editState.whiteBalanceTint,
-                range: -100...100, identity: 0
+                range: -100...100, identity: 0, track: SliderTrackPalette.tint
             ) { String(format: "%+.0f", $0) }
             Button {
                 // `toggle` alone already replaces whatever else was armed
@@ -616,15 +616,15 @@ struct AdjustTabView: View {
             .disabled(document.currentImage == nil)
             EditSliderRow(
                 label: "Hue", value: $document.editState.hslHue,
-                range: -180...180, identity: 0
+                range: -180...180, identity: 0, track: SliderTrackPalette.hue
             ) { String(format: "%+.0f°", $0) }
             EditSliderRow(
                 label: "Vibrance", value: $document.editState.vibrance,
-                range: -1...1, identity: 0, displayMultiplier: 100
+                range: -1...1, identity: 0, displayMultiplier: 100, track: SliderTrackPalette.vibrance
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "Saturation", value: $document.editState.hslSaturation,
-                range: -1...1, identity: 0, displayMultiplier: 100
+                range: -1...1, identity: 0, displayMultiplier: 100, track: SliderTrackPalette.saturation
             ) { String(format: "%+.0f%%", $0 * 100) }
         }
     }
@@ -1934,17 +1934,20 @@ struct AdjustTabView: View {
             EditSliderRow(
                 label: "\(panel.selectedSelectiveColorBand.label) Hue",
                 value: selectiveColorHueBinding(for: panel.selectedSelectiveColorBand),
-                range: -1...1, identity: 0, displayMultiplier: 100
+                range: -1...1, identity: 0, displayMultiplier: 100,
+                track: SliderTrackPalette.selectiveHue(panel.selectedSelectiveColorBand)
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "\(panel.selectedSelectiveColorBand.label) Saturation",
                 value: selectiveColorSaturationBinding(for: panel.selectedSelectiveColorBand),
-                range: -1...1, identity: 0, displayMultiplier: 100
+                range: -1...1, identity: 0, displayMultiplier: 100,
+                track: SliderTrackPalette.selectiveSaturation(panel.selectedSelectiveColorBand)
             ) { String(format: "%+.0f%%", $0 * 100) }
             EditSliderRow(
                 label: "\(panel.selectedSelectiveColorBand.label) Luminance",
                 value: selectiveColorLuminanceBinding(for: panel.selectedSelectiveColorBand),
-                range: -1...1, identity: 0, displayMultiplier: 100
+                range: -1...1, identity: 0, displayMultiplier: 100,
+                track: SliderTrackPalette.selectiveLuminance(panel.selectedSelectiveColorBand)
             ) { String(format: "%+.0f%%", $0 * 100) }
         }
     }

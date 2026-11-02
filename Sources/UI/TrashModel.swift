@@ -174,7 +174,7 @@ final class TrashModel: ObservableObject {
         if !outcome.trashedIDs.isEmpty {
             // A virtual copy trashed on its own leaves the shared file in place: its path must not drop the master's focus/thumbnail.
             let paths = plan.items.filter { !$0.isVersionOnly && outcome.trashedIDs.contains($0.photoID) }.map { $0.photoURL.path }
-            do { try await catalog.removeTrashedPhotos(ids: outcome.trashedIDs, paths: paths) } catch { result.catalogError = error.localizedDescription }
+            do { try await catalog.removeTrashedPhotos(ids: outcome.trashedIDs, paths: paths, trashedURLs: outcome.trashedURLs, editFiles: outcome.editFilesTrashed) } catch { result.catalogError = error.localizedDescription }
         }
         statusMessage = Self.summary(result)
     }
@@ -220,7 +220,8 @@ final class TrashModel: ObservableObject {
         return "Moves \(what) to the Trash, with each photo's edit file and XMP sidecar. " + copies
             + "A shared .xmp (same name as a RAW or JPEG that stays) is kept. The photo open in the Editor is skipped.\n\n"
             + "Nothing is permanently deleted: in the Trash, choose Put Back to restore a file, then import its folder again. "
-            + "The photos are removed from the Library, and their ratings, labels, keywords, collections and face data go with them."
+            + "The photos are removed from the Library, and their ratings, labels, keywords, collections and face data go with them. "
+            + "Lightbench keeps a record so you can restore the photo's ratings, keywords, collections and info from Photo ▸ Recently Deleted. The file itself stays in the Finder's Trash."
     }
 
     nonisolated static func summary(_ r: Result) -> String {
@@ -244,7 +245,7 @@ final class TrashModel: ObservableObject {
         if r.noAccess > 0 { parts.append("\(photos(r.noAccess)) skipped (folder access not granted)") }
         if !r.failed.isEmpty { parts.append("\(photos(r.failed.count)) could not be moved and stay in the Library (\(r.failed.first?.message ?? "unknown error"))") }
         if r.companionsFailed > 0 { parts.append("\(r.companionsFailed) edit / XMP file\(r.companionsFailed == 1 ? "" : "s") could not be moved") }
-        if let error = r.catalogError { parts.append("the photos are in the Trash but the Library could not be updated (\(error)); remove them with Remove from Library") }
+        if let error = r.catalogError { parts.append("the files are in the Trash but the Library could not be updated (\(error)), so the photos stay in the Library and show as missing; choose Put Back in the Finder to return them") }
         return parts.joined(separator: "; ") + "."
     }
 }

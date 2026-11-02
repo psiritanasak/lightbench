@@ -241,6 +241,12 @@ enum TrashEngine {
     struct Outcome: Equatable, Sendable {
         /// Catalog rows whose FILE reached the Trash (a photo's aliases included): exactly these lose their row.
         var trashedIDs: [Int64] = []
+        /// Where the Trash put each photo's FILE (photo id → location the mover reported); absent when the mover did not say. Recently
+        /// Deleted records it; nothing in this app ever moves a file back out.
+        var trashedURLs: [Int64: URL] = [:]
+        /// The edit files (`.photoapp.json`, original paths) that really reached the Trash with each photo id. Recently Deleted records them so
+        /// "ready to restore" can require them back too.
+        var editFilesTrashed: [Int64: [String]] = [:]
         var failures: [Failure] = []
         var companionsTrashed = 0
         var companionsFailed = 0
@@ -285,6 +291,7 @@ enum TrashEngine {
                     do {
                         _ = try mover(companion.url)
                         outcome.companionsTrashed += 1
+                        outcome.editFilesTrashed[item.photoID, default: []].append(companion.url.path)
                     } catch {
                         moved = false
                         outcome.companionsFailed += 1
@@ -294,14 +301,16 @@ enum TrashEngine {
                 if moved { outcome.trashedIDs.append(item.photoID) }
                 continue
             }
+            let trashedURL: URL?
             do {
-                _ = try mover(item.photoURL)
+                trashedURL = try mover(item.photoURL)
             } catch {
                 outcome.failures.append(Failure(photoID: item.photoID, name: item.photoURL.lastPathComponent, message: error.localizedDescription))
                 notTrashedKeys.insert(key)
                 continue
             }
             outcome.trashedIDs.append(item.photoID)
+            if let trashedURL { outcome.trashedURLs[item.photoID] = trashedURL }
             outcome.trashedIDs.append(contentsOf: item.alsoIDs)
             trashedKeys.insert(key)
             for companion in item.companions {
@@ -316,6 +325,7 @@ enum TrashEngine {
                     do {
                         _ = try mover(companion.url)
                         outcome.companionsTrashed += 1
+                        outcome.editFilesTrashed[item.photoID, default: []].append(companion.url.path)
                     } catch {
                         outcome.companionsFailed += 1
                     }

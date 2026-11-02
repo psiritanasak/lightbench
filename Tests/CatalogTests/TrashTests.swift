@@ -227,6 +227,19 @@ final class TrashEngineTests: XCTestCase {
         XCTAssertTrue(outcome.failures.isEmpty)
     }
 
+    func testTheOutcomeKeepsWhereEachPhotoFileWentAndNeverRecordsCompanionsOrFailures() async {
+        let plan = TrashPlan(items: [item(1, "a.jpg", companions: [("a.json", .editSidecar)]), item(2, "b.jpg"), item(3, "c.jpg")])
+        let outcome = await TrashEngine.apply(plan, mover: { url in
+            if url.lastPathComponent == "c.jpg" { throw Boom() }
+            return URL(fileURLWithPath: "/Users/x/.Trash/\(url.lastPathComponent)")
+        })
+        XCTAssertEqual(outcome.trashedURLs, [1: URL(fileURLWithPath: "/Users/x/.Trash/a.jpg"), 2: URL(fileURLWithPath: "/Users/x/.Trash/b.jpg")])
+        // A mover that does not say where the file went records nothing (the entry then has no trashed location).
+        let unknown = await TrashEngine.apply(TrashPlan(items: [item(1, "a.jpg")]), mover: { _ in nil })
+        XCTAssertTrue(unknown.trashedURLs.isEmpty)
+        XCTAssertEqual(unknown.trashedIDs, [1])
+    }
+
     func testAPhotoThatFailsToMoveKeepsItsCompanionsAndItsRow() async {
         let recorder = Recorder()
         let plan = TrashPlan(items: [item(1, "a.jpg", companions: [("a.json", .editSidecar)]), item(2, "b.jpg", companions: [("b.json", .editSidecar)])])
@@ -549,6 +562,17 @@ final class TrashModelTests: XCTestCase {
         XCTAssertFalse(catalog.trashBusy)
     }
 
+    func testTheTrashLocationAndTheEditFilesReachRecentlyDeleted() async throws {
+        let photos = try await makePhotos(["a.jpg"], rejected: ["a.jpg"])
+        try Data("{}".utf8).write(to: dir.appendingPathComponent("a.jpg.photoapp.json"))
+        model = TrashModel(folderAccess: access, mover: { url in URL(fileURLWithPath: "/Users/x/.Trash/\(url.lastPathComponent)") })
+        try await run(.rejected, shown: photos)
+        let entries = try await db.deletedPhotoEntries()
+        let entry = try XCTUnwrap(entries.first)
+        XCTAssertEqual(entry.trashedPath, "/Users/x/.Trash/a.jpg", "the mover's resulting URL is recorded")
+        XCTAssertEqual(entry.editFilePaths, [dir.appendingPathComponent("a.jpg.photoapp.json").path], "the edit file that moved is recorded")
+    }
+
     func testThePhotoOpenInTheEditorIsSkippedAndKeepsItsRowAndFiles() async throws {
         let photos = try await makePhotos(["a.jpg", "b.jpg"], rejected: ["a.jpg", "b.jpg"])
         open = dir.appendingPathComponent("a.jpg").path
@@ -737,7 +761,7 @@ final class TrashModelTests: XCTestCase {
         r.trashed = 1; r.companions = 3
         XCTAssertEqual(TrashModel.summary(r), "Moved 1 photo to the Trash with 3 edit / XMP files.")
         r.catalogError = "disk full"
-        XCTAssertTrue(TrashModel.summary(r).contains("the photos are in the Trash but the Library could not be updated (disk full)"))
+        XCTAssertTrue(TrashModel.summary(r).contains("the files are in the Trash but the Library could not be updated (disk full)"))
     }
 
     func testWiringConfirmationIsDestructiveWithNoDefaultButtonAndTheGatesAreInPlace() throws {

@@ -384,9 +384,9 @@ final class CatalogModelStacksTests: XCTestCase {
     func testTrashedPhotosLeaveTheirStacks() async throws {
         try await db.createStack(photoIDs: [ids[0], ids[1], ids[2]], manual: true)
         let model = await makeModel()
-        try await model.removeTrashedPhotos(ids: [ids[2]], paths: ["/tmp/stk/s3.jpg"])
+        try await model.removeTrashedPhotos(ids: [ids[2]], paths: ["/tmp/stk/s3.jpg"], trashedURLs: [:], editFiles: [:])
         XCTAssertEqual(model.stacks.first.map { Set($0.memberIDs) }, Set([ids[0], ids[1]]))
-        try await model.removeTrashedPhotos(ids: [ids[1]], paths: ["/tmp/stk/s2.jpg"])
+        try await model.removeTrashedPhotos(ids: [ids[1]], paths: ["/tmp/stk/s2.jpg"], trashedURLs: [:], editFiles: [:])
         XCTAssertTrue(model.stacks.isEmpty)
         XCTAssertEqual(model.photoCount, 4)
     }

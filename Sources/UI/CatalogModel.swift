@@ -140,6 +140,10 @@ final class CatalogModel: ObservableObject {
     @Published var duplicatesSheetRequested = false
     @Published var duplicatesSheetPresented = false
     let duplicates = DuplicatesModel()
+    /// Recently Deleted (Photo ▸ Recently Deleted…): the menu only REQUESTS; `RecentlyDeletedSheetModifier` presents unless another sheet is up.
+    @Published var recentlyDeletedRequested = false
+    @Published var recentlyDeletedPresented = false
+    let recentlyDeleted = RecentlyDeletedModel()
     /// The keyword sheet's snapshot of the photo ids it edits; `nil` = sheet closed. Lives here so the Photo-menu
     /// item (Scene level) and the Library toolbar reach the same sheet.
     @Published var keywordSheetPhotoIDs: [Int64]?
@@ -825,14 +829,15 @@ final class CatalogModel: ObservableObject {
 
     /// After `TrashEngine` moved these photos' files to the Trash: remove exactly their rows (one transaction), forget them in the selection and
     /// the focus, drop their cached thumbnails and re-read the library (`photoCount` must follow: the empty-state logic trusts it).
-    func removeTrashedPhotos(ids: [Int64], paths: [String]) async throws {
+    /// `trashedURLs` (photo id → where the Trash put the file) is recorded in Recently Deleted; the snapshot and the row delete are one transaction.
+    func removeTrashedPhotos(ids: [Int64], paths: [String], trashedURLs: [Int64: URL], editFiles: [Int64: [String]]) async throws {
         guard let database else { throw CatalogDatabaseError(message: "The photo catalog isn't ready yet.") }
         // The rows about to go (a master's copies included, by the cascade): read BEFORE deleting so focus and thumbnails can be dropped by edit key.
         let doomed = Set(ids)
         let doomedKeys = Set(((try? await database.allPhotos()) ?? []).filter { row in
             row.id.map(doomed.contains) == true || row.masterId.map(doomed.contains) == true
         }.map(\.editKey))
-        try await database.deletePhotos(ids: ids)
+        try await database.trashPhotos(ids: ids, trashedPaths: trashedURLs.mapValues(\.path), editFiles: editFiles)
         selectedPhotoIDs.subtract(ids)
         pruneStacks(removingMasters: doomed) // the trigger dissolved small stacks; `refresh()` below re-reads, this keeps the gap short
         if let focused = focusedPhotoPath, paths.contains(focused) || doomedKeys.contains(focused) { focusedPhotoPath = nil }
@@ -1480,7 +1485,7 @@ final class CatalogModel: ObservableObject {
 
     /// True while a Library tool sheet (keywords, duplicates, people) is up or one of their scans runs; batch rename must not start then.
     var toolSheetIsBusy: Bool {
-        keywordSheetPhotoIDs != nil || infoSheetPhotoIDs != nil || duplicatesSheetPresented || duplicates.isScanning || peopleSheetPresented || autoStackSheetPresented || autoStack.isWorking || faces.isWorking || mergeBusy || xmpBusy || trashBusy || importCopyBusy || backupBusy
+        keywordSheetPhotoIDs != nil || infoSheetPhotoIDs != nil || duplicatesSheetPresented || recentlyDeletedPresented || recentlyDeleted.isWorking || duplicates.isScanning || peopleSheetPresented || autoStackSheetPresented || autoStack.isWorking || faces.isWorking || mergeBusy || xmpBusy || trashBusy || importCopyBusy || backupBusy
     }
 
     /// The People sheet's scan: finds faces in the photos the Library is currently drawing from, then regroups ALL stored faces.

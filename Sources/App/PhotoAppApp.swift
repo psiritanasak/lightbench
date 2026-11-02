@@ -252,6 +252,9 @@ struct PhotoAppApp: App {
                         cull.isActive || !showLibrary || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
                             || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
+                // Library-only; only REQUESTS (`RecentlyDeletedSheetModifier` drops it while another sheet is up). No default shortcut.
+                Button("Recently Deleted…") { catalog.recentlyDeletedRequested = true }
+                    .disabled(cull.isActive || !showLibrary || catalog.toolSheetIsBusy || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight)
                 // Library-only; only REQUESTS (`PeopleSheetModifier` drops it while another sheet is up). No default shortcut.
                 Button("People…") { catalog.peopleSheetRequested = true }
                     .disabled(

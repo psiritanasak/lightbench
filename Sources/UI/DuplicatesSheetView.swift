@@ -190,7 +190,10 @@ struct LibraryToolSheetsModifier: ViewModifier {
     let importCopyProviders: RenameProviders
 
     func body(content: Content) -> some View {
-        content
+        // Recently Deleted is a sheet too: while it is up every other tool sheet request is dropped.
+        let blocked = self.blocked || catalog.recentlyDeletedPresented
+        return content
+            .modifier(RecentlyDeletedSheetModifier(catalog: catalog, blocked: blocked || catalog.toolSheetIsBusy))
             .modifier(KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
             .modifier(InfoSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))
             .modifier(DuplicatesSheetModifier(catalog: catalog, blocked: blocked || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.mergeBusy || catalog.fileToolBusy))

@@ -94,13 +94,36 @@ struct ExportSettings: Sendable, Equatable {
     /// Ignored under `ExportMetadataPolicy.none`. Default OFF: a caption can be private, so nothing is written
     /// unless the user switches it on in the options sheet (the choice is remembered).
     var includeInfo = false
+    /// Rendered (default) or a byte-identical copy of the original file. When `.original`, EVERY other setting except
+    /// the file-name template is ignored: nothing is rendered, converted, stripped or embedded. NEVER remembered
+    /// (neither saved nor read back): a byte copy keeps the GPS, so each sheet opens as Rendered, like Copy Photos' Move choice.
+    var kind: ExportKind = .rendered
+    /// Maximum file size in KB for a JPEG/HEIC export (`minimumFileSizeKB...maximumFileSizeKB`); nil = no limit (default).
+    /// Ignored for PNG/TIFF and for `.original`; see `sizeLimitBytes`.
+    var maxFileSizeKB: Int?
+
+    static let minimumFileSizeKB = 50
+    static let maximumFileSizeKB = 1_000_000
+
+    /// A stored or typed limit as a usable one: values of 0 or less mean "no limit", small values are raised to the floor
+    /// (a smaller file than ~50 KB is not something a photo export can reach), huge ones capped.
+    static func sanitizedFileSizeKB(_ value: Int?) -> Int? {
+        guard let value, value > 0 else { return nil }
+        return min(max(value, minimumFileSizeKB), maximumFileSizeKB)
+    }
+
+    /// The byte limit that actually applies to the file this export writes, nil when none does.
+    var sizeLimitBytes: Int? {
+        guard kind == .rendered, format.isLossy, let kb = Self.sanitizedFileSizeKB(maxFileSizeKB) else { return nil }
+        return kb * 1024
+    }
 }
 
 /// Schema-tolerant persistence (the pattern `EditState` uses): a missing key decodes to that field's default, so
 /// adding a field in a later release never invalidates settings an older build stored. In an extension, not the
 /// struct body, so the memberwise initializer (used by tests and call sites) is kept.
 extension ExportSettings: Codable {
-    private enum CodingKeys: String, CodingKey { case format, quality, resize, namingTemplate, colorSpace, metadata, sharpening, watermark, includeKeywords, includeInfo }
+    private enum CodingKeys: String, CodingKey { case format, quality, resize, namingTemplate, colorSpace, metadata, sharpening, watermark, includeKeywords, includeInfo, kind, maxFileSizeKB }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -118,6 +141,9 @@ extension ExportSettings: Codable {
         watermark = (try? container.decodeIfPresent(ExportWatermark.self, forKey: .watermark)) ?? defaults.watermark
         includeKeywords = (try? container.decodeIfPresent(Bool.self, forKey: .includeKeywords)) ?? defaults.includeKeywords
         includeInfo = (try? container.decodeIfPresent(Bool.self, forKey: .includeInfo)) ?? defaults.includeInfo
+        kind = defaults.kind // a stored `kind` (an older build's) is deliberately ignored
+        // A wrong type (a string) or a value outside Int resets this field only; a number is sanitised.
+        maxFileSizeKB = ExportSettings.sanitizedFileSizeKB((try? container.decodeIfPresent(Int.self, forKey: .maxFileSizeKB)) ?? nil)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -134,6 +160,7 @@ extension ExportSettings: Codable {
         try container.encode(watermark, forKey: .watermark)
         try container.encode(includeKeywords, forKey: .includeKeywords)
         try container.encode(includeInfo, forKey: .includeInfo)
+        try container.encodeIfPresent(Self.sanitizedFileSizeKB(maxFileSizeKB), forKey: .maxFileSizeKB)
     }
 }
 
@@ -174,6 +201,7 @@ enum PhotoExportError: LocalizedError {
     case unreadableSource(String)
     case incompleteSource(String)
     case invalidNaming(NamingError)
+    case encodingFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -181,6 +209,8 @@ enum PhotoExportError: LocalizedError {
             return "Couldn't read \"\(path)\" — the app may not currently have permission to access it."
         case .invalidNaming(let error):
             return error.errorDescription ?? "The file name template is invalid."
+        case .encodingFailed(let path):
+            return "Couldn't write \"\(path)\" within the file size limit."
         case .incompleteSource(let path):
             return "\"\(path)\" looks cut off (an incomplete or damaged file), so exporting it would write a partial image. Nothing was written. (The photo can still be opened and viewed.)"
         }
@@ -262,8 +292,10 @@ enum PhotoExporter {
 
     /// Renders `photo` (decoded, EXIF-oriented, edited, optionally
     /// resized) and writes it into `destinationFolder`, returning the
-    /// exact file URL written. Never overwrites an existing file — see
-    /// `uniqueDestinationURL`.
+    /// exact file URL written. Never overwrites an existing file — the
+    /// name is claimed at the very end by an exclusive commit
+    /// (`commitExclusively`), see `commitStaged`. With `settings.kind == .original`
+    /// this copies the original file instead (`exportOriginal`).
     static func export(
         _ photo: Photo,
         editState: EditState,
@@ -274,6 +306,30 @@ enum PhotoExporter {
         info: PhotoInfo = PhotoInfo(),
         logoStore: WatermarkLogoStore = .shared
     ) async throws -> URL {
+        try await exportReporting(
+            photo, editState: editState, to: destinationFolder, settings: settings, sequenceIndex: sequenceIndex,
+            keywords: keywords, info: info, logoStore: logoStore
+        ).url
+    }
+
+    /// `export`, also reporting whether a file-size limit could not be met. `firstCandidate` is a test hook: the first
+    /// name the commit tries (a name that is taken makes the commit move on, exactly like a collision that appears in
+    /// the moment between choosing a name and writing it).
+    static func exportReporting(
+        _ photo: Photo,
+        editState: EditState,
+        to destinationFolder: URL,
+        settings: ExportSettings,
+        sequenceIndex: Int = 0,
+        keywords: [String] = [],
+        info: PhotoInfo = PhotoInfo(),
+        logoStore: WatermarkLogoStore = .shared,
+        firstCandidate: URL? = nil
+    ) async throws -> ExportOutcome {
+        if settings.kind == .original {
+            let result = try exportOriginal(photo, to: destinationFolder, settings: settings, sequenceIndex: sequenceIndex, firstCandidate: firstCandidate)
+            return ExportOutcome(url: result.url, overLimit: false)
+        }
         let sourceURL = URL(fileURLWithPath: photo.path)
         // D37: refuse a truncated source rather than silently exporting a partial image.
         if SourceIntegrity.verdict(forFileAt: sourceURL) == .truncated {
@@ -312,26 +368,10 @@ enum PhotoExporter {
                 adding: info, policy: settings.metadata, include: settings.includeInfo
             )
         )
-        let outputURL = Self.uniqueFileURL(
-            baseName: baseName, fileExtension: settings.format.fileExtension, in: destinationFolder
-        )
 
-        // Writes to an app-writable temp file via CIContext first, then
-        // moves those bytes into the real destination via plain
-        // Foundation `Data.write(to:options:)` — the same write mechanism
-        // `ImageDocumentModel.saveSidecarNow` already uses successfully —
-        // rather than having `CIContext.write*Representation` write
-        // directly to `outputURL`. Both approaches were tested during
-        // this feature's development against a since-fixed sandbox
-        // entitlement bug (see `ExportModel.runExport`'s own comment);
-        // kept as the proven-working combination rather than re-verified
-        // in isolation now that the entitlement is fixed.
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(settings.format.fileExtension)
-        defer { try? FileManager.default.removeItem(at: tempURL) }
-
-        // RAW sources route this write through `RawDecoder.RenderGate` —
+        // The encoded bytes are produced first (in memory for a size-limited export, via a temp file for the existing
+        // writer), then committed under a name claimed exclusively — see `commitStaged`.
+        // RAW sources route the encode through `RawDecoder.RenderGate` —
         // the same serializing gate `RawDecoder.materialize`/
         // `ThumbnailGenerator` use — so a RAW batch export can't contend
         // with (and, live-caught elsewhere, deadlock against) RAW decode
@@ -339,17 +379,164 @@ enum PhotoExporter {
         // `RenderGate`'s own doc comment. Non-RAW is untouched/synchronous
         // — it never touches Apple's RawCamera framework, so gating it too
         // would only cost batch-export throughput for no benefit.
-        if RawDecoder.isRaw(sourceURL) {
-            try await RawDecoder.RenderGate.shared.run {
-                try Self.write(resized, format: settings.format, quality: settings.quality, colorSpace: settings.colorSpace, to: tempURL)
+        struct Encoded: Sendable { var data: Data; var overLimit: Bool }
+        let encode: @Sendable () throws -> Encoded = {
+            if let limit = settings.sizeLimitBytes {
+                let result = try Self.writeLimited(
+                    resized, format: settings.format, maxQuality: settings.quality, colorSpace: settings.colorSpace, limitBytes: limit,
+                    pathForError: photo.path
+                )
+                return Encoded(data: result.data, overLimit: !result.metLimit)
             }
-        } else {
+            // Writes to an app-writable temp file via CIContext first (the proven-working combination, see
+            // `ExportModel.runExport`'s comment), then reads those bytes back.
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(settings.format.fileExtension)
+            defer { try? FileManager.default.removeItem(at: tempURL) }
             try Self.write(resized, format: settings.format, quality: settings.quality, colorSpace: settings.colorSpace, to: tempURL)
+            return Encoded(data: try Data(contentsOf: tempURL), overLimit: false)
         }
+        let encoded: Encoded
+        if RawDecoder.isRaw(sourceURL) {
+            encoded = try await RawDecoder.RenderGate.shared.run { try encode() }
+        } else {
+            encoded = try encode()
+        }
+        let url = try commitData(
+            encoded.data, baseName: baseName, fileExtension: settings.format.fileExtension, in: destinationFolder, firstCandidate: firstCandidate
+        )
+        return ExportOutcome(url: url, overLimit: encoded.overLimit)
+    }
 
-        let data = try Data(contentsOf: tempURL)
-        try data.write(to: outputURL, options: .atomic)
-        return outputURL
+    // MARK: - Exclusive commit
+
+    /// The hidden temp file a commit stages in: the destination folder itself, so the final hard link never crosses a volume.
+    private static func stagingURL(in folder: URL) -> URL {
+        folder.appendingPathComponent(".lightbench-export-\(UUID().uuidString).tmp")
+    }
+
+    /// Claims a free name for the staged file with `commitExclusively` (a hard link: atomic, fails instead of replacing a
+    /// file that appeared after the name was chosen, then the next name is tried). `firstCandidate`, when given, is tried
+    /// first (tests simulate the race with it).
+    private static func commitStaged(
+        _ staged: URL, baseName: String, fileExtension: String, in folder: URL, firstCandidate: URL?
+    ) throws -> URL {
+        var pending = firstCandidate
+        return try PhotoEnhancer.commitExclusively(staged, nextCandidate: {
+            if let first = pending { pending = nil; return first }
+            return Self.uniqueFileURL(baseName: baseName, fileExtension: fileExtension, in: folder)
+        })
+    }
+
+    /// Writes `data` into `folder` under `baseName.fileExtension` (or the next free " (2)"… name). Never overwrites.
+    static func commitData(_ data: Data, baseName: String, fileExtension: String, in folder: URL, firstCandidate: URL? = nil) throws -> URL {
+        let staged = stagingURL(in: folder)
+        defer { try? FileManager.default.removeItem(at: staged) }
+        try data.write(to: staged)
+        return try commitStaged(staged, baseName: baseName, fileExtension: fileExtension, in: folder, firstCandidate: firstCandidate)
+    }
+
+    // MARK: - Original-file export
+
+    /// One row per FILE: virtual copies share their master's file, so exporting the originals of a master and its copies
+    /// would write the same bytes twice. The first row of each path (standardised) wins; order is kept.
+    static func photosForOriginalExport(_ photos: [Photo]) -> [Photo] {
+        var seen = Set<String>()
+        return photos.filter { seen.insert(URL(fileURLWithPath: $0.path).standardizedFileURL.path).inserted }
+    }
+
+    /// Copies `photo`'s ORIGINAL file into `destinationFolder`, byte for byte, named by `settings.namingTemplate` with the
+    /// SOURCE's own extension. Nothing is rendered, converted, stripped or embedded, so the file keeps its GPS and every
+    /// other tag (the sheet says so). Only the photo file is copied, never its edit file or XMP sidecar. A truncated
+    /// source is copied as it is and reported. Mechanism (as `ImportCopyEngine.copyOne`): copy to a hidden temp file in the
+    /// destination, verify size and SHA-256, then commit exclusively under a free name. The source is only ever read.
+    /// On APFS `copyItem` clones the file, so the hash check verifies little there (it matters on other file systems and
+    /// for an injected `copy`); `copy` is injectable so a corrupt copy is tested.
+    static func exportOriginal(
+        _ photo: Photo, to destinationFolder: URL, settings: ExportSettings, sequenceIndex: Int, firstCandidate: URL? = nil,
+        copy: (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }
+    ) throws -> OriginalExportResult {
+        let sourceURL = URL(fileURLWithPath: photo.path)
+        let fileExtension = sourceURL.pathExtension
+        let compiled: CompiledNamingTemplate
+        switch NamingTemplate.compile(settings.namingTemplate) {
+        case .success(let value): compiled = value
+        case .failure(let error): throw PhotoExportError.invalidNaming(error)
+        }
+        let captureDate = compiled.usesCaptureDate
+            ? CaptureDate.read(from: sourceURL, fallback: photo.importedAt)
+            : photo.importedAt
+        let baseName = try destinationBaseName(
+            for: photo, fileExtension: fileExtension, compiled: compiled, sequenceIndex: sequenceIndex, captureDate: captureDate
+        )
+        let fm = FileManager.default
+        // Only a REGULAR file is copied (lstat, links not followed): `copyItem` would copy a symlink AS a symlink pointing
+        // back at the original, and a folder catalogued as `X.jpg` recursively.
+        guard TrashPlan.systemFileKind(sourceURL) == .file, fm.isReadableFile(atPath: sourceURL.path) else {
+            throw PhotoExportError.unreadableSource(photo.path)
+        }
+        let truncated = SourceIntegrity.verdict(forFileAt: sourceURL) == .truncated
+
+        let staged = stagingURL(in: destinationFolder)
+        defer { try? fm.removeItem(at: staged) }
+        do {
+            try copy(sourceURL, staged)
+        } catch {
+            throw PhotoExportError.unreadableSource(photo.path)
+        }
+        // The source could have been swapped for a link after the check above: what was staged must be a regular file.
+        guard TrashPlan.systemFileKind(staged) == .file else { throw PhotoExportError.unreadableSource(photo.path) }
+        let sourceSize = (try? fm.attributesOfItem(atPath: sourceURL.path))?[.size] as? Int64
+        let stagedSize = (try? fm.attributesOfItem(atPath: staged.path))?[.size] as? Int64
+        guard let sourceSize, sourceSize == stagedSize,
+              let sourceHash = FileHasher.sha256Hex(ofFileAt: sourceURL),
+              FileHasher.sha256Hex(ofFileAt: staged) == sourceHash else {
+            throw PhotoExportError.unreadableSource(photo.path)
+        }
+        let url = try commitStaged(staged, baseName: baseName, fileExtension: fileExtension, in: destinationFolder, firstCandidate: firstCandidate)
+        return OriginalExportResult(url: url, sourceWasTruncated: truncated)
+    }
+
+    // MARK: - Size-limited encode
+
+    /// JPEG/HEIC bytes under `limitBytes` (see `FileSizeLimiter`). The image is rendered ONCE to an 8-bit CGImage in the
+    /// output colour space — flattened over black exactly like the unlimited writer does — then only the encode repeats,
+    /// in memory, at different qualities (metadata, keywords and the ICC tag ride along on the image's own properties, a
+    /// fixed cost). `EditPipeline` is never re-run per step. Memory: a full-size RGBA8 CGImage is held while the encodes
+    /// run (peak not measured). Throws `encodingFailed` when the image cannot be rendered/encoded.
+    static func writeLimited(
+        _ image: CIImage, format: ExportFormat, maxQuality: CGFloat, colorSpace: ExportColorSpace, limitBytes: Int, pathForError: String = ""
+    ) throws -> FileSizeLimiter.Result {
+        let outputColorSpace = colorSpace.cgColorSpace
+        let flattened = flattenedOverBlack(image, outputColorSpace: outputColorSpace)
+        guard !flattened.extent.isInfinite,
+              let cgImage = context.createCGImage(flattened, from: flattened.extent, format: .RGBA8, colorSpace: outputColorSpace)
+        else { throw PhotoExportError.encodingFailed(pathForError) }
+        let reloaded = CIImage(cgImage: cgImage).settingProperties(image.properties)
+        let key = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
+        let result = FileSizeLimiter.search(limitBytes: limitBytes, maxQuality: maxQuality) { quality in
+            switch format {
+            case .jpeg:
+                return context.jpegRepresentation(of: reloaded, colorSpace: outputColorSpace, options: [key: quality])
+            case .heic:
+                return context.heifRepresentation(of: reloaded, format: .RGBA8, colorSpace: outputColorSpace, options: [key: quality])
+            case .png, .tiff:
+                return nil // never limited (`ExportSettings.sizeLimitBytes`)
+            }
+        }
+        guard let result else { throw PhotoExportError.encodingFailed(pathForError) }
+        return result
+    }
+
+    /// Transparency flattened over opaque black on the OUTPUT-ENCODED values (what the JPEG writer does and `write`'s HEIC
+    /// branch pins; blending in linear light would give a different red). An infinite extent is returned as is.
+    private static func flattenedOverBlack(_ image: CIImage, outputColorSpace: CGColorSpace) -> CIImage {
+        if image.extent.isInfinite { return image }
+        let encoded = image.matchedFromWorkingSpace(to: outputColorSpace) ?? image
+        let opaque = encoded.composited(over: CIImage(color: .black).cropped(to: image.extent))
+            .settingAlphaOne(in: image.extent)
+        return opaque.matchedToWorkingSpace(from: outputColorSpace) ?? opaque
     }
 
     /// Not `private`: `PhotoEnhancer` reuses this exact writer for its own
@@ -378,15 +565,7 @@ enum PhotoExporter {
             // readers ignore or show differently. 8-bit (`.RGBA8`) like the other lossy path.
             // The blend is done on the OUTPUT-ENCODED values (as JPEG's writer does; blending in linear light would give
             // 187 instead of 126 for that red), and `settingAlphaOne` makes the result opaque so no alpha plane is written.
-            let flattened: CIImage
-            if image.extent.isInfinite {
-                flattened = image
-            } else {
-                let encoded = image.matchedFromWorkingSpace(to: outputColorSpace) ?? image
-                let opaque = encoded.composited(over: CIImage(color: .black).cropped(to: image.extent))
-                    .settingAlphaOne(in: image.extent)
-                flattened = opaque.matchedToWorkingSpace(from: outputColorSpace) ?? opaque
-            }
+            let flattened = flattenedOverBlack(image, outputColorSpace: outputColorSpace)
             try context.writeHEIFRepresentation(
                 of: flattened,
                 to: url,
@@ -439,9 +618,16 @@ enum PhotoExporter {
     static func destinationBaseName(
         for photo: Photo, format: ExportFormat, compiled: CompiledNamingTemplate, sequenceIndex: Int, captureDate: Date
     ) throws -> String {
+        try destinationBaseName(for: photo, fileExtension: format.fileExtension, compiled: compiled, sequenceIndex: sequenceIndex, captureDate: captureDate)
+    }
+
+    /// The same, for a file that keeps an arbitrary extension (an original-file export keeps the SOURCE's).
+    static func destinationBaseName(
+        for photo: Photo, fileExtension: String, compiled: CompiledNamingTemplate, sequenceIndex: Int, captureDate: Date
+    ) throws -> String {
         let context = NamingContext(
             baseName: (photo.filename as NSString).deletingPathExtension,
-            fileExtension: format.fileExtension,
+            fileExtension: fileExtension,
             sequenceIndex: sequenceIndex,
             captureDate: captureDate,
             rating: photo.rating,

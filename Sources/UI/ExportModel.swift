@@ -31,6 +31,8 @@ final class ExportModel: ObservableObject {
     /// folder is picked AFTER the user confirms those options, in
     /// `runExport(photos:keywordsByPhotoID:infoByPhotoID:)`.
     func beginExport() {
+        // Original (a byte copy that keeps the GPS) is never armed from an earlier sheet: this model lives as long as the window.
+        settings.kind = .rendered
         isPresentingOptions = true
     }
 
@@ -40,17 +42,25 @@ final class ExportModel: ObservableObject {
     /// independently and the final status message reports both counts.
     func runExport(photos: [Photo], keywordsByPhotoID: [Int64: [String]], infoByPhotoID: [Int64: PhotoInfo] = [:]) {
         guard !isExporting else { return }
+        let originalCount = photos.count
         guard !photos.isEmpty else {
             statusMessage = "No photos to export."
             return
         }
+        // Original files: virtual copies share their master's file, so each FILE is copied once. Done BEFORE the panel so
+        // its count is the number of files that will really be copied.
+        let settingsSnapshot = settings
+        let isOriginal = settingsSnapshot.kind == .original
+        let batch = isOriginal ? PhotoExporter.photosForOriginalExport(photos) : photos
+        let duplicatesSkipped = originalCount - batch.count
 
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "Choose a folder to export \(photos.count) photo\(photos.count == 1 ? "" : "s") into."
-        panel.prompt = "Export"
+        let wording = ExportSheetRules.folderPanel(count: batch.count, kind: settingsSnapshot.kind)
+        panel.message = wording.message
+        panel.prompt = wording.prompt
         guard panel.runModal() == .OK, let rawDestination = panel.url else { return }
 
         // Live debugging of this feature found the app's sandbox
@@ -89,8 +99,7 @@ final class ExportModel: ObservableObject {
         }
 
         isExporting = true
-        progress = ExportProgress(completed: 0, total: photos.count)
-        let settingsSnapshot = settings
+        progress = ExportProgress(completed: 0, total: batch.count)
 
         Task.detached { [weak self] in
             // `startAccessingSecurityScopedResource()` is called here, on
@@ -114,14 +123,22 @@ final class ExportModel: ObservableObject {
             var succeeded = 0
             var failed = 0
             var firstFailureMessage: String?
-            for (index, photo) in photos.enumerated() {
-                let editState = PhotoExporter.loadEditState(for: photo)
+            var overLimit = 0
+            var truncated = 0
+            for (index, photo) in batch.enumerated() {
                 do {
-                    _ = try await PhotoExporter.export(
-                        photo, editState: editState, to: destination, settings: settingsSnapshot, sequenceIndex: index,
-                        keywords: photo.id.flatMap { keywordsByPhotoID[$0] } ?? [],
-                        info: photo.id.flatMap { infoByPhotoID[$0] } ?? PhotoInfo()
-                    )
+                    if isOriginal {
+                        let result = try PhotoExporter.exportOriginal(photo, to: destination, settings: settingsSnapshot, sequenceIndex: index)
+                        if result.sourceWasTruncated { truncated += 1 }
+                    } else {
+                        let editState = PhotoExporter.loadEditState(for: photo)
+                        let outcome = try await PhotoExporter.exportReporting(
+                            photo, editState: editState, to: destination, settings: settingsSnapshot, sequenceIndex: index,
+                            keywords: photo.id.flatMap { keywordsByPhotoID[$0] } ?? [],
+                            info: photo.id.flatMap { infoByPhotoID[$0] } ?? PhotoInfo()
+                        )
+                        if outcome.overLimit { overLimit += 1 }
+                    }
                     succeeded += 1
                 } catch {
                     failed += 1
@@ -130,24 +147,17 @@ final class ExportModel: ObservableObject {
                     }
                 }
                 await MainActor.run {
-                    self?.progress = ExportProgress(completed: index + 1, total: photos.count)
+                    self?.progress = ExportProgress(completed: index + 1, total: batch.count)
                 }
             }
             await MainActor.run {
                 self?.isExporting = false
                 self?.progress = nil
-                self?.statusMessage = Self.summary(succeeded: succeeded, failed: failed, firstFailureMessage: firstFailureMessage)
+                self?.statusMessage = ExportSummary.text(
+                    succeeded: succeeded, failed: failed, firstFailureMessage: firstFailureMessage,
+                    overLimit: overLimit, original: isOriginal, truncated: truncated, duplicatesSkipped: duplicatesSkipped
+                )
             }
         }
-    }
-
-    private static func summary(succeeded: Int, failed: Int, firstFailureMessage: String?) -> String {
-        let part = "Exported \(succeeded) photo\(succeeded == 1 ? "" : "s")."
-        guard failed > 0 else { return part }
-        var message = "\(part) \(failed) failed."
-        if let firstFailureMessage {
-            message += " First error: \(firstFailureMessage)"
-        }
-        return message
     }
 }

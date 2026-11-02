@@ -28,7 +28,7 @@ enum ExportNamePreview: Equatable {
     }
 
     static func evaluate(
-        template: String, photo: Photo?, format: ExportFormat, captureDate: Date?
+        template: String, photo: Photo?, format: ExportFormat, captureDate: Date?, kind: ExportKind = .rendered
     ) -> ExportNamePreview? {
         let compiled: CompiledNamingTemplate
         switch NamingTemplate.compile(template) {
@@ -38,11 +38,13 @@ enum ExportNamePreview: Equatable {
         guard let photo else { return nil }
         if compiled.usesCaptureDate && captureDate == nil { return .waitingForDate }
         do {
+            // An original-file export keeps the SOURCE's extension, whatever format is selected.
+            let fileExtension = kind == .original ? URL(fileURLWithPath: photo.path).pathExtension : format.fileExtension
             let base = try PhotoExporter.destinationBaseName(
-                for: photo, format: format, compiled: compiled, sequenceIndex: 0,
+                for: photo, fileExtension: fileExtension, compiled: compiled, sequenceIndex: 0,
                 captureDate: captureDate ?? photo.importedAt
             )
-            return .example(base + "." + format.fileExtension)
+            return .example(fileExtension.isEmpty ? base : base + "." + fileExtension)
         } catch PhotoExportError.invalidNaming(let error) {
             return .photoError(error)
         } catch {

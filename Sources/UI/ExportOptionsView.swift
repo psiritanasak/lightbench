@@ -26,6 +26,9 @@ struct ExportOptionsView: View {
     @State private var watermarkProblem: String?
     @State private var logoImportError: String?
     @State private var logoImportBusy = false
+    /// The typed maximum size in KB (seeded from the stored limit; the setting is only written for a valid number).
+    @State private var sizeLimitText = "500"
+    @FocusState private var sizeLimitFocused: Bool
 
     /// What the keyword toggle does and does NOT control. The toggle only adds the keywords typed in the Library; keywords
     /// the original file already carries (e.g. written by another app) follow the Metadata setting, not this toggle.
@@ -53,9 +56,12 @@ struct ExportOptionsView: View {
     private var preview: ExportNamePreview? {
         ExportNamePreview.evaluate(
             template: exportModel.settings.namingTemplate, photo: previewPhoto,
-            format: exportModel.settings.format, captureDate: previewCaptureDate
+            format: exportModel.settings.format, captureDate: previewCaptureDate, kind: exportModel.settings.kind
         )
     }
+
+    /// False in Original mode: the rendering controls do nothing there and are shown disabled.
+    private var renderControlsEnabled: Bool { ExportSheetRules.renderControlsEnabled(kind: exportModel.settings.kind) }
 
     /// Thumbnail + Choose/Remove. Picking uses `.fileImporter` (attached to the watermark section in `form`, which is
     /// always present), never an `NSOpenPanel` opened from here (see the note at the Export button about panels and
@@ -129,27 +135,48 @@ struct ExportOptionsView: View {
 
     private var form: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Export \(photoCount) Photo\(photoCount == 1 ? "" : "s")")
+            Text(ExportSheetRules.title(count: photoCount, kind: exportModel.settings.kind))
                 .font(.headline)
+
+            Picker("Output", selection: $exportModel.settings.kind) {
+                ForEach(ExportKind.allCases) { kind in
+                    Text(kind.label).tag(kind)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Export rendered photos or original files")
+            if !renderControlsEnabled {
+                Text(ExportSheetRules.originalNotice)
+                    .font(.caption)
+                    .foregroundStyle(Theme.warning)
+            }
 
             Picker("Format", selection: $exportModel.settings.format) {
                 ForEach(ExportFormat.allCases) { format in
                     Text(format.label).tag(format)
                 }
             }
+            .disabled(!renderControlsEnabled)
 
             Picker("Color space", selection: $exportModel.settings.colorSpace) {
                 ForEach(ExportColorSpace.allCases) { space in
                     Text(space.label).tag(space)
                 }
             }
+            .disabled(!renderControlsEnabled)
 
             Picker("Sharpening", selection: $exportModel.settings.sharpening) {
                 ForEach(ExportSharpening.allCases) { option in
                     Text(option.label).tag(option)
                 }
             }
+            .disabled(!renderControlsEnabled)
 
+            if !renderControlsEnabled {
+                Text(ExportSheetRules.originalMetadataLabel)
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+            } else {
             VStack(alignment: .leading, spacing: 4) {
                 Picker("Metadata", selection: $exportModel.settings.metadata) {
                     ForEach(ExportMetadataPolicy.allCases) { policy in
@@ -172,6 +199,8 @@ struct ExportOptionsView: View {
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
             }
+            .disabled(!renderControlsEnabled)
+            }
 
             if exportModel.settings.format.isLossy {
                 VStack(alignment: .leading, spacing: 4) {
@@ -182,6 +211,44 @@ struct ExportOptionsView: View {
                         valueDescription: { "\(Int($0 * 100))%" }
                     )
                     .accessibilityLabel("\(exportModel.settings.format.label) quality")
+                }
+                .disabled(!renderControlsEnabled)
+            }
+
+            if ExportSheetRules.sizeLimitAvailable(exportModel.settings) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Limit file size", isOn: Binding(
+                        get: { exportModel.settings.maxFileSizeKB != nil },
+                        set: { on in
+                            exportModel.settings.maxFileSizeKB = on
+                                ? ExportSettings.sanitizedFileSizeKB(Int(sizeLimitText)) ?? 500
+                                : nil
+                        }
+                    ))
+                    if exportModel.settings.maxFileSizeKB != nil {
+                        HStack {
+                            Text("Maximum:")
+                            TextField("KB", text: $sizeLimitText)
+                                .frame(width: 80)
+                                .focused($sizeLimitFocused)
+                                .onChange(of: sizeLimitFocused) { _, focused in
+                                    // Show the value that is really used (10 is stored as 50; 0 keeps the old limit).
+                                    if !focused {
+                                        sizeLimitText = ExportSheetRules.effectiveSizeLimitText(typed: sizeLimitText, current: exportModel.settings.maxFileSizeKB)
+                                    }
+                                }
+                                .accessibilityLabel("Maximum file size in kilobytes")
+                                .onChange(of: sizeLimitText) { _, text in
+                                    if let kb = Int(text.trimmingCharacters(in: .whitespaces)), kb > 0 {
+                                        exportModel.settings.maxFileSizeKB = ExportSettings.sanitizedFileSizeKB(kb)
+                                    }
+                                }
+                            Text("KB")
+                        }
+                        Text("The quality above is the highest used; it is lowered only as far as needed (smallest limit \(ExportSettings.minimumFileSizeKB) KB). A photo that cannot get small enough is written at the lowest quality and counted in the summary.")
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary)
+                    }
                 }
             }
 
@@ -256,26 +323,34 @@ struct ExportOptionsView: View {
                     }
                 }
             }
+            .disabled(!renderControlsEnabled)
             // On the always-present watermark section (not on `logoRow`, which only exists in Image mode).
             .fileImporter(isPresented: $logoImporterShown, allowedContentTypes: [.png, .jpeg, .heic]) { result in
                 importLogo(result)
             }
 
-            Toggle("Resize", isOn: $useCustomResize)
-            if useCustomResize {
-                HStack {
-                    Text("Long edge:")
-                    TextField("pixels", text: $maxLongEdgeText)
-                        .frame(width: 80)
-                    Text("px")
+            Group {
+                Toggle("Resize", isOn: $useCustomResize)
+                if useCustomResize {
+                    HStack {
+                        Text("Long edge:")
+                        TextField("pixels", text: $maxLongEdgeText)
+                            .frame(width: 80)
+                        Text("px")
+                    }
                 }
             }
+            .disabled(!renderControlsEnabled)
 
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .buttonStyle(.flat)
                 Button("Export") {
+                    sizeLimitText = ExportSheetRules.effectiveSizeLimitText(typed: sizeLimitText, current: exportModel.settings.maxFileSizeKB)
+                    if exportModel.settings.maxFileSizeKB != nil {
+                        exportModel.settings.maxFileSizeKB = ExportSettings.sanitizedFileSizeKB(Int(sizeLimitText))
+                    }
                     // `resized(_:option:)` also guards against a
                     // non-positive value, but clamping here too means an
                     // invalid/empty field falls back to a sane default
@@ -318,6 +393,7 @@ struct ExportOptionsView: View {
             refreshLogoState()
             // Seed the resize controls from the remembered setting — otherwise the Export button would overwrite a
             // stored long edge with "original" from this sheet's own unseeded defaults.
+            if let kb = exportModel.settings.maxFileSizeKB { sizeLimitText = String(kb) }
             if case .maxLongEdge(let edge) = exportModel.settings.resize.sanitized {
                 useCustomResize = true
                 maxLongEdgeText = String(Int(edge.rounded()))

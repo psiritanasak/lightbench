@@ -139,7 +139,7 @@ final class FacesModelTests: XCTestCase {
 
     func testClearWhileAScanRunsKeepsItRunningAndItStillTellsTheLibrary() async throws {
         try await setUpModel()
-        let slow = model.scannerEnvironment
+        let slow = model.effectiveScannerEnvironment
         model.scannerEnvironment = FaceScanner.Environment(stat: slow.stat, detect: { path in Thread.sleep(forTimeInterval: 0.15); return slow.detect(path) })
         model.scanAndGroup(photos: photos, database: db)
         XCTAssertTrue(model.isWorking)
@@ -251,5 +251,36 @@ final class FacesModelTests: XCTestCase {
         hosting.cacheDisplay(in: hosting.bounds, to: rep)
         window.orderOut(nil)
         return rep
+    }
+
+    func testSmallFacesAreCountedSeparatelyNotGroupedAndOfferedUnderTheirOwnSelection() async throws {
+        try await setUpModel()
+        // One small face in EACH of the five photos, all with the same print: if grouping could see them they would form a person (faces
+        // of one photo are never merged, so they must come from different photos for this to bite).
+        model.scannerEnvironment = FaceScanner.Environment(
+            stat: { _ in (1000, 1) },
+            detect: { _ in
+                [FaceDetector.DetectedFace(x: 0.5, y: 0.8, w: 0.02, h: 0.02, quality: 0.4, featurePrint: Self.print(plane: 0, angle: 0), crop: Data([3]), isSmall: true)]
+            }, includeSmall: true)
+        try await scanAndWait()
+        XCTAssertEqual(model.smallFaceCount, 5)
+        XCTAssertEqual(model.unsortedCount, 0, "small faces are not 'unsorted'")
+        XCTAssertTrue(model.people.isEmpty, "and are never grouped into people, although five identical prints from five photos would otherwise form one")
+        model.selection = .smallFaces
+        for _ in 0..<200 where model.selectedFaces.isEmpty { try await Task.sleep(nanoseconds: 25_000_000) }
+        XCTAssertEqual(model.selectedFaces.count, 5)
+        XCTAssertTrue(model.selectedFaces.allSatisfy(\.isSmall))
+    }
+
+    func testTheSmallFaceOptionIsWrittenThroughToPreferencesAndSelectsTheRealScannerMode() {
+        let model = FacesModel()
+        let saved = AppPreferences.shared.findSmallFaces
+        defer { AppPreferences.shared.findSmallFaces = saved }
+        model.findSmallFaces = true
+        XCTAssertTrue(AppPreferences.shared.findSmallFaces)
+        XCTAssertTrue(model.effectiveScannerEnvironment.includeSmall)
+        model.findSmallFaces = false
+        XCTAssertFalse(AppPreferences.shared.findSmallFaces)
+        XCTAssertFalse(model.effectiveScannerEnvironment.includeSmall)
     }
 }

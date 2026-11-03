@@ -43,7 +43,9 @@ extension CatalogDatabase {
                     if let oldIndex = matches[index] {
                         keptOld.insert(oldIndex)
                         face.id = old[oldIndex].id
-                        face.personId = old[oldIndex].personId
+                        // A face that became SMALL keeps its person only when the USER gave it: an automatic assignment would be
+                        // permanent (grouping never reads small faces, so nothing could ever take it out again).
+                        face.personId = (face.isSmall && !old[oldIndex].isConfirmed) ? nil : old[oldIndex].personId
                         face.isConfirmed = old[oldIndex].isConfirmed
                         try face.update(db)
                     } else {
@@ -53,7 +55,9 @@ extension CatalogDatabase {
                         try face.insert(db)
                     }
                 }
-                for (oldIndex, oldFace) in old.enumerated() where !keptOld.contains(oldIndex) {
+                // A scan WITHOUT the small-face pass cannot see small faces, so it must not erase them (or the person the user gave one).
+                let keepSmall = !FaceDetector.includesSmallPass(revision: result.scan.detectRevision)
+                for (oldIndex, oldFace) in old.enumerated() where !keptOld.contains(oldIndex) && !(keepSmall && oldFace.isSmall) {
                     if let id = oldFace.id { _ = try Face.filter(Face.Columns.id == id).deleteAll(db) }
                 }
                 var scan = result.scan
@@ -69,11 +73,12 @@ extension CatalogDatabase {
         try await dbQueue.read { db in try Face.filter(Face.Columns.photoId == photoID).order(Face.Columns.id).fetchAll(db) }
     }
 
-    /// Every face's grouping data (feature prints included, crops NOT: they are the large part). A dedicated type, never a partial
+    /// Every face's grouping data (feature prints included, crops NOT: they are the large part). SMALL faces (`isSmall`) are left out on
+    /// purpose: they have no print and must never be assigned, clustered or unassigned by the automatic grouping. A dedicated type, never a partial
     /// `Face`. ~3 KB per face: the grouping commit decides how much of this it keeps in memory.
     func allFacesForGrouping() async throws -> [FaceGroupingInput] {
         try await dbQueue.read { db in
-            try Row.fetchAll(db, sql: "SELECT id, photoId, personId, isConfirmed, quality, featurePrint FROM face ORDER BY id").map { row in
+            try Row.fetchAll(db, sql: "SELECT id, photoId, personId, isConfirmed, quality, featurePrint FROM face WHERE isSmall = 0 ORDER BY id").map { row in
                 FaceGroupingInput(id: row["id"], photoId: row["photoId"], personId: row["personId"], isConfirmed: row["isConfirmed"],
                                   quality: row["quality"], featurePrint: row["featurePrint"])
             }
@@ -89,12 +94,23 @@ extension CatalogDatabase {
     /// Faces with no person, best quality first (the "Unsorted faces" tile).
     func unassignedFaces(limit: Int = 200) async throws -> [Face] {
         try await dbQueue.read { db in
-            try Face.filter(Face.Columns.personId == nil).order(Face.Columns.quality.desc).limit(limit).fetchAll(db)
+            try Face.filter(Face.Columns.personId == nil && Face.Columns.isSmall == false).order(Face.Columns.quality.desc).limit(limit).fetchAll(db)
         }
     }
 
+    /// Small faces nobody has been given yet (the "Small faces" tile), best quality first.
+    func smallFaces(limit: Int = 200) async throws -> [Face] {
+        try await dbQueue.read { db in
+            try Face.filter(Face.Columns.personId == nil && Face.Columns.isSmall == true).order(Face.Columns.quality.desc).limit(limit).fetchAll(db)
+        }
+    }
+
+    func smallFaceCount() async throws -> Int {
+        try await dbQueue.read { db in try Face.filter(Face.Columns.personId == nil && Face.Columns.isSmall == true).fetchCount(db) }
+    }
+
     func unassignedFaceCount() async throws -> Int {
-        try await dbQueue.read { db in try Face.filter(Face.Columns.personId == nil).fetchCount(db) }
+        try await dbQueue.read { db in try Face.filter(Face.Columns.personId == nil && Face.Columns.isSmall == false).fetchCount(db) }
     }
 
     /// The best crop of a person, for its tile.

@@ -11,10 +11,17 @@ enum FaceScanner {
     struct Environment: Sendable {
         var stat: @Sendable (_ path: String) -> (size: Int64, mtime: Double)?
         var detect: @Sendable (_ path: String) -> [FaceDetector.DetectedFace]?
+        /// Whether `detect` also runs the small-face pass: decides which revision is stored and which stored records still count as current.
+        var includeSmall: Bool = false
 
-        static let live = Environment(
-            stat: DuplicateScanner.Environment.live.stat,
-            detect: { FaceDetector.detect(inFileAt: URL(fileURLWithPath: $0)) })
+        static let live = live(includeSmall: false)
+
+        static func live(includeSmall: Bool) -> Environment {
+            Environment(
+                stat: DuplicateScanner.Environment.live.stat,
+                detect: { FaceDetector.detect(inFileAt: URL(fileURLWithPath: $0), includeSmall: includeSmall) },
+                includeSmall: includeSmall)
+        }
     }
 
     struct Progress: Equatable, Sendable {
@@ -79,8 +86,8 @@ enum FaceScanner {
             if Task.isCancelled { result.wasCancelled = true; break }
             completed += 1
             result.scanned += 1
-            if let record = cached[item.id], record.isCurrent(fileSize: stat.size, mtime: stat.mtime,
-                                                              detectRevision: FaceDetector.detectRevision, printRevision: FeaturePrintGenerator.revision) {
+            if let record = cached[item.id], record.isCurrent(fileSize: stat.size, mtime: stat.mtime, detectRevision: FaceDetector.detectRevision,
+                                                              printRevision: FeaturePrintGenerator.revision, requiresSmallPass: environment.includeSmall) {
                 result.alreadyCurrent += 1
                 progress(Progress(completed: completed, total: total))
                 continue
@@ -93,11 +100,11 @@ enum FaceScanner {
             let faces = detected.map { face in
                 Face(id: nil, photoId: item.id, x: face.x, y: face.y, w: face.w, h: face.h, quality: face.quality,
                      detectRevision: FaceDetector.detectRevision, printRevision: FeaturePrintGenerator.revision,
-                     featurePrint: face.featurePrint, crop: face.crop, personId: nil, isConfirmed: false)
+                     featurePrint: face.featurePrint, crop: face.crop, personId: nil, isConfirmed: false, isSmall: face.isSmall)
             }
             result.facesFound += faces.count
             pending.append(FaceScanResult(
-                scan: FaceScanRecord(photoId: item.id, fileSize: stat.size, mtime: stat.mtime, detectRevision: FaceDetector.detectRevision,
+                scan: FaceScanRecord(photoId: item.id, fileSize: stat.size, mtime: stat.mtime, detectRevision: FaceDetector.scanRevision(includeSmall: environment.includeSmall),
                                      printRevision: FeaturePrintGenerator.revision, faceCount: faces.count, scannedAt: Date()),
                 faces: faces))
             if pending.count >= saveBatch {

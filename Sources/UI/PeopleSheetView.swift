@@ -82,7 +82,7 @@ struct PeopleSheetView: View {
 
     // MARK: Scan
 
-    private var scanRow: some View {
+    @ViewBuilder private var scanRow: some View {
         HStack {
             if model.isWorking {
                 ProgressView(value: Double(model.progress?.completed ?? 0), total: Double(max(model.progress?.total ?? 1, 1)))
@@ -91,12 +91,17 @@ struct PeopleSheetView: View {
                     .font(.caption).monospacedDigit()
                 Button("Cancel") { model.cancel() }.buttonStyle(.flat)
             } else {
-                Button(model.people.isEmpty && model.unsortedCount == 0 ? "Find Faces" : "Scan for New Faces") { catalog.beginFaceScan() }
+                Button(model.people.isEmpty && model.unsortedCount == 0 && model.smallFaceCount == 0 ? "Find Faces" : "Scan for New Faces") { catalog.beginFaceScan() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(FlatButtonStyle(prominent: true))
                 Text("Scans every photo in the selected collection (or the whole Library), whatever filters are on; photos already scanned and unchanged are skipped.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
             }
+        }
+        if !model.isWorking {
+            Toggle("Also find small faces (slower)", isOn: $model.findSmallFaces)
+                .toggleStyle(.checkbox)
+                .help("Searches each photo in pieces at full size, for group photos where faces are small. Small faces are never grouped automatically: they appear under “Small faces” and you give them to a person yourself. Scanning takes longer, and photos already scanned are searched again once.")
         }
     }
 
@@ -112,7 +117,10 @@ struct PeopleSheetView: View {
                     row(selection: .person(person.id), title: person.displayName + (person.isHidden ? " (hidden)" : ""),
                         subtitle: "\(person.photoCount) photo\(person.photoCount == 1 ? "" : "s")", crop: model.tileCrops[person.id], dimmed: person.isHidden)
                 }
-                if model.people.isEmpty && model.unsortedCount == 0 && !model.isWorking {
+                if model.smallFaceCount > 0 {
+                    row(selection: .smallFaces, title: "Small faces", subtitle: "\(model.smallFaceCount) face\(model.smallFaceCount == 1 ? "" : "s")", crop: nil, dimmed: false)
+                }
+                if model.people.isEmpty && model.unsortedCount == 0 && model.smallFaceCount == 0 && !model.isWorking {
                     Text("No faces yet. Choose “Find Faces”.").font(.caption).foregroundStyle(Theme.textSecondary).padding(8)
                 }
             }
@@ -151,6 +159,13 @@ struct PeopleSheetView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Unsorted faces").font(.subheadline.weight(.semibold))
                 Text("Faces the grouping was not sure about. Right-click a face to give it to someone.").font(.caption).foregroundStyle(Theme.textSecondary)
+                faceGrid(person: nil)
+            }
+        case .smallFaces?:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Small faces").font(.subheadline.weight(.semibold))
+                Text("Faces found by searching the photos at full size. They are never grouped automatically: right-click a face to give it to someone.")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
                 faceGrid(person: nil)
             }
         case nil:
@@ -210,7 +225,7 @@ struct PeopleSheetView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: 8)], spacing: 8) {
                 ForEach(model.selectedFaces) { face in
                     FaceImage(data: face.crop, size: 78)
-                        .help(face.isConfirmed ? "Confirmed by you" : "Grouped automatically")
+                        .help(face.isConfirmed ? "Confirmed by you" : (face.isSmall ? "Small face: never grouped automatically" : "Grouped automatically"))
                         .overlay(alignment: .bottomTrailing) {
                             if face.isConfirmed { Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.white).padding(3) }
                         }

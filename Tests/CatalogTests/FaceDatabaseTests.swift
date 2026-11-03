@@ -295,4 +295,92 @@ final class FaceDatabaseTests: XCTestCase {
         XCTAssertEqual(m.compactMap { $0 }.count, 1)
         XCTAssertEqual(m[0], 0, "the better overlap wins")
     }
+
+    // MARK: Small faces (never grouped automatically)
+
+    private func smallFace(_ photoID: Int64, x: Double = 0.5) -> Face {
+        Face(id: nil, photoId: photoID, x: x, y: 0.5, w: 0.02, h: 0.02, quality: 0.4, detectRevision: 3 + FaceDetector.smallPassFlag, printRevision: 2,
+             featurePrint: Data(), crop: Data([5]), personId: nil, isConfirmed: false, isSmall: true)
+    }
+
+    private func scan(_ photoID: Int64, faces: [Face], revision: Int) -> FaceScanResult {
+        FaceScanResult(scan: FaceScanRecord(photoId: photoID, fileSize: 100, mtime: 5, detectRevision: revision, printRevision: 2,
+                                            faceCount: faces.count, scannedAt: Date()), faces: faces)
+    }
+
+    func testSmallFacesAreStoredButLeftOutOfGroupingAndTheUnsortedList() async throws {
+        try await db.saveFaceScans([scan(photoIDs[0], faces: [face(photoIDs[0]), smallFace(photoIDs[0]), smallFace(photoIDs[0], x: 0.7)], revision: 3 + FaceDetector.smallPassFlag)])
+        let stored = try await db.faces(forPhotoID: photoIDs[0])
+        XCTAssertEqual(stored.filter(\.isSmall).count, 2)
+        let inputs = try await db.allFacesForGrouping()
+        XCTAssertEqual(inputs.count, 1, "grouping reads only the normal face: a small face has no print and is never assigned, clustered or unassigned")
+        let unsortedCount = try await db.unassignedFaceCount()
+        XCTAssertEqual(unsortedCount, 1)
+        let unsorted = try await db.unassignedFaces()
+        XCTAssertEqual(unsorted.count, 1)
+        XCTAssertFalse(unsorted.contains { $0.isSmall }, "small faces would bury the Unsorted list")
+        let smallCount = try await db.smallFaceCount()
+        XCTAssertEqual(smallCount, 2)
+        let small = try await db.smallFaces()
+        XCTAssertEqual(small.count, 2)
+        XCTAssertTrue(small.allSatisfy(\.isSmall))
+    }
+
+    func testTheUserCanGiveASmallFaceToAPersonAndItLeavesTheSmallList() async throws {
+        try await db.saveFaceScans([scan(photoIDs[0], faces: [smallFace(photoIDs[0])], revision: 3 + FaceDetector.smallPassFlag)])
+        let person = try await db.createPerson(name: "Ann")
+        let before = try await db.faces(forPhotoID: photoIDs[0])
+        let id = try XCTUnwrap(before.first?.id)
+        try await db.assignFaces([id], to: person.id)
+        let afterFaces = try await db.faces(forPhotoID: photoIDs[0])
+        let after = try XCTUnwrap(afterFaces.first)
+        XCTAssertEqual(after.personId, person.id)
+        XCTAssertTrue(after.isConfirmed)
+        XCTAssertTrue(after.isSmall)
+        let smallCount = try await db.smallFaceCount()
+        XCTAssertEqual(smallCount, 0)
+        let summaries = try await db.peopleSummaries()
+        XCTAssertEqual(summaries.first?.faceCount, 1, "it counts for the person")
+    }
+
+    func testAScanWithoutTheSmallPassKeepsSmallFacesButOneWithItReplacesThem() async throws {
+        try await db.saveFaceScans([scan(photoIDs[0], faces: [smallFace(photoIDs[0]), smallFace(photoIDs[0], x: 0.7)], revision: 3 + FaceDetector.smallPassFlag)])
+        let person = try await db.createPerson(name: "Ann")
+        let existing = try await db.faces(forPhotoID: photoIDs[0])
+        let id = try XCTUnwrap(existing.first?.id)
+        try await db.assignFaces([id], to: person.id)
+        // The file changed and was rescanned with the option OFF: small faces cannot be seen, so they (and the person) must survive.
+        try await db.saveFaceScans([scan(photoIDs[0], faces: [], revision: 3)])
+        let kept = try await db.faces(forPhotoID: photoIDs[0])
+        XCTAssertEqual(kept.count, 2)
+        XCTAssertEqual(kept.first { $0.id == id }?.personId, person.id)
+        // A rescan WITH the pass that finds none is authoritative: they are gone.
+        try await db.saveFaceScans([scan(photoIDs[0], faces: [], revision: 3 + FaceDetector.smallPassFlag)])
+        let gone = try await db.faces(forPhotoID: photoIDs[0])
+        XCTAssertTrue(gone.isEmpty)
+    }
+
+    func testMigration019AddsIsSmallDefaultingToFalseForExistingFaces() async throws {
+        try await db.saveFaceScans([scan(photoIDs[0], faces: [face(photoIDs[0])])])
+        let stored = try await db.faces(forPhotoID: photoIDs[0])
+        XCTAssertFalse(try XCTUnwrap(stored.first).isSmall)
+    }
+
+    func testANormalFaceThatARescanFindsAsSmallLosesItsAutomaticPersonButAConfirmedOneKeepsIt() async throws {
+        try await db.saveFaceScans([scan(photoIDs[0], faces: [face(photoIDs[0]), face(photoIDs[0], x: 0.6)])])
+        let person = try await db.createPerson(name: "Ann")
+        let before = try await db.faces(forPhotoID: photoIDs[0])
+        let autoID = try XCTUnwrap(before[0].id), confirmedID = try XCTUnwrap(before[1].id)
+        try await db.applyAutomaticAssignments([FaceAssignment(faceID: autoID, personID: person.id)])   // grouping put it there
+        try await db.assignFaces([confirmedID], to: person.id)                                          // the user did
+        // Rescan with the small pass: the same two boxes now come back as small faces.
+        try await db.saveFaceScans([scan(photoIDs[0], faces: [smallFace(photoIDs[0], x: 0.1), smallFace(photoIDs[0], x: 0.6)].map { f in
+            var f = f; f.y = 0.1; f.w = 0.2; f.h = 0.2; return f }, revision: 3 + FaceDetector.smallPassFlag)])
+        let after = try await db.faces(forPhotoID: photoIDs[0])
+        let auto = try XCTUnwrap(after.first { $0.id == autoID }), confirmed = try XCTUnwrap(after.first { $0.id == confirmedID })
+        XCTAssertTrue(auto.isSmall && confirmed.isSmall)
+        XCTAssertNil(auto.personId, "an automatic assignment must not survive on a face grouping can no longer see")
+        XCTAssertEqual(confirmed.personId, person.id, "the user's choice is kept")
+        XCTAssertTrue(confirmed.isConfirmed)
+    }
 }

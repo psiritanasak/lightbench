@@ -30,6 +30,9 @@ struct Face: Codable, Equatable, Identifiable, Hashable, Sendable {
     var personId: Int64?
     /// True when the USER assigned (or confirmed) this face's person: regrouping never changes it.
     var isConfirmed: Bool = false
+    /// Found only by the optional small-face pass (`FaceDetector.detect(inFileAt:includeSmall:)`). NEVER grouped automatically: such a
+    /// face has an EMPTY `featurePrint` (it is never compared) and only the user can give it a person.
+    var isSmall: Bool = false
 }
 
 /// "This photo was scanned for faces" (so photos with none are not rescanned), trusted only while the file and both revisions match.
@@ -43,9 +46,14 @@ struct FaceScanRecord: Codable, Equatable, Hashable, Sendable {
     /// Informational; comes back from the database truncated to milliseconds, so never compare whole rows.
     var scannedAt: Date
 
-    func isCurrent(fileSize currentSize: Int64, mtime currentMTime: Double, detectRevision: Int, printRevision: Int) -> Bool {
-        fileSize == currentSize && abs(mtime - currentMTime) < 0.001
-            && self.detectRevision == detectRevision && self.printRevision == printRevision
+    /// `detectRevision` is the BASE revision (`FaceDetector.detectRevision`). A record written by a scan that also ran the small-face pass
+    /// carries `FaceDetector.smallPassFlag` on top: it satisfies a scan with or without that pass, while a record without the flag
+    /// satisfies only a scan without it (`requiresSmallPass`), so switching the option on rescans once and switching it off rescans nothing.
+    func isCurrent(fileSize currentSize: Int64, mtime currentMTime: Double, detectRevision: Int, printRevision: Int,
+                   requiresSmallPass: Bool = false) -> Bool {
+        let revisionOK = self.detectRevision == detectRevision + FaceDetector.smallPassFlag
+            || (!requiresSmallPass && self.detectRevision == detectRevision)
+        return fileSize == currentSize && abs(mtime - currentMTime) < 0.001 && revisionOK && self.printRevision == printRevision
     }
 }
 
@@ -112,6 +120,7 @@ extension Face: FetchableRecord, MutablePersistableRecord, TableRecord {
         static let personId = Column(CodingKeys.personId)
         static let isConfirmed = Column(CodingKeys.isConfirmed)
         static let quality = Column(CodingKeys.quality)
+        static let isSmall = Column(CodingKeys.isSmall)
     }
     mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }

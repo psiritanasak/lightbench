@@ -8,6 +8,8 @@ final class FacesModel: ObservableObject {
     enum Selection: Hashable {
         case person(Int64)
         case unsorted
+        /// Faces only the optional small-face pass found, not given to anyone yet. Never grouped automatically.
+        case smallFaces
     }
 
     @Published private(set) var isWorking = false
@@ -17,6 +19,11 @@ final class FacesModel: ObservableObject {
     @Published var statusMessage: String?
     @Published private(set) var people: [PersonSummary] = []
     @Published private(set) var unsortedCount = 0
+    @Published private(set) var smallFaceCount = 0
+    /// The "Also find small faces (slower)" option; every change is written straight to `AppPreferences`.
+    @Published var findSmallFaces: Bool = AppPreferences.shared.findSmallFaces {
+        didSet { if findSmallFaces != oldValue { AppPreferences.shared.findSmallFaces = findSmallFaces } }
+    }
     /// person id -> the best face crop (JPEG) for its tile.
     @Published private(set) var tileCrops: [Int64: Data] = [:]
     @Published var selection: Selection? {
@@ -27,8 +34,9 @@ final class FacesModel: ObservableObject {
     var database: CatalogDatabase?
     /// Called after the model changed people (so the Library's own people list and filter refresh).
     var onPeopleChanged: () -> Void = {}
-    /// Injected in tests (no files, no Vision).
-    var scannerEnvironment = FaceScanner.Environment.live
+    /// Injected in tests (no files, no Vision). `nil` = the real scanner, with the small-face option as set.
+    var scannerEnvironment: FaceScanner.Environment?
+    var effectiveScannerEnvironment: FaceScanner.Environment { scannerEnvironment ?? .live(includeSmall: findSmallFaces) }
     var thresholds = FaceGrouping.Thresholds()
 
     private var task: Task<Void, Never>?
@@ -46,6 +54,7 @@ final class FacesModel: ObservableObject {
             people = loaded
             tileCrops = crops
             unsortedCount = try await database.unassignedFaceCount()
+            smallFaceCount = try await database.smallFaceCount()
             if case .person(let id)? = selection, !loaded.contains(where: { $0.id == id }) { selection = nil }
             await reloadSelectedFaces()
         } catch {
@@ -62,6 +71,7 @@ final class FacesModel: ObservableObject {
             switch requested {
             case .person(let id)?: loaded = try await database.faces(forPersonID: id)
             case .unsorted?: loaded = try await database.unassignedFaces()
+            case .smallFaces?: loaded = try await database.smallFaces()
             case nil: loaded = []
             }
         } catch {
@@ -84,7 +94,7 @@ final class FacesModel: ObservableObject {
         phase = "Looking for faces…"
         statusMessage = nil
         summary = nil
-        let environment = scannerEnvironment
+        let environment = effectiveScannerEnvironment
         let thresholds = thresholds
         task = Task { [weak self] in
             let sink = FaceProgressSink(owner: self, generation: mine)

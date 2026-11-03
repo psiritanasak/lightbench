@@ -13,13 +13,14 @@ final class FaceScannerTests: XCTestCase {
         var missing: Set<String> = []
         var undecodable: Set<String> = []
         var facesPerPath: [String: Int] = [:]
+        var smallFacesPerPath: [String: Int] = [:]
         var cancelOnDetectNumber: Int?
         var cancelInStat = false
         var detectCalls: [String] { lock.lock(); defer { lock.unlock() }; return _detectCalls }
         func recordDetect(_ path: String) -> Int { lock.lock(); defer { lock.unlock() }; _detectCalls.append(path); return _detectCalls.count }
     }
 
-    private func environment(_ probe: Probe) -> FaceScanner.Environment {
+    private func environment(_ probe: Probe, includeSmall: Bool = false) -> FaceScanner.Environment {
         FaceScanner.Environment(
             stat: { path in
                 if probe.cancelInStat { withUnsafeCurrentTask { $0?.cancel() }; return nil }
@@ -29,10 +30,14 @@ final class FaceScannerTests: XCTestCase {
                 let number = probe.recordDetect(path)
                 if probe.cancelOnDetectNumber == number { withUnsafeCurrentTask { $0?.cancel() } }
                 if probe.undecodable.contains(path) { return nil }
-                return (0..<(probe.facesPerPath[path] ?? 0)).map { i in
+                let normal = (0..<(probe.facesPerPath[path] ?? 0)).map { i in
                     FaceDetector.DetectedFace(x: 0.1 * Double(i), y: 0.1, w: 0.2, h: 0.2, quality: 0.5, featurePrint: Data(repeating: 7, count: 8), crop: Data([1]))
                 }
-            })
+                guard includeSmall else { return normal }
+                return normal + (0..<(probe.smallFacesPerPath[path] ?? 0)).map { i in
+                    FaceDetector.DetectedFace(x: 0.05 * Double(i), y: 0.8, w: 0.02, h: 0.02, quality: 0.4, featurePrint: Data(), crop: Data([2]), isSmall: true)
+                }
+            }, includeSmall: includeSmall)
     }
 
     private func makePhotos(_ n: Int) async throws {
@@ -144,6 +149,43 @@ final class FaceScannerTests: XCTestCase {
         private let lock = NSLock(); private var _values: [Int] = []
         func add(_ v: Int) { lock.lock(); _values.append(v); lock.unlock() }
         var values: [Int] { lock.lock(); defer { lock.unlock() }; return _values }
+    }
+
+    // MARK: Small-face pass
+
+    func testASmallFaceScanStoresTheFlaggedRevisionAndTheSmallFaces() async throws {
+        try await makePhotos(1)
+        let probe = Probe()
+        probe.facesPerPath = [photos[0].path: 1]
+        probe.smallFacesPerPath = [photos[0].path: 3]
+        let result = try await FaceScanner.scan(photos: photos, database: db, environment: environment(probe, includeSmall: true))
+        XCTAssertEqual(result.facesFound, 4)
+        let faces = try await db.faces(forPhotoID: try XCTUnwrap(photos[0].id))
+        XCTAssertEqual(faces.filter(\.isSmall).count, 3)
+        XCTAssertEqual(faces.filter { !$0.isSmall }.count, 1)
+        let record = try await db.faceScans(forPhotoIDs: photos.compactMap(\.id))[try XCTUnwrap(photos[0].id)]
+        XCTAssertEqual(record?.detectRevision, FaceDetector.detectRevision + FaceDetector.smallPassFlag)
+    }
+
+    func testTurningTheSmallPassOnRescansOncePhotosScannedWithoutItAndTurningItOffRescansNothing() async throws {
+        try await makePhotos(2)
+        let probe = Probe()
+        probe.facesPerPath = [photos[0].path: 1, photos[1].path: 1]
+        probe.smallFacesPerPath = [photos[0].path: 2, photos[1].path: 2]
+        _ = try await FaceScanner.scan(photos: photos, database: db, environment: environment(probe, includeSmall: false))
+        XCTAssertEqual(probe.detectCalls.count, 2)
+        let normalIDsBefore = try await db.faces(forPhotoID: try XCTUnwrap(photos[0].id)).map(\.id)
+        let on = try await FaceScanner.scan(photos: photos, database: db, environment: environment(probe, includeSmall: true))
+        XCTAssertEqual(on.alreadyCurrent, 0, "records without the small pass are stale for a scan with it")
+        XCTAssertEqual(probe.detectCalls.count, 4)
+        let again = try await FaceScanner.scan(photos: photos, database: db, environment: environment(probe, includeSmall: true))
+        XCTAssertEqual(again.alreadyCurrent, 2)
+        let off = try await FaceScanner.scan(photos: photos, database: db, environment: environment(probe, includeSmall: false))
+        XCTAssertEqual(off.alreadyCurrent, 2, "a record that includes the small pass satisfies a scan without it")
+        XCTAssertEqual(probe.detectCalls.count, 4)
+        let faces = try await db.faces(forPhotoID: try XCTUnwrap(photos[0].id))
+        XCTAssertEqual(faces.filter(\.isSmall).count, 2, "the small faces were added once")
+        XCTAssertEqual(faces.filter { !$0.isSmall }.map(\.id), normalIDsBefore, "the matched normal face kept its row")
     }
 }
 

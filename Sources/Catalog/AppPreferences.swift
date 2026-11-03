@@ -21,6 +21,7 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let importCopyTemplate = "prefs.v1.importCopyTemplate"
         static let importCopySkipAlreadyCopied = "prefs.v1.importCopySkipAlreadyCopied"
         static let showPhotosInSubfolders = "prefs.v1.showPhotosInSubfolders"
+        static let findSmallFaces = "prefs.v1.findSmallFaces"
     }
 
     let defaults: UserDefaults
@@ -60,6 +61,13 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
     var showPhotosInSubfolders: Bool {
         get { bool(Key.showPhotosInSubfolders, default: false) }
         nonmutating set { defaults.set(newValue, forKey: Key.showPhotosInSubfolders) }
+    }
+
+    /// People: also search each photo in tiles at higher resolution for small faces (group photos). Slower; off by default. Small faces are
+    /// never grouped automatically.
+    var findSmallFaces: Bool {
+        get { bool(Key.findSmallFaces, default: false) }
+        nonmutating set { defaults.set(newValue, forKey: Key.findSmallFaces) }
     }
 
     /// How many backups of each kind (daily, manual) are kept in the Backups folder. The safety kinds (before-migration, before-restore, damaged)

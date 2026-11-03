@@ -128,6 +128,7 @@ final class CatalogDatabase: Sendable {
         Migration016PhotoInfo.register(in: &migrator)
         Migration017PhotoStacks.register(in: &migrator)
         Migration018DeletedPhoto.register(in: &migrator)
+        Migration019FaceSmall.register(in: &migrator)
         return migrator
     }
 

@@ -54,7 +54,10 @@ struct PhotoAppApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        // A single-instance `Window`, not a window group: a group can always make another window, and did whenever an open arrived
+        // while an alert was showing (live-checked 2026-11-03: a second `open -a <folder>` with the import alert up gave a blank
+        // duplicate window). A `Window` scene has exactly one instance, so no open event can add one.
+        Window("Lightbench", id: "main") {
             ContentView(
                 document: document, catalog: catalog, pasteModel: pasteModel, renameModel: renameModel, cull: cull,
                 showLibrary: $showLibrary

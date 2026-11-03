@@ -283,4 +283,195 @@ final class FacesModelTests: XCTestCase {
         XCTAssertFalse(AppPreferences.shared.findSmallFaces)
         XCTAssertFalse(model.effectiveScannerEnvironment.includeSmall)
     }
+
+    // MARK: Marking several faces and acting on them at once
+
+    /// Five photos, one small face each (all unassigned: small faces are never grouped), the Small faces list selected and loaded.
+    private func setUpFiveSmallFaces() async throws {
+        try await setUpModel()
+        model.scannerEnvironment = FaceScanner.Environment(
+            stat: { _ in (1000, 1) },
+            detect: { _ in [FaceDetector.DetectedFace(x: 0.5, y: 0.8, w: 0.02, h: 0.02, quality: 0.4, featurePrint: Data(), crop: Data([3]), isSmall: true)] },
+            includeSmall: true)
+        try await scanAndWait()
+        model.selection = .smallFaces
+        try await waitForShownFaces(5)
+    }
+
+    private func waitForShownFaces(_ count: Int) async throws {
+        for _ in 0..<200 where model.selectedFaces.count != count { try await Task.sleep(nanoseconds: 25_000_000) }
+        XCTAssertEqual(model.selectedFaces.count, count)
+    }
+
+    func testMarksToggleAreClearedWhenTheSelectionChangesAndPrunedWhenAFaceLeavesTheList() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        model.toggleMark(ids[0]); model.toggleMark(ids[1]); model.toggleMark(ids[1])
+        XCTAssertEqual(model.markedFaceIDs, [ids[0]], "a second click unmarks")
+        model.toggleMark(9_999_999)
+        XCTAssertEqual(model.markedFaceIDs, [ids[0]], "a face that is not shown cannot be marked")
+        model.markAllShown()
+        XCTAssertEqual(model.markedFaceIDs.count, 5)
+        // A face leaves the list (someone else gives it to a person): its mark must go with it.
+        try await db.assignFaces([ids[2]], to: try await db.createPerson().id)
+        await model.reload()
+        try await waitForShownFaces(4)
+        XCTAssertFalse(model.markedFaceIDs.contains(ids[2]))
+        XCTAssertEqual(model.markedFaceIDs.count, 4)
+        model.selection = .unsorted
+        XCTAssertTrue(model.markedFaceIDs.isEmpty, "a new selection starts with nothing marked")
+    }
+
+    func testAnActionOnAMarkedFaceActsOnAllMarkedAndOnAnUnmarkedFaceOnlyOnThatFace() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        model.toggleMark(ids[3]); model.toggleMark(ids[1])
+        XCTAssertEqual(model.targets(for: ids[1]), [ids[1], ids[3]], "in the order shown")
+        XCTAssertEqual(model.targets(for: ids[0]), [ids[0]], "an unmarked face is acted on alone")
+        XCTAssertEqual(FaceMarking.targets(clicked: 7, marked: [7, 8, 99], shownOrder: [8, 7, 6]), [8, 7], "a stale mark (99) is never a target")
+    }
+
+    func testBulkAssignGivesAllMarkedFacesToOnePersonConfirmedAndClearsTheMarks() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        for id in ids.prefix(3) { model.toggleMark(id) }
+        await model.assignToNewPerson(model.markedInShownOrder)
+        XCTAssertEqual(model.smallFaceCount, 2)
+        XCTAssertEqual(model.people.count, 1)
+        XCTAssertEqual(model.people.first?.faceCount, 3)
+        XCTAssertTrue(model.markedFaceIDs.isEmpty)
+        let assigned = try await db.faces(forPersonID: try XCTUnwrap(model.people.first?.id))
+        XCTAssertEqual(Set(assigned.compactMap(\.id)), Set(ids.prefix(3)))
+        XCTAssertTrue(assigned.allSatisfy(\.isConfirmed), "the user's choice is confirmed")
+        XCTAssertTrue(model.canUndoAssignment)
+    }
+
+    func testUndoPutsTheFacesBackAndRemovesThePersonTheAssignmentCreated() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        await model.assignToNewPerson(Array(ids.prefix(3)))
+        XCTAssertEqual(model.people.count, 1)
+        await model.undoLastAssignment()
+        XCTAssertEqual(model.smallFaceCount, 5, "all five are unassigned again")
+        XCTAssertTrue(model.people.isEmpty, "the empty unnamed person is gone")
+        XCTAssertFalse(model.canUndoAssignment)
+        let after = try await db.faces(forPhotoID: try XCTUnwrap(photos[0].id))
+        XCTAssertTrue(after.allSatisfy { !$0.isConfirmed && $0.personId == nil })
+    }
+
+    func testUndoOnlyRevertsTheLastAssignmentAndANewAssignmentReplacesIt() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        await model.assignToNewPerson([ids[0], ids[1]])
+        model.selection = .smallFaces
+        try await waitForShownFaces(3)
+        let rest = model.selectedFaces.compactMap(\.id)
+        await model.assignToNewPerson([rest[0]])
+        await model.undoLastAssignment()
+        XCTAssertEqual(model.people.count, 1, "the first person survives: only the last assignment was undone")
+        XCTAssertEqual(model.people.first?.faceCount, 2)
+        XCTAssertFalse(model.canUndoAssignment, "one level only")
+    }
+
+    func testUndoSurvivesAPersonDeletedInTheMeantime() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        let ann = try await db.createPerson(name: "Ann"), bob = try await db.createPerson(name: "Bob")
+        try await db.assignFaces([ids[0], ids[1]], to: ann.id)                  // the faces start in Ann, confirmed
+        await model.assign([ids[0], ids[1]], to: bob.id)                          // the user moves them to Bob
+        try await db.deletePerson(id: try XCTUnwrap(ann.id))                      // Ann is deleted before the undo
+        await model.undoLastAssignment()
+        let faces = try await db.faces(forPhotoID: try XCTUnwrap(photos[0].id)) + db.faces(forPhotoID: try XCTUnwrap(photos[1].id))
+        XCTAssertTrue(faces.allSatisfy { $0.personId == nil && !$0.isConfirmed },
+                      "they are back with nobody, and no longer in Bob (this fails if undo does nothing)")
+    }
+
+    func testUndoBringsBackTheNotThisPersonMarkTheAssignmentRemoved() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        let bob = try await db.createPerson(name: "Bob")
+        let bobID = try XCTUnwrap(bob.id)
+        try await db.excludeFace(ids[0], fromPerson: bobID)
+        await model.assign([ids[0]], to: bobID)                                   // a mistake
+        let during = try await db.faceExclusions()
+        XCTAssertNil(during[ids[0]])
+        await model.undoLastAssignment()
+        let after = try await db.faceExclusions()
+        XCTAssertEqual(after[ids[0]], [bobID], "undo must not silently erase an earlier correction")
+    }
+
+    func testNotThisPersonMakesAnEarlierAssignmentNoLongerUndoable() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        let bob = try await db.createPerson(name: "Bob")
+        await model.assign([ids[0], ids[1]], to: bob.id)
+        XCTAssertTrue(model.canUndoAssignment)
+        await model.notThisPerson(ids[0], from: try XCTUnwrap(bob.id))
+        XCTAssertFalse(model.canUndoAssignment, "undo would otherwise move the face back over the newer correction")
+    }
+
+    func testAnAssignmentMadeWhileAScanRunsCannotBeUndoneOverTheGrouping() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        // A second scan that re-reads every photo (new mtime), slowly.
+        model.scannerEnvironment = FaceScanner.Environment(
+            stat: { _ in (1000, 2) },
+            detect: { _ in Thread.sleep(forTimeInterval: 0.2); return [FaceDetector.DetectedFace(x: 0.5, y: 0.8, w: 0.02, h: 0.02, quality: 0.4, featurePrint: Data(), crop: Data([3]), isSmall: true)] },
+            includeSmall: true)
+        model.scanAndGroup(photos: photos, database: db)
+        for _ in 0..<100 where model.progress == nil { try await Task.sleep(nanoseconds: 10_000_000) }
+        await model.assignToNewPerson([ids[0]])
+        XCTAssertTrue(model.isWorking, "the scan is still running")
+        for _ in 0..<400 where model.isWorking { try await Task.sleep(nanoseconds: 25_000_000) }
+        XCTAssertFalse(model.isWorking)
+        XCTAssertFalse(model.canUndoAssignment, "the grouping was applied after the assignment: its snapshot is no longer trustworthy")
+    }
+
+    func testAScanForgetsTheUndo() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        await model.assignToNewPerson([ids[0]])
+        XCTAssertTrue(model.canUndoAssignment)
+        try await scanAndWait()
+        XCTAssertFalse(model.canUndoAssignment, "a scan regroups faces: an old snapshot must not be undone over it")
+    }
+
+    func testBulkNotThisPersonMovesEveryMarkedFaceOutOfThePerson() async throws {
+        try await setUpModel()
+        try await scanAndWait()
+        let personA = try XCTUnwrap(model.people.first)
+        model.selection = .person(personA.id)
+        try await waitForShownFaces(2)
+        model.markAllShown()
+        await model.notThisPerson(model.markedInShownOrder, from: personA.id)
+        XCTAssertEqual(model.unsortedCount, 2, "both faces left the person")
+        XCTAssertTrue(model.markedFaceIDs.isEmpty)
+        XCTAssertFalse(model.canUndoAssignment, "not-this-person is not undoable")
+    }
+
+    func testTheFaceAccessibilityLabelNamesSelectionAndConfirmation() {
+        XCTAssertEqual(PeopleSheetView.faceAccessibilityLabel(isConfirmed: false, isMarked: false), "Face")
+        XCTAssertEqual(PeopleSheetView.faceAccessibilityLabel(isConfirmed: true, isMarked: true), "Face, confirmed, selected")
+    }
+
+    func testAnAssignmentStillRunningWhenSomethingForgetsCannotBringTheUndoBack() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        let bob = try await db.createPerson(name: "Bob")
+        let running = Task { await model.assign([ids[0]], to: bob.id) }
+        await Task.yield()                                            // the assignment is now suspended at its database write
+        await model.notThisPerson(ids[1], from: try XCTUnwrap(bob.id))   // a newer action forgets the undo...
+        await running.value                                           // ...and the older assignment finishes afterwards
+        XCTAssertFalse(model.canUndoAssignment, "it must not store an undo that a later action already cleared")
+    }
+
+    func testUndoRemovesOnlyThePersonTheAssignmentCreatedNotOtherEmptyOnes() async throws {
+        try await setUpFiveSmallFaces()
+        let ids = model.selectedFaces.compactMap(\.id)
+        let strayEmpty = try await db.createPerson()                    // an unnamed, empty person that has nothing to do with the undo
+        await model.assignToNewPerson([ids[0]])
+        await model.undoLastAssignment()
+        let ids2 = try await db.peopleSummaries().map(\.id)
+        XCTAssertEqual(ids2, [try XCTUnwrap(strayEmpty.id)], "the created person is gone, the unrelated one is not touched")
+    }
 }

@@ -383,4 +383,57 @@ final class FaceDatabaseTests: XCTestCase {
         XCTAssertEqual(confirmed.personId, person.id, "the user's choice is kept")
         XCTAssertTrue(confirmed.isConfirmed)
     }
+
+    func testARecordedAssignmentIsUndoneExactlyIncludingTheNotThisPersonMarkItRemovedAndAMissingPersonIsSafe() async throws {
+        try await db.saveFaceScans([scan(photoIDs[0], faces: [face(photoIDs[0]), face(photoIDs[0], x: 0.6), face(photoIDs[0], x: 0.4, y: 0.6)])])
+        let ids = try await db.faces(forPhotoID: photoIDs[0]).compactMap(\.id)
+        let ann = try await db.createPerson(name: "Ann"), bob = try await db.createPerson(name: "Bob")
+        let annID = try XCTUnwrap(ann.id), bobID = try XCTUnwrap(bob.id)
+        try await db.assignFaces([ids[0]], to: annID)
+        try await db.applyAutomaticAssignments([FaceAssignment(faceID: ids[1], personID: bobID)])   // automatic: unconfirmed
+        try await db.excludeFace(ids[2], fromPerson: bobID)                                         // the user said "not Bob"
+        let before = try await db.faceAssignments(forFaceIDs: ids)
+        XCTAssertEqual(before.first { $0.faceID == ids[0] }, FaceAssignmentSnapshot(faceID: ids[0], personID: annID, isConfirmed: true))
+        XCTAssertEqual(before.first { $0.faceID == ids[1] }, FaceAssignmentSnapshot(faceID: ids[1], personID: bobID, isConfirmed: false))
+        XCTAssertEqual(before.first { $0.faceID == ids[2] }, FaceAssignmentSnapshot(faceID: ids[2], personID: nil, isConfirmed: false))
+
+        let undo = try await db.assignFacesRecordingUndo(ids, to: bobID)
+        XCTAssertEqual(Set(undo.snapshots), Set(before), "read in the same transaction, so it is exactly the state before")
+        XCTAssertEqual(undo.removedExclusions, [FaceAssignmentUndo.Exclusion(faceID: ids[2], personID: bobID)])
+        let during = try await db.faceExclusions()
+        XCTAssertNil(during[ids[2]], "assigning removed the mark")
+
+        try await db.restoreFaceAssignments(undo)
+        let restored = try await db.faceAssignments(forFaceIDs: ids)
+        XCTAssertEqual(Set(restored), Set(before))
+        let marks = try await db.faceExclusions()
+        XCTAssertEqual(marks[ids[2]], [bobID], "the user's 'not Bob' decision is back: grouping must not put the face in Bob again")
+
+        // The person was deleted since: its faces come back as nobody and unconfirmed, the mark is not restored, and nothing fails.
+        let second = try await db.assignFacesRecordingUndo([ids[0], ids[2]], to: bobID)   // ids[2] carries the 'not Bob' mark again, removed by this assignment
+        XCTAssertEqual(second.removedExclusions.count, 1)
+        try await db.deletePerson(id: annID)
+        try await db.deletePerson(id: bobID)
+        try await db.restoreFaceAssignments(second)   // would fail the foreign key if it re-inserted the mark for the deleted Bob
+        let leftover = try await db.faceExclusions()
+        XCTAssertNil(leftover[ids[2]], "a mark for a person that no longer exists is not restored")
+        let after = try await db.faceAssignments(forFaceIDs: [ids[0]])
+        XCTAssertEqual(after.first, FaceAssignmentSnapshot(faceID: ids[0], personID: nil, isConfirmed: false))
+        let none = try await db.faceAssignments(forFaceIDs: [999_999])
+        XCTAssertTrue(none.isEmpty)
+    }
+
+    func testAssigningToANewPersonCreatesItInTheSameTransactionAndUndoLeavesItEmpty() async throws {
+        try await db.saveFaceScans([scan(photoIDs[0], faces: [face(photoIDs[0])])])
+        let stored = try await db.faces(forPhotoID: photoIDs[0])
+        let id = try XCTUnwrap(stored.first?.id)
+        let undo = try await db.assignFacesRecordingUndo([id], to: nil, toNewPerson: true)
+        let summaries = try await db.peopleSummaries()
+        XCTAssertEqual(summaries.count, 1)
+        XCTAssertEqual(summaries.first?.faceCount, 1)
+        try await db.restoreFaceAssignments(undo)
+        try await db.pruneEmptyPeople()
+        let after = try await db.peopleSummaries()
+        XCTAssertTrue(after.isEmpty)
+    }
 }

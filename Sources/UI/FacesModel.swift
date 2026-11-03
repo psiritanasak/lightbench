@@ -27,9 +27,19 @@ final class FacesModel: ObservableObject {
     /// person id -> the best face crop (JPEG) for its tile.
     @Published private(set) var tileCrops: [Int64: Data] = [:]
     @Published var selection: Selection? {
-        didSet { if selection != oldValue { selectedFaces = []; Task { await reloadSelectedFaces() } } }
+        didSet { if selection != oldValue { selectedFaces = []; markedFaceIDs = []; Task { await reloadSelectedFaces() } } }
     }
     @Published private(set) var selectedFaces: [Face] = []
+    /// Faces the user has ticked in the grid; an action then applies to all of them. Always a subset of `selectedFaces`.
+    @Published private(set) var markedFaceIDs: Set<Int64> = []
+    /// Whether the last assignment (`assign` / `assignToNewPerson`) can still be undone.
+    @Published private(set) var canUndoAssignment = false
+    private var lastAssignment: FaceAssignmentUndo?
+    /// An assignment or undo is running: another one is ignored until it finishes (two overlapping ones could not both be undone correctly).
+    private var assignmentBusy = false
+    /// Bumped by every `forgetLastAssignment()`: an assignment that was still running when something forgot (a not-this-person, a merge, a
+    /// delete, `clear()`, a scan) must not store its undo afterwards.
+    private var undoEpoch = 0
 
     var database: CatalogDatabase?
     /// Called after the model changed people (so the Library's own people list and filter refresh).
@@ -77,7 +87,30 @@ final class FacesModel: ObservableObject {
         } catch {
             loaded = []
         }
-        if selection == requested { selectedFaces = loaded }
+        if selection == requested {
+            selectedFaces = loaded
+            // A face that left the list (assigned away, a rescan) must not stay marked: an action would act on it unseen.
+            markedFaceIDs.formIntersection(Set(loaded.compactMap(\.id)))
+        }
+    }
+
+    // MARK: Marking
+
+    func toggleMark(_ faceID: Int64) {
+        guard selectedFaces.contains(where: { $0.id == faceID }) else { return }
+        if markedFaceIDs.contains(faceID) { markedFaceIDs.remove(faceID) } else { markedFaceIDs.insert(faceID) }
+    }
+
+    func markAllShown() { markedFaceIDs = Set(selectedFaces.compactMap(\.id)) }
+
+    func clearMarks() { markedFaceIDs = [] }
+
+    /// The marked faces in the order the grid shows them.
+    var markedInShownOrder: [Int64] { selectedFaces.compactMap(\.id).filter { markedFaceIDs.contains($0) } }
+
+    /// The faces an action on `faceID` applies to (see `FaceMarking.targets`).
+    func targets(for faceID: Int64) -> [Int64] {
+        FaceMarking.targets(clicked: faceID, marked: markedFaceIDs, shownOrder: selectedFaces.compactMap(\.id))
     }
 
     // MARK: Scan + group
@@ -88,6 +121,7 @@ final class FacesModel: ObservableObject {
         guard !isWorking else { return }
         guard !photos.isEmpty else { statusMessage = "There are no photos to scan."; return }
         isWorking = true
+        forgetLastAssignment()   // a scan regroups faces: a snapshot taken before it could undo the regrouping too
         generation += 1
         let mine = generation
         progress = FaceScanner.Progress(completed: 0, total: photos.count)
@@ -132,6 +166,7 @@ final class FacesModel: ObservableObject {
 
     private func finish(scan: FaceScanner.Result?, applied: CatalogDatabase.GroupingApplied?, failure: String?, generation: Int) async {
         guard generation == self.generation else { return }
+        forgetLastAssignment()   // grouping was just applied: an assignment made while the scan ran must not be undone over it
         isWorking = false
         progress = nil
         phase = ""
@@ -161,6 +196,8 @@ final class FacesModel: ObservableObject {
         statusMessage = nil
         selection = nil
         selectedFaces = []
+        markedFaceIDs = []
+        forgetLastAssignment()
     }
 
     // MARK: Corrections (each one reloads and tells the Library)
@@ -185,26 +222,73 @@ final class FacesModel: ObservableObject {
     func merge(_ source: Int64, into target: Int64) async {
         // Move the selection to the target BEFORE the reload (which drops a selection on a person that no longer exists).
         if selection == .person(source) { selection = .person(target) }
+        forgetLastAssignment()
         await perform { _ = try await $0.mergePeople(source: source, into: target) }
     }
 
     func setHidden(_ id: Int64, _ hidden: Bool) async { await perform { try await $0.setPersonHidden(id: id, hidden: hidden) } }
 
     func delete(_ id: Int64) async {
+        forgetLastAssignment()
         await perform { try await $0.deletePerson(id: id) }
         if selection == .person(id) { selection = nil }
     }
 
-    func notThisPerson(_ faceID: Int64, from personID: Int64) async { await perform { try await $0.excludeFace(faceID, fromPerson: personID) } }
+    func notThisPerson(_ faceID: Int64, from personID: Int64) async { await notThisPerson([faceID], from: personID) }
 
-    func assign(_ faceIDs: [Int64], to personID: Int64?) async { await perform { try await $0.assignFaces(faceIDs, to: personID) } }
+    /// "Not this person" for several faces at once (one reload). It becomes the last action, so an earlier assignment can no longer be
+    /// undone over it (`forgetLastAssignment`); it is not undoable itself.
+    func notThisPerson(_ faceIDs: [Int64], from personID: Int64) async {
+        forgetLastAssignment()
+        markedFaceIDs.subtract(faceIDs)
+        await perform { database in for id in faceIDs { try await database.excludeFace(id, fromPerson: personID) } }
+    }
+
+    func assign(_ faceIDs: [Int64], to personID: Int64?) async {
+        await assignmentPerform(faceIDs) { try await $0.assignFacesRecordingUndo(faceIDs, to: personID) }
+    }
 
     /// "New person" for faces the grouping left alone: creates an unnamed person and puts the faces in it (confirmed).
     func assignToNewPerson(_ faceIDs: [Int64]) async {
-        await perform { database in
-            let person = try await database.createPerson()
-            try await database.assignFaces(faceIDs, to: person.id)
+        await assignmentPerform(faceIDs) { try await $0.assignFacesRecordingUndo(faceIDs, to: nil, toNewPerson: true) }
+    }
+
+    /// Runs an assignment (its undo information is read in the same transaction) and remembers it for `undoLastAssignment`. A failed
+    /// assignment keeps the previous undo state; one that arrives while another is running is ignored. The marks are cleared (the faces
+    /// move away).
+    private func assignmentPerform(_ faceIDs: [Int64], _ work: (CatalogDatabase) async throws -> FaceAssignmentUndo) async {
+        guard let database, !assignmentBusy else { return }
+        assignmentBusy = true
+        defer { assignmentBusy = false }
+        let epoch = undoEpoch
+        do {
+            let undo = try await work(database)
+            if epoch == undoEpoch { lastAssignment = undo; canUndoAssignment = true }
+        } catch {
+            statusMessage = "That didn't work: \(error.localizedDescription)"
         }
+        markedFaceIDs.subtract(faceIDs)
+        await reload()
+        onPeopleChanged()
+    }
+
+    /// Puts the faces of the last `assign` / `assignToNewPerson` back (their person, their confirmation and the "not this person" marks
+    /// the assignment removed) and removes an unnamed person the assignment created, if it is still empty. One level; cleared by the next assignment, a
+    /// "not this person", a scan, a merge, a delete and `clear()`.
+    func undoLastAssignment() async {
+        guard let undo = lastAssignment, !assignmentBusy else { return }
+        assignmentBusy = true
+        defer { assignmentBusy = false }
+        forgetLastAssignment()
+        await perform { database in
+            try await database.restoreFaceAssignments(undo)
+        }
+    }
+
+    private func forgetLastAssignment() {
+        undoEpoch += 1
+        lastAssignment = nil
+        canUndoAssignment = false
     }
 }
 

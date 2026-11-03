@@ -57,6 +57,26 @@ struct FaceScanRecord: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+/// One face's person and confirmation at a moment in time: what "Undo" puts back after a bulk assignment.
+struct FaceAssignmentSnapshot: Equatable, Hashable, Sendable {
+    var faceID: Int64
+    var personID: Int64?
+    var isConfirmed: Bool
+}
+
+/// Everything needed to undo ONE assignment: the faces' people before it, and the "not this person" marks it removed
+/// (`assignFaces` deletes the mark for the person it assigns to).
+struct FaceAssignmentUndo: Equatable, Sendable {
+    struct Exclusion: Equatable, Sendable {
+        var faceID: Int64
+        var personID: Int64
+    }
+    var snapshots: [FaceAssignmentSnapshot]
+    var removedExclusions: [Exclusion]
+    /// The unnamed person the assignment created (`toNewPerson`): undo removes it again, if it is still empty and unnamed.
+    var createdPersonID: Int64? = nil
+}
+
 /// A scanned photo's result, saved together.
 struct FaceScanResult: Sendable {
     var scan: FaceScanRecord

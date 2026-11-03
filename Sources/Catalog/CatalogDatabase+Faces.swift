@@ -281,15 +281,47 @@ extension CatalogDatabase {
     /// The user puts `faceIDs` in `personID` (confirmed), or takes them out (`nil`: unassigned, unconfirmed). Putting a face in a
     /// person lifts any "not this person" mark for that pair.
     func assignFaces(_ faceIDs: [Int64], to personID: Int64?) async throws {
+        try await dbQueue.write { db in try Self.applyAssignment(faceIDs, to: personID, in: db) }
+    }
+
+    private static func applyAssignment(_ faceIDs: [Int64], to personID: Int64?, in db: Database) throws {
+        for faceID in faceIDs {
+            if let personID {
+                try db.execute(sql: "UPDATE face SET personId = ?, isConfirmed = 1 WHERE id = ?", arguments: [personID, faceID])
+                try db.execute(sql: "DELETE FROM face_exclusion WHERE faceId = ? AND personId = ?", arguments: [faceID, personID])
+            } else {
+                try db.execute(sql: "UPDATE face SET personId = NULL, isConfirmed = 0 WHERE id = ?", arguments: [faceID])
+            }
+        }
+    }
+
+    /// `assignFaces` (or, with `toNewPerson`, "create an unnamed person and assign to it") that ALSO returns what is needed to undo it,
+    /// read and written in ONE transaction: the snapshot can never be older than the write it belongs to, whatever else runs meanwhile.
+    func assignFacesRecordingUndo(_ faceIDs: [Int64], to personID: Int64?, toNewPerson: Bool = false) async throws -> FaceAssignmentUndo {
         try await dbQueue.write { db in
-            for faceID in faceIDs {
-                if let personID {
-                    try db.execute(sql: "UPDATE face SET personId = ?, isConfirmed = 1 WHERE id = ?", arguments: [personID, faceID])
-                    try db.execute(sql: "DELETE FROM face_exclusion WHERE faceId = ? AND personId = ?", arguments: [faceID, personID])
-                } else {
-                    try db.execute(sql: "UPDATE face SET personId = NULL, isConfirmed = 0 WHERE id = ?", arguments: [faceID])
+            var target = personID
+            if toNewPerson {
+                var person = Person(id: nil, name: nil, nameKey: nil, isHidden: false, createdAt: Date())
+                try person.insert(db)
+                target = person.id
+            }
+            var snapshots: [FaceAssignmentSnapshot] = []
+            var removed: [FaceAssignmentUndo.Exclusion] = []
+            for start in stride(from: 0, to: faceIDs.count, by: 500) {
+                let chunk = Array(faceIDs[start..<min(start + 500, faceIDs.count)])
+                let marks = chunk.map { _ in "?" }.joined(separator: ",")
+                for row in try Row.fetchAll(db, sql: "SELECT id, personId, isConfirmed FROM face WHERE id IN (\(marks))", arguments: StatementArguments(chunk)) {
+                    snapshots.append(FaceAssignmentSnapshot(faceID: row["id"], personID: row["personId"], isConfirmed: row["isConfirmed"]))
+                }
+                if let target {
+                    for row in try Row.fetchAll(db, sql: "SELECT faceId FROM face_exclusion WHERE personId = ? AND faceId IN (\(marks))",
+                                                arguments: StatementArguments([target] + chunk)) {
+                        removed.append(FaceAssignmentUndo.Exclusion(faceID: row["faceId"], personID: target))
+                    }
                 }
             }
+            try Self.applyAssignment(faceIDs, to: target, in: db)
+            return FaceAssignmentUndo(snapshots: snapshots, removedExclusions: removed, createdPersonID: toNewPerson ? target : nil)
         }
     }
 
@@ -299,6 +331,45 @@ extension CatalogDatabase {
         try await dbQueue.write { db in
             try db.execute(sql: "INSERT OR IGNORE INTO face_exclusion (faceId, personId) VALUES (?, ?)", arguments: [faceID, personID])
             try db.execute(sql: "UPDATE face SET personId = NULL, isConfirmed = 0 WHERE id = ? AND personId = ?", arguments: [faceID, personID])
+        }
+    }
+
+    /// The person and confirmation of each face right now (a read-only inspection helper; the undo information of an assignment comes
+    /// from `assignFacesRecordingUndo`, which reads it in the same transaction). Faces that no longer exist are absent.
+    func faceAssignments(forFaceIDs faceIDs: [Int64]) async throws -> [FaceAssignmentSnapshot] {
+        try await dbQueue.read { db in
+            var result: [FaceAssignmentSnapshot] = []
+            for start in stride(from: 0, to: faceIDs.count, by: 500) {
+                let chunk = Array(faceIDs[start..<min(start + 500, faceIDs.count)])
+                let rows = try Row.fetchAll(db, Face.filter(chunk.contains(Face.Columns.id)).select(Face.Columns.id, Face.Columns.personId, Face.Columns.isConfirmed))
+                result += rows.map { FaceAssignmentSnapshot(faceID: $0["id"], personID: $0["personId"], isConfirmed: $0["isConfirmed"]) }
+            }
+            return result
+        }
+    }
+
+    /// Puts the faces back as `undo` recorded them, in one write: each face's person and confirmation, and the "not this person" marks the
+    /// assignment removed. A person that no longer exists restores as "no person" (and unconfirmed: a confirmation without a person means
+    /// nothing) and its marks are not restored; a face that no longer exists is skipped. The person the assignment created is removed
+    /// again when it is still unnamed and empty.
+    func restoreFaceAssignments(_ undo: FaceAssignmentUndo) async throws {
+        try await dbQueue.write { db in
+            for snapshot in undo.snapshots {
+                try db.execute(sql: """
+                    UPDATE face SET personId = (SELECT id FROM person WHERE id = ?1),
+                                    isConfirmed = CASE WHEN EXISTS (SELECT 1 FROM person WHERE id = ?1) THEN ?2 ELSE 0 END
+                    WHERE id = ?3
+                    """, arguments: [snapshot.personID, snapshot.isConfirmed, snapshot.faceID])
+            }
+            for mark in undo.removedExclusions {
+                try db.execute(sql: """
+                    INSERT OR IGNORE INTO face_exclusion (faceId, personId)
+                    SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM face WHERE id = ?1) AND EXISTS (SELECT 1 FROM person WHERE id = ?2)
+                    """, arguments: [mark.faceID, mark.personID])
+            }
+            if let created = undo.createdPersonID {
+                try db.execute(sql: "DELETE FROM person WHERE id = ? AND name IS NULL AND NOT EXISTS (SELECT 1 FROM face WHERE personId = ?1)", arguments: [created])
+            }
         }
     }
 

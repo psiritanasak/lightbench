@@ -221,35 +221,90 @@ struct PeopleSheetView: View {
     }
 
     private func faceGrid(person: PersonSummary?) -> some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: 8)], spacing: 8) {
-                ForEach(model.selectedFaces) { face in
-                    FaceImage(data: face.crop, size: 78)
-                        .help(face.isConfirmed ? "Confirmed by you" : (face.isSmall ? "Small face: never grouped automatically" : "Grouped automatically"))
-                        .overlay(alignment: .bottomTrailing) {
-                            if face.isConfirmed { Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.white).padding(3) }
-                        }
-                        .contextMenu { faceMenu(face, person: person) }
-                        .accessibilityLabel(face.isConfirmed ? "Face, confirmed" : "Face")
+        VStack(alignment: .leading, spacing: 8) {
+            markBar(person: person)
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: 8)], spacing: 8) {
+                    ForEach(model.selectedFaces) { face in
+                        let marked = face.id.map { model.markedFaceIDs.contains($0) } ?? false
+                        FaceImage(data: face.crop, size: 78)
+                            .help(face.isConfirmed ? "Confirmed by you" : (face.isSmall ? "Small face: never grouped automatically" : "Grouped automatically"))
+                            .overlay { if marked { RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.selectedOutline, lineWidth: 3) } }
+                            .overlay(alignment: .topTrailing) {
+                                if marked { Image(systemName: "checkmark.circle.fill").font(.callout).foregroundStyle(.white).padding(3) }
+                            }
+                            .overlay(alignment: .bottomTrailing) {
+                                if face.isConfirmed { Image(systemName: "person.crop.circle.badge.checkmark").font(.caption).foregroundStyle(.white).padding(3) }
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture { if let id = face.id { model.toggleMark(id) } }
+                            .contextMenu { faceMenu(face, person: person) }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(Self.faceAccessibilityLabel(isConfirmed: face.isConfirmed, isMarked: marked))
+                            .accessibilityAddTraits(marked ? [.isButton, .isSelected] : .isButton)
+                            .accessibilityAction { if let id = face.id { model.toggleMark(id) } }
+                    }
                 }
             }
+        }
+    }
+
+    static func faceAccessibilityLabel(isConfirmed: Bool, isMarked: Bool) -> String {
+        "Face" + (isConfirmed ? ", confirmed" : "") + (isMarked ? ", selected" : "")
+    }
+
+    /// Shown while faces are ticked (and for a moment after an assignment, for Undo): acts on ALL ticked faces.
+    @ViewBuilder
+    private func markBar(person: PersonSummary?) -> some View {
+        let ids = model.markedInShownOrder
+        if !ids.isEmpty || model.canUndoAssignment {
+            HStack(spacing: 8) {
+                if !ids.isEmpty {
+                    Text("\(ids.count) selected").font(.caption.weight(.semibold))
+                    Menu("Assign To…") {
+                        ForEach(model.people.filter { $0.id != person?.id }) { other in
+                            Button(other.displayName) { Task { await model.assign(ids, to: other.id) } }
+                        }
+                        Divider()
+                        Button("New Person") { Task { await model.assignToNewPerson(ids) } }
+                    }
+                    .fixedSize()
+                    if let person {
+                        Button("Not “\(person.displayName)”") { Task { await model.notThisPerson(ids, from: person.id) } }.buttonStyle(.flat)
+                        Button("Confirm") { Task { await model.assign(ids, to: person.id) } }.buttonStyle(.flat)
+                            .disabled(model.selectedFaces.filter { $0.id.map(ids.contains) ?? false }.allSatisfy(\.isConfirmed))
+                    }
+                    Button("Select All Shown (\(model.selectedFaces.count))") { model.markAllShown() }.buttonStyle(.flat)
+                    Button("Clear") { model.clearMarks() }.buttonStyle(.flat)
+                }
+                if model.canUndoAssignment {
+                    Button("Undo Assign") { Task { await model.undoLastAssignment() } }.buttonStyle(.flat)
+                        .help("Put the faces of the last assignment back")
+                }
+            }
+            .font(.caption)
+        } else if !model.selectedFaces.isEmpty {
+            Text("Click faces to select several, then give them all to someone.").font(.caption).foregroundStyle(Theme.textTertiary)
         }
     }
 
     @ViewBuilder
     private func faceMenu(_ face: Face, person: PersonSummary?) -> some View {
         if let faceID = face.id {
+            let ids = model.targets(for: faceID)
+            let count = ids.count
+            let suffix = count > 1 ? " (\(count) faces)" : ""
             if let person {
-                Button("Not “\(person.displayName)”") { Task { await model.notThisPerson(faceID, from: person.id) } }
-                Button("Confirm This Is “\(person.displayName)”") { Task { await model.assign([faceID], to: person.id) } }
-                    .disabled(face.isConfirmed)
+                Button("Not “\(person.displayName)”\(suffix)") { Task { await model.notThisPerson(ids, from: person.id) } }
+                Button("Confirm This Is “\(person.displayName)”\(suffix)") { Task { await model.assign(ids, to: person.id) } }
+                    .disabled(model.selectedFaces.filter { $0.id.map(ids.contains) ?? false }.allSatisfy(\.isConfirmed))
             }
-            Menu("Assign To…") {
+            Menu("Assign To…\(suffix)") {
                 ForEach(model.people.filter { $0.id != person?.id }) { other in
-                    Button(other.displayName) { Task { await model.assign([faceID], to: other.id) } }
+                    Button(other.displayName) { Task { await model.assign(ids, to: other.id) } }
                 }
                 Divider()
-                Button("New Person") { Task { await model.assignToNewPerson([faceID]) } }
+                Button("New Person") { Task { await model.assignToNewPerson(ids) } }
             }
         }
     }

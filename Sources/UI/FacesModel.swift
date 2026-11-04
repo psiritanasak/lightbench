@@ -34,6 +34,10 @@ final class FacesModel: ObservableObject {
     @Published private(set) var markedFaceIDs: Set<Int64> = []
     /// Whether the last assignment (`assign` / `assignToNewPerson`) can still be undone.
     @Published private(set) var canUndoAssignment = false
+    /// A Select Similar comparison is running (tests wait on it to change the selection mid-flight).
+    @Published private(set) var isSelectingSimilar = false
+    /// Tests only: awaited while a Select Similar comparison counts as running, to hold it open deterministically.
+    var selectSimilarGate: (() async -> Void)?
     private var lastAssignment: FaceAssignmentUndo?
     /// An assignment or undo is running: another one is ignored until it finishes (two overlapping ones could not both be undone correctly).
     private var assignmentBusy = false
@@ -102,6 +106,35 @@ final class FacesModel: ObservableObject {
     }
 
     func markAllShown() { markedFaceIDs = Set(selectedFaces.compactMap(\.id)) }
+
+    /// Ticks every SHOWN face that looks like a ticked one (nearest ticked face within the strength's limit). It only ticks: nothing is
+    /// assigned, so a wrong match costs one click. Faces beyond the shown 200 are not searched. Needs at least one ticked face; a result for
+    /// a selection that changed meanwhile is dropped.
+    func selectSimilar(strength: FaceSimilarityStrength) async {
+        let references = selectedFaces.filter { $0.id.map(markedFaceIDs.contains) ?? false }.map(\.featurePrint)
+        guard !references.isEmpty else { return }
+        let requested = selection
+        let candidates = selectedFaces.compactMap { face in face.id.map { FaceSimilarity.Candidate(id: $0, featurePrint: face.featurePrint) } }
+        let limit = strength.limit
+        isSelectingSimilar = true
+        defer { isSelectingSimilar = false }
+        await selectSimilarGate?()
+        let result = await Task.detached(priority: .userInitiated) {
+            FaceSimilarity.similar(references: references, candidates: candidates, limit: limit)
+        }.value
+        guard selection == requested else { return }
+        let shown = Set(selectedFaces.compactMap(\.id))
+        let before = markedFaceIDs
+        markedFaceIDs.formUnion(result.matches.filter(shown.contains))
+        let added = markedFaceIDs.count - before.count
+        if result.referencesWithoutPrint == references.count {
+            statusMessage = "The selected faces have no face print to compare. Scan them again with “Also find small faces” on."
+        } else if added > 0 {
+            statusMessage = "Selected \(added) similar face\(added == 1 ? "" : "s")." + (result.withoutPrint > 0 ? " \(result.withoutPrint) could not be compared (no face print)." : "")
+        } else {
+            statusMessage = "No other similar faces among the \(shown.count) shown." + (result.withoutPrint > 0 ? " \(result.withoutPrint) could not be compared (no face print)." : "")
+        }
+    }
 
     func clearMarks() { markedFaceIDs = [] }
 

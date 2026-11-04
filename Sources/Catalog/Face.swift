@@ -31,7 +31,7 @@ struct Face: Codable, Equatable, Identifiable, Hashable, Sendable {
     /// True when the USER assigned (or confirmed) this face's person: regrouping never changes it.
     var isConfirmed: Bool = false
     /// Found only by the optional small-face pass (`FaceDetector.detect(inFileAt:includeSmall:)`). NEVER grouped automatically: such a
-    /// face has an EMPTY `featurePrint` (it is never compared) and only the user can give it a person.
+    /// face has a print only for "Select Similar" (older ones: EMPTY) and only the user can give it a person.
     var isSmall: Bool = false
 }
 
@@ -47,12 +47,13 @@ struct FaceScanRecord: Codable, Equatable, Hashable, Sendable {
     var scannedAt: Date
 
     /// `detectRevision` is the BASE revision (`FaceDetector.detectRevision`). A record written by a scan that also ran the small-face pass
-    /// carries `FaceDetector.smallPassFlag` on top: it satisfies a scan with or without that pass, while a record without the flag
+    /// carries `FaceDetector.smallPassFlag` on top: it satisfies a scan with or without that pass (a record with the OLD flag, written before
+    /// small faces had prints, satisfies only a scan without it), while a record without the flag
     /// satisfies only a scan without it (`requiresSmallPass`), so switching the option on rescans once and switching it off rescans nothing.
     func isCurrent(fileSize currentSize: Int64, mtime currentMTime: Double, detectRevision: Int, printRevision: Int,
                    requiresSmallPass: Bool = false) -> Bool {
         let revisionOK = self.detectRevision == detectRevision + FaceDetector.smallPassFlag
-            || (!requiresSmallPass && self.detectRevision == detectRevision)
+            || (!requiresSmallPass && (self.detectRevision == detectRevision || self.detectRevision == detectRevision + FaceDetector.legacySmallPassFlag))
         return fileSize == currentSize && abs(mtime - currentMTime) < 0.001 && revisionOK && self.printRevision == printRevision
     }
 }

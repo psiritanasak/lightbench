@@ -114,4 +114,45 @@ final class FaceSmallPassTests: XCTestCase {
         XCTAssertEqual(none, 0)
         XCTAssertEqual(FaceDetector.firstEncoded(Array(candidates.prefix(2)), limit: 5) { _ -> Int? in 7 }.count, 2, "fewer candidates than the cap returns them all")
     }
+
+    func testARecordFromTheFirstSmallPassVersionIsCurrentOnlyForAScanWithoutThePass() {
+        func record(_ revision: Int) -> FaceScanRecord {
+            FaceScanRecord(photoId: 1, fileSize: 10, mtime: 2, detectRevision: revision, printRevision: 2, faceCount: 0, scannedAt: Date())
+        }
+        let base = FaceDetector.detectRevision
+        let legacy = base + FaceDetector.legacySmallPassFlag
+        func current(_ r: FaceScanRecord, small: Bool) -> Bool { r.isCurrent(fileSize: 10, mtime: 2, detectRevision: base, printRevision: 2, requiresSmallPass: small) }
+        XCTAssertEqual(FaceDetector.smallPassFlag, 20_000)
+        XCTAssertTrue(current(record(legacy), small: false), "turning the option off rescans nothing")
+        XCTAssertFalse(current(record(legacy), small: true), "the option on rescans once so print-less small faces get prints")
+        XCTAssertTrue(FaceDetector.includesSmallPass(revision: legacy), "a legacy record still counts as having run the pass (keep-small rule)")
+        XCTAssertTrue(FaceDetector.includesSmallPass(revision: FaceDetector.scanRevision(includeSmall: true)))
+    }
+
+    // MARK: printing small faces
+
+    private func syntheticImage() -> CGImage {
+        let context = CGContext(data: nil, width: 400, height: 300, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        context.setFillColor(CGColor(gray: 0.6, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+        return context.makeImage()!
+    }
+
+    private func smallCandidates(_ n: Int) -> [FaceDetector.SmallCandidate] {
+        (0..<n).map { FaceDetector.SmallCandidate(box: FaceMatching.Box(x: 0.1 + Double($0) * 0.08, y: 0.4, w: 0.06, h: 0.08), quality: 0.5 - Double($0) * 0.01) }
+    }
+
+    func testSmallFacesCarryTheirPrintTheTileAndTheSmallFlag() throws {
+        let faces = try XCTUnwrap(FaceDetector.smallFaces(from: smallCandidates(3), in: syntheticImage()) { _ in Data([7, 7]) })
+        XCTAssertEqual(faces.count, 3)
+        XCTAssertTrue(faces.allSatisfy { $0.isSmall && $0.featurePrint == Data([7, 7]) && ($0.crop?.isEmpty == false) })
+        XCTAssertEqual(faces.map(\.quality), faces.map(\.quality).sorted(by: >), "quality order kept")
+    }
+
+    func testAPrintThatCannotBeMadeMakesTheWholePhotoUnreadableSoNothingStoredIsReplaced() {
+        var calls = 0
+        let result = FaceDetector.smallFaces(from: smallCandidates(5), in: syntheticImage()) { _ in calls += 1; return calls == 2 ? nil : Data([1]) }
+        XCTAssertNil(result, "could not look: the photo is retried, never recorded as having fewer small faces")
+        XCTAssertEqual(calls, 2, "it stops at the failure")
+    }
 }

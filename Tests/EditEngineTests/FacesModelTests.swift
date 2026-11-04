@@ -474,4 +474,73 @@ final class FacesModelTests: XCTestCase {
         let ids2 = try await db.peopleSummaries().map(\.id)
         XCTAssertEqual(ids2, [try XCTUnwrap(strayEmpty.id)], "the created person is gone, the unrelated one is not touched")
     }
+
+    // MARK: Select Similar
+
+    /// Five photos, one small face each with a real print: photos 0-2 are "Ann" (plane 0), photos 3-4 "Bob" (plane 1); Small faces selected.
+    private func setUpPrintedSmallFaces() async throws {
+        try await setUpModel()
+        let planes: [String: (Int, Double)] = ["/tmp/fm0.jpg": (0, 0), "/tmp/fm1.jpg": (0, 0.02), "/tmp/fm2.jpg": (0, 0.04), "/tmp/fm3.jpg": (1, 0), "/tmp/fm4.jpg": (1, 0.02)]
+        model.scannerEnvironment = FaceScanner.Environment(
+            stat: { _ in (1000, 1) },
+            detect: { path in
+                guard let (plane, angle) = planes[path] else { return [] }
+                return [FaceDetector.DetectedFace(x: 0.5, y: 0.8, w: 0.02, h: 0.02, quality: 0.4, featurePrint: Self.print(plane: plane, angle: angle), crop: Data([3]), isSmall: true)]
+            }, includeSmall: true)
+        try await scanAndWait()
+        model.selection = .smallFaces
+        try await waitForShownFaces(5)
+    }
+
+    func testSelectSimilarTicksTheLookAlikesOnlyAndNeverAssigns() async throws {
+        try await setUpPrintedSmallFaces()
+        let ann = model.selectedFaces.first { $0.featurePrint == Self.print(plane: 0, angle: 0) }
+        let annID = try XCTUnwrap(ann?.id)
+        model.toggleMark(annID)
+        await model.selectSimilar(strength: .normal)
+        XCTAssertEqual(model.markedFaceIDs.count, 3, "the three Anns, not the two Bobs")
+        let bobIDs = Set(model.selectedFaces.filter { $0.featurePrint == Self.print(plane: 1, angle: 0) || $0.featurePrint == Self.print(plane: 1, angle: 0.02) }.compactMap(\.id))
+        XCTAssertTrue(model.markedFaceIDs.isDisjoint(with: bobIDs))
+        XCTAssertEqual(model.smallFaceCount, 5, "nothing was assigned")
+        XCTAssertTrue(model.people.isEmpty)
+        XCTAssertEqual(model.statusMessage, "Selected 2 similar faces.")
+    }
+
+    func testSelectSimilarNeedsATickedFaceKeepsEarlierTicksAndSaysWhenNothingElseMatches() async throws {
+        try await setUpPrintedSmallFaces()
+        await model.selectSimilar(strength: .loose)
+        XCTAssertTrue(model.markedFaceIDs.isEmpty, "no ticked face, no reference: nothing happens")
+        XCTAssertNil(model.statusMessage)
+        let bob = try XCTUnwrap(model.selectedFaces.first { $0.featurePrint == Self.print(plane: 1, angle: 0.02) }?.id)
+        let ann = try XCTUnwrap(model.selectedFaces.first { $0.featurePrint == Self.print(plane: 0, angle: 0) }?.id)
+        model.toggleMark(ann)
+        model.toggleMark(bob)
+        await model.selectSimilar(strength: .strict)                          // both groups ticked already apart from the near twins
+        XCTAssertTrue(model.markedFaceIDs.contains(ann) && model.markedFaceIDs.contains(bob), "earlier ticks stay")
+        XCTAssertEqual(model.markedFaceIDs.count, 5)
+        await model.selectSimilar(strength: .strict)
+        XCTAssertEqual(model.statusMessage, "No other similar faces among the 5 shown.")
+    }
+
+    func testSelectSimilarOnFacesWithoutPrintsExplainsInsteadOfTickingEverything() async throws {
+        try await setUpFiveSmallFaces()                                        // empty prints (legacy small faces)
+        let first = try XCTUnwrap(model.selectedFaces.first?.id)
+        model.toggleMark(first)
+        await model.selectSimilar(strength: .loose)
+        XCTAssertEqual(model.markedFaceIDs, [first])
+        XCTAssertEqual(model.statusMessage, "The selected faces have no face print to compare. Scan them again with “Also find small faces” on.")
+    }
+
+    func testASelectSimilarResultForAnOlderSelectionIsDropped() async throws {
+        try await setUpPrintedSmallFaces()
+        let ann = try XCTUnwrap(model.selectedFaces.first { $0.featurePrint == Self.print(plane: 0, angle: 0) }?.id)
+        model.toggleMark(ann)
+        model.selectSimilarGate = { try? await Task.sleep(nanoseconds: 300_000_000) }   // holds the comparison open for 0.3 s
+        let running = Task { await model.selectSimilar(strength: .normal) }
+        for _ in 0..<400 where !model.isSelectingSimilar { try await Task.sleep(nanoseconds: 5_000_000) }   // until it is really suspended on its comparison (up to 2 s)
+        XCTAssertTrue(model.isSelectingSimilar, "the comparison is in flight")
+        model.selection = .unsorted                                            // the user moves on before the result lands
+        await running.value
+        XCTAssertTrue(model.markedFaceIDs.isEmpty, "marks belong to the selection they were made in")
+    }
 }

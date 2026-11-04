@@ -274,6 +274,13 @@ struct PeopleSheetView: View {
                         Button("Confirm") { Task { await model.assign(ids, to: person.id) } }.buttonStyle(.flat)
                             .disabled(model.selectedFaces.filter { $0.id.map(ids.contains) ?? false }.allSatisfy(\.isConfirmed))
                     }
+                    Menu("Select Similar") {
+                        ForEach(FaceSimilarityStrength.allCases) { strength in
+                            Button(strength.title) { Task { await model.selectSimilar(strength: strength) } }
+                        }
+                    }
+                    .fixedSize()
+                    .help("Also tick the shown faces that look like the ticked ones. It only ticks: you review, then assign.")
                     Button("Select All Shown (\(model.selectedFaces.count))") { model.markAllShown() }.buttonStyle(.flat)
                     Button("Clear") { model.clearMarks() }.buttonStyle(.flat)
                 }

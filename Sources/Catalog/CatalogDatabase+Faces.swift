@@ -81,7 +81,7 @@ extension CatalogDatabase {
     }
 
     /// Every face's grouping data (feature prints included, crops NOT: they are the large part). SMALL faces (`isSmall`) are left out on
-    /// purpose: they have no print and must never be assigned, clustered or unassigned by the automatic grouping. A dedicated type, never a partial
+    /// purpose: they must never be assigned, clustered or unassigned by the automatic grouping (their prints, where present, serve "Select Similar" only). A dedicated type, never a partial
     /// `Face`. ~3 KB per face: the grouping commit decides how much of this it keeps in memory.
     func allFacesForGrouping() async throws -> [FaceGroupingInput] {
         try await dbQueue.read { db in

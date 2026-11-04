@@ -18,8 +18,12 @@ enum FaceDetector {
     static let detectRevision = rectanglesRevision * 100 + qualityRevision
     /// Added to the stored revision of a scan that ALSO ran the small-face pass (see `FaceScanRecord.isCurrent`). Large against
     /// `detectRevision` (hundreds), so the two can never collide.
-    static let smallPassFlag = 10_000
-    static func includesSmallPass(revision: Int) -> Bool { revision >= smallPassFlag }
+    /// 20_000: the small pass that ALSO stores a feature print per small face (for "Select Similar"). A record from the first version
+    /// of the pass (`legacySmallPassFlag`, no prints) still satisfies a scan WITHOUT the pass, but not one with it: that rescans once and
+    /// replaces the print-less faces.
+    static let smallPassFlag = 20_000
+    static let legacySmallPassFlag = 10_000
+    static func includesSmallPass(revision: Int) -> Bool { revision >= legacySmallPassFlag }
     /// The revision a scan stores for its photos: the base, plus the flag when the small-face pass ran.
     static func scanRevision(includeSmall: Bool) -> Int { detectRevision + (includeSmall ? smallPassFlag : 0) }
     /// Long edge of the image faces are found in. Larger than the duplicate scan's 512: a face is ~5 % of a group photo's width.
@@ -60,7 +64,8 @@ enum FaceDetector {
         var quality: Double
         var featurePrint: Data
         var crop: Data?
-        /// Found only by the small-face pass: no print (`Data()`), never grouped automatically.
+        /// Found only by the small-face pass: never grouped automatically. Its print serves "Select Similar" only (EMPTY in catalogs written
+        /// by the first version of the pass).
         var isSmall: Bool = false
     }
 
@@ -227,8 +232,8 @@ enum FaceDetector {
 
     /// The faces only a higher-resolution look finds: `image` is searched in overlapping tiles, boxes cut by an interior tile edge are
     /// dropped, the rest must pass the SAME width/quality filters (in pixels of `image`), duplicates and the faces the full-frame pass
-    /// already found (`existing`) are removed, and at most `maximumSmallFacesPerPhoto` of the best remain. They carry NO feature print:
-    /// they are never compared (see `Face.isSmall`). `nil` when any tile could not be searched.
+    /// already found (`existing`) are removed, and at most `maximumSmallFacesPerPhoto` of the best remain. They carry a feature print for "Select Similar" only
+    /// (see `Face.isSmall`: never read by grouping). `nil` when any tile could not be searched.
     static func smallFaces(in image: CGImage, excluding existing: [DetectedFace]) -> [DetectedFace]? {
         var candidates: [SmallCandidate] = []
         for tile in tiles(imageWidth: image.width, imageHeight: image.height) {
@@ -245,14 +250,28 @@ enum FaceDetector {
             if failed { return nil }
         }
         let kept = suppressDuplicates(candidates, existing: existing.map { FaceMatching.Box(x: $0.x, y: $0.y, w: $0.w, h: $0.h) })
-        // A face whose tile cannot be encoded is dropped (the user could not recognise a blank tile). Crops are encoded in quality order
-        // and only until the cap is reached, so a crowd does not pay for crops that would be thrown away.
-        return firstEncoded(kept, limit: maximumSmallFacesPerPhoto) { candidate in
-            let box = (x: candidate.box.x, y: candidate.box.y, w: candidate.box.w, h: candidate.box.h)
-            let rect = cropRect(box: box, imageWidth: image.width, imageHeight: image.height)
-            guard let crop = image.cropping(to: rect).flatMap({ squareFit($0, side: tileSide) }).flatMap(jpegData(from:)) else { return nil }
-            return DetectedFace(x: box.x, y: box.y, w: box.w, h: box.h, quality: candidate.quality, featurePrint: Data(), crop: crop, isSmall: true)
+        return smallFaces(from: kept, in: image, makePrint: FeaturePrintGenerator.fingerprint(of:))
+    }
+
+    /// The faces for the de-duplicated `kept` candidates (best quality first), at most `maximumSmallFacesPerPhoto`. Each gets a tile and a
+    /// feature print made like a normal face's (40 % padding, 224 px square; the print serves "Select Similar" only, never grouping; its
+    /// accuracy at this size is unmeasured). A candidate whose TILE cannot be encoded is dropped (the user could not recognise a blank
+    /// tile); a PRINT that cannot be made is "could not look": the whole call is nil, so the photo is retried and nothing already stored
+    /// (including a face the user gave to a person) is replaced by a scan that silently lost it. Crops are made only until the cap.
+    static func smallFaces(from kept: [SmallCandidate], in image: CGImage, makePrint: (CGImage) -> Data?) -> [DetectedFace]? {
+        var printFailed = false
+        let faces = firstEncoded(kept, limit: maximumSmallFacesPerPhoto) { candidate -> DetectedFace? in
+            autoreleasepool {
+                if printFailed { return nil }
+                let box = (x: candidate.box.x, y: candidate.box.y, w: candidate.box.w, h: candidate.box.h)
+                let rect = cropRect(box: box, imageWidth: image.width, imageHeight: image.height)
+                guard let cropped = image.cropping(to: rect), let printable = squareFit(cropped, side: printSide) else { return nil }
+                guard let print = makePrint(printable) else { printFailed = true; return nil }
+                guard let crop = squareFit(cropped, side: tileSide).flatMap(jpegData(from:)) else { return nil }
+                return DetectedFace(x: box.x, y: box.y, w: box.w, h: box.h, quality: candidate.quality, featurePrint: print, crop: crop, isSmall: true)
+            }
         }
+        return printFailed ? nil : faces
     }
 
     /// The first `limit` results of `encode` over `candidates` in order, skipping candidates it cannot encode, and calling it no more

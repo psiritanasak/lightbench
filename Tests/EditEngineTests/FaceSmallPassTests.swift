@@ -100,4 +100,18 @@ final class FaceSmallPassTests: XCTestCase {
         XCTAssertFalse(current(record(base + 1), small: false), "a different detector revision is still stale")
         XCTAssertFalse(current(record(withSmall + 1), small: true))
     }
+
+    // MARK: encoding stops at the cap
+
+    func testFirstEncodedStopsAtTheCapSkipsFailuresAndKeepsOrder() {
+        let candidates = (0..<10).map { FaceDetector.SmallCandidate(box: FaceMatching.Box(x: Double($0) / 20, y: 0, w: 0.01, h: 0.01), quality: 1 - Double($0) / 20) }
+        var calls = 0
+        let out = FaceDetector.firstEncoded(candidates, limit: 3) { c -> Int? in calls += 1; let index = Int((c.box.x * 20).rounded()); return index == 0 ? nil : index }   // #0 fails
+        XCTAssertEqual(out, [1, 2, 3], "the failing first candidate is skipped and the next ones fill in, in order")
+        XCTAssertEqual(calls, 4, "no candidate after the third success is encoded")
+        var none = 0
+        XCTAssertTrue(FaceDetector.firstEncoded(candidates, limit: 0) { _ -> Int? in none += 1; return 1 }.isEmpty)
+        XCTAssertEqual(none, 0)
+        XCTAssertEqual(FaceDetector.firstEncoded(Array(candidates.prefix(2)), limit: 5) { _ -> Int? in 7 }.count, 2, "fewer candidates than the cap returns them all")
+    }
 }

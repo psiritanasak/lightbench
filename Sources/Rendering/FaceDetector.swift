@@ -245,13 +245,25 @@ enum FaceDetector {
             if failed { return nil }
         }
         let kept = suppressDuplicates(candidates, existing: existing.map { FaceMatching.Box(x: $0.x, y: $0.y, w: $0.w, h: $0.h) })
-        // A face whose tile cannot be encoded is dropped (the user could not recognise a blank tile).
-        return kept.compactMap { candidate -> DetectedFace? in
+        // A face whose tile cannot be encoded is dropped (the user could not recognise a blank tile). Crops are encoded in quality order
+        // and only until the cap is reached, so a crowd does not pay for crops that would be thrown away.
+        return firstEncoded(kept, limit: maximumSmallFacesPerPhoto) { candidate in
             let box = (x: candidate.box.x, y: candidate.box.y, w: candidate.box.w, h: candidate.box.h)
             let rect = cropRect(box: box, imageWidth: image.width, imageHeight: image.height)
             guard let crop = image.cropping(to: rect).flatMap({ squareFit($0, side: tileSide) }).flatMap(jpegData(from:)) else { return nil }
             return DetectedFace(x: box.x, y: box.y, w: box.w, h: box.h, quality: candidate.quality, featurePrint: Data(), crop: crop, isSmall: true)
-        }.prefix(maximumSmallFacesPerPhoto).map { $0 }
+        }
+    }
+
+    /// The first `limit` results of `encode` over `candidates` in order, skipping candidates it cannot encode, and calling it no more
+    /// often than needed (it stops as soon as `limit` results exist).
+    static func firstEncoded<T>(_ candidates: [SmallCandidate], limit: Int, encode: (SmallCandidate) -> T?) -> [T] {
+        var out: [T] = []
+        guard limit > 0 else { return out }
+        for candidate in candidates {
+            if let item = encode(candidate) { out.append(item); if out.count == limit { break } }
+        }
+        return out
     }
 
     // MARK: Image helpers

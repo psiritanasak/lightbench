@@ -34,6 +34,9 @@ extension CatalogDatabase {
             for result in results where existing.contains(result.scan.photoId) {
                 let photoID = result.scan.photoId
                 let old = try Face.filter(Face.Columns.photoId == photoID).fetchAll(db)
+                // Did the file change since the previous scan? (No previous record: treated as unchanged.) Same tolerance as `isCurrent`.
+                let previous = try FaceScanRecord.fetchOne(db, key: photoID)
+                let fileChanged = previous.map { $0.fileSize != result.scan.fileSize || abs($0.mtime - result.scan.mtime) >= 0.001 } ?? false
                 let matches = FaceMatching.match(
                     old: old.map { FaceMatching.Box(x: $0.x, y: $0.y, w: $0.w, h: $0.h) },
                     new: result.faces.map { FaceMatching.Box(x: $0.x, y: $0.y, w: $0.w, h: $0.h) })
@@ -55,13 +58,17 @@ extension CatalogDatabase {
                         try face.insert(db)
                     }
                 }
-                // A scan WITHOUT the small-face pass cannot see small faces, so it must not erase them (or the person the user gave one).
-                let keepSmall = !FaceDetector.includesSmallPass(revision: result.scan.detectRevision)
-                for (oldIndex, oldFace) in old.enumerated() where !keptOld.contains(oldIndex) && !(keepSmall && oldFace.isSmall) {
+                // A scan WITHOUT the small-face pass cannot see small faces, so it must not erase them (or the person the user gave one)
+                // while the file is unchanged. If the file CHANGED their boxes no longer describe it: unconfirmed ones go, a face the
+                // user gave to a person keeps its row.
+                let withoutSmallPass = !FaceDetector.includesSmallPass(revision: result.scan.detectRevision)
+                var keptSmall = 0
+                for (oldIndex, oldFace) in old.enumerated() where !keptOld.contains(oldIndex) {
+                    if withoutSmallPass && oldFace.isSmall && (!fileChanged || oldFace.isConfirmed) { keptSmall += 1; continue }
                     if let id = oldFace.id { _ = try Face.filter(Face.Columns.id == id).deleteAll(db) }
                 }
                 var scan = result.scan
-                scan.faceCount = result.faces.count
+                scan.faceCount = result.faces.count + keptSmall   // the number of face rows this photo now has
                 try scan.save(db)
             }
         }

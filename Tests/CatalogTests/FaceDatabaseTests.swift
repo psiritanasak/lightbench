@@ -436,4 +436,44 @@ final class FaceDatabaseTests: XCTestCase {
         let after = try await db.peopleSummaries()
         XCTAssertTrue(after.isEmpty)
     }
+
+    // MARK: A scan without the small pass: record count and a changed file
+
+    private func smallScan(_ photoID: Int64, faces: [Face], revision: Int, size: Int64 = 100, mtime: Double = 5) -> FaceScanResult {
+        FaceScanResult(scan: FaceScanRecord(photoId: photoID, fileSize: size, mtime: mtime, detectRevision: revision, printRevision: 2,
+                                            faceCount: faces.count, scannedAt: Date()), faces: faces)
+    }
+
+    func testAScanWithoutTheSmallPassOnAnUnchangedFileKeepsSmallFacesAndRecordsTheRealFaceCount() async throws {
+        try await db.saveFaceScans([smallScan(photoIDs[0], faces: [face(photoIDs[0]), smallFace(photoIDs[0]), smallFace(photoIDs[0], x: 0.7)], revision: 3 + FaceDetector.smallPassFlag)])
+        try await db.saveFaceScans([smallScan(photoIDs[0], faces: [face(photoIDs[0])], revision: 3)])
+        let rows = try await db.faces(forPhotoID: photoIDs[0])
+        XCTAssertEqual(rows.count, 3)
+        let record = try await db.faceScans(forPhotoIDs: [photoIDs[0]])[photoIDs[0]]
+        XCTAssertEqual(record?.faceCount, 3, "faceCount is the number of rows the photo has, small faces included")
+    }
+
+    func testAScanWithoutTheSmallPassOnAChangedFileDropsUnconfirmedSmallFacesButKeepsTheOnesTheUserAssigned() async throws {
+        for (label, size, mtime) in [("size", Int64(999), 5.0), ("mtime", Int64(100), 6.0)] {
+            try await db.saveFaceScans([smallScan(photoIDs[1], faces: [smallFace(photoIDs[1]), smallFace(photoIDs[1], x: 0.7)], revision: 3 + FaceDetector.smallPassFlag)])
+            let person = try await db.createPerson(name: "P\(label)")
+            let stored = try await db.faces(forPhotoID: photoIDs[1])
+            let keepID = try XCTUnwrap(stored.first { $0.x == 0.5 }?.id)
+            try await db.assignFaces([keepID], to: person.id)
+            try await db.saveFaceScans([smallScan(photoIDs[1], faces: [], revision: 3, size: size, mtime: mtime)])
+            let after = try await db.faces(forPhotoID: photoIDs[1])
+            XCTAssertEqual(after.map(\.id), [keepID], "\(label) changed: only the user's face survives")
+            let record = try await db.faceScans(forPhotoIDs: [photoIDs[1]])[photoIDs[1]]
+            XCTAssertEqual(record?.faceCount, 1, "\(label): faceCount counts the kept small face")
+            try await db.saveFaceScans([smallScan(photoIDs[1], faces: [], revision: 3 + FaceDetector.smallPassFlag, size: size, mtime: mtime)])   // reset for the next round
+            let rest = try await db.faces(forPhotoID: photoIDs[1])
+            XCTAssertTrue(rest.isEmpty, "a scan WITH the pass is authoritative")
+        }
+    }
+
+    func testAScanWithTheSmallPassStoresExactlyItsOwnFaceCount() async throws {
+        try await db.saveFaceScans([smallScan(photoIDs[2], faces: [face(photoIDs[2]), smallFace(photoIDs[2])], revision: 3 + FaceDetector.smallPassFlag)])
+        let record = try await db.faceScans(forPhotoIDs: [photoIDs[2]])[photoIDs[2]]
+        XCTAssertEqual(record?.faceCount, 2)
+    }
 }

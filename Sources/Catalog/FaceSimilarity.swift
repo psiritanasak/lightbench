@@ -1,16 +1,18 @@
 import Foundation
 
-/// How strictly "Select Similar" matches. A match only TICKS a face for the user to review (never assigns), so these are looser than the
-/// 0.45 automatic-grouping threshold's zero-false-merge rule; the values are by-eye defaults, not measured. Small faces' prints are
-/// unmeasured at their size.
+/// How strictly "Select Similar" matches. A match only TICKS a face for the user to review (never assigns), so, unlike the 0.45
+/// automatic-grouping threshold's zero-false-merge rule, Loose may tick other people (Strict and Normal sit below 0.45). Retuned 2026-11-05 from a probe on 149 small faces of 3 D610 group frames
+/// (6 reference faces, identities judged by eye): the same person's 3 frames sat at 0.23-0.41, the first DIFFERENT person at 0.44
+/// (then 0.50, 0.53, 0.56...). The old 0.60 ticked other people; 0.35/0.45 were by eye. Small sample, one scene, same-moment frames
+/// (an easy case for "same person"), so treat the numbers as a first measurement, not a guarantee.
 enum FaceSimilarityStrength: String, CaseIterable, Identifiable, Sendable {
     case strict, normal, loose
     var id: String { rawValue }
     var limit: Float {
         switch self {
-        case .strict: return 0.35
-        case .normal: return 0.45   // the automatic-grouping threshold
-        case .loose: return 0.60
+        case .strict: return 0.33
+        case .normal: return 0.42   // just under the first different person seen (0.44)
+        case .loose: return 0.50    // inclusive limit: the different person measured at exactly 0.50 IS ticked; review before assigning
         }
     }
     var title: String {

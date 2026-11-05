@@ -35,9 +35,11 @@ final class FaceSimilarityTests: XCTestCase {
         XCTAssertEqual(none.withoutPrint, 1)
     }
 
-    func testStrengthLimitsAreOrderedAndNormalIsTheGroupingThreshold() {
+    func testStrengthLimitsAreOrderedAndNormalStaysUnderTheGroupingThreshold() {
         XCTAssertLessThan(FaceSimilarityStrength.strict.limit, FaceSimilarityStrength.normal.limit)
         XCTAssertLessThan(FaceSimilarityStrength.normal.limit, FaceSimilarityStrength.loose.limit)
-        XCTAssertEqual(FaceSimilarityStrength.normal.limit, FaceGrouping.Thresholds().assign)
+        // Retuned 2026-11-05: Normal stays at or under the grouping threshold and under the first different person in the probe (0.44).
+        XCTAssertLessThanOrEqual(FaceSimilarityStrength.normal.limit, FaceGrouping.Thresholds().assign)
+        XCTAssertLessThan(FaceSimilarityStrength.normal.limit, 0.44)
     }
 }

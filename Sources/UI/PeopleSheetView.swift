@@ -258,7 +258,13 @@ struct PeopleSheetView: View {
     private func markBar(person: PersonSummary?) -> some View {
         let ids = model.markedInShownOrder
         if !ids.isEmpty || model.canUndoAssignment {
+            ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                // First, so it is never the item scrolled off the right edge of a narrow sheet right after an assignment.
+                if model.canUndoAssignment {
+                    Button("Undo Assign") { Task { await model.undoLastAssignment() } }.buttonStyle(.flat)
+                        .help("Put the faces of the last assignment back")
+                }
                 if !ids.isEmpty {
                     Text("\(ids.count) selected").font(.caption.weight(.semibold))
                     Menu("Assign To…") {
@@ -284,10 +290,8 @@ struct PeopleSheetView: View {
                     Button("Select All Shown (\(model.selectedFaces.count))") { model.markAllShown() }.buttonStyle(.flat)
                     Button("Clear") { model.clearMarks() }.buttonStyle(.flat)
                 }
-                if model.canUndoAssignment {
-                    Button("Undo Assign") { Task { await model.undoLastAssignment() } }.buttonStyle(.flat)
-                        .help("Put the faces of the last assignment back")
-                }
+            }
+            .lineLimit(1)
             }
             .font(.caption)
         } else if !model.selectedFaces.isEmpty {

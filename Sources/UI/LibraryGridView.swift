@@ -1026,6 +1026,11 @@ private struct LibraryThumbnailCell: View {
             async let missingCheck = catalog.isPhotoConfirmedMissing(photo)
             let sidecarURL = SidecarStore.sidecarURL(for: photo) // the version's own edit file for a virtual copy (nil: malformed key)
             hasEdits = sidecarURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+            // A RAW's real thumbnail waits its turn behind `RawDecoder.RenderGate`; show the camera's embedded preview meanwhile (only into an
+            // empty cell, so a recycled cell never swaps one photo's image for a stand-in of another and a cached thumbnail is never covered).
+            if image == nil, let quick = await catalog.quickThumbnailPreview(for: photo), !Task.isCancelled, image == nil {
+                image = quick
+            }
             let thumb = await thumbnail
             let missing = await missingCheck
             // A superseded `.task` (this cell recycled onto a different

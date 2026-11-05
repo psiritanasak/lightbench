@@ -37,6 +37,19 @@ enum ThumbnailGenerator {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
+    /// The camera's EMBEDDED JPEG preview of a RAW file, oriented, no larger than `maxPixelSize` on its longest side: a fast (tens of ms on a
+    /// D610, `docs/ROADMAP_HISTORY.md`) stand-in shown in the Library grid while the real RAW render (`rawDecodedThumbnail`) is still queued
+    /// behind `RawDecoder.RenderGate`. It carries the CAMERA's colours, not Apple's RAW rendering, so it is never the final image and never
+    /// cached. nil for a non-RAW file (already fast) and for an unreadable one. Does not touch `RenderGate`: it never decodes the RAW itself
+    /// (`FeaturePrintGenerator.thumbnail` keeps a RAW's embedded preview and never asks ImageIO for `FromImageAlways`).
+    static func embeddedPreview(for url: URL, maxPixelSize: Int) -> CGImage? {
+        guard RawDecoder.isRaw(url) else { return nil }
+        return FeaturePrintGenerator.thumbnail(ofFileAt: url, pixelSize: maxPixelSize)
+    }
+
+    /// (2026-11-05: the Library grid now shows `embeddedPreview` for an UNEDITED RAW while the render below is still queued, behind a
+    /// Preferences switch. The decision below still holds for the FINAL image: the grid ends up showing Apple's rendering, like the Editor.)
+    ///
     /// ImageIO's own thumbnail API *can* decode a RAW file, but only from
     /// its embedded camera-JPEG preview — the camera's own rendering, not
     /// Apple's RAW rendering — which would make the Library grid visibly

@@ -22,6 +22,7 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let importCopySkipAlreadyCopied = "prefs.v1.importCopySkipAlreadyCopied"
         static let showPhotosInSubfolders = "prefs.v1.showPhotosInSubfolders"
         static let findSmallFaces = "prefs.v1.findSmallFaces"
+        static let quickRawPreviews = "prefs.v1.quickRawPreviews"
     }
 
     let defaults: UserDefaults
@@ -61,6 +62,13 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
     var showPhotosInSubfolders: Bool {
         get { bool(Key.showPhotosInSubfolders, default: false) }
         nonmutating set { defaults.set(newValue, forKey: Key.showPhotosInSubfolders) }
+    }
+
+    /// Library: while a RAW photo's real thumbnail is still rendering, show the camera's embedded JPEG preview in its cell (it has the camera's
+    /// colours, so the cell changes colour a little when the real render arrives). On by default; off keeps the grid blank until the render.
+    var quickRawPreviews: Bool {
+        get { bool(Key.quickRawPreviews, default: true) }
+        nonmutating set { defaults.set(newValue, forKey: Key.quickRawPreviews) }
     }
 
     /// People: also search each photo in tiles at higher resolution for small faces (group photos). Slower; off by default. Small faces are

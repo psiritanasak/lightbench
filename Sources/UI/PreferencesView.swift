@@ -10,6 +10,7 @@ final class PreferencesModel: ObservableObject {
     @Published var cullAutoAdvance: Bool { didSet { store.cullAutoAdvance = cullAutoAdvance } }
     @Published var cullStartUnflaggedOnly: Bool { didSet { store.cullStartUnflaggedOnly = cullStartUnflaggedOnly } }
     @Published var autoReadXMPOnImport: Bool { didSet { store.autoReadXMPOnImport = autoReadXMPOnImport } }
+    @Published var quickRawPreviews: Bool { didSet { store.quickRawPreviews = quickRawPreviews } }
     @Published var backupsToKeep: Int {
         didSet {
             let clamped = min(max(backupsToKeep, AppPreferences.keepBackupsRange.lowerBound), AppPreferences.keepBackupsRange.upperBound)
@@ -23,6 +24,7 @@ final class PreferencesModel: ObservableObject {
         cullAutoAdvance = store.cullAutoAdvance
         cullStartUnflaggedOnly = store.cullStartUnflaggedOnly
         autoReadXMPOnImport = store.autoReadXMPOnImport
+        quickRawPreviews = store.quickRawPreviews
         backupsToKeep = store.backupsToKeep
     }
 }
@@ -51,6 +53,10 @@ struct PreferencesView: View {
             Section("Library") {
                 Toggle("Show photos from subfolders when a folder is selected", isOn: showPhotosInSubfolders)
                 Text("Applies to folders imported as a tree. Also in the folder\u{2019}s right-click menu.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.textTertiary)
+                Toggle("Show a quick preview while RAW thumbnails render", isOn: $model.quickRawPreviews)
+                Text("Uses the camera\u{2019}s own JPEG preview, so a thumbnail may change colour a little when the real render arrives.")
                     .font(.footnote)
                     .foregroundStyle(Theme.textTertiary)
             }

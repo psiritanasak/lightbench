@@ -123,6 +123,20 @@ actor ThumbnailCache {
         return result
     }
 
+    /// A quick stand-in for `photo`'s thumbnail while `thumbnail(for:)` is still rendering: the camera's embedded preview, for a RAW photo with
+    /// NO saved edits (an edited photo must not flash its unedited look) whose final thumbnail is not already cached. NEVER stored in `cache`
+    /// (that holds final images only, so invalidation and `generation` are unaffected). The plain `Task { }` captures no `self`, so it runs on
+    /// the global executor like the decode in `thumbnail(for:)` (see its doc comment) and never holds this actor.
+    func quickPreview(for photo: Photo) async -> CGImage? {
+        guard !Task.isCancelled, cache.object(forKey: photo.editKey as NSString) == nil else { return nil }
+        let path = photo.path
+        return await Task<CGImage?, Never> {
+            guard RawDecoder.isRaw(URL(fileURLWithPath: path)),
+                  PhotoExporter.loadEditState(for: photo).isEffectivelyIdentity else { return nil }
+            return ThumbnailGenerator.embeddedPreview(for: URL(fileURLWithPath: path), maxPixelSize: Self.maxPixelSize)
+        }.value
+    }
+
     private var keysByPath: [String: Set<String>] = [:]
 
     /// Drops the cached thumbnail of ONE edit set (`Photo.editKey`) and bumps its generation (see `generation`'s doc comment for why a

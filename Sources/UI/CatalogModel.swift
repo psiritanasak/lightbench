@@ -935,6 +935,14 @@ final class CatalogModel: ObservableObject {
         return result
     }
 
+    /// A quick stand-in image for a RAW photo's grid cell while its real thumbnail renders (nil when the Preferences switch is off, the photo is
+    /// not RAW or has saved edits, or the real thumbnail is already cached). See `ThumbnailCache.quickPreview(for:)`.
+    func quickThumbnailPreview(for photo: Photo) async -> CGImage? {
+        // Cheap exits BEFORE the actor hop: switched off, a cell that has already scrolled away, or a file that is not RAW.
+        guard preferences.quickRawPreviews, !Task.isCancelled, RawDecoder.isRaw(URL(fileURLWithPath: photo.path)) else { return nil }
+        return await thumbnailCache.quickPreview(for: photo)
+    }
+
     /// Roots whose access a failed thumbnail already tried to restore this session (one silent attempt per root, so a folder that stays broken
     /// is not re-resolved for every cell). Never cleared: a grant that goes stale a SECOND time in one session gets no silent recovery (the Editor-open path
     /// still recovers it, with a prompt). Separate from `reactivationTasks`, so a thumbnail recovery and an Editor-open recovery of the same root can each start a

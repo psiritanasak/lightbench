@@ -44,9 +44,9 @@ struct ColorGradingWheelView: View {
     /// between the old range's former 140-220 bounds for comfortable puck
     /// placement. NOT floor-constrained by the sidebar's own minimum
     /// width today — `ContentView`'s `editControls` pane floor is
-    /// `minWidth: 360` (raised from 260 in the same bug-fix round this
-    /// value shipped in), leaving ~170pt of slack around this circle,
-    /// not a tight fit against that floor.
+    /// `Theme.Metrics.adjustPanelMinWidth` (300 since 2026-11-05; 360
+    /// when this value shipped), still wider than this circle with the
+    /// panel's own padding; live-checked at the 300 pt floor.
     private static let wheelDiameter: CGFloat = 190
 
     var body: some View {

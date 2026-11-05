@@ -8,8 +8,8 @@ enum Theme {
     enum Metrics {
         /// The Library's collection sidebar.
         static let sidebarMinWidth: CGFloat = 160, sidebarIdealWidth: CGFloat = 200, sidebarMaxWidth: CGFloat = 260
-        /// The Editor's Adjust panel (`ContentView` explains why the minimum is 360).
-        static let adjustPanelMinWidth: CGFloat = 360, adjustPanelMaxWidth: CGFloat = 420
+        /// The Editor's Adjust panel (`ContentView` explains why the minimum is a hard floor, not an ideal width). 2026-11-05: 360/420 -> 300/380 because the panel took about half of a small window; checked for clipping at window widths of 837 / 1100 / 1440 pt (Retouch with spots placed, Point Color instance detail and the Info popover were not checked).
+        static let adjustPanelMinWidth: CGFloat = 300, adjustPanelMaxWidth: CGFloat = 380
         /// The bar under the Editor photo (rating / flag / label); also the height of an icon-only rail cell.
         static let barHeight: CGFloat = 36
     }

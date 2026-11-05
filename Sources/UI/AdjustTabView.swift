@@ -409,6 +409,7 @@ struct AdjustTabView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .controlSize(.small) // 2026-11-05: the narrower Adjust panel (300pt) must fit these pickers
             .labelsHidden()
             HistogramView(
                 data: document.histogramData,
@@ -465,6 +466,7 @@ struct AdjustTabView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .controlSize(.small) // 2026-11-05: the narrower Adjust panel (300pt) must fit these pickers
             .labelsHidden()
             // An index into one channel's array is meaningless applied to
             // another's (see `selectedToneCurvePointIndex`'s own doc
@@ -691,6 +693,7 @@ struct AdjustTabView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .controlSize(.small) // 2026-11-05: the narrower Adjust panel (300pt) must fit these pickers
             .labelsHidden()
             colorGradingEditedRangesSummary
             // `.id(range)` is PRECAUTIONARY, not load-bearing today —
@@ -1653,6 +1656,7 @@ struct AdjustTabView: View {
             Text("Clone").tag(RetouchMode.clone)
         }
         .pickerStyle(.segmented)
+        .controlSize(.small) // 2026-11-05: the narrower Adjust panel (300pt) must fit these pickers
         .accessibilityLabel("Spot mode")
         EditSliderRow(
             label: "Size", value: binding.radius,
@@ -1894,6 +1898,7 @@ struct AdjustTabView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .controlSize(.small) // 2026-11-05: the narrower Adjust panel (300pt) must fit these pickers
             .labelsHidden()
             .accessibilityLabel("Targeted property")
             .onChange(of: panel.targetedSelectiveProperty) { _, newProperty in

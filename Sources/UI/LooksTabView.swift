@@ -135,7 +135,7 @@ struct LooksTabView: View {
         if id.isEmpty { document.editState.lookIntensity = 1 }
     }
 
-    /// Exactly three columns: an adaptive grid is not guaranteed three at the sidebar's 360 pt minimum once the padding, the
+    /// Exactly three columns: an adaptive grid is not guaranteed three at the sidebar's 300 pt minimum (360 before 2026-11-05) once the padding, the
     /// disclosure indent and an always-visible scroll bar are taken off.
     private static let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
 

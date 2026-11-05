@@ -2202,6 +2202,11 @@ struct ContentView: View {
                 // (by manually dragging the divider) doesn't clip Color
                 // Grading's caption/labels; `maxWidth` bumped 380 -> 420
                 // to keep some manual resize headroom above the new floor.
+                // 2026-11-05: the floor is now 300 / 380 (Theme.Metrics) because the panel took about half of a small window. 360 was
+                // needed only because the segmented pickers (Color Grading's four-way picker overflowed at a bare 300 and shifted the
+                // whole panel left); they are `.controlSize(.small)` now. Live-checked in a throwaway Release app at window widths
+                // 837 / 1100 / 1440 pt: every Edit-tab section and the Looks, Retouch (empty), Red-eye, Masks (one radial mask) and Crop tabs.
+                // Not checked: Retouch with spots placed, Point Color instance detail, the Info popover.
                 .frame(minWidth: Theme.Metrics.adjustPanelMinWidth, maxWidth: Theme.Metrics.adjustPanelMaxWidth)
         }
     }

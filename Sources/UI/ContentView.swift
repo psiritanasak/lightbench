@@ -696,6 +696,10 @@ struct ContentView: View {
             setFlag: { catalog.setFlagStatus($0, for: $1) },
             setLabel: { catalog.setColorLabel($0, for: $1) },
             thumbnail: { await catalog.thumbnail(for: $0) },
+            quickPreview: { photo, size in
+                guard catalog.preferences.quickRawPreviews else { return nil }
+                return await CullPreviewCache.quickPreview(for: photo, pixelSize: size)
+            },
             stacks: { catalog.stacks },
             expandedStackIDs: { catalog.expandedStackIDs }))
     }

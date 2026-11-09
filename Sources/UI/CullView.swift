@@ -169,6 +169,13 @@ struct CullView: View {
                 .overlay(alignment: .bottomTrailing) {
                     if model.isPlaceholder || !ready { ProgressView().controlSize(.small).padding(10) }
                 }
+                .overlay(alignment: .bottom) {
+                    if ready, let photo, model.cameraPreviewOnlyID == photo.id {
+                        Text("Camera preview only: this RAW could not be decoded")
+                            .font(.caption).padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(Color.black.opacity(0.6)).foregroundStyle(.white).padding(8)
+                    }
+                }
         } else if model.decodeFailed {
             Text("This photo can't be shown").foregroundStyle(Theme.textSecondary)
         } else {

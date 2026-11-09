@@ -48,6 +48,9 @@ struct CullEnvironment {
     var setLabel: (ColorLabel, Photo) -> Void = { _, _ in }
     /// The grid thumbnail (already cached in practice): shown at once while the full preview decodes.
     var thumbnail: (Photo) async -> CGImage? = { _ in nil }
+    /// A quicker stand-in than the thumbnail for an unedited RAW (the camera's embedded preview at the given long-edge size), or nil: shown as a placeholder
+    /// until the real preview lands. Never cached. Wired to `CullPreviewCache.quickPreview` behind the Preferences switch; the default (nil) changes nothing.
+    var quickPreview: (Photo, Int) async -> CGImage? = { _, _ in nil }
     /// The catalog's stacks and the ones the grid shows expanded: the pass folds `photos` into the grid's cells with them (and only READS them).
     var stacks: () -> [StackSnapshot] = { [] }
     var expandedStackIDs: () -> Set<Int64> = { [] }
@@ -75,6 +78,8 @@ final class CullModel: ObservableObject {
     /// The photo whose preview could not be decoded at all (a broken or missing file). Tied to an id, and cleared synchronously when the
     /// current photo changes, so it can never make the NEXT photo look actable before it is on screen.
     @Published private(set) var failedPhotoID: Int64?
+    /// The loupe photo whose real preview failed to decode while the camera's embedded preview (the stand-in) is what is on screen.
+    @Published private(set) var cameraPreviewOnlyID: Int64?
     /// Compare / Survey: one picture per visible photo (the single `image` above belongs to the loupe). Each slot is gated exactly like the loupe's
     /// picture: a photo key acts on `currentID` only once ITS slot holds its picture (or it failed to decode).
     @Published private(set) var slots: [Int64: CullSlot] = [:]
@@ -158,6 +163,7 @@ final class CullModel: ObservableObject {
         imagePhotoID = nil
         isPlaceholder = false
         failedPhotoID = nil
+        cameraPreviewOnlyID = nil
         slots = [:]
         note = nil
         endReached = false
@@ -405,6 +411,7 @@ final class CullModel: ObservableObject {
         loadTask?.cancel()
         loadToken += 1
         let token = loadToken
+        cameraPreviewOnlyID = nil
         failedPhotoID = nil // synchronously: a failure belongs to the photo it was recorded for, never to its successor
         if let s = session, s.mode != .loupe { loadVisible(s, token: token); return }
         slots = [:] // back in the loupe: the cells' pictures are no longer needed (memory), and the loupe gate does not read them
@@ -428,19 +435,28 @@ final class CullModel: ObservableObject {
                 self.imagePhotoID = currentID
                 self.isPlaceholder = false
             } else {
-                let placeholder = await self.environment.thumbnail(photo)
-                guard self.loadToken == token else { return }
-                if let placeholder {
-                    self.image = placeholder
+                // The camera's embedded preview (an unedited RAW only, at the view's size) and the grid thumbnail are fetched concurrently and each is a
+                // PLACEHOLDER: the key gate treats it as the picture of `currentID` (it IS that photo), and the stand-in replaces the thumbnail, never the reverse.
+                let (standIn, placeholder) = await self.fetchPlaceholders(for: photo, size: size, token: token) { shownImage in
+                    self.image = shownImage
                     self.imagePhotoID = currentID
                     self.isPlaceholder = true
                 }
+                guard self.loadToken == token else { return }
+                // Accepted limit: the real decode starts only after BOTH placeholder fetches return, so the slower of the stand-in and the thumbnail adds its
+                // latency to it. A photo the prefetch worker already cached never gets here (`cache.cached` above skips the placeholders entirely).
                 let full = await self.cache.preview(for: photo, pixelSize: size)
                 guard self.loadToken == token else { return }
                 if let full {
                     self.image = full
                     self.imagePhotoID = currentID
                     self.isPlaceholder = false
+                } else if standIn != nil {
+                    // The real preview failed but the camera's embedded preview is on screen (a RAW this Mac cannot decode often still has one): keep it,
+                    // stop the spinner (nothing more is coming) and say so, instead of leaving a stand-in up as if the real picture were still loading.
+                    // The photo stays reviewable: it IS the current photo (same key gate as any placeholder).
+                    self.isPlaceholder = false
+                    self.cameraPreviewOnlyID = currentID
                 } else if placeholder == nil {
                     // Nothing decodable: still navigable, and `canActOnCurrent` lets the user flag it (a broken file is a reject).
                     self.image = nil
@@ -464,6 +480,8 @@ struct CullSlot {
     var image: CGImage?
     var isPlaceholder = false
     var failed = false
+    /// The real preview could not be made but the camera's embedded preview was: shown as it is, with no spinner (nothing more is coming).
+    var cameraPreviewOnly = false
 }
 
 /// Pure layout maths for Compare / Survey, shared by the view and the preview sizing.
@@ -491,7 +509,35 @@ enum CullLayout {
     }
 }
 
+/// Whether the stand-in was shown for one load (both fetches write on the main actor, so a plain flag is race-free).
+@MainActor private final class StandInShown { var value = false }
+
 extension CullModel {
+    /// Fetches the camera's embedded stand-in and the grid thumbnail CONCURRENTLY and shows each as soon as it arrives, so the cached thumbnail never
+    /// waits for the stand-in: the stand-in (bigger, sharper) REPLACES the thumbnail when it lands, a thumbnail that lands after it is dropped, and
+    /// every write re-checks `loadToken` (a stale load never writes: that check, not the weak reference, is what protects the screen, since both Tasks are
+    /// unstructured and the callers' `show` closures hold `self`). `show(image)` does the write; the caller awaits both results before it goes on.
+    fileprivate func fetchPlaceholders(for photo: Photo, size: Int, token: Int,
+                                       show: @escaping (CGImage) -> Void) async -> (standIn: CGImage?, thumbnail: CGImage?) {
+        let shown = StandInShown()
+        let standInTask = Task { [weak self] () -> CGImage? in
+            guard let self else { return nil }
+            let image = await self.environment.quickPreview(photo, size)
+            guard self.loadToken == token, let image else { return image }
+            shown.value = true
+            show(image)
+            return image
+        }
+        let thumbnailTask = Task { [weak self] () -> CGImage? in
+            guard let self else { return nil }
+            let image = await self.environment.thumbnail(photo)
+            guard self.loadToken == token, let image, !shown.value else { return image }
+            show(image)
+            return image
+        }
+        return (await standInTask.value, await thumbnailTask.value)
+    }
+
     /// Loads one picture per visible photo (the current one first): the cached preview at once, or the grid thumbnail while the real one decodes.
     /// A newer load (`loadToken`) supersedes this one, and each slot write re-checks it, so a stale result never lands in the wrong layout.
     fileprivate func loadVisibleSlots(_ s: CullSession, token: Int) async {
@@ -506,13 +552,17 @@ extension CullModel {
                 slots[id] = CullSlot(image: hit)
                 continue
             }
-            let placeholder = await environment.thumbnail(photo)
+            let (standIn, placeholder) = await fetchPlaceholders(for: photo, size: size, token: token) { shownImage in
+                self.slots[id] = CullSlot(image: shownImage, isPlaceholder: true)
+            }
             guard loadToken == token else { return }
-            if let placeholder { slots[id] = CullSlot(image: placeholder, isPlaceholder: true) }
+            // Same accepted limit as `loadCurrent`: the real decode waits for both placeholder fetches (and survey cells load one after another).
             let full = await cache.preview(for: photo, pixelSize: size)
             guard loadToken == token else { return }
             if let full {
                 slots[id] = CullSlot(image: full)
+            } else if let standIn {
+                slots[id] = CullSlot(image: standIn, cameraPreviewOnly: true)
             } else if placeholder == nil {
                 slots[id] = CullSlot(image: nil, failed: true)
             }

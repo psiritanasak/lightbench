@@ -53,6 +53,22 @@ actor CullPreviewCache {
         cache.object(forKey: Self.key(photo.editKey, pixelSize) as NSString)
     }
 
+    /// A quick stand-in for `photo`'s preview while the real one decodes: the camera's EMBEDDED JPEG of an unedited RAW, no larger than `pixelSize`
+    /// (the embedded preview is the full sensor size on a D610, so ImageIO scales it down). nil for a non-RAW photo, for any photo with saved edits (the cull
+    /// view shows edits, so an unedited stand-in would show the wrong picture), and when the calling task was already cancelled on entry (that only
+    /// helps callers that run in their own `.task`, like the grid and filmstrip; Cull calls it from an unstructured Task, so Cull relies on its `loadToken`
+    /// check instead. A decode that has started is never interrupted: the Task below is unstructured). Static and never stored: the
+    /// NSCache, `generation`, `keysByPath` and the prefetch worker never see it, and it never enters `RenderGate` (the embedded path never decodes the RAW).
+    static func quickPreview(for photo: Photo, pixelSize: Int) async -> CGImage? {
+        let path = photo.path
+        // Cheap exits BEFORE any Task or sidecar read: cancelled, or not a RAW (the common case for JPEG/PNG libraries).
+        guard !Task.isCancelled, RawDecoder.isRaw(URL(fileURLWithPath: path)) else { return nil }
+        return await Task<CGImage?, Never> {
+            guard PhotoExporter.loadEditState(for: photo).isEffectivelyIdentity else { return nil }
+            return ThumbnailGenerator.embeddedPreview(for: URL(fileURLWithPath: path), maxPixelSize: pixelSize)
+        }.value
+    }
+
     /// The preview for `photo`: from the cache, from a decode already running for the same size, or a fresh decode (edits applied from
     /// the photo's saved sidecar, like the grid thumbnail).
     func preview(for photo: Photo, pixelSize: Int) async -> CGImage? {

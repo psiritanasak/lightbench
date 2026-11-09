@@ -162,6 +162,11 @@ private struct FilmstripCell: View {
             // why this can't be gated on the decode failing.
             async let thumbnail = catalog.thumbnail(for: photo)
             async let missingCheck = catalog.isPhotoConfirmedMissing(photo)
+            // A RAW's real thumbnail waits its turn behind `RawDecoder.RenderGate`; show the camera's embedded preview meanwhile (same rule and
+            // Preferences switch as the Library grid: only into an empty cell, unedited RAW only, never cached).
+            if image == nil, let quick = await catalog.quickThumbnailPreview(for: photo), !Task.isCancelled, image == nil {
+                image = quick
+            }
             let thumb = await thumbnail
             let missing = await missingCheck
             // See `LibraryThumbnailCell`'s own `.task(id:)` for why this

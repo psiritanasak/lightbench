@@ -58,5 +58,14 @@ final class CellChromeTests: XCTestCase {
         }
         XCTAssertEqual(depth, 0, "the modifier must directly follow the control row's HStack, not an enclosing container")
     }
-}
 
+    func testTheSelectionPlateShowsOnlyForAFullySelectedCell() {
+        XCTAssertTrue(CellChrome.showsSelectionPlate(.all))
+        XCTAssertFalse(CellChrome.showsSelectionPlate(.partial))
+        XCTAssertFalse(CellChrome.showsSelectionPlate(.none))
+    }
+
+    func testTheSelectionPlateFitsInTheGridSpacing() {
+        XCTAssertLessThan(CellChrome.selectionPlateOutset * 2, 12)
+    }
+}

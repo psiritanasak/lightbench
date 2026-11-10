@@ -1,7 +1,8 @@
+import AppKit
 import SwiftUI
 
 /// The Library view — a thumbnail grid over every catalogued photo, backed
-/// by `CatalogModel.photos`. Selecting a thumbnail hands the tapped
+/// by `CatalogModel.photos`. A click selects a thumbnail (`GridSelection`), a double-click hands the
 /// `Photo` back via `onOpen`; this view has no opinion on what happens
 /// next (that's `ContentView`'s job — load it into the editor and switch
 /// back to editing mode).
@@ -62,6 +63,8 @@ struct LibraryGridView: View {
     /// first layout pass, which `LibraryGridColumns` treats as "1 column"
     /// rather than dividing by zero.
     @State private var gridWidth: Double = 0
+    /// The scroll area's own height, so the grid content is at least as tall as the pane and a click BELOW the last row hits it (clears the selection).
+    @State private var gridHeight: Double = 0
 
     /// D4 (IMPROVEMENTS.md): one-shot guard for restoring scroll position
     /// to the focused cell when returning to the Library from the Editor
@@ -76,7 +79,12 @@ struct LibraryGridView: View {
     /// regardless of which `.onAppear` triggers it, so this move fixed a
     /// theorized ordering issue that, measured, turned out not to be a
     /// real bug — it's a no-op behaviorally, kept for the cleaner call site.
+    /// Since 2026-11-10 that describes the SQUARE grid only: the justified
+    /// rows restore from `scheduleJustifiedRestore`, after the grid width
+    /// has settled.
     @State private var hasRestoredInitialScrollPosition = false
+    /// The pending wait of `scheduleJustifiedRestore`.
+    @State private var justifiedRestoreTask: Task<Void, Never>?
 
     private static let gridSpacing: Double = 12
     /// Explicit, not the parameterless `.padding()`'s platform default —
@@ -131,10 +139,12 @@ struct LibraryGridView: View {
         LibraryThumbnailCell(
             catalog: catalog, item: item, cellSize: width, cellHeight: isJustified ? height : nil,
             isFocused: focusKey == photo.editKey,
-            thumbnailRevision: catalog.thumbnailRevisions[photo.editKey, default: 0]
+            thumbnailRevision: catalog.thumbnailRevisions[photo.editKey, default: 0],
+            onOpen: { onOpen(photo) },
+            onClick: { clickCount, command, shift in
+                handleCellClick(item, clickCount: clickCount, command: command, shift: shift)
+            }
         ) {
-            onOpen(photo)
-        } onRequestRemoval: {
             Task {
                 guard let copies = await LibraryRemovalText.copyCount(for: photo, loading: { try await catalog.copiesByMaster() }) else {
                     catalog.importStatusMessage = "Couldn't count this photo's virtual copies, so nothing was removed."
@@ -261,8 +271,8 @@ struct LibraryGridView: View {
                                                     .id(item.cellID)
                                             }
                                         }
-                                        // Scroll-to targets the ROW (a view inside a lazy stack's nested HStack is not reliably scrollable by id).
-                                        .id(JustifiedScrollTarget.rowViewID(rowNumber))
+                                        // Scroll-to targets the ROW by its `ForEach` identity (the row number): a lazy stack can only scroll to a
+                                        // row it has not built yet through that identity, never through an explicit `.id(...)`.
                                     }
                                 }
                             } else {
@@ -273,13 +283,22 @@ struct LibraryGridView: View {
                                     ForEach(items) { item in
                                         thumbnailCell(item, focusKey: focusKey, width: cellSize, height: cellSize)
                                         // The cell's identity includes its stack role: a photo that becomes a stack cover (or stops being
-                                        // one) gets a NEW cell view, so its badge and caption never go stale. Scroll-to targets this same id.
+                                        // one) gets a NEW cell view, so its badge and caption never go stale. Scroll-to does NOT use this id: it targets the `ForEach` identity (`item.id`), see `scroll(_:to:)`.
                                         .id(item.cellID)
                                     }
                                 }
                             }
                             }
                             .padding(Self.gridPadding)
+                            // A PLAIN click on empty grid space (gaps, below the last row, a justified row's ragged edge) clears the selection; a
+                            // Command- or Shift-click that misses a cell by a few points leaves a hand-built selection alone, as in the Finder.
+                            // The cells' own taps and buttons win over this parent tap.
+                            .frame(maxWidth: .infinity, minHeight: gridHeight, alignment: .top)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                let flags = NSApp.currentEvent?.modifierFlags ?? []
+                                if !flags.contains(.command), !flags.contains(.shift) { _ = catalog.clearGridSelection() }
+                            }
                         }
                         // D4 (IMPROVEMENTS.md): measures the SCROLL VIEW's
                         // own frame, not the `LazyVGrid`'s — reviewer-caught:
@@ -302,11 +321,13 @@ struct LibraryGridView: View {
                                 Color.clear
                                     .onAppear {
                                         gridWidth = geometry.size.width
+                                        gridHeight = geometry.size.height
                                         // The justified rows only exist in their real shape once this width has been laid out: that restore runs from
                                         // `onChange(of: gridWidth)` below.
                                         if !isJustified { restoreInitialScrollPositionIfNeeded(proxy) }
                                     }
                                     .onChange(of: geometry.size.width) { _, newWidth in gridWidth = newWidth }
+                                    .onChange(of: geometry.size.height) { _, newHeight in gridHeight = newHeight }
                             }
                         )
                         // D4 (IMPROVEMENTS.md): reclaims grid keyboard focus
@@ -324,7 +345,7 @@ struct LibraryGridView: View {
                             }
                         }
                         .onChange(of: gridWidth) { _, _ in
-                            if isJustified { restoreInitialScrollPositionIfNeeded(proxy) }
+                            if isJustified { scheduleJustifiedRestore(proxy) }
                         }
                     }
                 }
@@ -334,7 +355,10 @@ struct LibraryGridView: View {
             .focusEffectDisabled()
             .focused($isGridFocused)
             .onKeyPress { keyPress in handleKeyPress(keyPress) }
+            // Edit > Select All (Command-A) while the grid has focus; idempotent with the key handler above.
+            .onCommand(#selector(NSText.selectAll(_:))) { catalog.selectAllGridCells(in: catalog.gridPhotos) }
             .onAppear { isGridFocused = true }
+            .onDisappear { justifiedRestoreTask?.cancel() }
             if !catalog.photos.isEmpty {
                 thumbnailSizeBar
             }
@@ -387,18 +411,28 @@ struct LibraryGridView: View {
     }
 
     /// See `hasRestoredInitialScrollPosition`'s own doc comment for why
-    /// this runs from the width `GeometryReader`'s `onAppear`, not the
-    /// `ScrollView`'s.
+    /// the square grid runs this from the width `GeometryReader`'s
+    /// `onAppear`, not the `ScrollView`'s; the justified rows run it from
+    /// `scheduleJustifiedRestore`.
     private func restoreInitialScrollPositionIfNeeded(_ proxy: ScrollViewProxy) {
         guard !hasRestoredInitialScrollPosition else { return }
         guard JustifiedScrollTarget.canRestore(isJustified: isJustified, gridWidth: gridWidth) else { return }
         hasRestoredInitialScrollPosition = true
         guard let target = gridScrollTarget(forFocusedPath: catalog.focusedPhotoPath, fallbackToPath: false) else { return }
-        if isJustified {
-            // Let the rows laid out for the measured width exist before scrolling to one.
-            DispatchQueue.main.async { scroll(proxy, to: target) }
-        } else {
-            scroll(proxy, to: target)
+        scroll(proxy, to: target)
+    }
+
+    /// The justified rows' restore waits for the grid width to SETTLE: a row number is only right for the width it was computed with, and the
+    /// split view reports a transient width first when the Library reappears (seen live 2026-11-10: 310.5 pt, then 1179 pt; a restore computed
+    /// at the first one aimed at row 21 of a layout that has 7 rows). Every width change restarts a short wait; the restore runs once, after the
+    /// last one. The wait's length is a by-eye choice, not measured.
+    private func scheduleJustifiedRestore(_ proxy: ScrollViewProxy) {
+        guard !hasRestoredInitialScrollPosition, JustifiedScrollTarget.canRestore(isJustified: true, gridWidth: gridWidth) else { return }
+        justifiedRestoreTask?.cancel()
+        justifiedRestoreTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            restoreInitialScrollPositionIfNeeded(proxy)
         }
     }
 
@@ -414,8 +448,12 @@ struct LibraryGridView: View {
 
     private func scroll(_ proxy: ScrollViewProxy, to target: JustifiedScrollTarget) {
         switch target {
-        case .cell(let id): proxy.scrollTo(id, anchor: .center)
-        case .row(let row): proxy.scrollTo(JustifiedScrollTarget.rowViewID(row), anchor: .center)
+        // Both layouts scroll to the `ForEach` IDENTITY (the grid item's `id`, the row number), not to the explicit `.id(cellID)` the cells also
+        // carry: a lazy container resolves only the former for a view it has not built yet. Seen live 2026-11-10: with the explicit id, arrowing
+        // past the built cells and returning from the Editor both left the grid where it was.
+        case .cell(let cellID):
+            if let item = catalog.gridPhotos.first(where: { $0.cellID == cellID }) { proxy.scrollTo(item.id, anchor: .center) }
+        case .row(let row): proxy.scrollTo(row, anchor: .center)
         }
     }
 
@@ -448,6 +486,17 @@ struct LibraryGridView: View {
     /// correct even if a future macOS attaches other incidental flags to
     /// arrow/character events.
     private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        // Command-A / Command-D (A1): select every photo shown / clear the selection. Checked before the modifier guard below.
+        if let command = GridSelection.commandKey(
+            character: keyPress.characters.first, command: keyPress.modifiers.contains(.command),
+            shift: keyPress.modifiers.contains(.shift), option: keyPress.modifiers.contains(.option),
+            control: keyPress.modifiers.contains(.control)) {
+            let cells = catalog.gridPhotos
+            switch command {
+            case .selectAll: catalog.selectAllGridCells(in: cells); return .handled
+            case .clearSelection: _ = catalog.clearGridSelection(); return .handled
+            }
+        }
         let semanticModifiers: EventModifiers = [.command, .option, .control]
         guard keyPress.modifiers.isDisjoint(with: semanticModifiers) else { return .ignored }
         // The grid's CELLS (a collapsed stack is one), see `CatalogModel+Stacks`. Focus is normalised first, so every handler below (arrows,
@@ -455,16 +504,20 @@ struct LibraryGridView: View {
         let cells = catalog.gridPhotos
         catalog.normalizeFocus(in: cells)
         let displayed = cells.map(\.photo)
+        // Shift + arrow extends the selection from its anchor; a plain arrow moves the focus AND selects only the new cell (A1).
+        let extend = keyPress.modifiers.contains(.shift)
         // Justified rows have no fixed column count: Up / Down go through the row layout (the square grid's `±columnCount` lines below stay as they are).
         if isJustified, keyPress.key == .upArrow || keyPress.key == .downArrow {
-            return moveFocusVertically(keyPress.key == .upArrow ? .up : .down, in: cells)
+            return moveFocusVertically(keyPress.key == .upArrow ? .up : .down, in: cells, extending: extend)
         }
         switch keyPress.key {
-        case .leftArrow: return moveFocus(by: -1, in: displayed)
-        case .rightArrow: return moveFocus(by: 1, in: displayed)
-        case .upArrow: return moveFocus(by: -columnCount, in: displayed)
-        case .downArrow: return moveFocus(by: columnCount, in: displayed)
+        case .leftArrow: return moveFocus(by: -1, in: cells, extending: extend)
+        case .rightArrow: return moveFocus(by: 1, in: cells, extending: extend)
+        case .upArrow: return moveFocus(by: -columnCount, in: cells, extending: extend)
+        case .downArrow: return moveFocus(by: columnCount, in: cells, extending: extend)
         case .return: return openFocused(in: displayed)
+        case .space: return openFocused(in: displayed)
+        case .escape: return catalog.clearGridSelection() ? .handled : .ignored
         default: break
         }
         if let character = keyPress.characters.first, let command = PhotoKeyCommand.command(for: character) {
@@ -494,37 +547,67 @@ struct LibraryGridView: View {
     /// cells are only reachable via Left/Right, not Down. Not fixed this
     /// session; clamping Down to the last valid item would need its own
     /// care to avoid landing on an unintended row.
-    private func moveFocus(by offset: Int, in photos: [Photo]) -> KeyPress.Result {
+    private func moveFocus(by offset: Int, in cells: [StackGridItem], extending: Bool) -> KeyPress.Result {
+        let photos = cells.map(\.photo)
         guard !photos.isEmpty else { return .ignored }
         guard let currentPath = catalog.focusedPhotoPath,
               photos.contains(where: { $0.editKey == currentPath }) else {
-            catalog.focusedPhotoPath = photos.first?.editKey
+            catalog.selectOnlyGridCell(cells[0])
             return .handled
         }
-        if let next = LibraryNavigation.neighbor(of: currentPath, in: photos, offset: offset) {
-            catalog.focusedPhotoPath = next.editKey
+        if let next = LibraryNavigation.neighbor(of: currentPath, in: photos, offset: offset),
+           let nextIndex = photos.firstIndex(where: { $0.editKey == next.editKey }) {
+            moveSelection(toCellAt: nextIndex, in: cells, extending: extending)
         }
         return .handled
+    }
+
+    /// An arrow that moved to `cells[index]`: Shift extends the selection from its anchor (focus only when there is no usable anchor or
+    /// focus); a plain arrow selects only that cell, like Finder.
+    private func moveSelection(toCellAt index: Int, in cells: [StackGridItem], extending: Bool) {
+        if extending {
+            if !catalog.extendGridSelection(toCellAt: index, in: cells) { catalog.focusedPhotoPath = cells[index].photo.editKey }
+        } else {
+            catalog.selectOnlyGridCell(cells[index])
+        }
     }
 
     /// Up / Down in the justified rows: the photo one row up or down whose horizontal centre is nearest the focused one (`JustifiedRows.neighbor`).
     /// Nothing focused (or the focus fell out of the cells) focuses the first photo, like `moveFocus`; the top / bottom edge is a no-op. Unlike the
     /// square grid's `±columnCount`, a short last row can still be reached from the row above it.
-    private func moveFocusVertically(_ direction: JustifiedRows.Direction, in cells: [StackGridItem]) -> KeyPress.Result {
+    private func moveFocusVertically(_ direction: JustifiedRows.Direction, in cells: [StackGridItem], extending: Bool) -> KeyPress.Result {
         guard !cells.isEmpty else { return .ignored }
         guard let currentPath = catalog.focusedPhotoPath,
               let index = cells.firstIndex(where: { $0.photo.editKey == currentPath }) else {
-            catalog.focusedPhotoPath = cells.first?.photo.editKey
+            catalog.selectOnlyGridCell(cells[0])
             return .handled
         }
         if let next = JustifiedRows.neighbor(of: index, direction: direction, in: justifiedRows(for: cells)) {
-            catalog.focusedPhotoPath = cells[next].photo.editKey
+            moveSelection(toCellAt: next, in: cells, extending: extending)
         }
         return .handled
     }
 
+    // MARK: - A1: click selection
+
+    /// A click on a cell: click 1 selects (plain / Command toggles / Shift extends), a second unmodified click opens, a second click with
+    /// Command or Shift is ignored (`GridSelection.clickEffect`). A collapsed stack's cell opens its cover.
+    private func handleCellClick(_ item: StackGridItem, clickCount: Int, command: Bool, shift: Bool) {
+        switch GridSelection.clickEffect(clickCount: clickCount, command: command, shift: shift) {
+        case .open: onOpen(item.photo)
+        case .ignore: break
+        case .select(.plain): catalog.selectOnlyGridCell(item)
+        case .select(.toggle): catalog.toggleSelection(of: item)
+        case .select(.extend):
+            let cells = catalog.gridPhotos
+            let index = cells.firstIndex { $0.photo.editKey == item.photo.editKey }
+            if let index, catalog.extendGridSelection(toCellAt: index, in: cells) { break }
+            catalog.selectOnlyGridCell(item)
+        }
+    }
+
     /// Return opens the focused photo — the exact same `onOpen` closure a
-    /// mouse click on a cell already calls, so `ContentView.libraryContent`
+    /// double-click on a cell already calls, so `ContentView.libraryContent`
     /// needs no changes to support this.
     private func openFocused(in photos: [Photo]) -> KeyPress.Result {
         guard let path = catalog.focusedPhotoPath, let photo = photos.first(where: { $0.editKey == path }) else {
@@ -732,7 +815,10 @@ private struct LibraryThumbnailCell: View {
     /// see `.task(id:)` below for why this needs to be part of the task's
     /// own identity, not just re-read inside an unchanged task.
     let thumbnailRevision: Int
-    let onTap: () -> Void
+    /// Opens the photo in the Editor (a double-click, VoiceOver's default action).
+    let onOpen: () -> Void
+    /// A click on the cell body: AppKit's click count and the Command / Shift state. The grid decides what it means (`GridSelection`).
+    let onClick: (_ clickCount: Int, _ command: Bool, _ shift: Bool) -> Void
     let onRequestRemoval: () -> Void
 
     @State private var image: CGImage?
@@ -820,13 +906,13 @@ private struct LibraryThumbnailCell: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(thumbnailAccessibilityLabel)
                 .accessibilityAddTraits(.isButton)
-                .accessibilityAction { onTap() }
+                .accessibilityAddTraits(isCellSelected ? [.isSelected] : [])
+                .accessibilityAction { onOpen() }
                 // Always-present selection checkbox (dimmed at rest, see `CellChrome`) — tapping IT toggles
-                // selection (a `Button` claims its own tap before the
+                // selection like a Command-click (a `Button` claims its own tap before the
                 // cell's whole-VStack `.onTapGesture` below sees it, the
                 // same already-proven pattern the star row/flag/menu
-                // controls use); tapping anywhere else on the thumbnail
-                // still opens the photo, unchanged.
+                // controls use); a click anywhere else on the cell selects it, a double-click opens it.
                 Button {
                     catalog.toggleSelection(of: item)
                 } label: {
@@ -875,8 +961,8 @@ private struct LibraryThumbnailCell: View {
                         .accessibilityHidden(true)
                 }
             }
-            // D4 (IMPROVEMENTS.md): the keyboard-focus ring — a full white outline around the cell, a different SHAPE from the
-            // selection mark (a filled check in the corner), so "keyboard-focused" never reads as "export-selected". Same technique as
+            // D4 (IMPROVEMENTS.md): the keyboard-focus ring — a full white outline around the thumbnail, a different SHAPE and extent from the
+            // selection card (a grey plate around the whole cell), so "keyboard-focused" never reads as "export-selected". Same technique as
             // `EditorFilmstripView`'s current-photo ring (there at `Theme.selectedOutline`).
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
@@ -1079,8 +1165,24 @@ private struct LibraryThumbnailCell: View {
         // within its OWN cell, never bleeding into a neighbor again.
         .frame(width: cellSize)
         .clipped()
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
+        // The selection card: behind the WHOLE cell, outset into the grid spacing (not clipped), only for a fully selected cell.
+        .background {
+            if CellChrome.showsSelectionPlate(selectionState) {
+                RoundedRectangle(cornerRadius: CellChrome.selectionPlateCornerRadius)
+                    .fill(Theme.selectedFill)
+                    .overlay(RoundedRectangle(cornerRadius: CellChrome.selectionPlateCornerRadius).stroke(Theme.selectedOutline, lineWidth: 1))
+                    .padding(-CellChrome.selectionPlateOutset)
+            }
+        }
+        // The card's edge belongs to the cell: a click there selects instead of clearing.
+        .contentShape(Rectangle().inset(by: -CellChrome.selectionPlateOutset))
+        // ONE single-click recogniser (no `count: 2` one, so SwiftUI never waits to see if a second click follows): a click selects at once,
+        // and AppKit's click count on the event tells the second click of a double-click apart.
+        .onTapGesture {
+            let event = NSApp.currentEvent
+            let flags = event?.modifierFlags ?? NSEvent.modifierFlags
+            onClick(event?.clickCount ?? 1, flags.contains(.command), flags.contains(.shift))
+        }
         // D4 (IMPROVEMENTS.md): reviewer-caught — without this, mouse
         // interaction never wrote `catalog.focusedPhotoPath` at all, so
         // clicking a DIFFERENT cell's checkbox/star/flag (none of which

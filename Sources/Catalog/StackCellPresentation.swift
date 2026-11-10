@@ -46,8 +46,9 @@ enum StackCellPresentation {
         }
     }
 
-    /// The id of the cell `proxy.scrollTo` must target for the focused photo: the focus is first resolved to a cell
-    /// (`StackFocus.resolve`: a member hidden in a collapsed stack scrolls to the stack's cell), then to that cell's `cellID`.
+    /// The cell the grid must scroll to for the focused photo, named by its `cellID`: the focus is first resolved to a cell
+    /// (`StackFocus.resolve`: a member hidden in a collapsed stack scrolls to the stack's cell). The grid looks that cell up and scrolls to
+    /// its `ForEach` identity (`StackGridItem.id`), not to the `cellID` itself (`LibraryGridView.scroll(_:to:)`).
     static func scrollTarget(forFocusedKey key: String?, in items: [StackGridItem]) -> String? {
         guard let resolved = StackFocus.resolve(key, in: items) else { return nil }
         return items.first { $0.photo.editKey == resolved }?.cellID

@@ -34,10 +34,6 @@ final class JustifiedGridSupportTests: XCTestCase {
         XCTAssertTrue(JustifiedScrollTarget.canRestore(isJustified: true, gridWidth: 800))
     }
 
-    func testRowViewID() {
-        XCTAssertEqual(JustifiedScrollTarget.rowViewID(3), "justified-row-3")
-    }
-
     // MARK: ThumbnailAspect
 
     func testAnUneditedThumbnailReportsNothing() {

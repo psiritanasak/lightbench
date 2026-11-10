@@ -18,4 +18,12 @@ enum CellChrome {
     static func checkOpacity(isHovered: Bool, isSelected: Bool, anySelected: Bool) -> Double {
         (isHovered || isSelected || anySelected) ? 1 : dimmedCheckOpacity
     }
+
+    /// The selection card behind a selected cell: it reaches this far past the cell on every side, so it must stay under half the grid
+    /// spacing (12) to leave a gap between neighbouring cards.
+    static let selectionPlateOutset = 4.0
+    static let selectionPlateCornerRadius = 8.0
+
+    /// Only a FULLY selected cell gets the card; a partly selected stack keeps just its mixed checkbox.
+    static func showsSelectionPlate(_ state: StackSelection.State) -> Bool { state == .all }
 }

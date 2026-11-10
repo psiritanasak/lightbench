@@ -1,14 +1,12 @@
 import Foundation
 
-/// Which scroll target the Library grid uses for a photo cell, per layout. The square grid scrolls to the cell's own id; a justified row's cells are
-/// nested in a lazy stack's HStack and are not reliably scrollable by id, so that layout scrolls to the cell's ROW. Pure, so the Library's
+/// Which scroll target the Library grid uses for a photo cell, per layout. The square grid scrolls to the cell (`.cell` carries its `cellID`, which
+/// the grid turns into the cell's `ForEach` identity); a justified row's cells are nested in a lazy stack's HStack, so that layout scrolls to the
+/// cell's ROW (by row number, the rows' `ForEach` identity). Pure, so the Library's
 /// restore-on-return and focus-follow code share one decision (unit-tested in `JustifiedGridSupportTests`).
 enum JustifiedScrollTarget: Equatable {
     case cell(String)
     case row(Int)
-
-    /// The id the row views carry (`.id(...)` in the grid) for row number `row`.
-    static func rowViewID(_ row: Int) -> String { "justified-row-\(row)" }
 
     /// `justifiedRows == nil` means the square layout. In the justified layout a cell that is not in `cellIDs` or not in any row gives nil.
     static func target(forCellID id: String, cellIDs: [String], justifiedRows: [JustifiedRows.Row]?) -> JustifiedScrollTarget? {

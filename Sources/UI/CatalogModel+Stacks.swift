@@ -117,8 +117,7 @@ extension CatalogModel {
 
     /// Ticking a collapsed stack's cell selects every visible member; any other cell is its own photo.
     func toggleSelection(of item: StackGridItem) {
-        let ids = StackSelection.ids(for: item)
-        if isSelected(item) { deselect(ids) } else { select(ids) }
+        applyGridOutcome(GridSelection.toggling(item, in: selectedPhotoIDs))
     }
 
     // MARK: - Manual stack operations

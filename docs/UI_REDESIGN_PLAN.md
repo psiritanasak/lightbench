@@ -158,6 +158,10 @@ New findings (not in section 2; each is assigned to a slice below):
 ### Track A: Library
 
 #### A1. Click selects, double-click opens
+- **DONE 2026-11-10** (CLAUDE.md "Library grid layouts + selection", IMPROVEMENTS.md D90). Decisions taken: D-1 yes; Space opens the
+  Editor; plain arrows move the selection too (user, 2026-11-10); rating / flag / label keys act on the focused cell only. The click count
+  is read from `NSApp.currentEvent` in one tap gesture (no delay seen; not timed). N1 (launch lands in the Editor) was NOT done here.
+  The live check also fixed scroll-to in both layouts. The text below is the original brief.
 - **Today**: `.onTapGesture(perform: onTap)` on the whole cell opens the
   Editor; `selectedPhotoIDs` changes only through the checkbox; keys in
   `LibraryGridView.swift:432-460`.
@@ -441,7 +445,7 @@ New findings (not in section 2; each is assigned to a slice below):
 | # | Slice | Size | Risk | Why here |
 |---|---|---|---|---|
 | 0 | R0 baseline | done | | see its results |
-| 1 | A1 click selects | M | medium (every selection reader) | biggest daily difference |
+| 1 | A1 click selects | done 2026-11-10 | | see the slice |
 | 2 | C1 toasts + progress | L | medium (many call sites) | removes the most interruptions |
 | 3 | B1 section header | M | low | makes the Edit panel readable |
 | 4 | A2 right-click + selection bar | L | medium (busy gates) | needs A1 |

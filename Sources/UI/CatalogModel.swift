@@ -53,6 +53,7 @@ final class CatalogModel: ObservableObject {
         didSet {
             guard oldValue != selectedFilter else { return }
             selectedPhotoIDs.removeAll()
+            gridSelectionAnchor = nil
             Task { await refresh() }
         }
     }
@@ -65,6 +66,7 @@ final class CatalogModel: ObservableObject {
             recomputeFolderPhotoCounts()
             if case .collection(let id) = selectedFilter, collections.first(where: { $0.id == id })?.isFolder == true {
                 selectedPhotoIDs.removeAll()
+                gridSelectionAnchor = nil
                 Task { await refresh() }
             }
         }
@@ -108,6 +110,11 @@ final class CatalogModel: ObservableObject {
     /// needed, and it comes back "sticky" for free if the user returns to
     /// where it's still visible.
     @Published var focusedPhotoPath: String?
+
+    /// Where the next Shift-click / Shift-arrow range starts (`GridSelection`). Not `@Published`: it is never drawn. Lives here (not in the
+    /// grid view's `@State`) so it survives a trip to the Editor and back. Cleared with the selection, on a sidebar change, by Select All
+    /// and by `GridSelection.selectingOnly` replacing it.
+    var gridSelectionAnchor: GridSelection.Anchor?
 
     /// True while `RenameModel` is applying or undoing a batch rename. Renaming moves files and rewrites
     /// catalog paths, so the catalog's other path-touching actions (import, locate, remove) refuse to run
@@ -1384,6 +1391,8 @@ final class CatalogModel: ObservableObject {
     /// Adds / removes ids from the checked set (the stacked cells' tick, `CatalogModel+Stacks`).
     func select(_ ids: [Int64]) { selectedPhotoIDs.formUnion(ids) }
     func deselect(_ ids: [Int64]) { selectedPhotoIDs.subtract(ids) }
+    /// Replaces the selection; publishes nothing when it is already exactly `ids`.
+    func setSelection(_ ids: Set<Int64>) { if selectedPhotoIDs != ids { selectedPhotoIDs = ids } }
 
     func isSelected(_ photo: Photo) -> Bool {
         guard let id = photo.id else { return false }
@@ -1428,6 +1437,7 @@ final class CatalogModel: ObservableObject {
 
     func clearSelection() {
         selectedPhotoIDs.removeAll()
+        gridSelectionAnchor = nil
     }
 
     // MARK: - Ratings and flags (Phase 4 slice 3)

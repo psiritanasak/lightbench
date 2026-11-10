@@ -711,7 +711,7 @@ struct ContentView: View {
         showLibrary = true
     }
 
-    /// Leaves culling and opens the current photo in the Editor (the same path as a grid tap).
+    /// Leaves culling and opens the current photo in the Editor (the same path as a grid double-click).
     private func openFromCulling(_ photo: Photo) {
         guard !renameModel.isWorking else { return }
         _ = cull.end()
@@ -1845,8 +1845,10 @@ struct ContentView: View {
                 // Deliberately the RAW `catalog.selectedPhotoIDs`, not
                 // `selectedPhotosVisibleInGrid` (IMPROVEMENTS.md D33,
                 // reviewer-caught): the menu's own "Clear Selection" button
-                // is the ONLY call site of `catalog.clearSelection()`
-                // anywhere in this app. Gating the whole menu on the
+                // was the ONLY call site of `catalog.clearSelection()`
+                // when this was written (since 2026-11-10 Esc, Command-D and
+                // a click on empty grid space clear it too, but only while
+                // the grid has focus). Gating the whole menu on the
                 // ghost-filtered set would hide that button too the moment
                 // every selected id becomes a ghost, trapping the user with
                 // a selection they can no longer reach any way to clear
@@ -2003,7 +2005,7 @@ struct ContentView: View {
 
     /// The Library, in an `HSplitView` alongside `editorContent` (Phase 4
     /// slice 4) — a collections sidebar on the left, the thumbnail grid
-    /// on the right. Selecting a thumbnail loads it into the editor and
+    /// on the right. Opening a thumbnail (double-click, Return, Space) loads it into the editor and
     /// switches back out of Library mode.
     private var libraryContent: some View {
         HSplitView {

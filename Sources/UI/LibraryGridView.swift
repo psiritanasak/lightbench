@@ -24,6 +24,11 @@ struct LibraryGridView: View {
     /// deliberately untouched.
     @AppStorage("PhotoApp.libraryThumbnailSize") private var thumbnailSize: Double = 140
 
+    /// "square" (default: the fixed-column grid of square cells) or "justified" (rows of equal height, each photo at its own aspect ratio, rows
+    /// stretched to the full width: `JustifiedRows`). The size slider's value is the cell edge in square mode and the ROW HEIGHT in justified mode.
+    @AppStorage("PhotoApp.libraryGridLayout") private var gridLayout: String = "square"
+    private var isJustified: Bool { gridLayout == "justified" }
+
     /// Single source of truth for the slider's bounds — reviewer-caught:
     /// the floor and the read-site/migration clamps below used to
     /// duplicate this range as separate literals, which a future range
@@ -118,6 +123,42 @@ struct LibraryGridView: View {
         )
     }
 
+    /// One grid cell, shared by the square grid and the justified rows (`width`/`height` = the thumbnail's frame). Cell identity, the keyboard focus ring,
+    /// the thumbnail revision and the open / remove closures are the same in both layouts.
+    @ViewBuilder
+    private func thumbnailCell(_ item: StackGridItem, focusKey: String?, width: Double, height: Double) -> some View {
+        let photo = item.photo
+        LibraryThumbnailCell(
+            catalog: catalog, item: item, cellSize: width, cellHeight: isJustified ? height : nil,
+            isFocused: focusKey == photo.editKey,
+            thumbnailRevision: catalog.thumbnailRevisions[photo.editKey, default: 0]
+        ) {
+            onOpen(photo)
+        } onRequestRemoval: {
+            Task {
+                guard let copies = await LibraryRemovalText.copyCount(for: photo, loading: { try await catalog.copiesByMaster() }) else {
+                    catalog.importStatusMessage = "Couldn't count this photo's virtual copies, so nothing was removed."
+                    return
+                }
+                copiesPendingRemoval = copies
+                photoPendingRemoval = photo
+            }
+        }
+    }
+
+    /// The justified rows for `cells`: each photo's aspect ratio from its decoded thumbnail when that differs from the file's (a saved rotation or crop;
+    /// `CatalogModel.measuredThumbnailAspects`), else the file's DISPLAYED shape from the cached camera data (`PhotoMetadata.displayAspect`: stored pixel
+    /// size, turned for EXIF orientation 5...8), square until the background scan has read it. Pure `JustifiedRows` does the maths, so the body and the
+    /// Up/Down keys use the same rows.
+    private func justifiedRows(for cells: [StackGridItem]) -> [JustifiedRows.Row] {
+        let aspects = cells.map { item -> Double in
+            let fileAspect = item.photo.id.flatMap { catalog.metadataByPhotoID[$0]?.displayAspect }
+            return ThumbnailAspect.effective(measured: catalog.measuredThumbnailAspects[item.photo.editKey], metadata: fileAspect) ?? 1
+        }
+        return JustifiedRows.layout(aspects: aspects, availableWidth: gridWidth - 2 * Self.gridPadding,
+                                    targetRowHeight: cellSize, spacing: Self.gridSpacing)
+    }
+
     private var columns: [GridItem] {
         // D4 (IMPROVEMENTS.md): `.flexible(minimum: 1, maximum: cellSize)`,
         // not `.fixed(cellSize)` — reviewer-caught (empirically, via an
@@ -206,32 +247,37 @@ struct LibraryGridView: View {
                     let focusKey = catalog.resolvedFocusPath(in: items)
                     ScrollViewReader { proxy in
                         ScrollView {
-                            LazyVGrid(columns: columns, spacing: Self.gridSpacing) {
-                                // `gridPhotos`, not `displayedPhotos`: one cell per collapsed stack (`CatalogModel+Stacks`). Keyboard focus,
-                                // arrows, scroll-to and focus advance below walk the SAME cells (`gridCellPhotos`); Cull and the Editor filmstrip
-                                // fold stacks with their own cells (`CullSession`, `filmstripItems`); every other tool keeps the flat list.
-                                ForEach(items) { item in
-                                    let photo = item.photo
-                                    LibraryThumbnailCell(
-                                        catalog: catalog, item: item, cellSize: cellSize,
-                                        isFocused: focusKey == photo.editKey,
-                                        thumbnailRevision: catalog.thumbnailRevisions[photo.editKey, default: 0]
-                                    ) {
-                                        onOpen(photo)
-                                    } onRequestRemoval: {
-                                        Task {
-                                            guard let copies = await LibraryRemovalText.copyCount(for: photo, loading: { try await catalog.copiesByMaster() }) else {
-                                                catalog.importStatusMessage = "Couldn't count this photo's virtual copies, so nothing was removed."
-                                                return
+                            Group {
+                            if isJustified {
+                                let rows = justifiedRows(for: items)
+                                LazyVStack(alignment: .leading, spacing: Self.gridSpacing) {
+                                    ForEach(rows.indices, id: \.self) { rowNumber in
+                                        let row = rows[rowNumber]
+                                        HStack(alignment: .top, spacing: Self.gridSpacing) {
+                                            ForEach(row.items, id: \.index) { placed in
+                                                let item = items[placed.index]
+                                                thumbnailCell(item, focusKey: focusKey, width: placed.width, height: row.height)
+                                                    // Same identity rule as the square grid (stack role in the id).
+                                                    .id(item.cellID)
                                             }
-                                            copiesPendingRemoval = copies
-                                            photoPendingRemoval = photo
                                         }
+                                        // Scroll-to targets the ROW (a view inside a lazy stack's nested HStack is not reliably scrollable by id).
+                                        .id(JustifiedScrollTarget.rowViewID(rowNumber))
                                     }
-                                    // The cell's identity includes its stack role: a photo that becomes a stack cover (or stops being
-                                    // one) gets a NEW cell view, so its badge and caption never go stale. Scroll-to targets this same id.
-                                    .id(item.cellID)
                                 }
+                            } else {
+                                LazyVGrid(columns: columns, spacing: Self.gridSpacing) {
+                                    // `gridPhotos`, not `displayedPhotos`: one cell per collapsed stack (`CatalogModel+Stacks`). Keyboard focus,
+                                    // arrows, scroll-to and focus advance below walk the SAME cells (`gridCellPhotos`); Cull and the Editor filmstrip
+                                    // fold stacks with their own cells (`CullSession`, `filmstripItems`); every other tool keeps the flat list.
+                                    ForEach(items) { item in
+                                        thumbnailCell(item, focusKey: focusKey, width: cellSize, height: cellSize)
+                                        // The cell's identity includes its stack role: a photo that becomes a stack cover (or stops being
+                                        // one) gets a NEW cell view, so its badge and caption never go stale. Scroll-to targets this same id.
+                                        .id(item.cellID)
+                                    }
+                                }
+                            }
                             }
                             .padding(Self.gridPadding)
                         }
@@ -256,7 +302,9 @@ struct LibraryGridView: View {
                                 Color.clear
                                     .onAppear {
                                         gridWidth = geometry.size.width
-                                        restoreInitialScrollPositionIfNeeded(proxy)
+                                        // The justified rows only exist in their real shape once this width has been laid out: that restore runs from
+                                        // `onChange(of: gridWidth)` below.
+                                        if !isJustified { restoreInitialScrollPositionIfNeeded(proxy) }
                                     }
                                     .onChange(of: geometry.size.width) { _, newWidth in gridWidth = newWidth }
                             }
@@ -271,9 +319,12 @@ struct LibraryGridView: View {
                         // them, so this never blocks a rating/flag/menu tap.
                         .simultaneousGesture(TapGesture().onEnded { isGridFocused = true })
                         .onChange(of: catalog.focusedPhotoPath) { _, newPath in
-                            if let newPath {
-                                withAnimation { proxy.scrollTo(StackCellPresentation.scrollTarget(forFocusedKey: newPath, in: catalog.gridPhotos) ?? newPath, anchor: .center) }
+                            if let newPath, let target = gridScrollTarget(forFocusedPath: newPath, fallbackToPath: true) {
+                                withAnimation { scroll(proxy, to: target) }
                             }
+                        }
+                        .onChange(of: gridWidth) { _, _ in
+                            if isJustified { restoreInitialScrollPositionIfNeeded(proxy) }
                         }
                     }
                 }
@@ -340,9 +391,31 @@ struct LibraryGridView: View {
     /// `ScrollView`'s.
     private func restoreInitialScrollPositionIfNeeded(_ proxy: ScrollViewProxy) {
         guard !hasRestoredInitialScrollPosition else { return }
+        guard JustifiedScrollTarget.canRestore(isJustified: isJustified, gridWidth: gridWidth) else { return }
         hasRestoredInitialScrollPosition = true
-        if let path = StackCellPresentation.scrollTarget(forFocusedKey: catalog.focusedPhotoPath, in: catalog.gridPhotos) {
-            proxy.scrollTo(path, anchor: .center)
+        guard let target = gridScrollTarget(forFocusedPath: catalog.focusedPhotoPath, fallbackToPath: false) else { return }
+        if isJustified {
+            // Let the rows laid out for the measured width exist before scrolling to one.
+            DispatchQueue.main.async { scroll(proxy, to: target) }
+        } else {
+            scroll(proxy, to: target)
+        }
+    }
+
+    /// The scroll target for the focused photo in the current layout, shared by the focus-follow and the restore-on-return paths: the cell's id in
+    /// the square grid, its row in the justified rows (`JustifiedScrollTarget`). `fallbackToPath`: the focus-follow path scrolls to the raw path when
+    /// no cell claims it (square grid only, as before).
+    private func gridScrollTarget(forFocusedPath path: String?, fallbackToPath: Bool) -> JustifiedScrollTarget? {
+        let cells = catalog.gridPhotos
+        guard let id = StackCellPresentation.scrollTarget(forFocusedKey: path, in: cells) ?? (fallbackToPath ? path : nil) else { return nil }
+        return JustifiedScrollTarget.target(forCellID: id, cellIDs: cells.map(\.cellID),
+                                            justifiedRows: isJustified ? justifiedRows(for: cells) : nil)
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy, to target: JustifiedScrollTarget) {
+        switch target {
+        case .cell(let id): proxy.scrollTo(id, anchor: .center)
+        case .row(let row): proxy.scrollTo(JustifiedScrollTarget.rowViewID(row), anchor: .center)
         }
     }
 
@@ -382,6 +455,10 @@ struct LibraryGridView: View {
         let cells = catalog.gridPhotos
         catalog.normalizeFocus(in: cells)
         let displayed = cells.map(\.photo)
+        // Justified rows have no fixed column count: Up / Down go through the row layout (the square grid's `±columnCount` lines below stay as they are).
+        if isJustified, keyPress.key == .upArrow || keyPress.key == .downArrow {
+            return moveFocusVertically(keyPress.key == .upArrow ? .up : .down, in: cells)
+        }
         switch keyPress.key {
         case .leftArrow: return moveFocus(by: -1, in: displayed)
         case .rightArrow: return moveFocus(by: 1, in: displayed)
@@ -426,6 +503,22 @@ struct LibraryGridView: View {
         }
         if let next = LibraryNavigation.neighbor(of: currentPath, in: photos, offset: offset) {
             catalog.focusedPhotoPath = next.editKey
+        }
+        return .handled
+    }
+
+    /// Up / Down in the justified rows: the photo one row up or down whose horizontal centre is nearest the focused one (`JustifiedRows.neighbor`).
+    /// Nothing focused (or the focus fell out of the cells) focuses the first photo, like `moveFocus`; the top / bottom edge is a no-op. Unlike the
+    /// square grid's `±columnCount`, a short last row can still be reached from the row above it.
+    private func moveFocusVertically(_ direction: JustifiedRows.Direction, in cells: [StackGridItem]) -> KeyPress.Result {
+        guard !cells.isEmpty else { return .ignored }
+        guard let currentPath = catalog.focusedPhotoPath,
+              let index = cells.firstIndex(where: { $0.photo.editKey == currentPath }) else {
+            catalog.focusedPhotoPath = cells.first?.photo.editKey
+            return .handled
+        }
+        if let next = JustifiedRows.neighbor(of: index, direction: direction, in: justifiedRows(for: cells)) {
+            catalog.focusedPhotoPath = cells[next].photo.editKey
         }
         return .handled
     }
@@ -500,6 +593,17 @@ struct LibraryGridView: View {
     private var thumbnailSizeBar: some View {
         HStack(spacing: 10) {
             Spacer()
+            // Layout: square cells (default) or justified rows (each photo at its own aspect ratio). Flat buttons, the grey `isOn` chip marks the choice.
+            Button { gridLayout = "square" } label: { Image(systemName: "square.grid.2x2") }
+                .buttonStyle(FlatButtonStyle(isOn: !isJustified))
+                .help("Square grid")
+                .accessibilityLabel("Square grid")
+                .accessibilityAddTraits(!isJustified ? [.isSelected] : [])
+            Button { gridLayout = "justified" } label: { Image(systemName: "rectangle.grid.1x2") }
+                .buttonStyle(FlatButtonStyle(isOn: isJustified))
+                .help("Justified rows: every photo keeps its shape")
+                .accessibilityLabel("Justified rows")
+                .accessibilityAddTraits(isJustified ? [.isSelected] : [])
             Image(systemName: "photo")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
@@ -521,7 +625,7 @@ struct LibraryGridView: View {
                 valueDescription: { "\(Int($0.rounded())) points" }
             )
                 .frame(width: 100)
-                .accessibilityLabel("Thumbnail size")
+                .accessibilityLabel(isJustified ? "Row height" : "Thumbnail size")
             Image(systemName: "photo")
                 .font(.body)
                 .foregroundStyle(Theme.textSecondary)
@@ -606,7 +710,11 @@ private struct LibraryThumbnailCell: View {
     private var isCellSelected: Bool { catalog.isSelected(item) }
     /// `.partial` (some, not all, visible members of a collapsed stack) draws a mixed checkbox.
     private var selectionState: StackSelection.State { catalog.selectionState(of: item) }
+    /// The cell's width (and, in the square grid, its height too). The justified-rows layout gives each cell its own width and the row's height.
     let cellSize: CGFloat
+    /// The thumbnail's height when it differs from `cellSize` (justified rows); nil = square, exactly as before.
+    var cellHeight: CGFloat? = nil
+    private var imageHeight: CGFloat { cellHeight ?? cellSize }
     /// D4 (IMPROVEMENTS.md): the grid's keyboard-focused photo, passed down
     /// as a plain `let` rather than read from `catalog` in here — this
     /// struct deliberately keeps `catalog` a non-`@ObservedObject` `let`
@@ -695,7 +803,7 @@ private struct LibraryThumbnailCell: View {
                         Image(decorative: image, scale: 1)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                            .frame(width: cellSize, height: cellSize)
+                            .frame(width: cellSize, height: imageHeight)
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                     } else {
                         // Feedback while the thumbnail decodes — most visible
@@ -705,7 +813,7 @@ private struct LibraryThumbnailCell: View {
                         // show this instead of a silent blank box.
                         ProgressView()
                             .controlSize(.small)
-                            .frame(width: cellSize, height: cellSize)
+                            .frame(width: cellSize, height: imageHeight)
                     }
                 }
                 .opacity(photo.flagStatus == .rejected ? 0.45 : 1)
@@ -740,7 +848,7 @@ private struct LibraryThumbnailCell: View {
                 .accessibilityValue(selectionState == .partial ? "Partly selected" : "")
                 .accessibilityAddTraits(isCellSelected ? [.isSelected] : [])
             }
-            .frame(width: cellSize, height: cellSize)
+            .frame(width: cellSize, height: imageHeight)
             .clipped()
             .overlay(alignment: .bottomTrailing) {
                 if hasEdits {
@@ -1050,6 +1158,10 @@ private struct LibraryThumbnailCell: View {
             guard !Task.isCancelled else { return }
             image = thumb
             isMissing = missing
+            // Justified rows only: the thumbnail shows the saved edit, so its own shape (not the file's) decides the cell's shape.
+            if cellHeight != nil, let thumb {
+                catalog.noteThumbnailSize(forKey: photo.editKey, photoID: photo.id, width: thumb.width, height: thumb.height)
+            }
         }
     }
 
@@ -1077,7 +1189,7 @@ private struct LibraryThumbnailCell: View {
                 .font(.caption2)
                 .foregroundStyle(Theme.textSecondary)
         }
-        .frame(width: cellSize, height: cellSize)
+        .frame(width: cellSize, height: imageHeight)
     }
 
     /// D3 (IMPROVEMENTS.md): same circular-backdrop visual language the

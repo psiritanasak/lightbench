@@ -106,7 +106,7 @@ enum MetadataScanner {
                     captureDate: fields.captureDate, iso: fields.iso, cameraMake: fields.cameraMake,
                     cameraModel: fields.cameraModel, lens: fields.lens, focalLength: fields.focalLength,
                     aperture: fields.aperture, shutter: fields.shutter, pixelWidth: fields.pixelWidth,
-                    pixelHeight: fields.pixelHeight, scannedAt: Date()
+                    pixelHeight: fields.pixelHeight, orientation: fields.orientation, scannedAt: Date()
                 ))
                 scanned += 1
                 if pending.count >= saveBatch {

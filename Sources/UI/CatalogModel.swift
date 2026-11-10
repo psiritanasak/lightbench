@@ -1262,6 +1262,23 @@ final class CatalogModel: ObservableObject {
     /// `PhotoExporter.uniqueFileURL`'s own collision handling).
     @Published private(set) var thumbnailRevisions: [String: Int] = [:]
 
+    /// Justified-rows layout only: the shape (width / height) of a photo's decoded thumbnail, for photos whose saved edit (rotation, crop) makes it differ
+    /// from the file's own shape beyond `ThumbnailAspect.tolerance`. Keyed like `thumbnailRevisions` (`Photo.editKey`). Unedited photos never appear
+    /// here, so loading thumbnails causes no re-layout for them; an entry is replaced or removed when the photo's thumbnail is decoded again
+    /// (a `thumbnailRevisions` bump re-runs the cell's load).
+    @Published private(set) var measuredThumbnailAspects: [String: Double] = [:]
+
+    /// Called by a justified-rows cell after its thumbnail decoded (never from a view update). Publishes only when `ThumbnailAspect.update` says the
+    /// remembered shape changes.
+    func noteThumbnailSize(forKey key: String, photoID: Int64?, width: Int, height: Int) {
+        let fileAspect = photoID.flatMap { metadataByPhotoID[$0]?.displayAspect }
+        switch ThumbnailAspect.update(current: measuredThumbnailAspects[key], thumbWidth: width, thumbHeight: height, metadataAspect: fileAspect) {
+        case .keep: break
+        case .set(let aspect): measuredThumbnailAspects[key] = aspect
+        case .clear: measuredThumbnailAspects.removeValue(forKey: key)
+        }
+    }
+
     /// Drops the cached thumbnail for the photo at `url`. Callers:
     /// `ImageDocumentModel.onSidecarSaved` via `ContentView`,
     /// `relocatePhoto`/`relocateSelectedPhotos`, `removePhoto` (none of

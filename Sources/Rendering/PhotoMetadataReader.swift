@@ -21,6 +21,8 @@ enum PhotoMetadataReader {
         /// As stored in the file, BEFORE any EXIF orientation is applied.
         var pixelWidth: Int?
         var pixelHeight: Int?
+        /// EXIF/TIFF orientation 1...8 as stored (nil when the file has no valid tag).
+        var orientation: Int?
 
         static let empty = Fields()
     }
@@ -51,6 +53,7 @@ enum PhotoMetadataReader {
         fields.shutter = positive(exif?[kCGImagePropertyExifExposureTime])
         fields.pixelWidth = positiveInt(props[kCGImagePropertyPixelWidth])
         fields.pixelHeight = positiveInt(props[kCGImagePropertyPixelHeight])
+        if let value = positiveInt(props[kCGImagePropertyOrientation]), (1...8).contains(value) { fields.orientation = value }
         return fields
     }
 

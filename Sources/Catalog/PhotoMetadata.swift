@@ -5,7 +5,7 @@ import GRDB
 /// what they carry, and a photo with none of it still has a row so it is not re-read.
 struct PhotoMetadata: Codable, Equatable, Hashable, Sendable {
     /// Bumped when the reader starts extracting something new (or fixes a parse), which makes every older row stale.
-    static let currentReaderRevision = 1
+    static let currentReaderRevision = 2
 
     var photoId: Int64
     var fileSize: Int64
@@ -30,6 +30,8 @@ struct PhotoMetadata: Codable, Equatable, Hashable, Sendable {
     var shutter: Double?
     var pixelWidth: Int?
     var pixelHeight: Int?
+    /// EXIF/TIFF orientation 1...8 as stored in the file (nil: no tag, or a row read before reader revision 2).
+    var orientation: Int?
     /// Informational only; it comes back from the database truncated to milliseconds, so never use whole-row equality to
     /// decide that nothing changed.
     var scannedAt: Date
@@ -37,6 +39,15 @@ struct PhotoMetadata: Codable, Equatable, Hashable, Sendable {
     /// True while the file still looks as it did when this row was read AND the row came from the current reader.
     func isCurrent(fileSize currentSize: Int64, mtime currentMTime: Double) -> Bool {
         readerRevision == Self.currentReaderRevision && fileSize == currentSize && abs(mtime - currentMTime) < 0.001
+    }
+
+    /// Width / height of the picture as DISPLAYED (EXIF orientation 5...8 turns it a quarter turn, so the stored sides swap), or nil without a usable pixel size.
+    /// A saved crop or rotation from the Editor is NOT included here: the justified-rows grid corrects for it from the decoded thumbnail's own
+    /// shape (`ThumbnailAspect`, `CatalogModel.measuredThumbnailAspects`), and uses this value until the thumbnail has loaded.
+    var displayAspect: Double? {
+        guard let width = pixelWidth, let height = pixelHeight, width > 0, height > 0 else { return nil }
+        let turned = (5...8).contains(orientation ?? 1)
+        return turned ? Double(height) / Double(width) : Double(width) / Double(height)
     }
 
     /// "Make Model" for search and display, without repeating the make when the model already starts with it
@@ -74,6 +85,7 @@ extension PhotoMetadata: FetchableRecord, PersistableRecord, TableRecord {
         static let shutter = Column(CodingKeys.shutter)
         static let pixelWidth = Column(CodingKeys.pixelWidth)
         static let pixelHeight = Column(CodingKeys.pixelHeight)
+        static let orientation = Column(CodingKeys.orientation)
         static let scannedAt = Column(CodingKeys.scannedAt)
     }
 }

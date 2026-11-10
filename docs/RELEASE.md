@@ -5,7 +5,7 @@ without your Apple account is already done and checked by `scripts/release.sh --
 
 ## What is already in place
 - App icon: the designer's Lightbench mark (half white / half amber disc over a bar; master SVG in `docs/icon/`), drawn on the macOS rounded tile by `scripts/make_app_icon.swift` into `Sources/App/Assets.xcassets` (re-run it to regenerate all ten sizes).
-- Version: `MARKETING_VERSION` (1.0.0) and `CURRENT_PROJECT_VERSION` (1) in `project.yml`. Bump the build number for every notarized build.
+- Version: `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml` (1.3.0 / build 4 at the 2026-11-05 release). Bump the build number for every notarized build.
 - Category (`public.app-category.photography`), hardened runtime, App Sandbox + user-selected read-write file access.
 - `ThirdPartyNotices.md` (GRDB MIT, Depth Anything V2 Small Apache-2.0 with its full text) is bundled in the app.
 - `scripts/release.sh`: `--check` (preflight, no account needed), `--unsigned` (shareable zip, no account), and the full archive → sign → notarize → staple → zip run.
@@ -72,6 +72,9 @@ There was no second Mac, so this is a SIMULATION of a stranger's first launch of
 - First launch under a THROWAWAY bundle identifier (a copy re-signed ad hoc, so macOS made a brand-new sandbox container: no catalog, preferences or folder grants): the app ran, created `catalog.sqlite` with all 14 migrations applied and `integrity_check` ok, no crash report. Second launch: it took the launch backup into `Backups/` (`catalog-<stamp>.sqlite`), a valid catalog with 14 migrations — the backup feature working in a real sandbox. The throwaway container, preferences and copy were deleted; the real container was never touched.
 - Intel code under Rosetta 2 (2026-10-16, same throwaway-bundle-id method plus `LSArchitecturePriority = x86_64` in the copy's Info.plist): `vmmap` reported `Code Type: X86-64 (translated)` for the running process; first launch created the catalog (14 migrations, `integrity_check` ok), second launch wrote a valid launch backup, no crash report either time. This exercises the x86_64 CODE on Apple-silicon hardware; it does NOT test an Intel GPU (Metal/MetalFX availability, Core ML speed, the depth model, Enhance's Lanczos fallback) or macOS 14. Nothing was driven in the UI.
 - NOT covered, still needs a real clean Mac (or fresh macOS user): the Gatekeeper dialog flow itself; a real Intel Mac or macOS 14 (GPU-dependent features and speed); importing a real folder / RAW (no photos were used); the "allow access to data from other apps" prompt macOS 14+ may show for a changed signature; double-click / Dock / "Open With" paths; any UI interaction (nothing was driven).
+
+## Release routine used for the unsigned releases (1.0.0 to 1.3.0)
+Bump the two version keys in `project.yml`, write `docs/RELEASE_NOTES_<version>.md` (only claims that were actually checked), commit "Release X: bump version, add release notes", run `scripts/release.sh --unsigned`, verify the zip with `ditto -x -k` plus `codesign --verify --deep --strict` (plain `unzip` reports a false "sealed resource" error), push, then `gh release create vX build/unsigned/<zip> --target master --notes-file docs/RELEASE_NOTES_<version>.md`. To install the result on the dev Mac: quit the app, replace `/Applications/Lightbench.app` from the verified extract, remove the quarantine attribute. Put Back in the Finder restores a file the app trashed (checked 2026-11-09 with `FileManager.trashItem`).
 
 ## Release notes: set expectations
 - RAW support runs on Apple's decoder (`CIRAWFilter`); it has been exercised with Nikon D610 files only.

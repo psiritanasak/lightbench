@@ -362,7 +362,8 @@ New findings (not in section 2; each is assigned to a slice below):
 ### Track C: shared kit
 
 #### C1. Toasts and progress
-- **Session 1 DONE 2026-11-11** (CLAUDE.md "Toasts and activity strip", IMPROVEMENTS.md D91; NOT live-checked). Shipped: the kit
+- **Session 1 DONE 2026-11-11** (CLAUDE.md "Toasts and activity strip", IMPROVEMENTS.md D91; live-checked 2026-11-11 on a throwaway build:
+  toast, hover pause, Show in Finder, strip, Cancel, sheet pause, Enhance, an error alert and Cull keys all passed). Shipped: the kit
   (`Feedback`, `FeedbackClassifier`, `FeedbackInbox`, `ToastTimeline`, `ToastCenter`, `ToastView`, `feedbackAlert`), Paste Settings /
   Enhance / Export converted, one activity strip for Export and Enhance, Export Cancel. Decisions taken: a result with anything not
   written is ALWAYS an alert (no "toast with Details"); a toast is not drawn above a sheet, its clock pauses instead; a user-stopped

@@ -576,4 +576,42 @@ final class ExportExtrasTests: XCTestCase {
             ExportSummary.text(succeeded: 2, failed: 0, firstFailureMessage: nil, original: true)
         )
     }
+
+    // MARK: Cancelled
+
+    func testCancelledOnlyIsAWarningToastWithTheCountAndTheWrittenFiles() {
+        let feedback = ExportSummary.feedback(succeeded: 1, failed: 0, firstFailureMessage: nil, cancelled: 9, written: [written[0]])
+        XCTAssertEqual(feedback.kind, .warning)
+        XCTAssertEqual(feedback.presentation, .toast)
+        XCTAssertEqual(feedback.message, "Exported 1 photo. Stopped: 9 photos not exported.")
+        XCTAssertEqual(feedback.action, .revealInFinder([written[0]]))
+    }
+
+    func testCancelledSingularWording() {
+        let text = ExportSummary.text(succeeded: 2, failed: 0, firstFailureMessage: nil, cancelled: 1)
+        XCTAssertEqual(text, "Exported 2 photos. Stopped: 1 photo not exported.")
+    }
+
+    func testCancelledPlusFailedIsAnAlert() {
+        let feedback = ExportSummary.feedback(succeeded: 1, failed: 1, firstFailureMessage: "disk full", cancelled: 3, written: [written[0]])
+        XCTAssertEqual(feedback.kind, .incomplete)
+        XCTAssertEqual(feedback.presentation, .alert)
+        XCTAssertTrue(feedback.message.contains("Stopped: 3 photos not exported."))
+        XCTAssertTrue(feedback.message.contains("1 failed. First error: disk full"))
+    }
+
+    func testZeroWrittenPlusCancelledIsAWarning() {
+        let feedback = ExportSummary.feedback(succeeded: 0, failed: 0, firstFailureMessage: nil, cancelled: 5, written: [])
+        XCTAssertEqual(feedback.kind, .warning)
+        XCTAssertNil(feedback.action)
+        XCTAssertEqual(feedback.message, "Exported 0 photos. Stopped: 5 photos not exported.")
+    }
+
+    func testCancelledZeroLeavesTheTextUnchanged() {
+        XCTAssertEqual(
+            ExportSummary.text(succeeded: 2, failed: 1, firstFailureMessage: "x", cancelled: 0),
+            ExportSummary.text(succeeded: 2, failed: 1, firstFailureMessage: "x")
+        )
+        XCTAssertEqual(ExportSummary.feedback(succeeded: 2, failed: 0, firstFailureMessage: nil, cancelled: 0, written: written).kind, .done)
+    }
 }

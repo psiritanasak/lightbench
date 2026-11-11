@@ -5,6 +5,8 @@ import Foundation
 /// deliberately kept in `Sources/UI`, not `Sources/Rendering`, mirroring
 /// `CatalogModel`'s own separation from `Sources/Catalog` (the actual
 /// export engine, `PhotoExporter`, stays UI-free).
+///
+/// `completed` = photos FINISHED (success or failure), 0 while the first is in flight; the photo in flight has index `completed`.
 struct ExportProgress: Equatable {
     var completed: Int
     var total: Int
@@ -20,6 +22,10 @@ final class ExportModel: ObservableObject {
     @Published var feedback: Feedback?
     @Published private(set) var isExporting = false
     @Published private(set) var progress: ExportProgress?
+    /// The user asked to stop. Read by the export loop at the TOP of each photo on the MainActor, so the photo in flight always finishes
+    /// (it is staged and committed atomically) and nothing is ever cut off mid-write. A flag, never `Task.cancel()`: Task cancellation
+    /// could throw out of the awaited render or `RawDecoder.RenderGate` in the middle of a photo.
+    @Published private(set) var isCancelRequested = false
 
     private let store: ExportSettingsStore
     nonisolated static let feedbackTitle = "Export"
@@ -36,6 +42,13 @@ final class ExportModel: ObservableObject {
         // Original (a byte copy that keeps the GPS) is never armed from an earlier sheet: this model lives as long as the window.
         settings.kind = .rendered
         isPresentingOptions = true
+    }
+
+    /// Asks the running export to stop after the photo in flight. Does nothing when no export is running (a stale click can never arm the
+    /// next run: the flag is also cleared when a run starts and when it finishes). Pressing it twice is the same as once.
+    func cancelExport() {
+        guard isExporting else { return }
+        isCancelRequested = true
     }
 
     /// Prompts for a destination folder, then exports every photo in
@@ -101,6 +114,7 @@ final class ExportModel: ObservableObject {
         }
 
         isExporting = true
+        isCancelRequested = false
         progress = ExportProgress(completed: 0, total: batch.count)
 
         Task.detached { [weak self] in
@@ -116,6 +130,7 @@ final class ExportModel: ObservableObject {
             guard destination.startAccessingSecurityScopedResource() else {
                 await MainActor.run {
                     self?.isExporting = false
+                    self?.isCancelRequested = false
                     self?.progress = nil
                     self?.feedback = .error(Self.feedbackTitle, "Couldn't get access to the destination folder.")
                 }
@@ -128,7 +143,14 @@ final class ExportModel: ObservableObject {
             var overLimit = 0
             var truncated = 0
             var written: [URL] = []
+            var cancelled = 0
             for (index, photo) in batch.enumerated() {
+                // The only place a stop is honoured: between photos. Pressing Cancel while the LAST photo is in flight never reaches
+                // this line again, so nothing is skipped and the result never says "Stopped: 0".
+                if await MainActor.run(body: { self?.isCancelRequested ?? false }) {
+                    cancelled = batch.count - index
+                    break
+                }
                 do {
                     if isOriginal {
                         let result = try PhotoExporter.exportOriginal(photo, to: destination, settings: settingsSnapshot, sequenceIndex: index)
@@ -157,11 +179,12 @@ final class ExportModel: ObservableObject {
             }
             await MainActor.run {
                 self?.isExporting = false
+                self?.isCancelRequested = false
                 self?.progress = nil
                 self?.feedback = ExportSummary.feedback(
                     succeeded: succeeded, failed: failed, firstFailureMessage: firstFailureMessage,
                     overLimit: overLimit, original: isOriginal, truncated: truncated, duplicatesSkipped: duplicatesSkipped,
-                    written: written
+                    cancelled: cancelled, written: written
                 )
             }
         }

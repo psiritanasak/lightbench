@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Progress panel shown while a merge renders (one atomic call, no incremental progress — like `EnhancingHUD`).
+/// Progress panel shown while a merge renders (one atomic call, no incremental progress — like the Enhance activity row).
 struct MergingHUD: View {
     var body: some View {
         HStack(spacing: 8) {

@@ -1378,8 +1378,19 @@ struct ContentView: View {
             }
             .modifier(FeedbackHostModifier(
                 sheetPresented: anySheetPresented,
-                exportProgress: exportModel.progress, isEnhancing: enhanceModel.isEnhancing
+                activities: activityItems,
+                onCancel: { kind in if kind == .export { exportModel.cancelExport() } }
             ))
+    }
+
+    /// What the activity strip lists: Export first, then Enhance.
+    private var activityItems: [ActivityItem] {
+        var items: [ActivityItem] = []
+        if let progress = exportModel.progress {
+            items.append(.export(completed: progress.completed, total: progress.total, stopping: exportModel.isCancelRequested))
+        }
+        if enhanceModel.isEnhancing { items.append(.enhancing) }
+        return items
     }
 
     /// True while any sheet this view hosts is up: a macOS sheet is its own window, so a toast cannot sit above it and its clock pauses instead.
@@ -2751,25 +2762,19 @@ extension ToolbarContent {
 
 // MARK: - Feedback host
 
-/// The bottom overlay (toast plus the progress HUDs) and the two things that pause the toast clock: a sheet being up and the app being
+/// The bottom overlay (the toast above the activity strip) and the two things that pause the toast clock: a sheet being up and the app being
 /// inactive. Kept as its own small modifier because `ContentView.body` is close to the type-checker's limit, and so that ONLY this modifier
 /// observes the `ToastCenter`: `ContentView` itself must not, or its whole body would run again on every hover and every app switch.
 struct FeedbackHostModifier: ViewModifier {
     @EnvironmentObject private var toasts: ToastCenter
     let sheetPresented: Bool
-    let exportProgress: ExportProgress?
-    let isEnhancing: Bool
+    let activities: [ActivityItem]
+    let onCancel: (ActivityItem.Kind) -> Void
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .bottom) {
-                FeedbackOverlay(toasts: toasts) {
-                    if let progress = exportProgress {
-                        ExportProgressHUD(progress: progress)
-                    } else if isEnhancing {
-                        EnhancingHUD()
-                    }
-                }
+                FeedbackOverlay(toasts: toasts, activities: activities, onCancel: onCancel)
             }
             .onChange(of: sheetPresented, initial: true) { _, presented in toasts.setSheetPresented(presented) }
             // The notifications below only report CHANGES: a window that appears while the app is in the background starts paused.

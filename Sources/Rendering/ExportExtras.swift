@@ -79,7 +79,8 @@ enum FileSizeLimiter {
 enum ExportSummary {
     static func text(
         succeeded: Int, failed: Int, firstFailureMessage: String?,
-        overLimit: Int = 0, original: Bool = false, truncated: Int = 0, duplicatesSkipped: Int = 0
+        overLimit: Int = 0, original: Bool = false, truncated: Int = 0, duplicatesSkipped: Int = 0,
+        cancelled: Int = 0
     ) -> String {
         var part = original
             ? "Copied \(succeeded) original file\(succeeded == 1 ? "" : "s")."
@@ -95,6 +96,9 @@ enum ExportSummary {
         if duplicatesSkipped > 0 {
             part += " \(duplicatesSkipped) virtual cop\(duplicatesSkipped == 1 ? "y shared a file" : "ies shared a file") and was not copied again."
         }
+        if cancelled > 0 {
+            part += " Stopped: \(cancelled) photo\(cancelled == 1 ? "" : "s") not exported."
+        }
         guard failed > 0 else { return part }
         var message = "\(part) \(failed) failed."
         if let firstFailureMessage {
@@ -105,20 +109,23 @@ enum ExportSummary {
 
     /// The result of a batch: any failed photo makes it an alert (`.incomplete`, with Show in Finder when some files were written); a clean
     /// run with a note (over the size limit, cut-off source, shared virtual-copy file) is a `.warning` toast; otherwise `.done`.
-    /// The message is `text(...)`.
+    /// `cancelled` (photos the user stopped the run before) counts as a caveat: a stopped run with no failures is a `.warning` toast that
+    /// states the count; with any failure it is `.incomplete`. The message is `text(...)`.
     static func feedback(
         succeeded: Int, failed: Int, firstFailureMessage: String?,
         overLimit: Int = 0, original: Bool = false, truncated: Int = 0, duplicatesSkipped: Int = 0,
+        cancelled: Int = 0,
         written: [URL]
     ) -> Feedback {
         Feedback(
             kind: FeedbackClassifier.batch(
-                written: succeeded, notWritten: failed, caveats: overLimit + truncated + duplicatesSkipped
+                written: succeeded, notWritten: failed, caveats: overLimit + truncated + duplicatesSkipped + cancelled
             ),
             title: "Export",
             message: text(
                 succeeded: succeeded, failed: failed, firstFailureMessage: firstFailureMessage,
-                overLimit: overLimit, original: original, truncated: truncated, duplicatesSkipped: duplicatesSkipped
+                overLimit: overLimit, original: original, truncated: truncated, duplicatesSkipped: duplicatesSkipped,
+                cancelled: cancelled
             ),
             action: written.isEmpty ? nil : .revealInFinder(written)
         )

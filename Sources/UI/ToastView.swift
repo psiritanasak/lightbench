@@ -54,10 +54,52 @@ struct ToastView: View {
     }
 }
 
-/// The bottom-centre host for the toast. Progress HUDs are passed in as `extra` (until the activity strip replaces them).
-struct FeedbackOverlay<Extra: View>: View {
+// MARK: - Activity strip
+
+/// One solid panel listing what is running: a caption, a determinate bar or a small spinner, and a Cancel button when the item can be
+/// stopped. Sizes are by-eye conventions (kept close to the HUDs this replaced); nothing here was measured. Cancel is
+/// `.focusable(false)` so it never takes the key focus Cull relies on.
+struct ActivityStrip: View {
+    let items: [ActivityItem]
+    var onCancel: (ActivityItem.Kind) -> Void
+
+    static let cancelHint = "Stops after the current photo. Files already exported are kept."
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(items) { item in
+                HStack(spacing: 10) {
+                    Text(item.text)
+                        .font(.caption)
+                        .foregroundStyle(Theme.textPrimary)
+                    switch item.progress {
+                    case .indeterminate:
+                        ProgressView().controlSize(.small)
+                    case let .steps(done, total):
+                        ProgressView(value: Double(done), total: Double(max(total, 1)))
+                            .frame(width: 220)
+                    }
+                    if item.canCancel {
+                        Button("Cancel") { onCancel(item.kind) }
+                            .buttonStyle(.flat)
+                            .focusable(false)
+                            .help(Self.cancelHint)
+                            .accessibilityHint(Self.cancelHint)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .solidPanel(cornerRadius: 10)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// The bottom-centre host: the toast above the activity strip.
+struct FeedbackOverlay: View {
     @ObservedObject var toasts: ToastCenter
-    @ViewBuilder var extra: () -> Extra
+    let activities: [ActivityItem]
+    var onCancel: (ActivityItem.Kind) -> Void
 
     var body: some View {
         VStack(spacing: 8) {
@@ -70,8 +112,11 @@ struct FeedbackOverlay<Extra: View>: View {
                 )
                 .id(entry.id)
             }
-            extra()
+            if !activities.isEmpty {
+                ActivityStrip(items: activities, onCancel: onCancel)
+            }
         }
+        .padding(.bottom, 16)
         .animation(.easeInOut(duration: 0.2), value: toasts.current?.id)
     }
 }

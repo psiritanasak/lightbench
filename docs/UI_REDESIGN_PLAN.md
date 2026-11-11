@@ -362,6 +362,13 @@ New findings (not in section 2; each is assigned to a slice below):
 ### Track C: shared kit
 
 #### C1. Toasts and progress
+- **Session 1 DONE 2026-11-11** (CLAUDE.md "Toasts and activity strip", IMPROVEMENTS.md D91; NOT live-checked). Shipped: the kit
+  (`Feedback`, `FeedbackClassifier`, `FeedbackInbox`, `ToastTimeline`, `ToastCenter`, `ToastView`, `feedbackAlert`), Paste Settings /
+  Enhance / Export converted, one activity strip for Export and Enhance, Export Cancel. Decisions taken: a result with anything not
+  written is ALWAYS an alert (no "toast with Details"); a toast is not drawn above a sheet, its clock pauses instead; a user-stopped
+  export is a warning toast stating the count. **Session 2 (open)**: the other 13 result sites (Photo Catalog summaries, Rename,
+  Auto Straighten / Upright / Auto Crop, Spot, Import Look, Merge, XMP, Trash, Backup, Copy Photos, Lightroom), an import activity
+  row (folder import really has no progress UI: confirmed), and the five dialog-modifier HUDs folded into the strip.
 - **Today**: 30 `.alert(`; success and "nothing to do" messages are modal.
   `ExportProgressHUD` has no Cancel; folder import has no progress UI.
 - **Change**:

@@ -47,6 +47,9 @@ struct PhotoAppApp: App {
     /// The Preferences window's state (⌘,).
     @StateObject private var preferences = PreferencesModel()
 
+    /// The passing-result toast shared by every mode (Library, Editor, Cull).
+    @StateObject private var toasts = ToastCenter()
+
     init() {
         // User looks must be registered BEFORE any render (Editor, thumbnails, export): an unresolved look renders
         // as no look, which would silently disagree with the Editor. Synchronous on purpose.
@@ -62,6 +65,7 @@ struct PhotoAppApp: App {
                 document: document, catalog: catalog, pasteModel: pasteModel, renameModel: renameModel, cull: cull,
                 showLibrary: $showLibrary
             )
+            .environmentObject(toasts)
             // Drag a folder or photo onto the window, or open one from Finder / the Dock.
             .modifier(DropAndOpenModifier(document: document, catalog: catalog, renameModel: renameModel, cull: cull, showLibrary: $showLibrary))
             .modifier(LightroomImportModifier(model: lightroomImport, document: document))

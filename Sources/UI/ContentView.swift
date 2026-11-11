@@ -1413,13 +1413,19 @@ struct ContentView: View {
             .task(id: catalog.photos.count) {
                 await renameModel.refreshCanUndo(catalog: catalog)
             }
-            .overlay(alignment: .bottom) {
-                if let progress = exportModel.progress {
-                    ExportProgressHUD(progress: progress)
-                } else if enhanceModel.isEnhancing {
-                    EnhancingHUD()
-                }
-            }
+            .modifier(FeedbackHostModifier(
+                sheetPresented: anySheetPresented,
+                exportProgress: exportModel.progress, isEnhancing: enhanceModel.isEnhancing
+            ))
+    }
+
+    /// True while any sheet this view hosts is up: a macOS sheet is its own window, so a toast cannot sit above it and its clock pauses instead.
+    /// Every `.sheet(` in `Sources/UI` must be listed here (`AlertSitesTests` counts them). Known gaps: the Copy Photos setup sheet, and the
+    /// folder panels (`NSOpenPanel`), which are not sheets: the clock keeps running under those.
+    private var anySheetPresented: Bool {
+        exportModel.isPresentingOptions || renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil
+            || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
+            || catalog.recentlyDeletedPresented || catalog.autoStackSheetPresented
     }
 
     /// Library toolbar "People" button (its own property: `body` is at the type-checker's limit).
@@ -2762,6 +2768,7 @@ struct ContentView: View {
         document: ImageDocumentModel(), catalog: CatalogModel(), pasteModel: PasteSettingsModel(),
         renameModel: RenameModel(), cull: CullModel(), showLibrary: .constant(false)
     )
+    .environmentObject(ToastCenter())
 }
 
 extension ToolbarContent {
@@ -2776,5 +2783,35 @@ extension ToolbarContent {
         } else {
             self
         }
+    }
+}
+
+// MARK: - Feedback host
+
+/// The bottom overlay (toast plus the progress HUDs) and the two things that pause the toast clock: a sheet being up and the app being
+/// inactive. Kept as its own small modifier because `ContentView.body` is close to the type-checker's limit, and so that ONLY this modifier
+/// observes the `ToastCenter`: `ContentView` itself must not, or its whole body would run again on every hover and every app switch.
+struct FeedbackHostModifier: ViewModifier {
+    @EnvironmentObject private var toasts: ToastCenter
+    let sheetPresented: Bool
+    let exportProgress: ExportProgress?
+    let isEnhancing: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .bottom) {
+                FeedbackOverlay(toasts: toasts) {
+                    if let progress = exportProgress {
+                        ExportProgressHUD(progress: progress)
+                    } else if isEnhancing {
+                        EnhancingHUD()
+                    }
+                }
+            }
+            .onChange(of: sheetPresented, initial: true) { _, presented in toasts.setSheetPresented(presented) }
+            // The notifications below only report CHANGES: a window that appears while the app is in the background starts paused.
+            .onAppear { toasts.setAppActive(NSApp.isActive) }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in toasts.setAppActive(false) }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in toasts.setAppActive(true) }
     }
 }

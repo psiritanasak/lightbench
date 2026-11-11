@@ -10,6 +10,8 @@ import SwiftUI
 /// turn are merged by `onChange` and only the last is seen. Alerts still waiting when the window closes are lost.
 struct FeedbackAlertModifier: ViewModifier {
     let sources: [Binding<Feedback?>]
+    /// Lists of results other models post into (several can arrive in one turn; none is merged away). Each is emptied as it is taken.
+    var queues: [Binding<[Feedback]>] = []
     let perform: (FeedbackAction) -> Void
 
     @EnvironmentObject private var toasts: ToastCenter
@@ -41,6 +43,18 @@ struct FeedbackAlertModifier: ViewModifier {
             }
             // `initial`: a value set while this view was not in the hierarchy is still taken when it appears.
             .onChange(of: sources.map(\.wrappedValue), initial: true) { _, _ in takeAll() }
+            // Emptying a queue below changes it once more; that second pass finds every queue empty and does nothing, so there is no loop.
+            .onChange(of: queues.map(\.wrappedValue), initial: true) { _, _ in takeQueued() }
+    }
+
+    private func takeQueued() {
+        for queue in queues {
+            let items = queue.wrappedValue
+            guard !items.isEmpty else { continue }
+            queue.wrappedValue = []
+            // A toast replaces the previous one, so when several arrive together the last stays; every alert is kept.
+            for toast in inbox.receive(all: items) { toasts.show(toast) }
+        }
     }
 
     private func takeAll() {
@@ -52,14 +66,34 @@ struct FeedbackAlertModifier: ViewModifier {
     }
 }
 
+/// Moves a model's single-slot `feedback` into a queue (the window's `feedbackAlert` drains it) as soon as it is set, so a dialog modifier
+/// that owns a model the window does not observe can still report through the one inbox.
+struct FeedbackRelayModifier: ViewModifier {
+    @Binding var source: Feedback?
+    let post: (Feedback) -> Void
+
+    func body(content: Content) -> some View {
+        content.onChange(of: source, initial: true) { _, new in
+            guard let new else { return }
+            source = nil
+            post(new)
+        }
+    }
+}
+
 extension View {
-    /// Reports what the models put in their `feedback` bindings: a toast or an alert, by its kind. Needs a `ToastCenter` in the environment.
-    /// Apply it ONCE per window with every source.
-    func feedbackAlert(_ sources: Binding<Feedback?>...) -> some View {
-        modifier(FeedbackAlertModifier(sources: sources) { action in
+    /// Reports what the models put in their `feedback` bindings and the results posted to their queues: a toast or an alert, by kind.
+    /// Needs a `ToastCenter` in the environment. Apply it ONCE per window with every source.
+    func feedbackAlert(_ sources: [Binding<Feedback?>], queues: [Binding<[Feedback]>] = []) -> some View {
+        modifier(FeedbackAlertModifier(sources: sources, queues: queues) { action in
             switch action {
             case .revealInFinder(let urls): NSWorkspace.shared.activateFileViewerSelecting(urls)
             }
         })
+    }
+
+    /// Forwards `source` to `post` (and clears it) whenever it is set.
+    func relayFeedback(_ source: Binding<Feedback?>, to post: @escaping (Feedback) -> Void) -> some View {
+        modifier(FeedbackRelayModifier(source: source, post: post))
     }
 }

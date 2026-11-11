@@ -46,7 +46,7 @@ struct ToastView: View {
         switch feedback.kind {
         case .done:
             Image(systemName: "checkmark.circle").foregroundStyle(Theme.textSecondary)
-        case .nothingToDo:
+        case .nothingToDo, .notice:
             Image(systemName: "info.circle").foregroundStyle(Theme.textSecondary)
         case .warning, .incomplete, .error:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning)

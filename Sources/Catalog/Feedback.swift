@@ -15,11 +15,14 @@ enum FeedbackKind: String, Equatable, Sendable {
     case incomplete
     /// The action failed as a whole or was refused.
     case error
+    /// Everything asked for was written, but the user must read this before carrying on (a step to do by hand, a change applied at next
+    /// launch, an approximate result). Shown as an alert. `FeedbackClassifier` never returns it: a call site chooses it explicitly.
+    case notice
 
     var presentation: FeedbackPresentation {
         switch self {
         case .done, .nothingToDo, .warning: return .toast
-        case .incomplete, .error: return .alert
+        case .incomplete, .error, .notice: return .alert
         }
     }
 }
@@ -56,6 +59,11 @@ struct Feedback: Equatable, Sendable {
 
     static func error(_ title: String, _ message: String) -> Feedback {
         Feedback(kind: .error, title: title, message: message)
+    }
+
+    /// A result that was fully written but must be read (an alert, never a toast).
+    static func notice(_ title: String, _ message: String, action: FeedbackAction? = nil) -> Feedback {
+        Feedback(kind: .notice, title: title, message: message, action: action)
     }
 }
 
@@ -98,6 +106,11 @@ struct FeedbackInbox: Equatable {
             waiting.append(feedback)
         }
         return nil
+    }
+
+    /// Takes several results in order. Returns the toasts, in order; the alerts are kept exactly as `receive(_:)` keeps them.
+    mutating func receive(all items: [Feedback]) -> [Feedback] {
+        items.compactMap { receive($0) }
     }
 
     /// The user closed `feedback`. Does nothing when a different alert is on screen. The next waiting alert is NOT shown yet: see `presentNext()`.

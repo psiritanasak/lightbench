@@ -33,7 +33,10 @@ final class ImportCopyModel: ObservableObject {
     var isBusy: Bool { isScanning || isWorking || setup != nil }
 
     private weak var catalog: CatalogModel?
-    private func publishBusy() { catalog?.importCopyBusy = isBusy }
+    private func publishBusy() {
+        catalog?.importCopyBusy = isBusy
+        catalog?.importCopySheetPresented = setup != nil
+    }
 
     private let preferences: AppPreferences
     private let chooseFolder: (_ message: String, _ prompt: String, _ canCreate: Bool) -> URL?

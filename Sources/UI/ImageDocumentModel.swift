@@ -13,6 +13,11 @@ final class ImageDocumentModel: ObservableObject {
     /// Bumped every time `currentImage` is replaced (a photo load, a RAW re-decode). Consumers that cache something derived
     /// from the pixels — the Looks tab's preview base — compare it to know their cache is stale.
     @Published private(set) var imageRevision = 0
+
+    /// Finished results other views post for the window's one `feedbackAlert` to take (toast or alert by kind); the window empties the
+    /// list as it takes them, and several in one turn are all kept.
+    @Published var postedFeedback: [Feedback] = []
+    func post(_ feedback: Feedback) { postedFeedback.append(feedback) }
     /// True while `load(from:)` is awaiting a RAW photo's one-time
     /// `RawDecoder.materialize` (see that function's own doc comment) —
     /// distinct from the pre-existing, private `isLoadingPhoto` below,

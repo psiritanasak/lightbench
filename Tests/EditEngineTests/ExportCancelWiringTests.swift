@@ -29,8 +29,11 @@ final class ExportCancelWiringTests: XCTestCase {
 
     func testTheStripsCancelIsFocusableFalseAndWiredToTheExportModel() throws {
         let view = try source("Sources/UI/ToastView.swift")
-        XCTAssertTrue(view.contains("Button(\"Cancel\")"))
-        XCTAssertTrue(view.contains(".focusable(false)"))
+        let start = try XCTUnwrap(view.range(of: "struct ActivityStrip"))
+        let end = try XCTUnwrap(view.range(of: "struct FeedbackOverlay"))
+        let strip = String(view[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(strip.contains("Button(\"Cancel\")"))
+        XCTAssertTrue(strip.contains(".focusable(false)"), "scoped to the strip: the toast's own buttons do not count")
         XCTAssertTrue(try source("Sources/UI/ContentView.swift").contains("exportModel.cancelExport()"))
     }
 }

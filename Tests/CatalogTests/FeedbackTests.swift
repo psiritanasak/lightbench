@@ -8,6 +8,48 @@ final class FeedbackTests: XCTestCase {
         XCTAssertEqual(FeedbackKind.warning.presentation, .toast)
         XCTAssertEqual(FeedbackKind.incomplete.presentation, .alert)
         XCTAssertEqual(FeedbackKind.error.presentation, .alert)
+        XCTAssertEqual(FeedbackKind.notice.presentation, .alert)
+    }
+
+    func testNoticeHelperIsAnAlertKindWithItsAction() {
+        let url = URL(fileURLWithPath: "/tmp/x")
+        let notice = Feedback.notice("Catalog Backup", "Backed up.", action: .revealInFinder([url]))
+        XCTAssertEqual(notice.kind, .notice)
+        XCTAssertEqual(notice.presentation, .alert)
+        XCTAssertEqual(notice.action, .revealInFinder([url]))
+        XCTAssertNil(Feedback.notice("t", "m").action)
+    }
+
+    func testTheClassifierNeverReturnsANotice() {
+        for written in 0...2 {
+            for unchanged in 0...2 {
+                for notWritten in 0...2 {
+                    for caveats in 0...2 {
+                        let kind = FeedbackClassifier.batch(written: written, unchanged: unchanged, notWritten: notWritten, caveats: caveats)
+                        XCTAssertNotEqual(kind, .notice)
+                    }
+                }
+            }
+        }
+    }
+
+    func testInboxKeepsANotice() {
+        var inbox = FeedbackInbox()
+        XCTAssertNil(inbox.receive(Feedback.notice("Rename", "Read this.")))
+        XCTAssertEqual(inbox.presented?.kind, .notice)
+    }
+
+    func testReceiveAllReturnsTheToastsInOrderAndKeepsTheAlerts() {
+        var inbox = FeedbackInbox()
+        let toast1 = Feedback(kind: .done, title: "A", message: "1")
+        let toast2 = Feedback(kind: .warning, title: "B", message: "2")
+        let alertA = Feedback.error("C", "a")
+        let alertB = Feedback.notice("D", "b")
+        let toasts = inbox.receive(all: [toast1, alertA, toast2, alertB])
+        XCTAssertEqual(toasts, [toast1, toast2])
+        XCTAssertEqual(inbox.presented, alertA)
+        XCTAssertEqual(inbox.waiting, [alertB])
+        XCTAssertEqual(inbox.receive(all: []), [])
     }
 
     func testBatchTable() {

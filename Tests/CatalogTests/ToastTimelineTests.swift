@@ -25,6 +25,12 @@ final class ToastTimelineTests: XCTestCase {
         XCTAssertEqual(timeline.current?.feedback, toast, "a refused alert leaves the toast alone")
     }
 
+    func testANoticeIsRefusedLikeAnAlert() {
+        var timeline = ToastTimeline()
+        XCTAssertNil(timeline.show(Feedback.notice("Backup", "Read this."), now: t0, voiceOver: false))
+        XCTAssertNil(timeline.current)
+    }
+
     func testReplacementGetsANewIDAndTheOldWakeIsIgnored() throws {
         var timeline = ToastTimeline()
         let first = try XCTUnwrap(timeline.show(toast, now: t0, voiceOver: false))

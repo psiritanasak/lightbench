@@ -11,7 +11,7 @@ final class ActivityItemTests: XCTestCase {
 
     func testStoppingTextAndNoCancel() {
         let item = ActivityItem.export(completed: 3, total: 10, stopping: true)
-        XCTAssertEqual(item.text, "Stopping after this photo…")
+        XCTAssertEqual(item.text, "Stopping after this photo… 3 of 10 exported")
         XCTAssertFalse(item.canCancel)
     }
 
@@ -22,6 +22,21 @@ final class ActivityItemTests: XCTestCase {
         XCTAssertFalse(ActivityItem.export(completed: 2, total: 3, stopping: false).canCancel, "last photo in flight: nothing left to stop")
         XCTAssertFalse(ActivityItem.export(completed: 3, total: 3, stopping: false).canCancel)
         XCTAssertFalse(ActivityItem.export(completed: 0, total: 1, stopping: false).canCancel)
+    }
+
+    func testImportingFoldersIsIndeterminateAndCannotBeCancelled() {
+        XCTAssertEqual(ActivityItem.importingFolders.text, "Importing photos…")
+        XCTAssertEqual(ActivityItem.importingFolders.progress, .indeterminate)
+        XCTAssertFalse(ActivityItem.importingFolders.canCancel)
+        XCTAssertEqual(ActivityItem.importingFolders.kind, .importFolders)
+    }
+
+    func testStripListsExportThenEnhanceThenImport() {
+        XCTAssertEqual(ActivityItem.strip(export: nil, stopping: false, enhancing: false, importingFolders: false), [])
+        let all = ActivityItem.strip(export: (completed: 1, total: 5), stopping: false, enhancing: true, importingFolders: true)
+        XCTAssertEqual(all.map(\.kind), [.export, .enhance, .importFolders])
+        XCTAssertEqual(all.first, ActivityItem.export(completed: 1, total: 5, stopping: false))
+        XCTAssertEqual(ActivityItem.strip(export: nil, stopping: true, enhancing: false, importingFolders: true).map(\.kind), [.importFolders])
     }
 
     func testEnhancingIsIndeterminateAndCannotBeCancelled() {

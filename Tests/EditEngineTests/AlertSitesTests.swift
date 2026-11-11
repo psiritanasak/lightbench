@@ -51,22 +51,45 @@ final class AlertSitesTests: XCTestCase {
 
     /// ONE `feedbackAlert` in `ContentView` takes all three models' results into one inbox (three stacked alert modifiers can leave an
     /// alert stuck when two fire together).
-    func testContentViewHasOneFeedbackAlertNamingAllThreeModels() throws {
+    func testContentViewHasOneFeedbackAlertNamingEverySourceAndQueue() throws {
         let lines = try XCTUnwrap(try codeLines()["ContentView.swift"])
         let calls = lines.filter { $0.contains(".feedbackAlert(") }
         XCTAssertEqual(calls.count, 1)
         let call = try XCTUnwrap(calls.first)
-        for binding in ["$pasteModel.feedback", "$enhanceModel.feedback", "$exportModel.feedback"] {
-            XCTAssertTrue(call.contains(binding), "feedbackAlert names \(binding)")
+        XCTAssertTrue(call.contains("feedbackSources"))
+        XCTAssertTrue(call.contains("feedbackQueues"))
+        // The bindings live in the two computed lists; the list grows as models are converted.
+        let text = lines.joined(separator: "\n")
+        for binding in [
+            "$pasteModel.feedback", "$enhanceModel.feedback", "$exportModel.feedback",
+            "$catalog.postedFeedback", "$document.postedFeedback",
+        ] {
+            XCTAssertTrue(text.contains(binding), "ContentView names \(binding)")
         }
     }
 
     /// The sheets live in several UI files (ContentView hosts two; the rest are in the sheet views and dialog modifiers). Eight are listed in
-    /// `ContentView.anySheetPresented`; the Copy Photos setup sheet (`ImportCopyDialogModifier`) is the known gap.
+    /// `ContentView.anySheetPresented`, the Copy Photos setup sheet through `catalog.importCopySheetPresented`.
     func testEverySheetIsKnownToTheToastPause() throws {
         let all = try codeLines()
         let found = all.mapValues { $0.filter { $0.contains(".sheet(") }.count }.filter { $0.value > 0 }
         XCTAssertEqual(found.values.reduce(0, +), 9, "list the new sheet in ContentView.anySheetPresented, then update this count")
-        XCTAssertEqual(found["ImportCopyDialogModifier.swift"], 1, "the one sheet NOT in anySheetPresented (known gap)")
+        XCTAssertEqual(found["ImportCopyDialogModifier.swift"], 1)
+        let lines = try XCTUnwrap(all["ContentView.swift"])
+        let start = try XCTUnwrap(lines.firstIndex { $0.contains("var anySheetPresented") })
+        let body = lines[start...].prefix(8).joined(separator: "\n")
+        XCTAssertTrue(body.contains("catalog.importCopySheetPresented"), "the Copy Photos sheet pauses the toast clock")
+    }
+
+    /// The anchor markers that place toasts over the photo and the grid; Cull has none (whole-window fallback).
+    func testPlacementMarkersAreOnTheEditorCanvasAndTheLibraryGrid() throws {
+        let all = try codeLines()
+        for file in ["ContentView.swift", "LibraryGridView.swift"] {
+            let lines = try XCTUnwrap(all[file])
+            XCTAssertEqual(lines.filter { $0.contains(".feedbackArea()") }.count, 1, file)
+        }
+        for (file, lines) in all where file != "ContentView.swift" && file != "LibraryGridView.swift" {
+            XCTAssertFalse(lines.contains { $0.contains(".feedbackArea()") }, "\(file) must not mark an area (Cull falls back to the window)")
+        }
     }
 }

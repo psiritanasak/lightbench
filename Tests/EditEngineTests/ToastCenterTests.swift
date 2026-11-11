@@ -63,6 +63,14 @@ final class ToastCenterTests: XCTestCase {
         XCTAssertNil(center.current)
     }
 
+    func testANoticeIsIgnored() {
+        let center = makeCenter()
+        center.show(Feedback.notice("Backup", "Read this."))
+        XCTAssertNil(center.current)
+        XCTAssertTrue(announcements.isEmpty)
+        XCTAssertTrue(delays.isEmpty)
+    }
+
     func testAnAlertKindIsIgnored() {
         let center = makeCenter()
         center.show(Feedback.error("Export", "No."))

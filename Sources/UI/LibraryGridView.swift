@@ -351,6 +351,8 @@ struct LibraryGridView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Toasts and the activity strip centre on the grid, above the thumbnail-size bar.
+            .feedbackArea()
             .focusable()
             .focusEffectDisabled()
             .focused($isGridFocused)

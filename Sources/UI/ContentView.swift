@@ -1168,7 +1168,7 @@ struct ContentView: View {
         // stacked alert modifiers could leave one stuck when two fired
         // together, hence one modifier with three sources.
         contentWithExportAlerts
-            .feedbackAlert($pasteModel.feedback, $enhanceModel.feedback, $exportModel.feedback)
+            .feedbackAlert(feedbackSources, queues: feedbackQueues)
             // Irreversibility mitigation: only the currently-open photo
             // (if it's among the targets) gets an undo step, via
             // `ImageDocumentModel.pasteSettings(_:)`'s own `EditHistory`
@@ -1383,23 +1383,32 @@ struct ContentView: View {
             ))
     }
 
-    /// What the activity strip lists: Export first, then Enhance.
+    /// The single-slot results the window's one `feedbackAlert` takes.
+    private var feedbackSources: [Binding<Feedback?>] {
+        [$pasteModel.feedback, $enhanceModel.feedback, $exportModel.feedback]
+    }
+
+    /// The queues other models post finished results into (drained by the same `feedbackAlert`).
+    private var feedbackQueues: [Binding<[Feedback]>] {
+        [$catalog.postedFeedback, $document.postedFeedback]
+    }
+
+    /// What the activity strip lists: Export, Enhance, then the folder import. Copy Photos raises the import flag too when it registers its
+    /// copies, so the import row is left out while it is the one running.
     private var activityItems: [ActivityItem] {
-        var items: [ActivityItem] = []
-        if let progress = exportModel.progress {
-            items.append(.export(completed: progress.completed, total: progress.total, stopping: exportModel.isCancelRequested))
-        }
-        if enhanceModel.isEnhancing { items.append(.enhancing) }
-        return items
+        let progress = exportModel.progress.map { (completed: $0.completed, total: $0.total) }
+        return ActivityItem.strip(
+            export: progress, stopping: exportModel.isCancelRequested, enhancing: enhanceModel.isEnhancing,
+            importingFolders: catalog.isImporting && !catalog.importCopyBusy
+        )
     }
 
     /// True while any sheet this view hosts is up: a macOS sheet is its own window, so a toast cannot sit above it and its clock pauses instead.
-    /// Every `.sheet(` in `Sources/UI` must be listed here (`AlertSitesTests` counts them). Known gaps: the Copy Photos setup sheet, and the
-    /// folder panels (`NSOpenPanel`), which are not sheets: the clock keeps running under those.
+    /// Every `.sheet(` in `Sources/UI` must be listed here (`AlertSitesTests` counts them). Known gap: the folder panels (`NSOpenPanel`), which are not sheets: the clock keeps running under those.
     private var anySheetPresented: Bool {
         exportModel.isPresentingOptions || renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil
             || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented
-            || catalog.recentlyDeletedPresented || catalog.autoStackSheetPresented
+            || catalog.recentlyDeletedPresented || catalog.autoStackSheetPresented || catalog.importCopySheetPresented
     }
 
     /// Library toolbar "People" button (its own property: `body` is at the type-checker's limit).
@@ -2166,6 +2175,8 @@ struct ContentView: View {
                             : isEditingOverlayMask ? "Mask editing" : "Image"
                     )
                 }
+                // Toasts and the activity strip centre on the photo, above the rating bar.
+                .feedbackArea()
                 editorRatingBar
             }
             .frame(minWidth: 480, minHeight: 360)
@@ -2760,6 +2771,26 @@ extension ToolbarContent {
     }
 }
 
+// MARK: - Feedback area
+
+/// Where toasts and the activity strip sit: the bounds of the marked view (`feedbackArea()`), so they float over the photo or the grid
+/// rather than the whole window. The first marked view wins; with none marked the host falls back to the whole window.
+struct FeedbackAreaKey: PreferenceKey {
+    // Computed (not a stored static) so Swift 6 strict concurrency accepts a non-Sendable `Anchor`.
+    static var defaultValue: Anchor<CGRect>? { nil }
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
+    }
+}
+
+extension View {
+    /// Marks this view as the area toasts and the activity strip are centred in.
+    func feedbackArea() -> some View {
+        anchorPreference(key: FeedbackAreaKey.self, value: .bounds) { $0 }
+    }
+}
+
 // MARK: - Feedback host
 
 /// The bottom overlay (the toast above the activity strip) and the two things that pause the toast clock: a sheet being up and the app being
@@ -2773,8 +2804,14 @@ struct FeedbackHostModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .overlay(alignment: .bottom) {
-                FeedbackOverlay(toasts: toasts, activities: activities, onCancel: onCancel)
+            .overlayPreferenceValue(FeedbackAreaKey.self) { anchor in
+                GeometryReader { proxy in
+                    // No marked view reports an area (Cull): the whole window, as before.
+                    let area = anchor.map { proxy[$0] } ?? CGRect(origin: .zero, size: proxy.size)
+                    FeedbackOverlay(toasts: toasts, activities: activities, onCancel: onCancel)
+                        .frame(width: area.width, height: area.height, alignment: .bottom)
+                        .offset(x: area.minX, y: area.minY)
+                }
             }
             .onChange(of: sheetPresented, initial: true) { _, presented in toasts.setSheetPresented(presented) }
             // The notifications below only report CHANGES: a window that appears while the app is in the background starts paused.

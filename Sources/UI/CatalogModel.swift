@@ -221,6 +221,13 @@ final class CatalogModel: ObservableObject {
     /// `importCopyBusy` mirrors "a source is being scanned, the options sheet is up or photos are being copied".
     @Published var importCopyRequested = false
     @Published var importCopyBusy = false
+    /// The Copy Photos setup sheet is up (set by `ImportCopyModel`, exactly while its `setup` is non-nil): the toast clock pauses under it.
+    @Published var importCopySheetPresented = false
+
+    /// Finished results other models post for the window's one `feedbackAlert` to take (toast or alert by kind). Several can arrive in one
+    /// turn and none is merged away; the window empties the list as it takes them.
+    @Published var postedFeedback: [Feedback] = []
+    func post(_ feedback: Feedback) { postedFeedback.append(feedback) }
     /// A file tool (XMP read/write, Move to Trash, Copy Photos) is up or running: the menus that act on the selection's files wait for it.
     var fileToolBusy: Bool { xmpBusy || trashBusy || importCopyBusy }
     let xmp = XMPModel()

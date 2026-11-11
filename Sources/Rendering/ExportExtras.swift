@@ -96,15 +96,16 @@ enum ExportSummary {
         if duplicatesSkipped > 0 {
             part += " \(duplicatesSkipped) virtual cop\(duplicatesSkipped == 1 ? "y shared a file" : "ies shared a file") and was not copied again."
         }
+        if failed > 0 { part += " \(failed) failed." }
         if cancelled > 0 {
-            part += " Stopped: \(cancelled) photo\(cancelled == 1 ? "" : "s") not exported."
+            if original {
+                part += " Stopped: \(cancelled) file\(cancelled == 1 ? "" : "s") not copied."
+            } else {
+                part += " Stopped: \(cancelled) photo\(cancelled == 1 ? "" : "s") not exported."
+            }
         }
-        guard failed > 0 else { return part }
-        var message = "\(part) \(failed) failed."
-        if let firstFailureMessage {
-            message += " First error: \(firstFailureMessage)"
-        }
-        return message
+        if failed > 0, let firstFailureMessage { part += " First error: \(firstFailureMessage)" }
+        return part
     }
 
     /// The result of a batch: any failed photo makes it an alert (`.incomplete`, with Show in Finder when some files were written); a clean

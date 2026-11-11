@@ -587,6 +587,24 @@ final class ExportExtrasTests: XCTestCase {
         XCTAssertEqual(feedback.action, .revealInFinder([written[0]]))
     }
 
+    func testOriginalModeSaysFilesNotCopied() {
+        XCTAssertEqual(
+            ExportSummary.text(succeeded: 2, failed: 0, firstFailureMessage: nil, original: true, cancelled: 3),
+            "Copied 2 original files. Stopped: 3 files not copied."
+        )
+        XCTAssertEqual(
+            ExportSummary.text(succeeded: 2, failed: 0, firstFailureMessage: nil, original: true, cancelled: 1),
+            "Copied 2 original files. Stopped: 1 file not copied."
+        )
+    }
+
+    func testClauseOrderIsCaveatsThenFailedThenStoppedThenFirstError() {
+        XCTAssertEqual(
+            ExportSummary.text(succeeded: 1, failed: 2, firstFailureMessage: "disk full", overLimit: 1, cancelled: 4),
+            "Exported 1 photo. 1 photo is over the size limit (smallest quality used). 2 failed. Stopped: 4 photos not exported. First error: disk full"
+        )
+    }
+
     func testCancelledSingularWording() {
         let text = ExportSummary.text(succeeded: 2, failed: 0, firstFailureMessage: nil, cancelled: 1)
         XCTAssertEqual(text, "Exported 2 photos. Stopped: 1 photo not exported.")
@@ -597,7 +615,8 @@ final class ExportExtrasTests: XCTestCase {
         XCTAssertEqual(feedback.kind, .incomplete)
         XCTAssertEqual(feedback.presentation, .alert)
         XCTAssertTrue(feedback.message.contains("Stopped: 3 photos not exported."))
-        XCTAssertTrue(feedback.message.contains("1 failed. First error: disk full"))
+        XCTAssertTrue(feedback.message.contains("1 failed."))
+        XCTAssertTrue(feedback.message.hasSuffix("First error: disk full"))
     }
 
     func testZeroWrittenPlusCancelledIsAWarning() {

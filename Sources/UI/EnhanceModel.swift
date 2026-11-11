@@ -18,7 +18,8 @@ import Foundation
 @MainActor
 final class EnhanceModel: ObservableObject {
     @Published private(set) var isEnhancing = false
-    @Published var statusMessage: String?
+    /// The result of the last Enhance, taken by `feedbackAlert`. Written ONCE per completed action.
+    @Published var feedback: Feedback?
 
     /// `SidecarFolderAccess`'s third caller (after `ImageDocumentModel` and
     /// `PasteSettingsModel`) — reused exactly as-is, no new bookmark
@@ -67,7 +68,7 @@ final class EnhanceModel: ObservableObject {
 
             do {
                 guard try await catalog.catalogedPhoto(atPath: sourceURL.path) != nil else {
-                    statusMessage = "Enhance works on photos in your Library — import this photo's folder first."
+                    feedback = .error(Self.feedbackTitle, "Enhance works on photos in your Library — import this photo's folder first.")
                     return
                 }
             } catch let error as CatalogDatabaseError {
@@ -76,10 +77,10 @@ final class EnhanceModel: ObservableObject {
                 // show Foundation's generic fallback text, not the actual
                 // message `catalogedPhoto` constructed (e.g. "isn't ready
                 // yet"). Read `.message` directly instead.
-                statusMessage = error.message
+                feedback = .error(Self.feedbackTitle, error.message)
                 return
             } catch {
-                statusMessage = error.localizedDescription
+                feedback = .error(Self.feedbackTitle, error.localizedDescription)
                 return
             }
 
@@ -97,7 +98,7 @@ final class EnhanceModel: ObservableObject {
                 // comment on this policy choice).
                 return
             case .failed(let error):
-                statusMessage = error.localizedDescription
+                feedback = .error(Self.feedbackTitle, error.localizedDescription)
             case .granted(let grantedFolder):
                 // Reviewer-caught: `NSOpenPanel` (inside `resolveOrRequest`,
                 // on a first-time grant) lets the user navigate to and pick
@@ -126,7 +127,7 @@ final class EnhanceModel: ObservableObject {
                 // `resolveOrRequest`'s own persistence decision exactly so
                 // the two checks can't silently disagree.
                 guard grantedFolder.coversAccess(to: folder) else {
-                    statusMessage = "Enhance needs access to “\(folder.lastPathComponent)” (or a parent folder containing it) — try again."
+                    feedback = .error(Self.feedbackTitle, "Enhance needs access to “\(folder.lastPathComponent)” (or a parent folder containing it) — try again.")
                     return
                 }
                 // `grantedFolder` (the SCOPE to hold) and `folder` (the
@@ -147,7 +148,7 @@ final class EnhanceModel: ObservableObject {
 
     private func runEnhance(sourceURL: URL, editState: EditState, accessScope: URL, destinationFolder: URL, catalog: CatalogModel) async {
         guard accessScope.startAccessingSecurityScopedResource() else {
-            statusMessage = "Couldn't get access to the destination folder."
+            feedback = .error(Self.feedbackTitle, "Couldn't get access to the destination folder.")
             return
         }
         defer { accessScope.stopAccessingSecurityScopedResource() }
@@ -169,7 +170,7 @@ final class EnhanceModel: ObservableObject {
             // `PhotoEnhanceError` or a filesystem-level `NSError`; that
             // catch arm belongs on `registerEnhancedPhoto`'s own call
             // below, not here.
-            statusMessage = "Enhance failed: \(error.localizedDescription)"
+            feedback = .error(Self.feedbackTitle, "Enhance failed: \(error.localizedDescription)")
             return
         }
 
@@ -187,12 +188,29 @@ final class EnhanceModel: ObservableObject {
         // nothing and removes any doubt).
         do {
             _ = try await catalog.registerEnhancedPhoto(at: outcome.url)
-            statusMessage = Self.summary(outcome)
+            feedback = Self.feedback(outcome)
         } catch let error as CatalogDatabaseError {
-            statusMessage = "Created “\(outcome.url.lastPathComponent)”, but couldn't add it to the Library: \(error.message)"
+            feedback = Self.notRegisteredFeedback(outcome, reason: error.message)
         } catch {
-            statusMessage = "Created “\(outcome.url.lastPathComponent)”, but couldn't add it to the Library: \(error.localizedDescription)"
+            feedback = Self.notRegisteredFeedback(outcome, reason: error.localizedDescription)
         }
+    }
+
+    nonisolated static let feedbackTitle = "Enhance"
+
+    /// The result of a successful Enhance: MetalFX is `.done`, the Lanczos fallback is `.warning` (both toasts), each with Show in Finder.
+    nonisolated static func feedback(_ outcome: EnhanceOutcome) -> Feedback {
+        let kind: FeedbackKind = outcome.method == .metalFX ? .done : .warning
+        return Feedback(kind: kind, title: feedbackTitle, message: summary(outcome), action: .revealInFinder([outcome.url]))
+    }
+
+    /// The file exists but the Library does not know it: `.incomplete` (an alert), with Show in Finder.
+    nonisolated static func notRegisteredFeedback(_ outcome: EnhanceOutcome, reason: String) -> Feedback {
+        Feedback(
+            kind: .incomplete, title: feedbackTitle,
+            message: "Created “\(outcome.url.lastPathComponent)”, but couldn't add it to the Library: \(reason)",
+            action: .revealInFinder([outcome.url])
+        )
     }
 
     /// Pure string formatting, pulled out of `runEnhance`'s own file-I/O

@@ -29,7 +29,7 @@ final class AlertSitesTests: XCTestCase {
             "AdjustTabView.swift": 3,
             "CatalogBackupDialogModifier.swift": 1,
             "CollectionSidebarView.swift": 6,
-            "ContentView.swift": 8,
+            "ContentView.swift": 5,
             "CropTabView.swift": 3,
             "FeedbackAlertModifier.swift": 1,
             "ImportCopyDialogModifier.swift": 1,
@@ -47,6 +47,18 @@ final class AlertSitesTests: XCTestCase {
             if n > 0 { found[name] = n }
         }
         XCTAssertEqual(found, allowed, "an alert site was added or removed: list it in `allowed` with a verdict")
+    }
+
+    /// ONE `feedbackAlert` in `ContentView` takes all three models' results into one inbox (three stacked alert modifiers can leave an
+    /// alert stuck when two fire together).
+    func testContentViewHasOneFeedbackAlertNamingAllThreeModels() throws {
+        let lines = try XCTUnwrap(try codeLines()["ContentView.swift"])
+        let calls = lines.filter { $0.contains(".feedbackAlert(") }
+        XCTAssertEqual(calls.count, 1)
+        let call = try XCTUnwrap(calls.first)
+        for binding in ["$pasteModel.feedback", "$enhanceModel.feedback", "$exportModel.feedback"] {
+            XCTAssertTrue(call.contains(binding), "feedbackAlert names \(binding)")
+        }
     }
 
     /// The sheets live in several UI files (ContentView hosts two; the rest are in the sheet views and dialog modifiers). Eight are listed in

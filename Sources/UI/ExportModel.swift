@@ -16,11 +16,13 @@ final class ExportModel: ObservableObject {
     @Published var settings: ExportSettings {
         didSet { if settings != oldValue { store.save(settings) } }
     }
-    @Published var statusMessage: String?
+    /// The result of the last export, taken by `feedbackAlert`. Written ONCE per completed action.
+    @Published var feedback: Feedback?
     @Published private(set) var isExporting = false
     @Published private(set) var progress: ExportProgress?
 
     private let store: ExportSettingsStore
+    nonisolated static let feedbackTitle = "Export"
 
     init(store: ExportSettingsStore = ExportSettingsStore()) {
         self.store = store
@@ -44,7 +46,7 @@ final class ExportModel: ObservableObject {
         guard !isExporting else { return }
         let originalCount = photos.count
         guard !photos.isEmpty else {
-            statusMessage = "No photos to export."
+            feedback = Feedback(kind: .nothingToDo, title: Self.feedbackTitle, message: "No photos to export.")
             return
         }
         // Original files: virtual copies share their master's file, so each FILE is copied once. Done BEFORE the panel so
@@ -82,7 +84,7 @@ final class ExportModel: ObservableObject {
                 relativeTo: nil
             )
         else {
-            statusMessage = "Couldn't get access to the destination folder."
+            feedback = .error(Self.feedbackTitle, "Couldn't get access to the destination folder.")
             return
         }
         var isStale = false
@@ -94,7 +96,7 @@ final class ExportModel: ObservableObject {
                 bookmarkDataIsStale: &isStale
             )
         else {
-            statusMessage = "Couldn't get access to the destination folder."
+            feedback = .error(Self.feedbackTitle, "Couldn't get access to the destination folder.")
             return
         }
 
@@ -115,7 +117,7 @@ final class ExportModel: ObservableObject {
                 await MainActor.run {
                     self?.isExporting = false
                     self?.progress = nil
-                    self?.statusMessage = "Couldn't get access to the destination folder."
+                    self?.feedback = .error(Self.feedbackTitle, "Couldn't get access to the destination folder.")
                 }
                 return
             }
@@ -125,11 +127,13 @@ final class ExportModel: ObservableObject {
             var firstFailureMessage: String?
             var overLimit = 0
             var truncated = 0
+            var written: [URL] = []
             for (index, photo) in batch.enumerated() {
                 do {
                     if isOriginal {
                         let result = try PhotoExporter.exportOriginal(photo, to: destination, settings: settingsSnapshot, sequenceIndex: index)
                         if result.sourceWasTruncated { truncated += 1 }
+                        written.append(result.url)
                     } else {
                         let editState = PhotoExporter.loadEditState(for: photo)
                         let outcome = try await PhotoExporter.exportReporting(
@@ -138,6 +142,7 @@ final class ExportModel: ObservableObject {
                             info: photo.id.flatMap { infoByPhotoID[$0] } ?? PhotoInfo()
                         )
                         if outcome.overLimit { overLimit += 1 }
+                        written.append(outcome.url)
                     }
                     succeeded += 1
                 } catch {
@@ -153,9 +158,10 @@ final class ExportModel: ObservableObject {
             await MainActor.run {
                 self?.isExporting = false
                 self?.progress = nil
-                self?.statusMessage = ExportSummary.text(
+                self?.feedback = ExportSummary.feedback(
                     succeeded: succeeded, failed: failed, firstFailureMessage: firstFailureMessage,
-                    overLimit: overLimit, original: isOriginal, truncated: truncated, duplicatesSkipped: duplicatesSkipped
+                    overLimit: overLimit, original: isOriginal, truncated: truncated, duplicatesSkipped: duplicatesSkipped,
+                    written: written
                 )
             }
         }

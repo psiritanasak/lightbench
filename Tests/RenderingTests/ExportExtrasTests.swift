@@ -530,4 +530,50 @@ final class ExportExtrasTests: XCTestCase {
         XCTAssertEqual(ExportNamePreview.evaluate(template: "{name}", photo: p, format: .jpeg, captureDate: nil, kind: .original), .example("IMG_0001.NEF"))
         XCTAssertEqual(ExportNamePreview.evaluate(template: "{name}", photo: p, format: .jpeg, captureDate: nil), .example("IMG_0001.jpg"))
     }
+
+    // MARK: - Feedback
+
+    private let written = [URL(fileURLWithPath: "/tmp/a.jpg"), URL(fileURLWithPath: "/tmp/b.jpg")]
+
+    func testFeedbackCleanRunIsDoneWithShowInFinder() {
+        let feedback = ExportSummary.feedback(succeeded: 2, failed: 0, firstFailureMessage: nil, written: written)
+        XCTAssertEqual(feedback.kind, .done)
+        XCTAssertEqual(feedback.title, "Export")
+        XCTAssertEqual(feedback.action, .revealInFinder(written))
+        XCTAssertEqual(feedback.message, ExportSummary.text(succeeded: 2, failed: 0, firstFailureMessage: nil))
+    }
+
+    func testFeedbackCaveatsAreWarningToasts() {
+        XCTAssertEqual(ExportSummary.feedback(succeeded: 2, failed: 0, firstFailureMessage: nil, overLimit: 1, written: written).kind, .warning)
+        XCTAssertEqual(
+            ExportSummary.feedback(succeeded: 2, failed: 0, firstFailureMessage: nil, original: true, truncated: 1, written: written).kind,
+            .warning
+        )
+        let dup = ExportSummary.feedback(
+            succeeded: 2, failed: 0, firstFailureMessage: nil, original: true, duplicatesSkipped: 1, written: written
+        )
+        XCTAssertEqual(dup.kind, .warning)
+        XCTAssertEqual(dup.presentation, .toast)
+    }
+
+    func testFeedbackAFailureIsAnAlertEvenWithCaveats() {
+        let some = ExportSummary.feedback(succeeded: 1, failed: 2, firstFailureMessage: "disk full", written: [written[0]])
+        XCTAssertEqual(some.kind, .incomplete)
+        XCTAssertEqual(some.action, .revealInFinder([written[0]]))
+        XCTAssertEqual(some.message, ExportSummary.text(succeeded: 1, failed: 2, firstFailureMessage: "disk full"))
+        let all = ExportSummary.feedback(succeeded: 0, failed: 3, firstFailureMessage: "disk full", written: [])
+        XCTAssertEqual(all.kind, .incomplete)
+        XCTAssertNil(all.action)
+        let mixed = ExportSummary.feedback(succeeded: 1, failed: 1, firstFailureMessage: nil, overLimit: 1, written: [written[0]])
+        XCTAssertEqual(mixed.presentation, .alert)
+    }
+
+    func testFeedbackOriginalCopyIsDone() {
+        let feedback = ExportSummary.feedback(succeeded: 2, failed: 0, firstFailureMessage: nil, original: true, written: written)
+        XCTAssertEqual(feedback.kind, .done)
+        XCTAssertEqual(
+            feedback.message,
+            ExportSummary.text(succeeded: 2, failed: 0, firstFailureMessage: nil, original: true)
+        )
+    }
 }

@@ -102,6 +102,27 @@ enum ExportSummary {
         }
         return message
     }
+
+    /// The result of a batch: any failed photo makes it an alert (`.incomplete`, with Show in Finder when some files were written); a clean
+    /// run with a note (over the size limit, cut-off source, shared virtual-copy file) is a `.warning` toast; otherwise `.done`.
+    /// The message is `text(...)`.
+    static func feedback(
+        succeeded: Int, failed: Int, firstFailureMessage: String?,
+        overLimit: Int = 0, original: Bool = false, truncated: Int = 0, duplicatesSkipped: Int = 0,
+        written: [URL]
+    ) -> Feedback {
+        Feedback(
+            kind: FeedbackClassifier.batch(
+                written: succeeded, notWritten: failed, caveats: overLimit + truncated + duplicatesSkipped
+            ),
+            title: "Export",
+            message: text(
+                succeeded: succeeded, failed: failed, firstFailureMessage: firstFailureMessage,
+                overLimit: overLimit, original: original, truncated: truncated, duplicatesSkipped: duplicatesSkipped
+            ),
+            action: written.isEmpty ? nil : .revealInFinder(written)
+        )
+    }
 }
 
 /// What the Export sheet shows and enables for each `ExportKind` (pure, so the rules are tested, not only SwiftUI).

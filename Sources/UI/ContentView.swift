@@ -1155,29 +1155,20 @@ struct ContentView: View {
 
     var body: some View {
         // A SECOND split, same reasoning as `mainContent`'s own doc
-        // comment below: adding the Paste Settings alert + confirmation
-        // dialog pushed `contentWithExportAlerts.alert(...).
-        // confirmationDialog(...)` past what the compiler could
-        // type-check in reasonable time as ONE expression — splitting
-        // `contentWithExportAlerts` out as its own opaque `some View` is
-        // what fixed it (measured: reproduced the exact "unable to
-        // type-check this expression" failure by inlining it back in,
-        // confirmed the split resolves it).
+        // comment below: the Paste Settings confirmation dialog pushed
+        // `contentWithExportAlerts.alert(...).confirmationDialog(...)`
+        // past what the compiler could type-check in reasonable time as
+        // ONE expression, so `contentWithExportAlerts` is its own opaque
+        // `some View`.
+        //
+        // Paste Settings, Enhance and Export report through ONE
+        // `feedbackAlert`: one inbox, one `.alert(`. A passing result is a
+        // toast; anything not written is an alert that stays until
+        // acknowledged, and a second alert waits for the first. Three
+        // stacked alert modifiers could leave one stuck when two fired
+        // together, hence one modifier with three sources.
         contentWithExportAlerts
-            .alert(
-                "Paste Settings",
-                isPresented: Binding(
-                    get: { pasteModel.statusMessage != nil },
-                    set: { isPresented in
-                        if !isPresented { pasteModel.statusMessage = nil }
-                    }
-                ),
-                presenting: pasteModel.statusMessage
-            ) { _ in
-                Button("OK") {}
-            } message: { message in
-                Text(message)
-            }
+            .feedbackAlert($pasteModel.feedback, $enhanceModel.feedback, $exportModel.feedback)
             // Irreversibility mitigation: only the currently-open photo
             // (if it's among the targets) gets an undo step, via
             // `ImageDocumentModel.pasteSettings(_:)`'s own `EditHistory`
@@ -1206,7 +1197,7 @@ struct ContentView: View {
                     // confirm). Re-check here too, at the moment of the
                     // actual, mostly-irreversible write.
                     guard !document.isLoadInFlight, !renameModel.isWorking else {
-                        pasteModel.statusMessage = "A photo is still loading or being renamed — try Paste Settings again in a moment."
+                        pasteModel.feedback = .error(PasteSettingsModel.feedbackTitle, "A photo is still loading or being renamed — try Paste Settings again in a moment.")
                         return
                     }
                     // Captured ONCE, synchronously, in the same step as
@@ -1341,20 +1332,6 @@ struct ContentView: View {
             } message: { message in
                 Text(message)
             }
-            .alert(
-                "Export",
-                isPresented: Binding(
-                    get: { exportModel.statusMessage != nil },
-                    set: { isPresented in
-                        if !isPresented { exportModel.statusMessage = nil }
-                    }
-                ),
-                presenting: exportModel.statusMessage
-            ) { _ in
-                Button("OK") {}
-            } message: { message in
-                Text(message)
-            }
             .sheet(isPresented: $exportModel.isPresentingOptions) {
                 ExportOptionsView(
                     exportModel: exportModel, photoCount: photosToExport.count, previewPhoto: photosToExport.first
@@ -1363,20 +1340,6 @@ struct ContentView: View {
                     exportModel.runExport(photos: photosToExport, keywordsByPhotoID: catalog.keywordNames(for: photosToExport),
                                            infoByPhotoID: catalog.infoForExport(photosToExport))
                 }
-            }
-            .alert(
-                "Enhance",
-                isPresented: Binding(
-                    get: { enhanceModel.statusMessage != nil },
-                    set: { isPresented in
-                        if !isPresented { enhanceModel.statusMessage = nil }
-                    }
-                ),
-                presenting: enhanceModel.statusMessage
-            ) { _ in
-                Button("OK") {}
-            } message: { message in
-                Text(message)
             }
             .sheet(isPresented: $renameModel.isPresentingSheet) {
                 RenameSheetView(model: renameModel)

@@ -78,17 +78,21 @@ enum FeedbackClassifier {
 
 /// What a `feedbackAlert` does with the results a model hands it. A toast-kind result is passed straight on; an alert-kind result is shown,
 /// and stays shown until the user acknowledges it: a later result (toast or alert) never takes it down, and later alerts wait their turn.
+///
+/// Rules for the models that feed it: a model writes its `feedback` ONCE per completed action (two writes in one run-loop turn are merged
+/// by `onChange`, and only the last is seen). Alerts still waiting when the window closes are lost.
 struct FeedbackInbox: Equatable {
     /// The alert on screen, if any.
     private(set) var presented: Feedback?
-    /// Alerts that arrived while another was on screen, oldest first.
+    /// Alerts that arrived while another was on screen (or while the next one was about to be shown), oldest first.
     private(set) var waiting: [Feedback] = []
 
     /// Takes a result. Returns it when it is a toast (the caller shows it); returns nil when it was kept as an alert.
-    /// An alert identical to one already shown or waiting is dropped, so one failure reported twice is acknowledged once.
+    /// An alert identical to one already shown or waiting is dropped, so one failure reported twice is acknowledged once. While others
+    /// wait, a new alert goes to the back of the line even if nothing is on screen at this instant (between `acknowledge` and `presentNext`).
     mutating func receive(_ feedback: Feedback) -> Feedback? {
         guard feedback.presentation == .alert else { return feedback }
-        if presented == nil {
+        if presented == nil, waiting.isEmpty {
             presented = feedback
         } else if presented != feedback, !waiting.contains(feedback) {
             waiting.append(feedback)
@@ -96,12 +100,13 @@ struct FeedbackInbox: Equatable {
         return nil
     }
 
-    /// The user closed the alert on screen. The next waiting alert is NOT shown yet: see `presentNext()`.
-    mutating func acknowledge() {
+    /// The user closed `feedback`. Does nothing when a different alert is on screen. The next waiting alert is NOT shown yet: see `presentNext()`.
+    mutating func acknowledge(_ feedback: Feedback) {
+        guard presented == feedback else { return }
         presented = nil
     }
 
-    /// Shows the oldest waiting alert, when nothing is on screen. Called a moment after `acknowledge()`, so the alert that is closing and the
+    /// Shows the oldest waiting alert, when nothing is on screen. Called a moment after `acknowledge`, so the alert that is closing and the
     /// one that follows are two presentations.
     mutating func presentNext() {
         guard presented == nil, !waiting.isEmpty else { return }

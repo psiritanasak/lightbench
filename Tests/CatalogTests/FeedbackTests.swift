@@ -58,7 +58,7 @@ final class FeedbackTests: XCTestCase {
         _ = inbox.receive(incomplete)
         XCTAssertEqual(inbox.receive(done), done, "the toast is still shown")
         XCTAssertEqual(inbox.presented, incomplete, "and the alert stays until it is acknowledged")
-        inbox.acknowledge()
+        inbox.acknowledge(incomplete)
         XCTAssertNil(inbox.presented)
     }
 
@@ -70,13 +70,35 @@ final class FeedbackTests: XCTestCase {
         XCTAssertEqual(inbox.waiting, [failure])
         inbox.presentNext()
         XCTAssertEqual(inbox.presented, incomplete, "nothing replaces an alert that is still up")
-        inbox.acknowledge()
+        inbox.acknowledge(incomplete)
         XCTAssertNil(inbox.presented, "closing one alert and showing the next are two steps")
         inbox.presentNext()
         XCTAssertEqual(inbox.presented, failure)
         XCTAssertTrue(inbox.waiting.isEmpty)
-        inbox.acknowledge()
+        inbox.acknowledge(failure)
         inbox.presentNext()
+        XCTAssertNil(inbox.presented)
+    }
+
+    func testANewAlertCannotJumpTheQueueBetweenAcknowledgeAndPresentNext() {
+        var inbox = FeedbackInbox()
+        let third = Feedback.error("Paste Settings", "Third.")
+        _ = inbox.receive(incomplete)
+        _ = inbox.receive(failure)
+        inbox.acknowledge(incomplete)
+        XCTAssertNil(inbox.receive(third))
+        XCTAssertNil(inbox.presented, "the waiting alert is shown first, by presentNext")
+        XCTAssertEqual(inbox.waiting, [failure, third])
+        inbox.presentNext()
+        XCTAssertEqual(inbox.presented, failure)
+    }
+
+    func testAcknowledgeOfADifferentAlertDoesNothing() {
+        var inbox = FeedbackInbox()
+        _ = inbox.receive(incomplete)
+        inbox.acknowledge(failure)
+        XCTAssertEqual(inbox.presented, incomplete)
+        inbox.acknowledge(incomplete)
         XCTAssertNil(inbox.presented)
     }
 

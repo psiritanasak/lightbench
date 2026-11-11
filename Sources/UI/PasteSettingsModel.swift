@@ -123,7 +123,8 @@ final class PasteSettingsModel: ObservableObject {
     /// list its own "Paste" action will operate on. `performPaste` is the
     /// actual, mostly-irreversible work; this only requests it.
     @Published var pendingTargets: [Photo]?
-    @Published var statusMessage: String?
+    /// The result of the last paste, taken by `feedbackAlert` (a toast or an alert, by its kind). Written ONCE per completed action.
+    @Published var feedback: Feedback?
 
     private let folderAccess = SidecarFolderAccess()
 
@@ -278,7 +279,7 @@ final class PasteSettingsModel: ObservableObject {
         }
 
         guard canProceed() else {
-            statusMessage = "A different photo started loading while asking for folder access — try Paste Settings again."
+            feedback = .error(Self.feedbackTitle, "A different photo started loading while asking for folder access — try Paste Settings again.")
             return
         }
 
@@ -349,7 +350,18 @@ final class PasteSettingsModel: ObservableObject {
             }
         }
 
-        statusMessage = Self.summary(written: written, unchanged: unchanged, skipped: skipped, failed: failed)
+        feedback = Self.feedback(written: written, unchanged: unchanged, skipped: skipped, failed: failed)
+    }
+
+    nonisolated static let feedbackTitle = "Paste Settings"
+
+    /// The result of a paste: any skipped or failed photo makes it an alert (`.incomplete`), so it cannot fade away; the message is `summary`.
+    nonisolated static func feedback(written: Int, unchanged: Int, skipped: Int, failed: Int) -> Feedback {
+        Feedback(
+            kind: FeedbackClassifier.batch(written: written, unchanged: unchanged, notWritten: skipped + failed),
+            title: feedbackTitle,
+            message: summary(written: written, unchanged: unchanged, skipped: skipped, failed: failed)
+        )
     }
 
     /// Not `private` — pure string formatting, directly unit-testable

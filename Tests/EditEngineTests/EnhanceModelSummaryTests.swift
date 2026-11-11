@@ -71,4 +71,35 @@ final class EnhanceModelSummaryTests: XCTestCase {
         XCTAssertEqual(EnhanceModel.describe(.scalerConstructionFailed), "couldn't start")
         XCTAssertEqual(EnhanceModel.describe(.textureAllocationFailed), "out of memory")
     }
+
+    // MARK: - Feedback
+
+    func testFeedbackForMetalFXIsDoneWithTheRevealURL() {
+        let url = URL(fileURLWithPath: "/tmp/IMG_0001-Enhanced-SR.jpg")
+        let outcome = EnhanceOutcome(url: url, method: .metalFX, fallbackReason: nil)
+        let feedback = EnhanceModel.feedback(outcome)
+        XCTAssertEqual(feedback.kind, .done)
+        XCTAssertEqual(feedback.title, "Enhance")
+        XCTAssertEqual(feedback.message, EnhanceModel.summary(outcome))
+        XCTAssertEqual(feedback.action, .revealInFinder([url]))
+    }
+
+    func testFeedbackForLanczosIsAWarningToast() {
+        let url = URL(fileURLWithPath: "/tmp/IMG_0001-Enhanced-SR.jpg")
+        let outcome = EnhanceOutcome(url: url, method: .lanczos, fallbackReason: .noMetalDevice)
+        let feedback = EnhanceModel.feedback(outcome)
+        XCTAssertEqual(feedback.kind, .warning)
+        XCTAssertEqual(feedback.presentation, .toast)
+        XCTAssertEqual(feedback.action, .revealInFinder([url]))
+    }
+
+    func testAFileThatIsNotInTheLibraryIsAnAlertWithTheRevealURL() {
+        let url = URL(fileURLWithPath: "/tmp/IMG_0001-Enhanced-SR.jpg")
+        let outcome = EnhanceOutcome(url: url, method: .metalFX, fallbackReason: nil)
+        let feedback = EnhanceModel.notRegisteredFeedback(outcome, reason: "disk full")
+        XCTAssertEqual(feedback.kind, .incomplete)
+        XCTAssertEqual(feedback.presentation, .alert)
+        XCTAssertEqual(feedback.message, "Created “IMG_0001-Enhanced-SR.jpg”, but couldn't add it to the Library: disk full")
+        XCTAssertEqual(feedback.action, .revealInFinder([url]))
+    }
 }

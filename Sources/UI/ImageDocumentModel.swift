@@ -2042,13 +2042,17 @@ final class ImageDocumentModel: ObservableObject {
         historyEditKey = currentEditKey
         refreshHistoryState()
         analysisGeneration += 1
-        subjectMaskMessage = nil // a late "no subject" must not pop up about the NEXT photo
-        depthMaskMessage = nil // likewise a late depth message
-        retouchMessage = nil // likewise a late "no good source"
-        straightenMessage = nil // and a late "no horizon found"
-        skinProtectionMessage = nil // and a late "no people found"
-        uprightMessage = nil // and a late "no lines found"
-        autoCropMessage = nil // and a late "nothing to crop"
+        // A late result of the PREVIOUS photo's tool run is dropped by the `analysisGeneration` bump above: each run compares its captured
+        // generation before it writes, and that is the real guard. The editor tools' messages are posted as feedback the moment they are set
+        // (`postEditorMessage`, nil posts nothing), so the resets below pop nothing up; they only keep each stored message describing the
+        // photo that is open (tests read them). `skinProtectionMessage` is the exception: it is shown inline in the Style section.
+        subjectMaskMessage = nil
+        depthMaskMessage = nil
+        retouchMessage = nil
+        straightenMessage = nil
+        skinProtectionMessage = nil
+        uprightMessage = nil
+        autoCropMessage = nil
     }
 
     /// Undoes the most recent undo step. First flushes any in-progress burst

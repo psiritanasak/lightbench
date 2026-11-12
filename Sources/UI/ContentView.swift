@@ -1491,9 +1491,8 @@ struct ContentView: View {
             if effects.clearsMaskSelection { adjustPanel.selectedMaskID = nil }
             if effects.clearsPointColorSelection { adjustPanel.selectedPointColorID = nil }
             if effects.clearsRetouchSelection { adjustPanel.selectedRetouchSpotID = nil }
-            // The Masks tab's subject-mask alert lives inside that tab: a message a slow Vision run sets after the user left must not pop
-            // up when they come back (the old Masks collapse binding cleared it).
-            if newTab != .masks { document.subjectMaskMessage = nil; document.depthMaskMessage = nil }
+            // A Subject / Depth result that arrives after the user left the Masks tab is no longer held back: it shows at once through the
+            // window's one feedback inbox, titled with its tool, so nothing is cleared here.
             if !newTab.keepsCompareAndZoom {
                 compareMode = .off
                 zoomScale = 1

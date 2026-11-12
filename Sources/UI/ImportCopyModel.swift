@@ -26,7 +26,14 @@ final class ImportCopyModel: ObservableObject {
     @Published private(set) var isWorking = false { didSet { publishBusy() } }
     @Published private(set) var progressDone = 0
     @Published private(set) var progressTotal = 0
-    @Published var statusMessage: String?
+    /// The finished action's result, relayed to the window's one feedback inbox by `ImportCopyDialogModifier`.
+    @Published var feedback: Feedback?
+    nonisolated static let feedbackTitle = "Copy Photos"
+    /// A message written as a plain string is a refusal or an error (an alert); a finished run goes through `feedback(...)`.
+    var statusMessage: String? {
+        get { feedback?.message }
+        set { feedback = newValue.map { Feedback.error(Self.feedbackTitle, $0) } }
+    }
     /// Shown inside the sheet (a refusal that leaves the sheet open).
     @Published private(set) var sheetError: String?
 
@@ -86,7 +93,10 @@ final class ImportCopyModel: ObservableObject {
             let sources = await Task.detached { Self.scan(source) }.value
             if accessing { source.stopAccessingSecurityScopedResource() }
             if let reason = refusal(providers, catalog) { statusMessage = reason; return }
-            guard !sources.isEmpty else { statusMessage = "No photos were found in “\(source.lastPathComponent)”."; return }
+            guard !sources.isEmpty else {
+                feedback = Feedback(kind: .nothingToDo, title: Self.feedbackTitle, message: "No photos were found in “\(source.lastPathComponent)”.")
+                return
+            }
             options = preferences.importCopyOptions
             destination = nil
             sheetError = nil
@@ -204,7 +214,7 @@ final class ImportCopyModel: ObservableObject {
 
         let plan = await Task.detached { ImportCopyPlan.make(sources: setup.sources, destination: destination, options: options) }.value
         if let error = plan.templateError { statusMessage = error.errorDescription ?? "The name template is not valid."; return }
-        if plan.copyItems.isEmpty { statusMessage = Self.summary(Self.emptyOutcome(blocked: plan), registered: nil); return }
+        if plan.copyItems.isEmpty { feedback = Self.feedback(Self.emptyOutcome(blocked: plan), registered: nil); return }
         let environment = self.environment
         if let problem = ImportCopyEngine.spaceProblem(plan: plan, destination: destination, environment: environment) {
             statusMessage = problem
@@ -256,7 +266,7 @@ final class ImportCopyModel: ObservableObject {
                 registered = Registration(added: 0, accessWarning: nil, error: error.localizedDescription)
             }
         }
-        statusMessage = Self.summary(outcome, registered: registered, mode: mode)
+        feedback = Self.feedback(outcome, registered: registered, mode: mode)
     }
 
     // MARK: - Summary (pure, testable)
@@ -273,6 +283,23 @@ final class ImportCopyModel: ObservableObject {
             if case .blocked(let reason) = item.kind { outcome.blocked.append(.init(source: item.source, reason: reason)) }
         }
         return outcome
+    }
+
+    /// A finished run. Anything asked for that was not copied (failed, blocked, a companion, a stop), not added to the Library (an error, an
+    /// access warning) or, in Move mode, not moved or left behind makes it an alert. In Move mode even a fully done run is a `.notice`: where
+    /// the originals went must be read, never a passing toast. The Show in Finder action selects the new copies.
+    nonisolated static func feedback(
+        _ outcome: ImportCopyEngine.Outcome, registered: Registration?, mode: ImportCopyOptions.Mode = .copy
+    ) -> Feedback {
+        var notWritten = outcome.failed.count + outcome.blocked.count + outcome.companionFailures.count
+            + (outcome.stoppedEarly ? 1 : 0) + (registered?.error == nil ? 0 : 1) + (registered?.accessWarning == nil ? 0 : 1)
+        if mode == .move { notWritten += outcome.notMoved.count + outcome.companionsNotTrashed }
+        var kind = FeedbackClassifier.batch(written: outcome.copied.count, unchanged: outcome.skippedIdentical.count, notWritten: notWritten)
+        if mode == .move, kind.presentation == .toast { kind = .notice }
+        return Feedback(
+            kind: kind, title: feedbackTitle, message: summary(outcome, registered: registered, mode: mode),
+            action: outcome.copied.isEmpty ? nil : .revealInFinder(outcome.copied)
+        )
     }
 
     nonisolated static func summary(

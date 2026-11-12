@@ -28,7 +28,14 @@ final class CatalogBackupModel: ObservableObject {
 
     @Published var pendingRestore: RestoreRequest? { didSet { publishBusy() } }
     @Published private(set) var isWorking = false { didSet { publishBusy() } }
-    @Published var statusMessage: String?
+    /// The finished action's result, relayed to the window's one feedback inbox by `CatalogBackupDialogModifier`.
+    @Published var feedback: Feedback?
+    nonisolated static let feedbackTitle = "Catalog Backup"
+    /// A message written as a plain string is a refusal or an error (an alert); a finished backup or staged restore is a `.notice`.
+    var statusMessage: String? {
+        get { feedback?.message }
+        set { feedback = newValue.map { Feedback.error(Self.feedbackTitle, $0) } }
+    }
 
     var seams = Seams()
 
@@ -56,7 +63,7 @@ final class CatalogBackupModel: ObservableObject {
             defer { isWorking = false }
             do {
                 let info = try await catalog.backUpCatalog(to: destination)
-                statusMessage = Self.backedUpMessage(photoCount: info.photoCount, fileName: destination.lastPathComponent)
+                feedback = Self.backedUpFeedback(photoCount: info.photoCount, destination: destination)
             } catch {
                 statusMessage = "Couldn't back up the catalog: \(Self.describe(error))"
             }
@@ -89,7 +96,7 @@ final class CatalogBackupModel: ObservableObject {
             do {
                 let directory = try seams.catalogDirectory()
                 let info = try await Task.detached { try CatalogDatabase.stageRestore(from: request.url, into: directory) }.value
-                statusMessage = Self.stagedMessage(photoCount: info.photoCount)
+                feedback = Self.stagedFeedback(photoCount: info.photoCount)
             } catch {
                 statusMessage = "Couldn't prepare the restore: \(Self.describe(error)) Your catalog was not changed."
             }
@@ -111,6 +118,16 @@ final class CatalogBackupModel: ObservableObject {
         "Backed up the catalog (\(photos(photoCount))) to “\(fileName)”.\n\n"
             + "It holds ratings, flags, labels, keywords, collections, presets and people. Your edits are stored next to your photos, not in the catalog, "
             + "and folder permissions are not included (on a new Mac, import the folders again)."
+    }
+
+    /// A finished backup: the text says what a backup leaves out (edits, folder permissions), so it is read, never a toast.
+    nonisolated static func backedUpFeedback(photoCount: Int, destination: URL) -> Feedback {
+        .notice(feedbackTitle, backedUpMessage(photoCount: photoCount, fileName: destination.lastPathComponent), action: .revealInFinder([destination]))
+    }
+
+    /// A staged restore: nothing has changed yet, the user must quit and reopen to finish, so it is read, never a toast.
+    nonisolated static func stagedFeedback(photoCount: Int) -> Feedback {
+        .notice(feedbackTitle, stagedMessage(photoCount: photoCount))
     }
 
     nonisolated static func restoreConfirmationTitle(_ request: RestoreRequest) -> String { "Restore the catalog from “\(request.url.lastPathComponent)”?" }

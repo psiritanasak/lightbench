@@ -50,7 +50,14 @@ final class TrashModel: ObservableObject {
 
     @Published var pending: Request? { didSet { publishBusy() } }
     @Published private(set) var isWorking = false { didSet { publishBusy() } }
-    @Published var statusMessage: String?
+    /// The finished action's result, relayed to the window's one feedback inbox by `TrashDialogModifier`.
+    @Published var feedback: Feedback?
+    nonisolated static let feedbackTitle = "Move to Trash"
+    /// A message written as a plain string is a refusal or an error (an alert); a finished run goes through `feedback(for:)`.
+    var statusMessage: String? {
+        get { feedback?.message }
+        set { feedback = newValue.map { Feedback.error(Self.feedbackTitle, $0) } }
+    }
 
     var isBusy: Bool { isWorking || pending != nil }
 
@@ -136,7 +143,7 @@ final class TrashModel: ObservableObject {
         result.noLongerRejected = request.kind == .rejected ? fresh.count - stillTargets.count : 0
         let reachable = stillTargets.filter { scopes[XMPModel.folderPath(of: $0)] != nil }
         result.noAccess = stillTargets.count - reachable.count
-        guard !reachable.isEmpty else { statusMessage = Self.summary(result); return }
+        guard !reachable.isEmpty else { feedback = Self.feedback(for: result); return }
 
         let started = scopes.values.filter { $0.startAccessingSecurityScopedResource() }
         defer { started.forEach { $0.stopAccessingSecurityScopedResource() } }
@@ -152,7 +159,7 @@ final class TrashModel: ObservableObject {
         }.value
         if let reason = refusal(providers, catalog) { statusMessage = reason; return }
         result.skipped = plan.skipped
-        guard !plan.isEmpty else { statusMessage = Self.summary(result); return }
+        guard !plan.isEmpty else { feedback = Self.feedback(for: result); return }
 
         // 4. Move, then drop the rows of exactly the photos whose file reached the Trash.
         let mover = self.mover
@@ -176,7 +183,7 @@ final class TrashModel: ObservableObject {
             let paths = plan.items.filter { !$0.isVersionOnly && outcome.trashedIDs.contains($0.photoID) }.map { $0.photoURL.path }
             do { try await catalog.removeTrashedPhotos(ids: outcome.trashedIDs, paths: paths, trashedURLs: outcome.trashedURLs, editFiles: outcome.editFilesTrashed) } catch { result.catalogError = error.localizedDescription }
         }
-        statusMessage = Self.summary(result)
+        feedback = Self.feedback(for: result)
     }
 
     // MARK: - Pure helpers (testable)
@@ -222,6 +229,14 @@ final class TrashModel: ObservableObject {
             + "Nothing is permanently deleted: in the Trash, choose Put Back to restore a file, then import its folder again. "
             + "The photos are removed from the Library, and their ratings, labels, keywords, collections and face data go with them. "
             + "Lightbench keeps a record so you can restore the photo's ratings, keywords, collections and info from Photo ▸ Recently Deleted. The file itself stays in the Finder's Trash."
+    }
+
+    /// A finished run. Everything the user chose that did not reach the Trash (skipped, failed, left untouched by a stop, folder without access,
+    /// no longer rejected) or a follow-up that failed (companions, the Library update) makes it an alert; only a fully moved run is a toast.
+    nonisolated static func feedback(for r: Result) -> Feedback {
+        let notWritten = r.skipped.count + r.lateSkippedOpen.count + r.notAttempted + (r.stoppedBecause == nil ? 0 : 1)
+            + r.noLongerRejected + r.noAccess + r.failed.count + r.companionsFailed + (r.catalogError == nil ? 0 : 1)
+        return Feedback(kind: FeedbackClassifier.batch(written: r.trashed, notWritten: notWritten), title: feedbackTitle, message: summary(r))
     }
 
     nonisolated static func summary(_ r: Result) -> String {

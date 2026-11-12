@@ -37,7 +37,14 @@ final class XMPModel: ObservableObject {
 
     @Published var pending: Request? { didSet { publishBusy() } }
     @Published private(set) var isWorking = false { didSet { publishBusy() } }
-    @Published var statusMessage: String?
+    /// The finished action's result, relayed to the window's one feedback inbox by `XMPDialogModifier`.
+    @Published var feedback: Feedback?
+    nonisolated static let feedbackTitle = "XMP Metadata"
+    /// A message written as a plain string is a refusal or an error (an alert); a finished run goes through `feedback(for:)`.
+    var statusMessage: String? {
+        get { feedback?.message }
+        set { feedback = newValue.map { Feedback.error(Self.feedbackTitle, $0) } }
+    }
 
     var isBusy: Bool { isWorking || pending != nil }
 
@@ -112,7 +119,7 @@ final class XMPModel: ObservableObject {
         let fresh = await catalog.freshPhotos(ids: request.photos.compactMap(\.id))
         let reachable = fresh.filter { scopes[Self.folderPath(of: $0)] != nil }
         result.noAccess = fresh.count - reachable.count // photos deleted from the catalog meanwhile are simply gone, not "no access"
-        guard !reachable.isEmpty else { statusMessage = Self.summary(result); return }
+        guard !reachable.isEmpty else { feedback = Self.feedback(for: result); return }
 
         let started = scopes.values.filter { $0.startAccessingSecurityScopedResource() }
         defer { started.forEach { $0.stopAccessingSecurityScopedResource() } }
@@ -141,7 +148,7 @@ final class XMPModel: ObservableObject {
                 return
             }
         }
-        statusMessage = Self.summary(result)
+        feedback = Self.feedback(for: result)
     }
 
     // MARK: - File work (off the main actor)
@@ -268,6 +275,20 @@ final class XMPModel: ObservableObject {
                 + "Ratings, labels and rejects from the file replace the Library's (a JPEG next to a RAW with the same name uses only the XMP inside the photo, since the RAW owns that file); keywords are added, never removed, and text the file lacks never clears the Library's. Your photos and "
                 + "their edits are not changed."
         }
+    }
+
+    /// A finished run. Write: a photo skipped (a RAW owns the .xmp), unreadable, failed or in a folder without access was NOT written, so any
+    /// of those is an alert. Read: the same for unreadable files and folders without access; a photo with simply NO .xmp has nothing to read
+    /// and nothing failed, so it is a caveat (a warning toast, owner decision 2026-11-12).
+    nonisolated static func feedback(for r: Result) -> Feedback {
+        let kind: FeedbackKind
+        switch r.kind {
+        case .write:
+            kind = FeedbackClassifier.batch(written: r.changed, notWritten: r.sharedWithRaw + r.unreadable + r.failed + r.noAccess)
+        case .read:
+            kind = FeedbackClassifier.batch(written: r.changed, unchanged: r.unchanged, notWritten: r.unreadable + r.noAccess, caveats: r.noXMP)
+        }
+        return Feedback(kind: kind, title: feedbackTitle, message: summary(r))
     }
 
     nonisolated static func summary(_ r: Result) -> String {

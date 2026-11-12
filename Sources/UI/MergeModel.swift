@@ -38,7 +38,14 @@ final class MergeModel: ObservableObject {
     @Published private(set) var isMerging = false { didSet { publishBusy() } }
     /// True while `request` is reading the photos' orientations (before any dialog exists). Counts as busy so a second request is ignored.
     @Published private(set) var isChecking = false { didSet { publishBusy() } }
-    @Published var statusMessage: String?
+    /// The finished action's result, relayed to the window's one feedback inbox by `MergeDialogModifier`.
+    @Published var feedback: Feedback?
+    nonisolated static let feedbackTitle = "Photo Merge"
+    /// A message written as a plain string is a refusal or an error (an alert); results go through `feedback(for:)` and friends.
+    var statusMessage: String? {
+        get { feedback?.message }
+        set { feedback = newValue.map { Feedback.error(Self.feedbackTitle, $0) } }
+    }
 
     var isBusy: Bool { isMerging || isChecking || pending != nil }
 
@@ -174,11 +181,11 @@ final class MergeModel: ObservableObject {
         // The file is on disk by now: a registration failure must say so rather than claim the merge failed.
         do {
             _ = try await catalog.registerEnhancedPhoto(at: outcome.url)
-            statusMessage = Self.summary(outcome)
+            feedback = Self.feedback(for: outcome)
         } catch let error as CatalogDatabaseError {
-            statusMessage = "Created “\(outcome.url.lastPathComponent)”, but couldn't add it to the Library: \(error.message)"
+            feedback = Self.notRegisteredFeedback(outcome, reason: error.message)
         } catch {
-            statusMessage = "Created “\(outcome.url.lastPathComponent)”, but couldn't add it to the Library: \(error.localizedDescription)"
+            feedback = Self.notRegisteredFeedback(outcome, reason: error.localizedDescription)
         }
     }
 
@@ -227,6 +234,37 @@ final class MergeModel: ObservableObject {
         }
     }
 
+    /// The weakest frame alignment when it is uncertain (fewer than half the matches agreed), else nil. Used by `summary` and `feedback(for:)`.
+    nonisolated static func uncertainAlignment(_ outcome: MergeOutcome) -> MergeOutcome.FrameAlignment? {
+        guard let weakest = outcome.alignment.min(by: { $0.inlierRatio < $1.inlierRatio }), weakest.inlierRatio < 0.5 else { return nil }
+        return weakest
+    }
+
+    /// The frame whose measured exposure differed by 5% or more from its camera data (and was corrected), else nil.
+    nonisolated static func correctedExposure(_ outcome: MergeOutcome) -> MergeOutcome.FrameGain? {
+        guard let biggest = outcome.gains.max(by: { abs($0.correction) < abs($1.correction) }), abs(biggest.correction) >= 0.05 else { return nil }
+        return biggest
+    }
+
+    /// A finished merge. Plain: a toast with Show in Finder. When the text adds the uncertain-alignment or exposure-corrected sentence the
+    /// user must read it (check the seam / ghosting), and it is too long for a toast: a `.notice` alert.
+    nonisolated static func feedback(for outcome: MergeOutcome) -> Feedback {
+        let mustRead = uncertainAlignment(outcome) != nil || correctedExposure(outcome) != nil
+        return Feedback(
+            kind: mustRead ? .notice : FeedbackClassifier.batch(written: 1, notWritten: 0),
+            title: feedbackTitle, message: summary(outcome), action: .revealInFinder([outcome.url])
+        )
+    }
+
+    /// The merged file is on disk but the Library did not take it: part of the job is not done.
+    nonisolated static func notRegisteredFeedback(_ outcome: MergeOutcome, reason: String) -> Feedback {
+        Feedback(
+            kind: .incomplete, title: feedbackTitle,
+            message: "Created “\(outcome.url.lastPathComponent)”, but couldn't add it to the Library: \(reason)",
+            action: .revealInFinder([outcome.url])
+        )
+    }
+
     nonisolated static func summary(_ outcome: MergeOutcome) -> String {
         let name = outcome.url.lastPathComponent
         var text: String
@@ -238,12 +276,12 @@ final class MergeModel: ObservableObject {
             text = "Created “\(name)” (\(Int(outcome.size.width)) × \(Int(outcome.size.height))) from \(outcome.frameCount) photos"
             text += outcome.cropped ? ", edges cropped." : ", edges kept."
         }
-        if let weakest = outcome.alignment.min(by: { $0.inlierRatio < $1.inlierRatio }), weakest.inlierRatio < 0.5 {
+        if let weakest = uncertainAlignment(outcome) {
             text += outcome.mode == .panorama
                 ? " The join at “\(weakest.name)” was uncertain (\(weakest.inlierCount) of \(weakest.matchCount) matches agreed) — check the seam."
                 : " Alignment of “\(weakest.name)” was uncertain (\(weakest.inlierCount) of \(weakest.matchCount) matches agreed) — check the result for ghosting."
         }
-        if let biggest = outcome.gains.max(by: { abs($0.correction) < abs($1.correction) }), abs(biggest.correction) >= 0.05 {
+        if let biggest = correctedExposure(outcome) {
             text += " The exposure of “\(biggest.name)” was measured \(Int((abs(biggest.correction) * 100).rounded()))% "
                 + (biggest.correction > 0 ? "brighter" : "darker") + " than its camera data implied and was corrected."
         }

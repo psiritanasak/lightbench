@@ -39,15 +39,7 @@ struct XMPDialogModifier: ViewModifier {
             } message: { request in
                 Text(XMPModel.confirmationMessage(request))
             }
-            .alert(
-                "XMP Metadata",
-                isPresented: Binding(get: { model.statusMessage != nil }, set: { if !$0 { model.statusMessage = nil } }),
-                presenting: model.statusMessage
-            ) { _ in
-                Button("OK", role: .cancel) {}
-            } message: { message in
-                Text(message)
-            }
+            .relayFeedback($model.feedback, to: catalog.post)
             .overlay(alignment: .bottom) {
                 if model.isWorking { XMPWorkingHUD() }
             }

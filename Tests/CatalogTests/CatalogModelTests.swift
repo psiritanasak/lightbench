@@ -360,6 +360,17 @@ final class CatalogModelTests: XCTestCase {
         XCTAssertEqual(model.flagFilter, .all)
     }
 
+    func testImportStatusMessageShimMakesAnAlertAndReadsTheFeedbackMessage() async throws {
+        let model = await makeModel()
+        model.importStatusMessage = "x"
+        XCTAssertEqual(model.catalogFeedback, .error("Photo Catalog", "x"))
+        XCTAssertEqual(model.catalogFeedback?.presentation, .alert)
+        model.catalogFeedback = Feedback(kind: .done, title: "Photo Catalog", message: "y")
+        XCTAssertEqual(model.importStatusMessage, "y")
+        model.importStatusMessage = nil
+        XCTAssertNil(model.catalogFeedback)
+    }
+
     func testSavingWithNothingToSaveOrADuplicateNameReportsAndSavesNothing() async throws {
         let model = await makeModel()
         let nothing = await model.saveFiltersAsSmartCollection(name: "Empty")

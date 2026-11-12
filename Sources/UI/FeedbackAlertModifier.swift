@@ -48,13 +48,15 @@ struct FeedbackAlertModifier: ViewModifier {
     }
 
     private func takeQueued() {
+        var toastsInThisDrain: [Feedback] = []
         for queue in queues {
             let items = queue.wrappedValue
             guard !items.isEmpty else { continue }
             queue.wrappedValue = []
-            // A toast replaces the previous one, so when several arrive together the last stays; every alert is kept.
-            for toast in inbox.receive(all: items) { toasts.show(toast) }
+            toastsInThisDrain += inbox.receive(all: items)
         }
+        // A toast replaces the previous one, so when several arrive together only the most severe is shown; every alert is kept.
+        if let toast = FeedbackInbox.mostSevereToast(toastsInThisDrain) { toasts.show(toast) }
     }
 
     private func takeAll() {

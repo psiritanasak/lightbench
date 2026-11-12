@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Activity item
 
-/// One long-running action the activity strip lists (Export, Enhance). Pure: the strip only draws these.
+/// One long-running action the activity strip lists (Export, Enhance, the folder import). Pure: the strip only draws these.
 struct ActivityItem: Equatable, Identifiable, Sendable {
     enum Kind: String, Sendable { case export, enhance, importFolders }
     enum Progress: Equatable, Sendable {
@@ -26,7 +26,7 @@ struct ActivityItem: Equatable, Identifiable, Sendable {
     static func export(completed: Int, total: Int, stopping: Bool) -> ActivityItem {
         ActivityItem(
             kind: .export,
-            text: stopping ? "Stopping after this photo… \(completed) of \(total) exported" : "Exporting \(completed) of \(total)…",
+            text: stopping ? "Stopping after this photo… \(completed) of \(total) done" : "Exporting \(completed) of \(total)…",
             progress: .steps(done: completed, total: total),
             canCancel: !stopping && completed + 1 < total
         )

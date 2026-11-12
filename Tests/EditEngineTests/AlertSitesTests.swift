@@ -29,7 +29,7 @@ final class AlertSitesTests: XCTestCase {
             "AdjustTabView.swift": 3,
             "CatalogBackupDialogModifier.swift": 1,
             "CollectionSidebarView.swift": 6,
-            "ContentView.swift": 5,
+            "ContentView.swift": 4,
             "CropTabView.swift": 3,
             "FeedbackAlertModifier.swift": 1,
             "ImportCopyDialogModifier.swift": 1,
@@ -62,7 +62,7 @@ final class AlertSitesTests: XCTestCase {
         let text = lines.joined(separator: "\n")
         for binding in [
             "$pasteModel.feedback", "$enhanceModel.feedback", "$exportModel.feedback",
-            "$catalog.postedFeedback", "$document.postedFeedback",
+            "$catalog.catalogFeedback", "$catalog.postedFeedback", "$document.postedFeedback",
         ] {
             XCTAssertTrue(text.contains(binding), "ContentView names \(binding)")
         }

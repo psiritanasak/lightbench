@@ -22,9 +22,16 @@ final class VirtualCopyModel {
     /// Creates one copy of each of `photos` and returns the user-facing summary. `flushEdits` writes the open photo's pending (debounced)
     /// edits to its edit file first, so a copy made from the open photo carries what is on screen.
     func create(from photos: [Photo], catalog: CatalogModel, flushEdits: () -> Void = {}, openVersion: (editKey: String, state: EditState)? = nil) async -> String {
-        guard !catalog.isRenameInProgress else { return CatalogModel.renameInProgressMessage }
-        guard let database = catalog.databaseForVirtualCopies else { return "The photo catalog isn't ready yet — try again in a moment." }
-        guard !photos.isEmpty else { return "Select a photo first." }
+        await createFeedback(from: photos, catalog: catalog, flushEdits: flushEdits, openVersion: openVersion).message
+    }
+
+    /// The same, as a `Feedback`: every copy made is `.done`; any photo that could not be copied makes it `.incomplete` (`.error` when none
+    /// was made); a refusal is `.error`.
+    func createFeedback(from photos: [Photo], catalog: CatalogModel, flushEdits: () -> Void = {}, openVersion: (editKey: String, state: EditState)? = nil) async -> Feedback {
+        let title = CatalogModel.feedbackTitle
+        guard !catalog.isRenameInProgress else { return .error(title, CatalogModel.renameInProgressMessage) }
+        guard let database = catalog.databaseForVirtualCopies else { return .error(title, "The photo catalog isn't ready yet — try again in a moment.") }
+        guard !photos.isEmpty else { return .error(title, "Select a photo first.") }
         flushEdits()
         var created = 0
         var problems: [String] = []
@@ -41,7 +48,9 @@ final class VirtualCopyModel {
         var parts: [String] = []
         if created > 0 { parts.append("Created \(created) virtual cop\(created == 1 ? "y" : "ies")") }
         if !problems.isEmpty { parts.append("couldn't copy " + problems.joined(separator: "; ")) }
-        return parts.joined(separator: "; ") + "."
+        let message = parts.joined(separator: "; ") + "."
+        if created == 0, !problems.isEmpty { return .error(title, message) }
+        return Feedback(kind: FeedbackClassifier.batch(written: created, notWritten: problems.count), title: title, message: message)
     }
 
     private func createOne(from source: Photo, database: CatalogDatabase, liveState: EditState?) async throws {

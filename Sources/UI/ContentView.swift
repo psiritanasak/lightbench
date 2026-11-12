@@ -1259,8 +1259,8 @@ struct ContentView: View {
         // Split out of `body` (into `mainContent` below) so the type
         // checker only has to solve the alert chain against ONE already-
         // opaque `some View` type, not the whole `HSplitView` tree AND
-        // every alert simultaneously — adding the `importStatusMessage`
-        // alert pushed the previously-single expression past what the
+        // every alert simultaneously — adding an
+        // `importStatusMessage` alert pushed the previously-single expression past what the
         // compiler could type-check in reasonable time (measured: this
         // split is what fixed it).
         mainContent
@@ -1309,24 +1309,6 @@ struct ContentView: View {
                     }
                 ),
                 presenting: document.sidecarSaveErrorMessage
-            ) { _ in
-                Button("OK") {}
-            } message: { message in
-                Text(message)
-            }
-            .alert(
-                // Was "Import Folder" — widened to a generic title once
-                // this same `importStatusMessage`/alert pair started also
-                // reporting relocate-photo summaries (D5 follow-up), not
-                // just import summaries.
-                "Photo Catalog",
-                isPresented: Binding(
-                    get: { catalog.importStatusMessage != nil },
-                    set: { isPresented in
-                        if !isPresented { catalog.importStatusMessage = nil }
-                    }
-                ),
-                presenting: catalog.importStatusMessage
             ) { _ in
                 Button("OK") {}
             } message: { message in
@@ -1385,7 +1367,7 @@ struct ContentView: View {
 
     /// The single-slot results the window's one `feedbackAlert` takes.
     private var feedbackSources: [Binding<Feedback?>] {
-        [$pasteModel.feedback, $enhanceModel.feedback, $exportModel.feedback]
+        [$pasteModel.feedback, $enhanceModel.feedback, $exportModel.feedback, $catalog.catalogFeedback]
     }
 
     /// The queues other models post finished results into (drained by the same `feedbackAlert`).

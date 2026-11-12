@@ -447,5 +447,10 @@ final class CatalogBackupTests: XCTestCase {
         XCTAssertTrue(CatalogRestoreReport.restored(photoCount: 1).message.contains("1 photo)"))
         XCTAssertTrue(CatalogRestoreReport.restored(photoCount: 3).message.contains("3 photos"))
         XCTAssertTrue(CatalogRestoreReport.failed("Bad file.").message.contains("Bad file."))
+        let restored = CatalogRestoreReport.restored(photoCount: 2).feedback
+        XCTAssertEqual(restored.kind, .notice, "applied at launch and the old catalog's location must be read")
+        XCTAssertEqual(restored.title, "Catalog Backup")
+        XCTAssertEqual(restored.message, CatalogRestoreReport.restored(photoCount: 2).message)
+        XCTAssertEqual(CatalogRestoreReport.failed("Bad file.").feedback.kind, .error)
     }
 }

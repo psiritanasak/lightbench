@@ -113,6 +113,21 @@ struct FeedbackInbox: Equatable {
         items.compactMap { receive($0) }
     }
 
+    /// Which of several toast-kind results one drain should show (a toast replaces the previous one): the most severe, `.warning` over
+    /// `.done` over `.nothingToDo`; the LATER one on a tie. nil for an empty list. Alert-kind results are never passed here.
+    static func mostSevereToast(_ toasts: [Feedback]) -> Feedback? {
+        func rank(_ kind: FeedbackKind) -> Int {
+            switch kind {
+            case .warning: return 2
+            case .done: return 1
+            default: return 0
+            }
+        }
+        var best: Feedback?
+        for toast in toasts where best.map({ rank(toast.kind) >= rank($0.kind) }) ?? true { best = toast }
+        return best
+    }
+
     /// The user closed `feedback`. Does nothing when a different alert is on screen. The next waiting alert is NOT shown yet: see `presentNext()`.
     mutating func acknowledge(_ feedback: Feedback) {
         guard presented == feedback else { return }

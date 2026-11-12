@@ -11,7 +11,7 @@ final class ActivityItemTests: XCTestCase {
 
     func testStoppingTextAndNoCancel() {
         let item = ActivityItem.export(completed: 3, total: 10, stopping: true)
-        XCTAssertEqual(item.text, "Stopping after this photo… 3 of 10 exported")
+        XCTAssertEqual(item.text, "Stopping after this photo… 3 of 10 done")
         XCTAssertFalse(item.canCancel)
     }
 

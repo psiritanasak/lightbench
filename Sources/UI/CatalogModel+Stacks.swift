@@ -148,7 +148,7 @@ extension CatalogModel {
                 if dissolved > 0 {
                     message += " \(dissolved) other stack\(dissolved == 1 ? " was" : "s were") left with a single photo and dissolved."
                 }
-                importStatusMessage = message
+                catalogFeedback = Feedback(kind: .warning, title: Self.feedbackTitle, message: message)
             }
         } catch {
             importStatusMessage = "Couldn't stack the photos: \(error.localizedDescription)"
@@ -165,7 +165,10 @@ extension CatalogModel {
         var touched: [Int64: StackSnapshot] = [:]
         for photo in selected { if let owner = stack(of: photo) { touched[owner.id] = owner } }
         let leaving = selectedMasters.intersection(Set(touched.values.flatMap(\.memberIDs)))
-        guard !leaving.isEmpty else { importStatusMessage = "None of the selected photos is in a stack."; return }
+        guard !leaving.isEmpty else {
+            catalogFeedback = Feedback(kind: .nothingToDo, title: Self.feedbackTitle, message: "None of the selected photos is in a stack.")
+            return
+        }
         let dissolved = touched.values.filter { $0.memberIDs.filter { !leaving.contains($0) }.count < 2 }
         let stranded = dissolved.reduce(0) { $0 + $1.memberIDs.filter { !leaving.contains($0) }.count }
         do {
@@ -176,7 +179,9 @@ extension CatalogModel {
                 message += "; \(dissolved.count) stack\(dissolved.count == 1 ? "" : "s") ended"
                 if stranded > 0 { message += " (\(stranded) remaining photo\(stranded == 1 ? " is" : "s are") no longer stacked)" }
             }
-            importStatusMessage = message + ". Auto Stack will not stack the removed photos again."
+            catalogFeedback = Feedback(
+                kind: .done, title: Self.feedbackTitle, message: message + ". Auto Stack will not stack the removed photos again."
+            )
         } catch {
             importStatusMessage = "Couldn't unstack the photos: \(error.localizedDescription)"
         }

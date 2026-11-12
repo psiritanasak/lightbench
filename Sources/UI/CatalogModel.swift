@@ -34,7 +34,17 @@ final class CatalogModel: ObservableObject {
     /// Why the catalog could not be opened at launch (a catalog from a newer build, a damaged file), nil otherwise. The Library shows it instead
     /// of a blank grid — `refresh()` returns before `isLoaded` is set when there is no database.
     @Published private(set) var openFailureMessage: String?
-    @Published var importStatusMessage: String?
+    /// The result of the last catalog action (import, relocate, stack, virtual copy, ...), taken by the window's one `feedbackAlert`, which
+    /// shows it as a toast or an alert by kind. A writer that has not been classified sets `importStatusMessage` instead (an alert).
+    @Published var catalogFeedback: Feedback?
+    /// Compatibility for every writer that has not been given a kind: reads the message, and writing a message makes it an ALERT
+    /// (`.error`), so an unclassified result can never fade away as a toast. Classified writers set `catalogFeedback` directly.
+    var importStatusMessage: String? {
+        get { catalogFeedback?.message }
+        set { catalogFeedback = newValue.map { .error(Self.feedbackTitle, $0) } }
+    }
+    /// The title of every catalog result.
+    nonisolated static let feedbackTitle = "Photo Catalog"
     @Published private(set) var photos: [Photo] = []
     @Published private(set) var collections: [PhotoCollection] = []
     /// Phase 5 slice 2: named, saved edit-state "looks", applicable to any
@@ -457,7 +467,7 @@ final class CatalogModel: ObservableObject {
                 }
                 await self?.refresh()
                 if let report = CatalogRestoreReportStore.shared.take() {
-                    await MainActor.run { self?.importStatusMessage = report.message }
+                    await MainActor.run { self?.catalogFeedback = report.feedback }
                 }
             } catch {
                 await MainActor.run {
@@ -569,10 +579,10 @@ final class CatalogModel: ObservableObject {
 
         importsInFlight += 1
         Task.detached { [weak self] in
-            var messages: [String] = []
+            var reports: [FolderImportReport] = []
             for job in jobs {
                 let folder = job.item.url
-                var message: String
+                var outcome: FolderImportOutcome
                 do {
                     if job.item.asTree {
                         // The recursive scan is synchronous, blocking filesystem I/O: it must happen here, off the main actor.
@@ -581,9 +591,9 @@ final class CatalogModel: ObservableObject {
                             let result = try await database.importFolderTree(node)
                             await self?.refresh()
                             await self?.autoReadXMP(newerThan: before)
-                            message = await MainActor.run { Self.summary(for: result) }
+                            outcome = .imported(result)
                         } else {
-                            message = "No photos found in that folder."
+                            outcome = .noPhotos
                         }
                     } else {
                         let urls = PhotoImporter.imageFiles(in: folder)
@@ -591,17 +601,16 @@ final class CatalogModel: ObservableObject {
                         let result = try await database.importPhotos(at: urls)
                         await self?.refresh()
                         await self?.autoReadXMP(newerThan: before)
-                        message = await MainActor.run { Self.summary(for: result) }
+                        outcome = .imported(result)
                     }
-                    if let warning = job.accessWarning { message += " \(warning)" }
                 } catch {
-                    message = "Import failed: \(error.localizedDescription)"
+                    outcome = .failed(error.localizedDescription)
                 }
-                messages.append(jobs.count > 1 ? "\(folder.lastPathComponent): \(message)" : message)
+                reports.append(FolderImportReport(folderName: folder.lastPathComponent, outcome: outcome, accessWarning: job.accessWarning))
             }
             await MainActor.run {
                 self?.importsInFlight -= 1
-                self?.importStatusMessage = messages.joined(separator: "\n")
+                self?.catalogFeedback = FolderImportSummary.feedback(reports, title: Self.feedbackTitle)
             }
         }
     }
@@ -1157,7 +1166,7 @@ final class CatalogModel: ObservableObject {
         }
 
         let oldPath = photo.path
-        var summary: String
+        let result: RelocateOneResult
         do {
             let relocated = try await database.relocatePhotos([move])
             if relocated.contains(id) {
@@ -1167,15 +1176,14 @@ final class CatalogModel: ObservableObject {
                 // moved by this action — flagged here rather than solved,
                 // since moving one would need write access to the OLD
                 // folder too, not otherwise needed anywhere in this app.
-                summary = "Relocated \"\(photo.filename)\". If it had saved edits, move its sidecar file too to keep them."
+                result = .relocated
             } else {
-                summary = "Couldn't relocate \"\(photo.filename)\" — a different photo is already catalogued at that location."
+                result = .conflict
             }
         } catch {
-            summary = "Couldn't relocate \"\(photo.filename)\"."
+            result = .failed
         }
-        if let accessWarning { summary += " \(accessWarning)" }
-        importStatusMessage = summary
+        catalogFeedback = Self.relocateOneFeedback(filename: photo.filename, result: result, accessWarning: accessWarning)
         await refresh()
     }
 
@@ -1198,7 +1206,7 @@ final class CatalogModel: ObservableObject {
             if await isPhotoConfirmedMissing(photo) { missing.append(photo) }
         }
         guard !missing.isEmpty else {
-            importStatusMessage = "None of the selected photos are missing."
+            catalogFeedback = Feedback(kind: .nothingToDo, title: Self.feedbackTitle, message: "None of the selected photos are missing.")
             return
         }
 
@@ -1229,7 +1237,8 @@ final class CatalogModel: ObservableObject {
             return
         }
 
-        var summary: String
+        var relocatedCount = 0
+        var failed = false
         do {
             let relocated = try await database.relocatePhotos(moves)
             for move in moves where relocated.contains(move.photoID) {
@@ -1238,21 +1247,16 @@ final class CatalogModel: ObservableObject {
                 }
             }
             await refresh()
-            let conflictCount = moves.count - relocated.count
-            summary = "Relocated \(relocated.count) of \(missing.count) photo(s)."
-            if unmatchedCount > 0 { summary += " \(unmatchedCount) not found in that folder." }
-            if conflictCount > 0 { summary += " \(conflictCount) skipped (already catalogued at that location)." }
-            if relocated.count > 0 {
-                // See `relocatePhoto(_:)`'s own doc comment — sidecars
-                // (saved edits) are never moved by this action.
-                summary += " Move any saved-edit sidecar files too, to keep their edits."
-            }
+            relocatedCount = relocated.count
+            // Sidecars (saved edits) are never moved by this action — see `relocatePhoto(_:)`'s own doc comment.
         } catch {
             await refresh()
-            summary = "Couldn't relocate the selected photos."
+            failed = true
         }
-        if let accessWarning { summary += " \(accessWarning)" }
-        importStatusMessage = summary
+        catalogFeedback = Self.relocateBatchFeedback(
+            relocated: relocatedCount, missing: missing.count, unmatched: unmatchedCount, conflicts: moves.count - relocatedCount,
+            failed: failed, accessWarning: accessWarning
+        )
     }
 
     /// One monotonically-increasing counter per photo path, bumped every
@@ -1378,7 +1382,7 @@ final class CatalogModel: ObservableObject {
         let open = openVersion ?? openVersionProvider?()
         Task { [weak self] in
             guard let self else { return }
-            self.importStatusMessage = await self.virtualCopies.create(from: photos, catalog: self, flushEdits: flush, openVersion: open)
+            self.catalogFeedback = await self.virtualCopies.createFeedback(from: photos, catalog: self, flushEdits: flush, openVersion: open)
         }
     }
 
@@ -2420,12 +2424,6 @@ final class CatalogModel: ObservableObject {
             return nil
         }
         return ResolvedBookmark(url: url, isStale: isStale)
-    }
-
-    private static func summary(for result: ImportResult) -> String {
-        let importedPart = "Imported \(result.inserted) photo\(result.inserted == 1 ? "" : "s")"
-        guard result.skipped > 0 else { return "\(importedPart)." }
-        return "\(importedPart) (\(result.skipped) already in catalog)."
     }
 }
 

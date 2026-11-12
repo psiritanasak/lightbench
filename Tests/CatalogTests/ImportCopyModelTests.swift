@@ -104,6 +104,18 @@ final class ImportCopyModelTests: XCTestCase {
         XCTAssertFalse(catalog.importCopyBusy)
     }
 
+    func testTheSetupSheetFlagOnTheCatalogFollowsTheSheet() async throws {
+        try photo("a.jpg")
+        XCTAssertFalse(catalog.importCopySheetPresented)
+        panelAnswers = [card]
+        model.begin(providers: providers, catalog: catalog)
+        XCTAssertFalse(catalog.importCopySheetPresented, "scanning is busy but no sheet is up yet")
+        try await waitUntil(model.setup != nil)
+        XCTAssertTrue(catalog.importCopySheetPresented, "the open sheet pauses the toast clock")
+        model.cancel()
+        XCTAssertFalse(catalog.importCopySheetPresented)
+    }
+
     func testBeginIsRefusedWhileAnotherToolIsBusyAndNoPanelOpens() async throws {
         try photo("a.jpg")
         busy = "A rename is running."

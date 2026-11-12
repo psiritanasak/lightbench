@@ -40,6 +40,19 @@ final class ImportFolderAtTests: XCTestCase {
         XCTAssertEqual(count, 2)
         XCTAssertFalse(catalog.isImporting)
         XCTAssertNotNil(catalog.importStatusMessage)
+        XCTAssertEqual(catalog.catalogFeedback?.kind, .done, "a clean import is a toast")
+        XCTAssertEqual(catalog.catalogFeedback?.title, "Photo Catalog")
+    }
+
+    func testImportingTheSameFolderAgainIsNothingToDo() async throws {
+        let folder = try photos(in: "again", ["a.jpg"])
+        catalog.importFolder(at: folder)
+        try await waitForImport()
+        catalog.catalogFeedback = nil
+        catalog.importFolder(at: folder)
+        try await waitForImport()
+        XCTAssertEqual(catalog.catalogFeedback?.kind, .nothingToDo)
+        XCTAssertEqual(catalog.importStatusMessage, "Imported 0 photos (1 already in catalog).")
     }
 
     func testImportFolderTreeAtMirrorsSubfolders() async throws {
@@ -74,6 +87,7 @@ final class ImportFolderAtTests: XCTestCase {
         catalog.isRenameInProgress = true
         catalog.importFolder(at: folder)
         XCTAssertEqual(catalog.importStatusMessage, CatalogModel.renameInProgressMessage)
+        XCTAssertEqual(catalog.catalogFeedback?.kind, .error)
         XCTAssertFalse(catalog.isImporting)
         let count = try await db.allPhotos().count
         XCTAssertEqual(count, 0)
@@ -115,5 +129,6 @@ final class ImportFolderAtTests: XCTestCase {
         catalog.importFolder(at: folder)
         try await waitForImport()
         XCTAssertTrue(try XCTUnwrap(catalog.importStatusMessage).contains("Couldn't get access"))
+        XCTAssertEqual(catalog.catalogFeedback?.kind, .incomplete, "the access warning makes the import an alert")
     }
 }

@@ -73,7 +73,11 @@ struct DropAndOpenModifier: ViewModifier {
     }
 
     private func apply(_ plan: DroppedItemsPlan) {
-        if let message = DroppedItems.leftOutMessage(for: plan) { catalog.importStatusMessage = message }
+        // Posted to the queue, not written to the catalog's single slot: `importFolders` below writes its own result in the same turn, which
+        // would replace this note.
+        if let message = DroppedItems.leftOutMessage(for: plan) {
+            catalog.post(Feedback(kind: .incomplete, title: CatalogModel.feedbackTitle, message: message))
+        }
         if !plan.folders.isEmpty { catalog.importFolders(plan.folders) }
         if let photo = plan.photoToOpen {
             // Switch to the Editor BEFORE the load, like `Open…`, so a RAW photo's loading indicator is visible.

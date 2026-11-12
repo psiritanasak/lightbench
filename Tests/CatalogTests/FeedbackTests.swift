@@ -52,6 +52,18 @@ final class FeedbackTests: XCTestCase {
         XCTAssertEqual(inbox.receive(all: []), [])
     }
 
+    func testMostSevereToastPrefersWarningThenDoneThenNothingToDoAndTheLaterOnATie() {
+        let nothing = Feedback(kind: .nothingToDo, title: "T", message: "n")
+        let done1 = Feedback(kind: .done, title: "T", message: "d1")
+        let done2 = Feedback(kind: .done, title: "T", message: "d2")
+        let warning = Feedback(kind: .warning, title: "T", message: "w")
+        XCTAssertNil(FeedbackInbox.mostSevereToast([]))
+        XCTAssertEqual(FeedbackInbox.mostSevereToast([done1, warning, done2]), warning, "the warning outlives a later done")
+        XCTAssertEqual(FeedbackInbox.mostSevereToast([nothing, done1, nothing]), done1)
+        XCTAssertEqual(FeedbackInbox.mostSevereToast([done1, done2]), done2, "a tie goes to the later one")
+        XCTAssertEqual(FeedbackInbox.mostSevereToast([nothing]), nothing)
+    }
+
     func testBatchTable() {
         // (written, unchanged, notWritten, caveats) -> kind
         let table: [(Int, Int, Int, Int, FeedbackKind)] = [

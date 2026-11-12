@@ -132,6 +132,35 @@ final class VirtualCopyPolicyTests: XCTestCase {
         XCTAssertEqual(catalog.photos.count, 2, "the Library shows the new version")
     }
 
+    func testCreateFeedbackKinds() async throws {
+        let image = dir.appendingPathComponent("a.jpg")
+        try Data("x".utf8).write(to: image)
+        let db = try CatalogDatabase(inMemory: true)
+        _ = try await db.importPhotos(at: [image])
+        let catalog = CatalogModel(database: db, defaults: UserDefaults(suiteName: "VirtualCopyPolicyTests-\(UUID().uuidString)") ?? .standard)
+        await catalog.refresh()
+        let source = try unwrapped(try await db.photo(atPath: image.path))
+        let model = VirtualCopyModel(folderAccess: StubAccess(try scopedDir()))
+
+        let done = await model.createFeedback(from: [source], catalog: catalog)
+        XCTAssertEqual(done.kind, .done)
+        XCTAssertTrue(done.message.hasPrefix("Created 1 virtual copy"), done.message)
+
+        let ghost = masterRow(dir.appendingPathComponent("ghost.jpg").path, id: 777)
+        let mixed = await model.createFeedback(from: [source, ghost], catalog: catalog)
+        XCTAssertEqual(mixed.kind, .incomplete, "one copy was made, one photo was not copied")
+        XCTAssertTrue(mixed.message.contains("couldn't copy"), mixed.message)
+
+        let none = await model.createFeedback(from: [ghost], catalog: catalog)
+        XCTAssertEqual(none.kind, .error)
+
+        let empty = await model.createFeedback(from: [], catalog: catalog)
+        XCTAssertEqual(empty, .error("Photo Catalog", "Select a photo first."))
+        catalog.isRenameInProgress = true
+        let renaming = await model.createFeedback(from: [source], catalog: catalog)
+        XCTAssertEqual(renaming, .error("Photo Catalog", CatalogModel.renameInProgressMessage))
+    }
+
     func testCreateVirtualCopyRefusesAMissingFileAndCreatesNothing() async throws {
         let image = dir.appendingPathComponent("gone.jpg")
         let db = try CatalogDatabase(inMemory: true)

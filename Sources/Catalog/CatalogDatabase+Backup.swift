@@ -34,6 +34,18 @@ enum CatalogRestoreReport: Equatable, Sendable {
     }
 }
 
+extension CatalogRestoreReport {
+    static let feedbackTitle = "Catalog Backup"
+
+    /// A restore that finished is a `.notice` (the previous catalog's whereabouts must be read); one that did not is an `.error`.
+    var feedback: Feedback {
+        switch self {
+        case .restored: return .notice(Self.feedbackTitle, message)
+        case .failed: return .error(Self.feedbackTitle, message)
+        }
+    }
+}
+
 /// Hands the launch-time restore result from `CatalogDatabase.init()` (a detached task) to `CatalogModel`, which shows it.
 final class CatalogRestoreReportStore: @unchecked Sendable {
     static let shared = CatalogRestoreReportStore()

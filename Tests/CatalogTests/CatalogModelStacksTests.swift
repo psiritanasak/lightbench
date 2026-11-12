@@ -193,6 +193,7 @@ final class CatalogModelStacksTests: XCTestCase {
         XCTAssertEqual(Set((model.stacks.first?.memberIDs ?? [])), Set([ids[0], ids[1], ids[2]]), "hidden selected photos are stacked too, like Edit Keywords")
         XCTAssertTrue((model.stacks.first?.isManual == true))
         XCTAssertEqual(model.importStatusMessage, "Stacked 3 photos, including 2 hidden by the current filters.")
+        XCTAssertEqual(model.catalogFeedback?.kind, .warning)
     }
 
     func testStackSelectedWithOnePhotoSaysSoAndChangesNothing() async throws {
@@ -201,6 +202,7 @@ final class CatalogModelStacksTests: XCTestCase {
         await model.stackSelected()
         XCTAssertTrue(model.stacks.isEmpty)
         XCTAssertEqual(model.importStatusMessage, "Select at least two photos to stack.")
+        XCTAssertEqual(model.catalogFeedback?.kind, .error, "a refusal stays an alert")
     }
 
     func testStackSelectedWithoutHiddenPhotosIsSilent() async throws {
@@ -220,6 +222,7 @@ final class CatalogModelStacksTests: XCTestCase {
         let exclusions = try await db.stackExclusions()
         XCTAssertEqual(exclusions, [ids[0]], "only the photo taken out is remembered")
         XCTAssertEqual(model.importStatusMessage, "Removed 1 photo from their stacks. Auto Stack will not stack the removed photos again.")
+        XCTAssertEqual(model.catalogFeedback?.kind, .done)
     }
 
     func testUnstackOfAWholeCollapsedStackDissolvesItAndRemembersEveryMember() async throws {
@@ -327,6 +330,7 @@ final class CatalogModelStacksTests: XCTestCase {
         model.select([ids[4]])
         await model.unstackSelected()
         XCTAssertEqual(model.importStatusMessage, "None of the selected photos is in a stack.")
+        XCTAssertEqual(model.catalogFeedback?.kind, .nothingToDo)
     }
 
     func testMakeCoverChangesTheCellThatStandsForTheStack() async throws {

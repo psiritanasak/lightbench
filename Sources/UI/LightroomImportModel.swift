@@ -48,7 +48,15 @@ final class LightroomImportModel: ObservableObject {
     }
 
     @Published var pending: Pending?
-    @Published var resultMessage: String?
+    /// The result of an import attempt, taken by the window's one inbox through `LightroomImportModifier`'s relay.
+    @Published var feedback: Feedback?
+    /// Compatibility for every writer that reports a refusal or failure: reads the message, and writing a message makes it an ALERT (`.error`).
+    var resultMessage: String? {
+        get { feedback?.message }
+        set { feedback = newValue.map { Feedback.error(Self.feedbackTitle, $0) } }
+    }
+
+    static let feedbackTitle = "Import Lightroom Settings"
 
     /// A confirmation is waiting (the menu is disabled meanwhile).
     var isBusy: Bool { pending != nil }
@@ -187,7 +195,17 @@ final class LightroomImportModel: ObservableObject {
         }
         let changes = LightroomMapping.changes(of: plan, onto: document.editState)
         let applied = document.applyLightroomSettings(plan)
-        resultMessage = Self.summary(plan: plan, changes: changes, applied: applied)
+        feedback = Self.feedback(plan: plan, changes: changes, applied: applied, includeCrop: includeCrop)
+    }
+
+    /// The finished import. The text always carries the approximation notes (and is far too long for a toast), so it is a `.notice` alert;
+    /// when a crop was asked for and refused, part of what the user chose was NOT applied: `.incomplete`.
+    static func feedback(plan: LightroomMapping.Plan, changes: LightroomMapping.Changes, applied: Bool, includeCrop: Bool) -> Feedback {
+        let message = summary(plan: plan, changes: changes, applied: applied)
+        if includeCrop, plan.cropRefusal != nil {
+            return Feedback(kind: .incomplete, title: feedbackTitle, message: message)
+        }
+        return .notice(feedbackTitle, message)
     }
 
     // MARK: - Text
@@ -304,14 +322,6 @@ struct LightroomImportModifier: ViewModifier {
             } message: { request in
                 Text(LightroomImportModel.confirmationMessage(request))
             }
-            .alert(
-                "Import Lightroom Settings",
-                isPresented: Binding(get: { model.resultMessage != nil }, set: { if !$0 { model.resultMessage = nil } }),
-                presenting: model.resultMessage
-            ) { _ in
-                Button("OK", role: .cancel) {}
-            } message: { message in
-                Text(message)
-            }
+            .relayFeedback($model.feedback, to: document.post)
     }
 }

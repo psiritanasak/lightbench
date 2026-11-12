@@ -992,19 +992,6 @@ struct AdjustTabView: View {
                     .disabled(document.isSelectingSubject)
                     .accessibilityLabel("Add Subject Mask")
                     .accessibilityValue(document.isSelectingSubject ? "Finding subject" : "")
-                    // Attached here, not in `ContentView` (whose `body` already hit the type-checker limit
-                    // with one more `.alert`). The message is set by `ImageDocumentModel.selectSubject`.
-                    .alert(
-                        "Subject Mask",
-                        isPresented: Binding(
-                            get: { document.subjectMaskMessage != nil },
-                            set: { if !$0 { document.subjectMaskMessage = nil } }
-                        )
-                    ) {
-                        Button("OK") {}
-                    } message: {
-                        Text(document.subjectMaskMessage ?? "")
-                    }
                 }
                 // Depth Range: a fourth row — the new button plus an explicit empty cell, the same shape as the "Color" row (see that comment).
                 HStack {
@@ -1015,18 +1002,6 @@ struct AdjustTabView: View {
                     .disabled(document.isGeneratingDepth)
                     .accessibilityLabel("Add Depth Range Mask")
                     .accessibilityValue(document.isGeneratingDepth ? "Reading depth" : "")
-                    // Same placement reason as the Subject alert above; the message is set by `ImageDocumentModel.generateDepth`.
-                    .alert(
-                        "Depth Range Mask",
-                        isPresented: Binding(
-                            get: { document.depthMaskMessage != nil },
-                            set: { if !$0 { document.depthMaskMessage = nil } }
-                        )
-                    ) {
-                        Button("OK") {}
-                    } message: {
-                        Text(document.depthMaskMessage ?? "")
-                    }
                     Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
                 }
             }
@@ -1593,14 +1568,6 @@ struct AdjustTabView: View {
             .buttonStyle(.flat)
             .disabled(document.currentImage == nil || !identity || spots.count >= EditState.maxRetouchSpots)
             .accessibilityLabel("Add Spot")
-            .alert(
-                "Spot Removal",
-                isPresented: Binding(get: { document.retouchMessage != nil }, set: { if !$0 { document.retouchMessage = nil } })
-            ) {
-                Button("OK") {}
-            } message: {
-                Text(document.retouchMessage ?? "")
-            }
             if spots.isEmpty {
                 Text("No spots yet. Press Place Spots and click each blemish (drag to size it), or Add Spot and drag it into place. Drag the dashed circle to choose where to copy from.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)

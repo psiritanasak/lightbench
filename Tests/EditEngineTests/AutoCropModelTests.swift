@@ -322,7 +322,10 @@ final class AutoCropModelTests: XCTestCase {
         for guardText in ["document.isAutoCropping", "document.isAutoStraightening", "document.isAutoUprighting"] {
             XCTAssertGreaterThanOrEqual(tab.components(separatedBy: guardText).count - 1, 3, "\(guardText) must gate Auto Crop, Auto and Upright")
         }
-        XCTAssertTrue(tab.contains("document.autoCropMessage"), "outcomes that change nothing are shown in an alert")
+        // Outcomes are reported through the window's one feedback alert / toast (C1), not an alert in the tab.
+        let model = try source("Sources/UI/ImageDocumentModel.swift")
+        XCTAssertTrue(model.contains("didSet { postEditorMessage(autoCropMessage, .autoCrop) }"), "every Auto Crop outcome must be posted as feedback")
+        XCTAssertFalse(tab.contains("document.autoCropMessage"), "the Crop tab no longer shows its own Auto Crop alert")
     }
 
     func testContentViewPassesTheEffectiveAspectRatioToTheCropTab() throws {

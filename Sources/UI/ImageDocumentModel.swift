@@ -18,6 +18,13 @@ final class ImageDocumentModel: ObservableObject {
     /// list as it takes them, and several in one turn are all kept.
     @Published var postedFeedback: [Feedback] = []
     func post(_ feedback: Feedback) { postedFeedback.append(feedback) }
+
+    /// Reports an Editor tool's message through the window's one inbox, once per write (a nil write, e.g. the photo-switch clear, posts
+    /// nothing). The stored message properties stay for the writers and tests; presentation is by `EditorFeedback`'s kind.
+    private func postEditorMessage(_ message: String?, _ tool: EditorFeedbackTool) {
+        guard let message else { return }
+        post(EditorFeedback.feedback(tool, message))
+    }
     /// True while `load(from:)` is awaiting a RAW photo's one-time
     /// `RawDecoder.materialize` (see that function's own doc comment) —
     /// distinct from the pre-existing, private `isLoadingPhoto` below,
@@ -152,15 +159,15 @@ final class ImageDocumentModel: ObservableObject {
     /// — mirrors `loadErrorMessage`'s alert-binding pattern.
     @Published var whiteBalanceSampleMessage: String?
     /// Shown by its own alert (not `whiteBalanceSampleMessage`'s "Color Sample" one) — `selectSubject` outcomes.
-    @Published var subjectMaskMessage: String?
+    @Published var subjectMaskMessage: String? { didSet { postEditorMessage(subjectMaskMessage, .subjectMask) } }
     /// True while a Vision subject pass is running (disables the Subject buttons: single-flight).
     @Published private(set) var isSelectingSubject = false
     /// Shown by the Crop tab's own alert — `autoStraighten` outcomes that changed nothing (no horizon, already level, failure).
-    @Published var straightenMessage: String?
+    @Published var straightenMessage: String? { didSet { postEditorMessage(straightenMessage, .autoStraighten) } }
     /// True while Vision is looking for the horizon (single-flight: disables the Crop tab's Auto button).
     @Published private(set) var isAutoStraightening = false
     /// Shown by its own alert — `generateDepth` outcomes (Depth Range mask).
-    @Published var depthMaskMessage: String?
+    @Published var depthMaskMessage: String? { didSet { postEditorMessage(depthMaskMessage, .depthMask) } }
     /// True while a depth map is being read or computed (single-flight: disables the Depth buttons).
     @Published private(set) var isGeneratingDepth = false
     /// EXIF of the PHOTO CURRENTLY DISPLAYED for the pinned strip (nil when unreadable or nothing open). Cleared at the commit point of a load
@@ -194,12 +201,12 @@ final class ImageDocumentModel: ObservableObject {
     private var analysisGeneration = 0
 
     /// Shown by the Crop tab's own alert: `autoCrop` outcomes that changed nothing (no empty corners, too large, failure).
-    @Published var autoCropMessage: String?
+    @Published var autoCropMessage: String? { didSet { postEditorMessage(autoCropMessage, .autoCrop) } }
     /// True while the empty corners are being measured (single-flight: disables the Crop tab's Auto Crop, Auto and Upright buttons).
     @Published private(set) var isAutoCropping = false
 
     /// Shown by the Crop tab's own alert: Upright outcomes that changed nothing (no lines, already upright, failure).
-    @Published var uprightMessage: String?
+    @Published var uprightMessage: String? { didSet { postEditorMessage(uprightMessage, .upright) } }
     /// The Upright mode being measured right now (nil when idle): the pressed button shows its progress label.
     @Published private(set) var runningUprightMode: UprightMode?
     var isAutoUprighting: Bool { runningUprightMode != nil }
@@ -1556,7 +1563,7 @@ final class ImageDocumentModel: ObservableObject {
     // MARK: - Spot removal
 
     /// Shown by the Retouch tab's own alert (placement refusals, a failed auto-source).
-    @Published var retouchMessage: String?
+    @Published var retouchMessage: String? { didSet { postEditorMessage(retouchMessage, .spotRemoval) } }
 
     /// Appends a spot in the middle of the frame (the "Add Spot" button; later ones spiral outward) and finds its source in the
     /// background. Refused (with a message) unless the geometry is at identity — spots live in the unedited source frame and the

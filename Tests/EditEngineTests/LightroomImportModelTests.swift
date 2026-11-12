@@ -189,6 +189,8 @@ final class LightroomImportModelTests: XCTestCase {
         XCTAssertEqual(doc.editState.contrast, 0, "Contrast is not imported")
         XCTAssertEqual(doc.editState.cropInsetLeft, 0, "crop not included")
         XCTAssertEqual(doc.historyEntries.count, steps + 1)
+        XCTAssertEqual(m.feedback?.kind, .notice, "an applied import always carries the approximation notes: an alert")
+        XCTAssertEqual(m.feedback?.title, "Import Lightroom Settings")
         let message = try XCTUnwrap(m.resultMessage)
         // set: Exposure2012, Vibrance. ignored: Contrast2012 (note), ColorGradeMidtoneHue, Temperature, Crop (not included)
         XCTAssertTrue(message.hasPrefix("Set 2 settings. Ignored 4."), message)
@@ -221,6 +223,7 @@ final class LightroomImportModelTests: XCTestCase {
         XCTAssertEqual(doc.editState.cropInsetLeft, 0)
         XCTAssertEqual(doc.editState.exposureEV, 0.65, accuracy: 1e-12, "the rest still imports")
         XCTAssertTrue(m.resultMessage?.contains("The crop was not imported") == true, m.resultMessage ?? "nil")
+        XCTAssertEqual(m.feedback?.kind, .incomplete, "the crop the user chose was refused")
     }
 
     func testConfirmIsRefusedWhenAnotherPhotoIsOpenByThen() async throws {
@@ -236,6 +239,7 @@ final class LightroomImportModelTests: XCTestCase {
         m.confirm(request, includeCrop: false, document: doc)
         XCTAssertEqual(doc.editState.exposureEV, 0, "nothing was applied to the new photo")
         XCTAssertTrue(m.resultMessage?.contains("photo changed") == true)
+        XCTAssertEqual(m.feedback?.kind, .error)
     }
 
     func testCancelClearsThePendingRequest() async throws {
@@ -425,5 +429,27 @@ final class LightroomImportModelTests: XCTestCase {
         XCTAssertEqual(doc.editState.cropInsetLeft, 0)
         let message = try XCTUnwrap(m.resultMessage)
         XCTAssertTrue(message.hasPrefix("Set 1 setting; cleared the crop. Ignored"), message)
+    }
+
+    /// Kinds of the finished import: crop refused only counts when the crop was asked for.
+    func testFeedbackKindTable() {
+        var refused = LightroomMapping.Plan()
+        refused.cropRefusal = "The crop was not imported: x."
+        let none = LightroomMapping.Plan()
+        let c = LightroomMapping.Changes()
+        XCTAssertEqual(LightroomImportModel.feedback(plan: refused, changes: c, applied: true, includeCrop: true).kind, .incomplete)
+        XCTAssertEqual(LightroomImportModel.feedback(plan: refused, changes: c, applied: true, includeCrop: false).kind, .notice)
+        XCTAssertEqual(LightroomImportModel.feedback(plan: none, changes: c, applied: true, includeCrop: true).kind, .notice)
+        XCTAssertEqual(LightroomImportModel.feedback(plan: none, changes: c, applied: false, includeCrop: false).kind, .notice)
+        let f = LightroomImportModel.feedback(plan: none, changes: c, applied: true, includeCrop: false)
+        XCTAssertEqual(f.message, LightroomImportModel.summary(plan: none, changes: c, applied: true))
+        XCTAssertNil(f.action)
+    }
+
+    func testTheModifierRelaysTheResultToTheDocumentQueue() throws {
+        let text = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/UI/LightroomImportModel.swift"), encoding: .utf8)
+        XCTAssertTrue(text.contains(".relayFeedback($model.feedback, to: document.post)"))
+        XCTAssertFalse(text.contains(".alert("))
     }
 }

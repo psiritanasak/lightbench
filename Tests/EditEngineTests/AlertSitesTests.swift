@@ -26,16 +26,13 @@ final class AlertSitesTests: XCTestCase {
         // Verdicts: every entry is still a raw alert to be converted to `feedbackAlert` or kept because it asks a question / needs a decision;
         // FeedbackAlertModifier is the one generic alert.
         let allowed: [String: Int] = [
-            "AdjustTabView.swift": 3,
             "CatalogBackupDialogModifier.swift": 1,
             "CollectionSidebarView.swift": 6,
             "ContentView.swift": 3,
-            "CropTabView.swift": 3,
             "FeedbackAlertModifier.swift": 1,
             "ImportCopyDialogModifier.swift": 1,
             "LibraryGridView.swift": 1,
-            "LightroomImportModel.swift": 1,
-            "LooksTabView.swift": 2,
+            "LooksTabView.swift": 1,
             "MergeDialogModifier.swift": 1,
             "PeopleSheetView.swift": 1,
             "TrashDialogModifier.swift": 1,
@@ -96,7 +93,8 @@ final class AlertSitesTests: XCTestCase {
     /// A drain of several toasts shows the most severe one, not just the last.
     func testFeedbackAlertModifierShowsTheMostSevereToastOfADrain() throws {
         let lines = try XCTUnwrap(try codeLines()["FeedbackAlertModifier.swift"])
-        XCTAssertTrue(lines.contains { $0.contains("FeedbackInbox.mostSevereToast(") })
+        // What it picks is what it shows: one statement, `toasts.show(` of the picked toast.
+        XCTAssertTrue(lines.contains { $0.contains("FeedbackInbox.mostSevereToast(") && $0.contains("toasts.show(") })
     }
 
     /// The drop's "left out" note is an alert posted through the queue, never the single catalog slot (which a following result would
@@ -105,8 +103,21 @@ final class AlertSitesTests: XCTestCase {
         let lines = try XCTUnwrap(try codeLines()["DropAndOpenModifier.swift"])
         let note = try XCTUnwrap(lines.firstIndex { $0.contains("catalog.post(") })
         XCTAssertTrue(lines[note...].prefix(3).joined().contains("message"))
+        XCTAssertTrue(lines[note].contains("kind: .incomplete"), "the left-out note is an alert kind")
         XCTAssertFalse(lines.contains { $0.contains("catalogFeedback") }, "nothing in the drop modifier writes the single slot")
         let writers = lines.filter { $0.contains("importStatusMessage") }
         XCTAssertFalse(writers.contains { $0.contains("left out") || $0.contains("leftOut") })
+    }
+
+    /// Editor results reach the inbox through the document's queue: the tools' alerts are gone and the Lightroom modifier relays.
+    func testEditorToolAlertsAreGoneAndNothingElseInTheEditorPostsRaw() throws {
+        let all = try codeLines()
+        for file in ["CropTabView.swift", "AdjustTabView.swift", "LightroomImportModel.swift"] {
+            XCTAssertFalse(try XCTUnwrap(all[file]).contains { $0.contains(".alert(") }, file)
+        }
+        let text = try XCTUnwrap(all["ImageDocumentModel.swift"]).joined(separator: "\n")
+        for name in ["straightenMessage", "uprightMessage", "autoCropMessage", "retouchMessage", "subjectMaskMessage", "depthMaskMessage"] {
+            XCTAssertTrue(text.contains("var \(name): String? { didSet { postEditorMessage(\(name),"), name)
+        }
     }
 }

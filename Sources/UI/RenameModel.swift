@@ -101,7 +101,8 @@ final class RenameModel: ObservableObject {
     /// A result shown after the sheet closes (success, or an undo outcome): a toast for a finished rename or undo, an alert for a refusal or
     /// failure, by kind. Taken by the window's one `feedbackAlert`.
     @Published var feedback: Feedback?
-    /// Compatibility for every writer that reports a refusal or failure: reads the message, and writing a message makes it an ALERT (`.error`).
+    /// Compatibility for every writer that reports a refusal or failure: writing a message makes it an ALERT (`.error`). The getter is a
+    /// test/compatibility read of the pending result's message, and also returns a toast's message (a finished rename or undo).
     var statusMessage: String? {
         get { feedback?.message }
         set { feedback = newValue.map(RenameSummary.failure) }

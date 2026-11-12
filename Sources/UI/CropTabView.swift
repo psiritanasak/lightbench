@@ -30,31 +30,9 @@ struct CropTabView: View {
             .buttonStyle(.flat)
             .disabled(document.currentImage == nil || document.isAutoStraightening || document.isAutoUprighting || document.isAutoCropping)
             .help("Find the horizon and set Straighten to level it")
-            .alert(
-                "Auto Straighten",
-                isPresented: Binding(
-                    get: { document.straightenMessage != nil },
-                    set: { if !$0 { document.straightenMessage = nil } }
-                )
-            ) {
-                Button("OK") {}
-            } message: {
-                Text(document.straightenMessage ?? "")
-            }
             HStack(spacing: 8) {
                 uprightButton(.level, title: "Level", help: "Find the dominant lines and rotate the photo so they are level")
                 uprightButton(.vertical, title: "Vertical", help: "Straighten vertical lines: rotate and correct keystone so they run parallel")
-            }
-            .alert(
-                "Upright",
-                isPresented: Binding(
-                    get: { document.uprightMessage != nil },
-                    set: { if !$0 { document.uprightMessage = nil } }
-                )
-            ) {
-                Button("OK") {}
-            } message: {
-                Text(document.uprightMessage ?? "")
             }
             Button {
                 document.autoCrop(aspectRatio: autoCropAspectRatio())
@@ -65,17 +43,6 @@ struct CropTabView: View {
             .buttonStyle(.flat)
             .disabled(document.currentImage == nil || document.isAutoCropping || document.isAutoStraightening || document.isAutoUprighting)
             .help("Crop to the largest rectangle with no empty corners (replaces the current crop; keeps the selected Aspect)")
-            .alert(
-                "Auto Crop",
-                isPresented: Binding(
-                    get: { document.autoCropMessage != nil },
-                    set: { if !$0 { document.autoCropMessage = nil } }
-                )
-            ) {
-                Button("OK") {}
-            } message: {
-                Text(document.autoCropMessage ?? "")
-            }
             EditSliderRow(
                 label: "Straighten", value: $document.editState.straightenAngle,
                 range: -45...45, identity: 0

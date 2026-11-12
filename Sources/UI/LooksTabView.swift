@@ -22,7 +22,6 @@ struct LooksTabView: View {
     /// Bumped after a look is imported/removed: `LookLibrary` is not observable, so the Looks list re-reads it
     /// when this changes.
     @State private var looksRevision = 0
-    @State private var lookImportMessage: String?
     @State private var newPresetName = ""
 
     var body: some View {
@@ -180,14 +179,6 @@ struct LooksTabView: View {
             Button("Import .cube…") { importLookFile() }
                 .buttonStyle(FlatButtonStyle(fullWidth: true))
                 .accessibilityLabel("Import Look")
-                .alert(
-                    "Import Look",
-                    isPresented: Binding(get: { lookImportMessage != nil }, set: { if !$0 { lookImportMessage = nil } })
-                ) {
-                    Button("OK") {}
-                } message: {
-                    Text(lookImportMessage ?? "")
-                }
         }
     }
 
@@ -212,12 +203,23 @@ struct LooksTabView: View {
         do {
             let look = try LookStore.shared.importCube(from: url)
             looksRevision += 1
-            lookImportMessage = "Imported \"\(look.name)\"."
+            document.post(Self.importedFeedback(name: look.name))
             selectLook(look.id)
         } catch {
-            lookImportMessage = error.localizedDescription
+            document.post(Self.importFailedFeedback(error))
         }
     }
+
+    /// "Imported "name"." A passing result: a toast.
+    static func importedFeedback(name: String) -> Feedback {
+        Feedback(kind: .done, title: "Import Look", message: "Imported \"\(name)\".")
+    }
+
+    /// A look that could not be imported: an alert (nothing was added).
+    static func importFailedFeedback(_ error: Error) -> Feedback { .error("Import Look", error.localizedDescription) }
+
+    /// A look that could not be removed: an alert (it is still there). Its title was "Import Look" before, which named the wrong action.
+    static func removeFailedFeedback(_ error: Error) -> Feedback { .error("Remove Look", error.localizedDescription) }
 
     private func removeUserLook(_ look: LookLibrary.UserLook) {
         let alert = NSAlert()
@@ -233,7 +235,7 @@ struct LooksTabView: View {
             if document.editState.lookID == look.id { selectLook("") }
             looksRevision += 1
         } catch {
-            lookImportMessage = error.localizedDescription
+            document.post(Self.removeFailedFeedback(error))
         }
     }
 

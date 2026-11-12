@@ -2,7 +2,7 @@ import XCTest
 @testable import PhotoApp
 
 final class RenameSummaryTests: XCTestCase {
-    func testRenamedIsATodaysTextToast() {
+    func testRenamedIsAToastWithTodaysText() {
         let one = RenameSummary.renamed(count: 1)
         XCTAssertEqual(one.kind, .done)
         XCTAssertEqual(one.title, "Rename")

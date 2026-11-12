@@ -58,6 +58,7 @@ final class AutoStraightenModelTests: XCTestCase {
         XCTAssertNil(model.autoStraighten())
         XCTAssertFalse(model.isAutoStraightening)
         XCTAssertNotNil(model.straightenMessage)
+        XCTAssertEqual(model.postedFeedback.map(\.kind), [.error], "a refusal is an alert")
         XCTAssertTrue(model.historyEntries.isEmpty)
     }
 
@@ -169,6 +170,7 @@ final class AutoStraightenModelTests: XCTestCase {
         await work.value
         XCTAssertEqual(model.straightenMessage, StraightenMessages.alreadyLevel)
         XCTAssertEqual(model.historyEntries.count, entries)
+        XCTAssertEqual(model.postedFeedback.last, Feedback(kind: .nothingToDo, title: "Auto Straighten", message: StraightenMessages.alreadyLevel))
     }
 
     func testRepeatPressSolvingToTheSameAngleSaysSoAndAddsNoStep() async throws {
@@ -187,6 +189,7 @@ final class AutoStraightenModelTests: XCTestCase {
         XCTAssertEqual(model.editState.straightenAngle, -4, "not doubled")
         XCTAssertEqual(model.historyEntries.count, entries)
         XCTAssertEqual(model.straightenMessage, StraightenMessages.alreadyApplied)
+        XCTAssertEqual(model.postedFeedback.last?.kind, .nothingToDo)
     }
 
     func testNoHorizonAndFailureOnlyExplain() async throws {

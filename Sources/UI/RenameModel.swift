@@ -98,8 +98,14 @@ final class RenameModel: ObservableObject {
     @Published private(set) var canUndo = false
     /// A failure shown INSIDE the sheet (so it stays open for the user to adjust).
     @Published var sheetError: String?
-    /// A result shown as an alert after the sheet closes (success, or an undo outcome).
-    @Published var statusMessage: String?
+    /// A result shown after the sheet closes (success, or an undo outcome): a toast for a finished rename or undo, an alert for a refusal or
+    /// failure, by kind. Taken by the window's one `feedbackAlert`.
+    @Published var feedback: Feedback?
+    /// Compatibility for every writer that reports a refusal or failure: reads the message, and writing a message makes it an ALERT (`.error`).
+    var statusMessage: String? {
+        get { feedback?.message }
+        set { feedback = newValue.map(RenameSummary.failure) }
+    }
 
     private(set) var targets: [Photo] = []
     private var captureDates: [Int64: Date] = [:]
@@ -143,7 +149,7 @@ final class RenameModel: ObservableObject {
         let wasStale = isPresentingSheet && !sheetIsVisible && !isWorking
         if wasStale { isPresentingSheet = false }
         guard !isWorking, !isPresentingSheet else { return }
-        pendingStatusMessage = nil // never let a stale message pop up after this sheet
+        pendingFeedback = nil // never let a stale message pop up after this sheet
         if let reason = providers.busyReason() {
             statusMessage = reason
             return
@@ -198,18 +204,19 @@ final class RenameModel: ObservableObject {
         isPresentingSheet = false
         // One run-loop turn later: an alert raised in the same pass as the sheet's dismissal can be dropped.
         Task { @MainActor [weak self] in
-            guard let self, let message = self.pendingStatusMessage else { return }
-            self.pendingStatusMessage = nil
-            self.statusMessage = message
+            guard let self, let pending = self.pendingFeedback else { return }
+            self.pendingFeedback = nil
+            self.feedback = pending
         }
     }
 
-    /// A status alert waiting for the sheet to finish dismissing (see `deliverStatus`).
-    private(set) var pendingStatusMessage: String?
+    /// A result waiting for the sheet to finish dismissing (see `deliver`).
+    private(set) var pendingFeedback: Feedback?
+    var pendingStatusMessage: String? { pendingFeedback?.message }
 
-    /// Shows `message` as the status alert: at once when no sheet is on screen, otherwise from `sheetDidDisappear()`.
-    private func deliverStatus(_ message: String) {
-        if sheetIsVisible { pendingStatusMessage = message } else { statusMessage = message }
+    /// Shows `feedback`: at once when no sheet is on screen, otherwise from `sheetDidDisappear()`.
+    private func deliver(_ feedback: Feedback) {
+        if sheetIsVisible { pendingFeedback = feedback } else { self.feedback = feedback }
     }
 
     func cancel() {
@@ -348,7 +355,7 @@ final class RenameModel: ObservableObject {
             canUndo = true
             // An alert raised in the same pass as a sheet's dismissal can be dropped by macOS, so while the
             // sheet is still on screen the message waits for `sheetDidDisappear()` (no timer to lose the race).
-            deliverStatus("Renamed \(count) photo\(count == 1 ? "" : "s"). Use Undo Rename to put the names back.")
+            deliver(RenameSummary.renamed(count: count))
         } catch {
             // `report`, not `sheetError`: if the sheet vanished mid-apply the message (which may be the
             // "files couldn't be put back — use Locate…" one) must still reach the user as an alert.
@@ -403,7 +410,7 @@ final class RenameModel: ObservableObject {
         do {
             let count = try await catalog.undoLastRename(expectedBatchID: log.batchID)
             canUndo = await catalog.lastRenameLog() != nil
-            statusMessage = "Restored \(count) photo\(count == 1 ? "" : "s") to their previous names."
+            feedback = RenameSummary.restored(count: count)
         } catch {
             statusMessage = error.localizedDescription
         }

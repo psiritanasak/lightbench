@@ -45,7 +45,7 @@ enum FolderImportSummary {
     }
 
     /// The result as a `Feedback`: a failure or an access warning means something asked for was not fully done, so it is an alert.
-    static func feedback(_ reports: [FolderImportReport], title: String = "Photo Catalog") -> Feedback {
+    static func feedback(_ reports: [FolderImportReport], title: String) -> Feedback {
         let message = text(reports)
         if reports.count == 1, case .failed = reports[0].outcome { return .error(title, message) }
         var written = 0, unchanged = 0, notWritten = 0

@@ -55,7 +55,8 @@ struct FeedbackAlertModifier: ViewModifier {
             queue.wrappedValue = []
             toastsInThisDrain += inbox.receive(all: items)
         }
-        // A toast replaces the previous one, so when several arrive together only the most severe is shown; every alert is kept.
+        // A toast replaces the previous one, so when several arrive together in one queue drain only the most severe is shown (single-slot
+        // sources in `takeAll` are still last-wins); every alert is kept.
         if let toast = FeedbackInbox.mostSevereToast(toastsInThisDrain) { toasts.show(toast) }
     }
 

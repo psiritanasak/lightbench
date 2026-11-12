@@ -29,7 +29,7 @@ final class AlertSitesTests: XCTestCase {
             "AdjustTabView.swift": 3,
             "CatalogBackupDialogModifier.swift": 1,
             "CollectionSidebarView.swift": 6,
-            "ContentView.swift": 4,
+            "ContentView.swift": 3,
             "CropTabView.swift": 3,
             "FeedbackAlertModifier.swift": 1,
             "ImportCopyDialogModifier.swift": 1,
@@ -49,8 +49,8 @@ final class AlertSitesTests: XCTestCase {
         XCTAssertEqual(found, allowed, "an alert site was added or removed: list it in `allowed` with a verdict")
     }
 
-    /// ONE `feedbackAlert` in `ContentView` takes all three models' results into one inbox (three stacked alert modifiers can leave an
-    /// alert stuck when two fire together).
+    /// ONE `feedbackAlert` in `ContentView` takes every converted model's result (the single slots and the two posted queues) into one
+    /// inbox (stacked alert modifiers can leave an alert stuck when two fire together).
     func testContentViewHasOneFeedbackAlertNamingEverySourceAndQueue() throws {
         let lines = try XCTUnwrap(try codeLines()["ContentView.swift"])
         let calls = lines.filter { $0.contains(".feedbackAlert(") }
@@ -62,7 +62,7 @@ final class AlertSitesTests: XCTestCase {
         let text = lines.joined(separator: "\n")
         for binding in [
             "$pasteModel.feedback", "$enhanceModel.feedback", "$exportModel.feedback",
-            "$catalog.catalogFeedback", "$catalog.postedFeedback", "$document.postedFeedback",
+            "$catalog.catalogFeedback", "$renameModel.feedback", "$catalog.postedFeedback", "$document.postedFeedback",
         ] {
             XCTAssertTrue(text.contains(binding), "ContentView names \(binding)")
         }
@@ -91,5 +91,22 @@ final class AlertSitesTests: XCTestCase {
         for (file, lines) in all where file != "ContentView.swift" && file != "LibraryGridView.swift" {
             XCTAssertFalse(lines.contains { $0.contains(".feedbackArea()") }, "\(file) must not mark an area (Cull falls back to the window)")
         }
+    }
+
+    /// A drain of several toasts shows the most severe one, not just the last.
+    func testFeedbackAlertModifierShowsTheMostSevereToastOfADrain() throws {
+        let lines = try XCTUnwrap(try codeLines()["FeedbackAlertModifier.swift"])
+        XCTAssertTrue(lines.contains { $0.contains("FeedbackInbox.mostSevereToast(") })
+    }
+
+    /// The drop's "left out" note is an alert posted through the queue, never the single catalog slot (which a following result would
+    /// replace).
+    func testDropLeftOutNoteIsPostedNotWrittenToTheCatalogSlot() throws {
+        let lines = try XCTUnwrap(try codeLines()["DropAndOpenModifier.swift"])
+        let note = try XCTUnwrap(lines.firstIndex { $0.contains("catalog.post(") })
+        XCTAssertTrue(lines[note...].prefix(3).joined().contains("message"))
+        XCTAssertFalse(lines.contains { $0.contains("catalogFeedback") }, "nothing in the drop modifier writes the single slot")
+        let writers = lines.filter { $0.contains("importStatusMessage") }
+        XCTAssertFalse(writers.contains { $0.contains("left out") || $0.contains("leftOut") })
     }
 }

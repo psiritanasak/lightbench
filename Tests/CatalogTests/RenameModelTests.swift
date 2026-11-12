@@ -163,6 +163,8 @@ final class RenameModelTests: XCTestCase {
         XCTAssertNil(read("a.jpg"))
         XCTAssertTrue(model.canUndo)
         XCTAssertTrue(model.statusMessage?.contains("Renamed 2 photos") ?? false, "\(String(describing: model.statusMessage))")
+        XCTAssertEqual(model.feedback?.kind, .done)
+        XCTAssertEqual(model.feedback?.title, "Rename")
         let rows = try await db.allPhotos().map(\.filename).sorted()
         XCTAssertEqual(rows, ["Trip_001.jpg", "Trip_002.jpg"])
 
@@ -175,6 +177,7 @@ final class RenameModelTests: XCTestCase {
         XCTAssertNil(read("Trip_001.jpg"))
         XCTAssertFalse(model.canUndo)
         XCTAssertTrue(model.statusMessage?.contains("Restored 2 photos") ?? false, "\(String(describing: model.statusMessage))")
+        XCTAssertEqual(model.feedback?.kind, .done)
     }
 
     func testApplyIsSingleFlight() async throws {
@@ -243,6 +246,7 @@ final class RenameModelTests: XCTestCase {
         model.undo(catalog: catalog, providers: providers)
         try await waitUntil("undo to finish") { !self.model.isWorking }
         XCTAssertEqual(model.statusMessage, "There is no rename to undo.")
+        XCTAssertEqual(model.feedback?.kind, .error)
     }
 
     func testUndoRefusesWhileAPhotoFromTheBatchIsOpenInTheEditor() async throws {
@@ -357,11 +361,15 @@ final class RenameModelTests: XCTestCase {
         try await applyAndWait()
         XCTAssertNil(model.statusMessage, "raised while the sheet was still up")
         XCTAssertNotNil(model.pendingStatusMessage)
+        XCTAssertEqual(model.pendingFeedback?.kind, .done)
+        XCTAssertNil(model.feedback)
         model.sheetDidDisappear()
         XCTAssertNil(model.statusMessage, "delivered one run-loop turn after the sheet is gone, not inside onDisappear")
         try await waitUntil("the held alert") { self.model.statusMessage != nil }
         XCTAssertTrue(model.statusMessage?.contains("Renamed 2 photos") ?? false, "\(String(describing: model.statusMessage))")
         XCTAssertNil(model.pendingStatusMessage)
+        XCTAssertEqual(model.feedback?.kind, .done)
+        XCTAssertEqual(model.feedback?.title, "Rename")
     }
 
     func testAHeldAlertIsDroppedWhenTheNextRenameBegins() async throws {

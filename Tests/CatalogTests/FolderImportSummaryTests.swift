@@ -15,7 +15,7 @@ final class FolderImportSummaryTests: XCTestCase {
     }
 
     func testOneFolderHasNoPrefixAndTheWarningFollowsTheMessage() {
-        let one = FolderImportSummary.feedback([report(.imported(ImportResult(inserted: 1, skipped: 0)), warning: "W.")])
+        let one = FolderImportSummary.feedback([report(.imported(ImportResult(inserted: 1, skipped: 0)), warning: "W.")], title: "Photo Catalog")
         XCTAssertEqual(one.message, "Imported 1 photo. W.")
         XCTAssertEqual(one.title, "Photo Catalog")
     }
@@ -25,7 +25,7 @@ final class FolderImportSummaryTests: XCTestCase {
             report(.imported(ImportResult(inserted: 1, skipped: 0)), name: "one"),
             report(.noPhotos, name: "two", warning: "W."),
             report(.failed("x"), name: "three", warning: "ignored"),
-        ])
+        ], title: "Photo Catalog")
         XCTAssertEqual(feedback.message, "one: Imported 1 photo.\ntwo: No photos found in that folder. W.\nthree: Import failed: x")
     }
 
@@ -44,7 +44,7 @@ final class FolderImportSummaryTests: XCTestCase {
             ([report(skipped), report(.noPhotos)], .nothingToDo),
         ]
         for (reports, kind) in table {
-            XCTAssertEqual(FolderImportSummary.feedback(reports).kind, kind, "\(reports)")
+            XCTAssertEqual(FolderImportSummary.feedback(reports, title: "Photo Catalog").kind, kind, "\(reports)")
         }
     }
 }

@@ -1256,13 +1256,10 @@ struct ContentView: View {
     }
 
     private var contentWithExportAlerts: some View {
-        // Split out of `body` (into `mainContent` below) so the type
-        // checker only has to solve the alert chain against ONE already-
-        // opaque `some View` type, not the whole `HSplitView` tree AND
-        // every alert simultaneously — adding an
-        // `importStatusMessage` alert pushed the previously-single expression past what the
-        // compiler could type-check in reasonable time (measured: this
-        // split is what fixed it).
+        // Split out of `body` (into `mainContent` below) so the type checker only has to solve the alert chain against ONE
+        // already-opaque `some View` type, not the whole `HSplitView` tree AND every alert simultaneously — adding an
+        // `importStatusMessage` alert pushed the previously-single expression past what the compiler could type-check in
+        // reasonable time (measured: this split is what fixed it).
         mainContent
             .modifier(LibraryToolSheetsModifier(
                 catalog: catalog, blocked: otherSheetIsPresented, trashProviders: trashProviders, importCopyProviders: importCopyProviders
@@ -1326,20 +1323,6 @@ struct ContentView: View {
             .sheet(isPresented: $renameModel.isPresentingSheet) {
                 RenameSheetView(model: renameModel)
             }
-            .alert(
-                "Rename",
-                isPresented: Binding(
-                    get: { renameModel.statusMessage != nil },
-                    set: { isPresented in
-                        if !isPresented { renameModel.statusMessage = nil }
-                    }
-                ),
-                presenting: renameModel.statusMessage
-            ) { _ in
-                Button("OK") {}
-            } message: { message in
-                Text(message)
-            }
             // The Photo menu can't see the selection or the Export/Enhance state, so it only sets
             // `request`; this view performs it with its own providers, then clears it.
             .onChange(of: renameModel.request) { _, request in
@@ -1367,7 +1350,7 @@ struct ContentView: View {
 
     /// The single-slot results the window's one `feedbackAlert` takes.
     private var feedbackSources: [Binding<Feedback?>] {
-        [$pasteModel.feedback, $enhanceModel.feedback, $exportModel.feedback, $catalog.catalogFeedback]
+        [$pasteModel.feedback, $enhanceModel.feedback, $exportModel.feedback, $catalog.catalogFeedback, $renameModel.feedback]
     }
 
     /// The queues other models post finished results into (drained by the same `feedbackAlert`).

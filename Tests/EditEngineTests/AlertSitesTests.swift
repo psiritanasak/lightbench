@@ -27,7 +27,6 @@ final class AlertSitesTests: XCTestCase {
         // FeedbackAlertModifier is the one generic alert.
         let allowed: [String: Int] = [
             "CollectionSidebarView.swift": 6,
-            "ContentView.swift": 3,
             "FeedbackAlertModifier.swift": 1,
             "LibraryGridView.swift": 1,
             "LooksTabView.swift": 1,
@@ -107,11 +106,14 @@ final class AlertSitesTests: XCTestCase {
     /// Editor results reach the inbox through the document's queue: the tools' alerts are gone and the Lightroom modifier relays.
     func testEditorToolAlertsAreGoneAndNothingElseInTheEditorPostsRaw() throws {
         let all = try codeLines()
-        for file in ["CropTabView.swift", "AdjustTabView.swift", "LightroomImportModel.swift"] {
+        for file in ["CropTabView.swift", "AdjustTabView.swift", "LightroomImportModel.swift", "ContentView.swift"] {
             XCTAssertFalse(try XCTUnwrap(all[file]).contains { $0.contains(".alert(") }, file)
         }
         let text = try XCTUnwrap(all["ImageDocumentModel.swift"]).joined(separator: "\n")
         for name in ["straightenMessage", "uprightMessage", "autoCropMessage", "retouchMessage", "subjectMaskMessage", "depthMaskMessage"] {
+            XCTAssertTrue(text.contains("var \(name): String? { didSet { postEditorMessage(\(name),"), name)
+        }
+        for name in ["loadErrorMessage", "whiteBalanceSampleMessage", "sidecarSaveErrorMessage"] {
             XCTAssertTrue(text.contains("var \(name): String? { didSet { postEditorMessage(\(name),"), name)
         }
     }

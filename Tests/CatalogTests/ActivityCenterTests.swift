@@ -51,5 +51,40 @@ final class ActivityCenterTests: XCTestCase {
         let content = try source("Sources/UI/ContentView.swift")
         XCTAssertTrue(content.contains("@ObservedObject var tools: ActivityCenter"))
         XCTAssertFalse(content.contains("catalog.merge.isMerging") || content.contains("catalog.activity.items"))
+        XCTAssertFalse(content.contains("catalog.importCopy.progressDone"), "ContentView must not read the per-photo progress")
+        // Exactly one observer of an ActivityCenter in all of Sources/UI, and it is FeedbackHostModifier's.
+        let ui = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/UI")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: ui, includingPropertiesForKeys: nil)).compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" }
+        var observers: [(file: String, line: String)] = []
+        for file in files {
+            for line in try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n") {
+                let code = line.components(separatedBy: "//").first ?? ""
+                let wrapped = ["@ObservedObject", "@StateObject", "@EnvironmentObject"].contains { code.contains($0) }
+                if wrapped, code.contains(": ActivityCenter") { observers.append((file.lastPathComponent, code)) }
+            }
+        }
+        XCTAssertEqual(observers.count, 1, "\(observers)")
+        XCTAssertEqual(observers.first?.file, "ContentView.swift")
+        let text = content
+        let host = try XCTUnwrap(text.range(of: "struct FeedbackHostModifier"))
+        let observer = try XCTUnwrap(text.range(of: "@ObservedObject var tools: ActivityCenter"))
+        XCTAssertGreaterThan(observer.lowerBound, host.lowerBound, "the one observer is inside FeedbackHostModifier")
+    }
+
+    func testEachModifierReportsItsRowOnAppearAndOnEveryChange() throws {
+        for name in ["Merge", "XMP", "Trash", "CatalogBackup", "ImportCopy"] {
+            let text = try source("Sources/UI/\(name)DialogModifier.swift")
+            XCTAssertEqual(text.components(separatedBy: ".onChange(of: model.activityItem").count - 1, 1, name)
+            XCTAssertTrue(text.contains(".onChange(of: model.activityItem, initial: true)"), "\(name): reports at once, not only on change")
+        }
+    }
+
+    /// `isWorking` and the progress counters are `private(set)` (a run is needed to move them), so the copying row's shape is pinned in the
+    /// source: while working it is built from the model's own counters.
+    func testTheCopyingRowIsBuiltFromTheModelsOwnProgress() throws {
+        let text = try source("Sources/UI/ImportCopyModel.swift")
+        XCTAssertTrue(text.contains("var activityItem: ActivityItem? { isWorking ? .copying(done: progressDone, total: progressTotal) : nil }"))
     }
 }

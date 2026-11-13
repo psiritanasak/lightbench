@@ -72,13 +72,13 @@ final class ImageDocumentModel: ObservableObject {
     /// `CIRAWFilter` to read these flags must go through `RenderGate`,
     /// not be re-done synchronously per UI update.
     @Published private(set) var currentRawAdjustmentSupport = RawDecoder.RawAdjustmentSupport.unsupported
-    @Published var loadErrorMessage: String?
+    @Published var loadErrorMessage: String? { didSet { postEditorMessage(loadErrorMessage, .openImage) } }
     /// User-facing feedback when saving a sidecar fails (folder-bookmark
     /// resolution or the write itself) — mirrors `whiteBalanceSampleMessage`'s
     /// alert-binding pattern. NOT set when the user simply declines a
     /// folder-access prompt — that's an ordinary, silent choice, not an
     /// error condition.
-    @Published var sidecarSaveErrorMessage: String?
+    @Published var sidecarSaveErrorMessage: String? { didSet { postEditorMessage(sidecarSaveErrorMessage, .saveEdits) } }
     /// Fired after a REAL, successful sidecar write (not on a decline/skip/
     /// error) — lets `ContentView` bridge this otherwise fully-decoupled
     /// model to `CatalogModel`, so the Library grid's thumbnail cache can
@@ -157,7 +157,7 @@ final class ImageDocumentModel: ObservableObject {
     /// User-facing feedback for a WB eyedropper tap that couldn't fully do
     /// its job (too dark to sample, or a cast too strong to fully correct)
     /// — mirrors `loadErrorMessage`'s alert-binding pattern.
-    @Published var whiteBalanceSampleMessage: String?
+    @Published var whiteBalanceSampleMessage: String? { didSet { postEditorMessage(whiteBalanceSampleMessage, .colorSample) } }
     /// Shown by its own alert (not `whiteBalanceSampleMessage`'s "Color Sample" one) — `selectSubject` outcomes.
     @Published var subjectMaskMessage: String? { didSet { postEditorMessage(subjectMaskMessage, .subjectMask) } }
     /// True while a Vision subject pass is running (disables the Subject buttons: single-flight).
@@ -2597,10 +2597,14 @@ final class ImageDocumentModel: ObservableObject {
     /// `sidecarSaveErrorMessage`, and folding them in here would need
     /// deeper plumbing than this fix's own scope; a documented, accepted
     /// imprecision, not silently ignored.
+    /// (Superseded for the write-failure half, C1 session 2 batch H: `.failed` is the save attempt this very paste made ending in
+    /// `.writeFailed`, so a paste that did not reach disk is never counted as written.)
     enum PasteSettingsResult {
         case written
         case unchanged
         case skipped
+        /// The paste's own save attempt failed (bookmark, folder access lost or the write itself): the edit is in memory only.
+        case failed
     }
 
     /// Merges a copied photo's "look" onto the current `editState`
@@ -2666,6 +2670,11 @@ final class ImageDocumentModel: ObservableObject {
         if let currentURL, refusedEditKey == Photo.editKey(path: currentURL.path, versionKey: currentVersionKey) {
             return .skipped
         }
+        // The flush above ran `saveSidecarNow` synchronously (the commit changed `editState`, whose didSet scheduled the save, and
+        // nothing interleaves here except the D28 case: a folder with no access grant yet shows a panel that pumps the run loop, and a
+        // load finishing behind it makes this the NEW photo's status), so the status is THIS paste's own outcome. Declined and refused outcomes
+        // returned `.skipped` above; the remaining failure is a write/access error.
+        if case .writeFailed = sidecarSaveStatus { return .failed }
         return .written
     }
 }

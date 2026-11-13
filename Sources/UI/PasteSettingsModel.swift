@@ -346,6 +346,7 @@ final class PasteSettingsModel: ObservableObject {
                 case .written: written += 1
                 case .unchanged: unchanged += 1
                 case .skipped: skipped += 1
+                case .failed: failed += 1
                 }
             }
         }

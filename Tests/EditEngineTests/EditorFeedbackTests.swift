@@ -7,7 +7,8 @@ import XCTest
 final class EditorFeedbackTests: XCTestCase {
     func testTitlesAreTodaysAlertTitles() {
         XCTAssertEqual(EditorFeedbackTool.allCases.map(\.title),
-                       ["Auto Straighten", "Upright", "Auto Crop", "Spot Removal", "Subject Mask", "Depth Range Mask"])
+                       ["Auto Straighten", "Upright", "Auto Crop", "Spot Removal", "Subject Mask", "Depth Range Mask",
+                        "Couldn't Open Image", "Color Sample", "Couldn't Save Edits"])
     }
 
     func testEveryAlreadyStateTextIsANothingToDoToast() {
@@ -60,6 +61,23 @@ final class EditorFeedbackTests: XCTestCase {
         XCTAssertEqual(model.postedFeedback.dropFirst().map(\.kind), [.error, .nothingToDo, .error, .error, .error])
         XCTAssertEqual(model.postedFeedback.dropFirst().map(\.title),
                        ["Spot Removal", "Upright", "Auto Crop", "Subject Mask", "Depth Range Mask"])
+    }
+
+    func testOpenColorSampleAndSaveMessagesAreAlwaysAlertsPostedOncePerWrite() {
+        let model = ImageDocumentModel()
+        model.loadErrorMessage = "Couldn't open \"a.jpg\". The file may be missing, unreadable, or not a supported image format."
+        model.whiteBalanceSampleMessage = "Couldn't read a color sample at that point."
+        model.sidecarSaveErrorMessage = "Couldn't save edits: nope"
+        model.loadErrorMessage = nil
+        model.whiteBalanceSampleMessage = nil
+        model.sidecarSaveErrorMessage = nil
+        XCTAssertEqual(model.postedFeedback, [
+            Feedback(kind: .error, title: "Couldn't Open Image",
+                     message: "Couldn't open \"a.jpg\". The file may be missing, unreadable, or not a supported image format."),
+            Feedback(kind: .error, title: "Color Sample", message: "Couldn't read a color sample at that point."),
+            Feedback(kind: .error, title: "Couldn't Save Edits", message: "Couldn't save edits: nope"),
+        ])
+        XCTAssertTrue(model.postedFeedback.allSatisfy { $0.presentation == .alert })
     }
 
     func testTheSamePassingTextWrittenTwiceIsTwoResults() {

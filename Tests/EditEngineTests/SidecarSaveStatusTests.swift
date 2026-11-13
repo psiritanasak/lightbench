@@ -295,4 +295,33 @@ final class SidecarSaveStatusTests: XCTestCase {
         XCTAssertNil(m.sidecarSaveErrorMessage)
         guard case .writeFailed = m.sidecarSaveStatus else { return XCTFail("got \(m.sidecarSaveStatus)") }
     }
+
+    // MARK: Paste onto the open photo
+
+    func testAPasteWhoseSaveFailedIsFailedNotWrittenAndSummarisesAsAnAlert() async throws {
+        let m = model()
+        await m.load(from: photoA)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        var source = EditState()
+        source.exposureEV = 1
+        XCTAssertEqual(m.pasteSettings(source), .failed)
+        guard case .writeFailed = m.sidecarSaveStatus else { return XCTFail("got \(m.sidecarSaveStatus)") }
+        XCTAssertEqual(m.editState.exposureEV, 1, accuracy: 1e-9, "the edit itself still applies in memory")
+        let f = PasteSettingsModel.feedback(written: 0, unchanged: 0, skipped: 0, failed: 1)
+        XCTAssertEqual(f, Feedback(kind: .incomplete, title: "Paste Settings", message: "1 failed."))
+        XCTAssertEqual(f.presentation, .alert)
+    }
+
+    func testAPasteThatSavedIsStillWrittenAndAnEarlierFailureDoesNotLeakIn() async throws {
+        let m = model()
+        await m.load(from: photoA)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        m.editState.exposureEV = 1
+        m.flushPendingSidecarSave()
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        var source = EditState()
+        source.contrast = 0.5
+        XCTAssertEqual(m.pasteSettings(source), .written, "this paste's own save succeeded, so the earlier failed status is replaced")
+        XCTAssertEqual(m.sidecarSaveStatus, .ok)
+    }
 }

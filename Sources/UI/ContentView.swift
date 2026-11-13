@@ -1264,53 +1264,6 @@ struct ContentView: View {
             .modifier(LibraryToolSheetsModifier(
                 catalog: catalog, blocked: otherSheetIsPresented, trashProviders: trashProviders, importCopyProviders: importCopyProviders
             ))
-            .alert(
-                "Couldn't Open Image",
-                isPresented: Binding(
-                    get: { document.loadErrorMessage != nil },
-                    set: { isPresented in
-                        if !isPresented { document.loadErrorMessage = nil }
-                    }
-                ),
-                presenting: document.loadErrorMessage
-            ) { _ in
-                Button("OK") {}
-            } message: { message in
-                Text(message)
-            }
-            .alert(
-                // Reviewer-caught (Phase 7 slice 5, second half): this
-                // alert is shared by `pickWhiteBalance`/`fixColorCast`
-                // AND (as of this slice) `pickColorRangeTarget` — a
-                // hardcoded "White Balance" title read as misleading for
-                // the latter two callers. "Color Sample" covers all three.
-                "Color Sample",
-                isPresented: Binding(
-                    get: { document.whiteBalanceSampleMessage != nil },
-                    set: { isPresented in
-                        if !isPresented { document.whiteBalanceSampleMessage = nil }
-                    }
-                ),
-                presenting: document.whiteBalanceSampleMessage
-            ) { _ in
-                Button("OK") {}
-            } message: { message in
-                Text(message)
-            }
-            .alert(
-                "Couldn't Save Edits",
-                isPresented: Binding(
-                    get: { document.sidecarSaveErrorMessage != nil },
-                    set: { isPresented in
-                        if !isPresented { document.sidecarSaveErrorMessage = nil }
-                    }
-                ),
-                presenting: document.sidecarSaveErrorMessage
-            ) { _ in
-                Button("OK") {}
-            } message: { message in
-                Text(message)
-            }
             .sheet(isPresented: $exportModel.isPresentingOptions) {
                 ExportOptionsView(
                     exportModel: exportModel, photoCount: photosToExport.count, previewPhoto: photosToExport.first

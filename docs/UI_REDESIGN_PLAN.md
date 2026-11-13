@@ -367,9 +367,10 @@ New findings (not in section 2; each is assigned to a slice below):
   (`Feedback`, `FeedbackClassifier`, `FeedbackInbox`, `ToastTimeline`, `ToastCenter`, `ToastView`, `feedbackAlert`), Paste Settings /
   Enhance / Export converted, one activity strip for Export and Enhance, Export Cancel. Decisions taken: a result with anything not
   written is ALWAYS an alert (no "toast with Details"); a toast is not drawn above a sheet, its clock pauses instead; a user-stopped
-  export is a warning toast stating the count. **Session 2 (open)**: the other 13 result sites (Photo Catalog summaries, Rename,
-  Auto Straighten / Upright / Auto Crop, Spot, Import Look, Merge, XMP, Trash, Backup, Copy Photos, Lightroom), an import activity
-  row (folder import really has no progress UI: confirmed), and the five dialog-modifier HUDs folded into the strip.
+  export is a warning toast stating the count. **Session 2 DONE 2026-11-13** (commits 3bdf7e3 to c49670b, not pushed): every result site converted (catalog results, Rename,
+  the Editor tools, Import Look, Lightroom, Merge, XMP, Trash, Catalog Backup, Copy Photos, and the last three window alerts),
+  an import activity row, the five dialog HUDs folded into the strip, and a fix so a failed paste onto the open photo is
+  reported. `ContentView` has no raw alert left. Not live-checked yet apart from the Library toast placement (IMPROVEMENTS.md D92).
 - **Today**: 30 `.alert(`; success and "nothing to do" messages are modal.
   `ExportProgressHUD` has no Cancel; folder import has no progress UI.
 - **Change**:

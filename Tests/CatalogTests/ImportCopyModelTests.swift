@@ -104,6 +104,18 @@ final class ImportCopyModelTests: XCTestCase {
         XCTAssertFalse(catalog.importCopyBusy)
     }
 
+    func testASourceWithNoPhotosIsANothingToDoResultNotAnAlert() async throws {
+        try Data("x".utf8).write(to: card.appendingPathComponent("notes.txt"))
+        try await beginAndWait()
+        XCTAssertNil(model.setup)
+        XCTAssertEqual(model.feedback?.kind, .nothingToDo)
+        XCTAssertEqual(model.feedback?.message, "No photos were found in “card”.")
+    }
+
+    func testNoProgressRowWhileIdle() {
+        XCTAssertNil(model.activityItem, "idle: no row")
+    }
+
     func testTheSetupSheetFlagOnTheCatalogFollowsTheSheet() async throws {
         try photo("a.jpg")
         XCTAssertFalse(catalog.importCopySheetPresented)

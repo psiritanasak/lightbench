@@ -1161,12 +1161,12 @@ struct ContentView: View {
         // ONE expression, so `contentWithExportAlerts` is its own opaque
         // `some View`.
         //
-        // Paste Settings, Enhance and Export report through ONE
-        // `feedbackAlert`: one inbox, one `.alert(`. A passing result is a
-        // toast; anything not written is an alert that stays until
-        // acknowledged, and a second alert waits for the first. Three
-        // stacked alert modifiers could leave one stuck when two fired
-        // together, hence one modifier with three sources.
+        // Every result source (`feedbackSources`, `feedbackQueues`) reports
+        // through ONE `feedbackAlert`: one inbox, one `.alert(`. A passing
+        // result is a toast; anything not written is an alert that stays
+        // until acknowledged, and a second alert waits for the first.
+        // Stacked alert modifiers could leave one stuck when two fired
+        // together, hence one modifier with many sources.
         contentWithExportAlerts
             .feedbackAlert(feedbackSources, queues: feedbackQueues)
             // Irreversibility mitigation: only the currently-open photo
@@ -1344,6 +1344,7 @@ struct ContentView: View {
             .modifier(FeedbackHostModifier(
                 sheetPresented: anySheetPresented,
                 activities: activityItems,
+                tools: catalog.activity,
                 onCancel: { kind in if kind == .export { exportModel.cancelExport() } }
             ))
     }
@@ -2764,6 +2765,8 @@ struct FeedbackHostModifier: ViewModifier {
     @EnvironmentObject private var toasts: ToastCenter
     let sheetPresented: Bool
     let activities: [ActivityItem]
+    /// The five Library tools' rows; observed here and nowhere else (not by `ContentView`).
+    @ObservedObject var tools: ActivityCenter
     let onCancel: (ActivityItem.Kind) -> Void
 
     func body(content: Content) -> some View {
@@ -2772,7 +2775,7 @@ struct FeedbackHostModifier: ViewModifier {
                 GeometryReader { proxy in
                     // No marked view reports an area (Cull): the whole window, as before.
                     let area = anchor.map { proxy[$0] } ?? CGRect(origin: .zero, size: proxy.size)
-                    FeedbackOverlay(toasts: toasts, activities: activities, onCancel: onCancel)
+                    FeedbackOverlay(toasts: toasts, activities: ActivityItem.ordered(activities + tools.items), onCancel: onCancel)
                         .frame(width: area.width, height: area.height, alignment: .bottom)
                         .offset(x: area.minX, y: area.minY)
                 }

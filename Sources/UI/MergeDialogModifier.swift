@@ -1,21 +1,6 @@
 import SwiftUI
 
-/// Progress panel shown while a merge renders (one atomic call, no incremental progress — like the Enhance activity row).
-struct MergingHUD: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            Text("Merging photos…")
-                .font(.caption)
-        }
-        .padding(12)
-        .solidPanel(cornerRadius: 10)
-        .padding(.bottom, 16)
-    }
-}
-
-/// Presents Photo Merge's confirmation dialog, progress HUD and result alert. Bundled inside `LibraryToolSheetsModifier` (not added to
+/// Presents Photo Merge's confirmation dialog, progress row (the activity strip) and result (relayed to the window's feedback: a toast or an alert). Bundled inside `LibraryToolSheetsModifier` (not added to
 /// `ContentView` directly: its `body` is at the type-checker's limit). The Photo menu / selection menu only REQUEST through
 /// `catalog.mergeRequested`; a request made while another sheet or dialog is up is dropped (`blocked`).
 struct MergeDialogModifier: ViewModifier {
@@ -49,8 +34,7 @@ struct MergeDialogModifier: ViewModifier {
                 Text(MergeModel.confirmationMessage(request))
             }
             .relayFeedback($model.feedback, to: catalog.post)
-            .overlay(alignment: .bottom) {
-                if model.isMerging { MergingHUD() }
-            }
+            .onChange(of: model.activityItem, initial: true) { _, item in catalog.activity.set(.merge, item) }
+            .onDisappear { catalog.activity.set(.merge, nil) }
     }
 }

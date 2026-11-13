@@ -559,6 +559,7 @@ final class TrashModelTests: XCTestCase {
         XCTAssertEqual(names, ["keep.jpg"])
         XCTAssertEqual(catalog.photoCount, 1, "the library was re-read")
         XCTAssertEqual(model.statusMessage, "Moved 2 photos to the Trash with 1 edit / XMP file.")
+        XCTAssertEqual(model.feedback?.kind, .done, "a clean full run is a toast, not an alert")
         XCTAssertFalse(catalog.trashBusy)
     }
 

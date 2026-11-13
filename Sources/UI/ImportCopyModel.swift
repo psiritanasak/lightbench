@@ -38,6 +38,8 @@ final class ImportCopyModel: ObservableObject {
     @Published private(set) var sheetError: String?
 
     var isBusy: Bool { isScanning || isWorking || setup != nil }
+    /// The row this tool puts in the activity strip: today's progress text while it is working, else none (`ActivityItem`).
+    var activityItem: ActivityItem? { isWorking ? .copying(done: progressDone, total: progressTotal) : nil }
 
     private weak var catalog: CatalogModel?
     private func publishBusy() {

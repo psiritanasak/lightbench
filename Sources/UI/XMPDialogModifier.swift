@@ -1,19 +1,6 @@
 import SwiftUI
 
-/// Progress panel while XMP files are read or written.
-struct XMPWorkingHUD: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text("Working on XMP files…").font(.caption)
-        }
-        .padding(12)
-        .solidPanel(cornerRadius: 10)
-        .padding(.bottom, 16)
-    }
-}
-
-/// Confirmation dialog, progress HUD and result alert for the XMP commands. Bundled inside `LibraryToolSheetsModifier` (`ContentView.body`
+/// Confirmation dialog, progress row (the activity strip) and result (relayed to the window's feedback: a toast or an alert) for the XMP commands. Bundled inside `LibraryToolSheetsModifier` (`ContentView.body`
 /// is at the type-checker's limit). The menus only REQUEST through `catalog.xmpRequested`; a request made while another sheet or
 /// dialog is up is dropped (`blocked`).
 struct XMPDialogModifier: ViewModifier {
@@ -40,8 +27,7 @@ struct XMPDialogModifier: ViewModifier {
                 Text(XMPModel.confirmationMessage(request))
             }
             .relayFeedback($model.feedback, to: catalog.post)
-            .overlay(alignment: .bottom) {
-                if model.isWorking { XMPWorkingHUD() }
-            }
+            .onChange(of: model.activityItem, initial: true) { _, item in catalog.activity.set(.xmp, item) }
+            .onDisappear { catalog.activity.set(.xmp, nil) }
     }
 }

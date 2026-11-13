@@ -40,6 +40,8 @@ final class CatalogBackupModel: ObservableObject {
     var seams = Seams()
 
     var isBusy: Bool { isWorking || pendingRestore != nil }
+    /// The row this tool puts in the activity strip: today's progress text while it is working, else none (`ActivityItem`).
+    var activityItem: ActivityItem? { isWorking ? .workingOnBackup : nil }
 
     private weak var catalog: CatalogModel?
     private func publishBusy() { catalog?.backupBusy = isBusy || (catalog?.backUpNowRunning ?? false) }

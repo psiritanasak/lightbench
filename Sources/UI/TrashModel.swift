@@ -29,7 +29,7 @@ final class TrashModel: ObservableObject {
         var copiesOnly: Int { photos.filter(\.isVirtualCopy).count }
     }
 
-    /// What a run did, for the result alert.
+    /// What a run did, relayed to the window's feedback (a toast or an alert).
     struct Result: Equatable {
         var trashed = 0
         var companions = 0
@@ -60,6 +60,8 @@ final class TrashModel: ObservableObject {
     }
 
     var isBusy: Bool { isWorking || pending != nil }
+    /// The row this tool puts in the activity strip: today's progress text while it is working, else none (`ActivityItem`).
+    var activityItem: ActivityItem? { isWorking ? .movingToTrash : nil }
 
     private weak var catalog: CatalogModel?
     private func publishBusy() { catalog?.trashBusy = isBusy }

@@ -437,6 +437,26 @@ final class MergeModelTests: XCTestCase {
         XCTAssertTrue(MergeModel.summary(tripod).hasSuffix("without alignment."))
     }
 
+    /// With neither caveat predicate true the summary is exactly the bare "Created …" text: a new caveat sentence appended without a
+    /// predicate (which `feedback(for:)` needs to turn it into a must-read alert) would make these fail.
+    func testSummaryWithNeitherCaveatIsTheBareCreatedText() {
+        let url = URL(fileURLWithPath: "/tmp/mid-HDR.tiff")
+        let hdr = MergeOutcome(url: url, frameCount: 3, referenceName: "mid.jpg",
+                               alignment: [.init(name: "a.jpg", inlierCount: 80, matchCount: 100)])
+        XCTAssertNil(MergeModel.uncertainAlignment(hdr))
+        XCTAssertNil(MergeModel.correctedExposure(hdr))
+        XCTAssertEqual(MergeModel.summary(hdr), "Created “mid-HDR.tiff” from 3 photos (exposure reference: mid.jpg), aligned.")
+        XCTAssertEqual(MergeModel.feedback(for: hdr).kind, .done)
+        var pano = MergeOutcome(url: URL(fileURLWithPath: "/tmp/a-Pano.tiff"), frameCount: 2, referenceName: "a.jpg",
+                                alignment: [.init(name: "b.jpg", inlierCount: 90, matchCount: 100)])
+        pano.mode = .panorama
+        pano.size = CGSize(width: 5200, height: 3100)
+        pano.cropped = true
+        XCTAssertNil(MergeModel.uncertainAlignment(pano))
+        XCTAssertNil(MergeModel.correctedExposure(pano))
+        XCTAssertEqual(MergeModel.summary(pano), "Created “a-Pano.tiff” (5200 × 3100) from 2 photos, edges cropped.")
+    }
+
     func testEstimatedBytesIsEightBytesPerPixelAndNilForAnUnreadableFile() throws {
         XCTAssertNil(MergeModel.estimatedOutputBytes(forFileAt: URL(fileURLWithPath: "/tmp/definitely-not-here.jpg")))
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("merge-est-\(UUID().uuidString)")

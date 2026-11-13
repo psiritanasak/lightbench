@@ -48,6 +48,8 @@ final class MergeModel: ObservableObject {
     }
 
     var isBusy: Bool { isMerging || isChecking || pending != nil }
+    /// The row this tool puts in the activity strip: today's progress text while it is working, else none (`ActivityItem`).
+    var activityItem: ActivityItem? { isMerging ? .merging : nil }
 
     /// Identifies the check in flight; `cancel()` and a new check replace it, so a finished check whose token no longer matches is dropped.
     private var checkToken: UUID?

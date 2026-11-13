@@ -1,19 +1,6 @@
 import SwiftUI
 
-/// Progress panel while photos are moved to the Trash.
-struct TrashWorkingHUD: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text("Moving photos to the Trash…").font(.caption)
-        }
-        .padding(12)
-        .solidPanel(cornerRadius: 10)
-        .padding(.bottom, 16)
-    }
-}
-
-/// Confirmation (destructive role, no default button), progress HUD and result alert for the Trash commands. Bundled inside
+/// Confirmation (destructive role, no default button), progress row (the activity strip) and result (relayed to the window's feedback: a toast or an alert) for the Trash commands. Bundled inside
 /// `LibraryToolSheetsModifier`. The menus only REQUEST through `catalog.trashRequested`; a request made while another sheet or dialog is up
 /// is dropped (`blocked`). The targets are what the Library SHOWS: `displayedPhotos` for Rejected, `selectedPhotosInDisplayedGrid` for Selected.
 struct TrashDialogModifier: ViewModifier {
@@ -43,8 +30,7 @@ struct TrashDialogModifier: ViewModifier {
                 Text(TrashModel.confirmationMessage(request))
             }
             .relayFeedback($model.feedback, to: catalog.post)
-            .overlay(alignment: .bottom) {
-                if model.isWorking { TrashWorkingHUD() }
-            }
+            .onChange(of: model.activityItem, initial: true) { _, item in catalog.activity.set(.trash, item) }
+            .onDisappear { catalog.activity.set(.trash, nil) }
     }
 }

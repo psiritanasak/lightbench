@@ -17,7 +17,7 @@ final class XMPModel: ObservableObject {
         let photos: [Photo]
     }
 
-    /// What a run did, for the result alert.
+    /// What a run did, relayed to the window's feedback (a toast or an alert).
     struct Result: Equatable {
         var kind: Kind
         /// Write: sidecars written. Read: photos whose Library data changed.
@@ -47,6 +47,8 @@ final class XMPModel: ObservableObject {
     }
 
     var isBusy: Bool { isWorking || pending != nil }
+    /// The row this tool puts in the activity strip: today's progress text while it is working, else none (`ActivityItem`).
+    var activityItem: ActivityItem? { isWorking ? .workingOnXMP : nil }
 
     private weak var catalog: CatalogModel?
     private func publishBusy() { catalog?.xmpBusy = isBusy }

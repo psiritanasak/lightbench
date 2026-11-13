@@ -148,6 +148,9 @@ final class FacesModelTests: XCTestCase {
         model.scanAndGroup(photos: photos, database: db)   // would overlap if isWorking had been reset
         for _ in 0..<400 where model.isWorking { try await Task.sleep(nanoseconds: 25_000_000) }
         XCTAssertFalse(model.isWorking)
+        // `finish` clears `isWorking` BEFORE its `await reload()` and the callback, so wait for the callback itself
+        // (seen 2026-11-13: polling `isWorking` alone failed 2 of 21 runs).
+        for _ in 0..<200 where peopleChangedCount == 0 { try await Task.sleep(nanoseconds: 25_000_000) }
         XCTAssertGreaterThan(peopleChangedCount, 0, "the finished scan still refreshed the Library")
         XCTAssertEqual(model.people.count, 2, "one scan's worth of people, not two overlapping ones")
     }

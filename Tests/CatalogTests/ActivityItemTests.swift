@@ -45,4 +45,40 @@ final class ActivityItemTests: XCTestCase {
         XCTAssertFalse(ActivityItem.enhancing.canCancel)
         XCTAssertEqual(ActivityItem.enhancing.kind, .enhance)
     }
+
+    // MARK: the five Library tools
+
+    func testToolRowsKeepTheOldHUDTextsAndCannotBeCancelled() {
+        let rows: [(ActivityItem, ActivityItem.Kind, String)] = [
+            (.merging, .merge, "Merging photos…"),
+            (.workingOnXMP, .xmp, "Working on XMP files…"),
+            (.movingToTrash, .trash, "Moving photos to the Trash…"),
+            (.workingOnBackup, .backup, "Working on the catalog backup…")
+        ]
+        for (item, kind, text) in rows {
+            XCTAssertEqual(item.kind, kind)
+            XCTAssertEqual(item.text, text)
+            XCTAssertEqual(item.progress, .indeterminate)
+            XCTAssertFalse(item.canCancel)
+        }
+    }
+
+    func testCopyingCountsWhenTheTotalIsKnown() {
+        let counting = ActivityItem.copying(done: 3, total: 12)
+        XCTAssertEqual(counting.text, "Copying photos… 3 of 12")
+        XCTAssertEqual(counting.progress, .steps(done: 3, total: 12))
+        XCTAssertEqual(counting.kind, .importCopy)
+        XCTAssertFalse(counting.canCancel)
+        let unknown = ActivityItem.copying(done: 0, total: 0)
+        XCTAssertEqual(unknown.text, "Copying photos…")
+        XCTAssertEqual(unknown.progress, .indeterminate)
+    }
+
+    func testOrderedFollowsKindOrderAndKeepsOneRowPerKind() {
+        let mixed: [ActivityItem] = [.copying(done: 1, total: 2), .merging, .enhancing, .export(completed: 0, total: 2, stopping: false), .movingToTrash]
+        XCTAssertEqual(ActivityItem.ordered(mixed).map(\.kind), [.export, .enhance, .merge, .trash, .importCopy])
+        let twice = ActivityItem.ordered([.copying(done: 1, total: 4), .copying(done: 2, total: 4)])
+        XCTAssertEqual(twice, [.copying(done: 2, total: 4)])
+        XCTAssertEqual(ActivityItem.Kind.allCases.map(\.rawValue), ["export", "enhance", "importFolders", "merge", "xmp", "trash", "backup", "importCopy"])
+    }
 }

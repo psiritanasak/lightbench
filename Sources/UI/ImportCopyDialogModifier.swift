@@ -1,22 +1,6 @@
 import SwiftUI
 
-/// Progress panel while photos are copied.
-struct ImportCopyWorkingHUD: View {
-    let done: Int
-    let total: Int
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text(total > 0 ? "Copying photos… \(done) of \(total)" : "Copying photos…").font(.caption)
-        }
-        .padding(12)
-        .solidPanel(cornerRadius: 10)
-        .padding(.bottom, 16)
-    }
-}
-
-/// The options sheet, progress HUD and result alert for "Copy Photos into Library…". Bundled inside `LibraryToolSheetsModifier`. The menus only
+/// The options sheet, progress row (the activity strip) and result (relayed to the window's feedback: a toast or an alert) for "Copy Photos into Library…". Bundled inside `LibraryToolSheetsModifier`. The menus only
 /// REQUEST through `catalog.importCopyRequested`; a request made while another sheet or dialog is up is dropped (`blocked`).
 struct ImportCopyDialogModifier: ViewModifier {
     @ObservedObject var catalog: CatalogModel
@@ -36,9 +20,8 @@ struct ImportCopyDialogModifier: ViewModifier {
                 ImportCopySheetView(model: model, providers: providers, catalog: catalog)
             }
             .relayFeedback($model.feedback, to: catalog.post)
-            .overlay(alignment: .bottom) {
-                if model.isWorking { ImportCopyWorkingHUD(done: model.progressDone, total: model.progressTotal) }
-            }
+            .onChange(of: model.activityItem, initial: true) { _, item in catalog.activity.set(.importCopy, item) }
+            .onDisappear { catalog.activity.set(.importCopy, nil) }
     }
 }
 

@@ -1,19 +1,6 @@
 import SwiftUI
 
-/// Progress panel while a catalog backup is written or checked.
-struct CatalogBackupWorkingHUD: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text("Working on the catalog backup…").font(.caption)
-        }
-        .padding(12)
-        .solidPanel(cornerRadius: 10)
-        .padding(.bottom, 16)
-    }
-}
-
-/// Confirmation dialog, progress HUD and result alert for Back Up / Restore. Bundled inside `LibraryToolSheetsModifier`
+/// Confirmation dialog, progress row (the activity strip) and result (relayed to the window's feedback: a toast or an alert) for Back Up / Restore. Bundled inside `LibraryToolSheetsModifier`
 /// (`ContentView.body` is at the type-checker's limit). The File menu only REQUESTS through `catalog.backupRequested`; a request made while
 /// another sheet is up is refused with a message (`blocked`).
 struct CatalogBackupDialogModifier: ViewModifier {
@@ -40,8 +27,7 @@ struct CatalogBackupDialogModifier: ViewModifier {
                 Text(CatalogBackupModel.restoreConfirmationMessage(request))
             }
             .relayFeedback($model.feedback, to: catalog.post)
-            .overlay(alignment: .bottom) {
-                if model.isWorking { CatalogBackupWorkingHUD() }
-            }
+            .onChange(of: model.activityItem, initial: true) { _, item in catalog.activity.set(.backup, item) }
+            .onDisappear { catalog.activity.set(.backup, nil) }
     }
 }

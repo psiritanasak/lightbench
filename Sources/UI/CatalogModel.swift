@@ -219,6 +219,8 @@ final class CatalogModel: ObservableObject {
     @Published var mergeRequested: MergeModel.Kind?
     @Published var mergeBusy = false
     let merge = MergeModel()
+    /// The five tools' progress rows for the activity strip (see `ActivityCenter`; deliberately not `@Published` here).
+    let activity = ActivityCenter()
     /// XMP sidecar read/write (see `XMPModel`): menus set `xmpRequested`; `XMPDialogModifier` performs it. `xmpBusy` mirrors "a confirmation is
     /// up or XMP files are being read/written".
     @Published var xmpRequested: XMPModel.Kind?

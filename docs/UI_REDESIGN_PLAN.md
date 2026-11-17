@@ -195,6 +195,7 @@ New findings (not in section 2; each is assigned to a slice below):
   keep "focused cell only" and state it in the shortcut window.
 
 #### A2. Right-click menu and a selection bar
+- **DONE 2026-11-17** (CLAUDE.md "Right-click menu + selection bar", IMPROVEMENTS.md D95; plan `.plans/A2_plan.md`). Defaults taken: the bar shows at 2+ selected; the selection moves to a right-clicked cell when an item is chosen, not when the menu opens; one title per item, no "(n)" counts; rating / flag / label from one cell write that cell's own photo (stack cover); Copy Settings in a cell menu only on the open photo; gates are the union of the three old menus. NOT checked on screen. The text below is the original brief.
 - **Needs**: A1.
 - **Today**: per-cell `Menu` behind `folder.badge.plus`
   (`LibraryGridView.swift:914-1030`); toolbar "n Selected" menu with 15 items
@@ -458,7 +459,7 @@ New findings (not in section 2; each is assigned to a slice below):
 | 1 | A1 click selects | done 2026-11-10 | | see the slice |
 | 2 | C1 toasts + progress | L | medium (many call sites) | removes the most interruptions |
 | 3 | B1 section header | M | low | makes the Edit panel readable |
-| 4 | A2 right-click + selection bar | L | medium (busy gates) | needs A1 |
+| 4 | A2 right-click + selection bar | done 2026-11-17 | | see the slice |
 | 5 | B2 panel defaults + histogram | S-M | low | |
 | 6 | B3 slider row | S | low | |
 | 7 | A3 + B4 menus and shortcuts | M | low | after A2 so names come from one model |

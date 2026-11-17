@@ -336,6 +336,38 @@ final class CatalogDatabase: Sendable {
         }
     }
 
+    /// Sets the star rating (clamped to 0...5, like `setRating(_:for:)`) of every photo in `photoIDs` in ONE transaction. Same shape as
+    /// `setFlagStatus(_:forPhotoIDs:)`: ids that no longer exist are skipped; returns the ids that existed.
+    @discardableResult
+    func setRating(_ rating: Int, forPhotoIDs photoIDs: [Int64]) async throws -> Set<Int64> {
+        let clamped = min(max(rating, 0), 5)
+        return try await dbQueue.write { db in
+            var changed = Set<Int64>()
+            for start in stride(from: 0, to: photoIDs.count, by: 500) {
+                let chunk = Array(photoIDs[start..<min(start + 500, photoIDs.count)])
+                let existing = try Int64.fetchAll(db, Photo.filter(chunk.contains(Photo.Columns.id)).select(Photo.Columns.id))
+                try Photo.filter(chunk.contains(Photo.Columns.id)).updateAll(db, Photo.Columns.rating.set(to: clamped))
+                changed.formUnion(existing)
+            }
+            return changed
+        }
+    }
+
+    /// Sets the color label of every photo in `photoIDs` in ONE transaction (same shape as `setFlagStatus(_:forPhotoIDs:)`).
+    @discardableResult
+    func setColorLabel(_ label: ColorLabel, forPhotoIDs photoIDs: [Int64]) async throws -> Set<Int64> {
+        try await dbQueue.write { db in
+            var changed = Set<Int64>()
+            for start in stride(from: 0, to: photoIDs.count, by: 500) {
+                let chunk = Array(photoIDs[start..<min(start + 500, photoIDs.count)])
+                let existing = try Int64.fetchAll(db, Photo.filter(chunk.contains(Photo.Columns.id)).select(Photo.Columns.id))
+                try Photo.filter(chunk.contains(Photo.Columns.id)).updateAll(db, Photo.Columns.colorLabel.set(to: label))
+                changed.formUnion(existing)
+            }
+            return changed
+        }
+    }
+
     // MARK: Fingerprints (duplicate detection cache)
 
     /// The cached fingerprints for `photoIDs` (absent ids simply have no entry). Callers must still check

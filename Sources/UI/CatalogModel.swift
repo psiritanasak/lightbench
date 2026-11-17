@@ -1473,6 +1473,20 @@ final class CatalogModel: ObservableObject {
         mutate(&photos[index])
     }
 
+    /// Applies `mutate` to every row whose id is in `ids` and assigns `photos` ONCE (a single publish, however many rows change;
+    /// nothing is assigned when no row matches).
+    private func updatePhotosInPlace(ids: Set<Int64>, _ mutate: (inout Photo) -> Void) {
+        guard !ids.isEmpty else { return }
+        var copy = photos
+        var changed = false
+        for index in copy.indices {
+            guard let id = copy[index].id, ids.contains(id) else { continue }
+            mutate(&copy[index])
+            changed = true
+        }
+        if changed { photos = copy }
+    }
+
     /// Sets `photo`'s star rating. Updates local state first, then writes —
     /// see `updatePhotoInPlace` for why that order is what fixes the stale
     /// rating, and `CatalogDatabase.setRating` for the authoritative store.
@@ -1514,9 +1528,38 @@ final class CatalogModel: ObservableObject {
     func setFlagStatus(_ status: FlagStatus, forPhotoIDs photoIDs: [Int64]) async -> Set<Int64>? {
         guard let database else { return nil }
         guard !photoIDs.isEmpty else { return [] }
-        for id in photoIDs { updatePhotoInPlace(id: id) { $0.flagStatus = status } }
+        updatePhotosInPlace(ids: Set(photoIDs)) { $0.flagStatus = status }
         do {
             return try await database.setFlagStatus(status, forPhotoIDs: photoIDs)
+        } catch {
+            await refresh()
+            return nil
+        }
+    }
+
+    /// Sets the star rating (clamped 0...5, mirroring the database) of every photo in `photoIDs`: local-first with ONE publish of
+    /// `photos`, then one transaction. Same contract as `setFlagStatus(_:forPhotoIDs:)`: the ids that still existed, or nil when the
+    /// write failed (local state is then re-read once).
+    func setRating(_ rating: Int, forPhotoIDs photoIDs: [Int64]) async -> Set<Int64>? {
+        guard let database else { return nil }
+        guard !photoIDs.isEmpty else { return [] }
+        let clamped = min(max(rating, 0), 5)
+        updatePhotosInPlace(ids: Set(photoIDs)) { $0.rating = clamped }
+        do {
+            return try await database.setRating(clamped, forPhotoIDs: photoIDs)
+        } catch {
+            await refresh()
+            return nil
+        }
+    }
+
+    /// Sets the color label of every photo in `photoIDs` (same contract as `setRating(_:forPhotoIDs:)`).
+    func setColorLabel(_ label: ColorLabel, forPhotoIDs photoIDs: [Int64]) async -> Set<Int64>? {
+        guard let database else { return nil }
+        guard !photoIDs.isEmpty else { return [] }
+        updatePhotosInPlace(ids: Set(photoIDs)) { $0.colorLabel = label }
+        do {
+            return try await database.setColorLabel(label, forPhotoIDs: photoIDs)
         } catch {
             await refresh()
             return nil

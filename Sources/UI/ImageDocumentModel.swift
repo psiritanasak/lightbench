@@ -2282,6 +2282,26 @@ final class ImageDocumentModel: ObservableObject {
         applyHistoryState(history.current)
     }
 
+    /// One Edit-tab section's reset: ONE labelled undo step ("Reset Light"), touching only that section's fields. No step when the
+    /// section is already at its defaults.
+    func resetSection(_ section: AdjustSection) {
+        resetSections([section], summary: "Reset \(section.title)")
+    }
+
+    /// "Reset Adjustments": every Edit-tab section except RAW, as ONE labelled step. Leaves geometry, red-eye, retouch, masks,
+    /// look/style and every RAW field (including the determinism pin) alone.
+    func resetAdjustments() {
+        resetSections(AdjustSection.resetAdjustmentsSections, summary: "Reset Adjustments")
+    }
+
+    private func resetSections(_ sections: [AdjustSection], summary: String) {
+        finalizePendingCommit()
+        let next = AdjustSection.resetting(sections, in: editState)
+        guard next != editState else { return }
+        history.commit(next, summary: summary)
+        applyHistoryState(history.current)
+    }
+
     /// Clears the preset, the pad, the strength, the texture, the Grain toggle and skin protection in one step.
     func resetStyle() {
         skinDetectionGeneration += 1 // a detection still running must not switch protection back on

@@ -101,8 +101,8 @@ final class GlobalWhitesTests: XCTestCase {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let ui = try String(contentsOf: root.appendingPathComponent("Sources/UI/AdjustTabView.swift"), encoding: .utf8)
         XCTAssertTrue(ui.contains("label: \"Whites\", value: $document.editState.whites"))
-        XCTAssertTrue(ui.contains("&& state.whites == 0"), "Reset Adjustments must see Whites as an edit")
-        XCTAssertTrue(ui.contains("document.editState.whites = 0"), "Reset Adjustments must clear it")
+        XCTAssertEqual(AdjustSection.section(for: \EditState.whites), .light, "Reset Adjustments must see Whites as an edit and clear it")
+        XCTAssertTrue(AdjustSection.resetAdjustmentsSections.contains(.light))
     }
 
     func testHistoryNamesTheField() {

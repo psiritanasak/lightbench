@@ -28,12 +28,14 @@ final class ColorGradingUIWiringTests: XCTestCase {
 
     func testTheIdentityCheckAndTheResetActionIncludeBothFields() throws {
         let view = try source("Sources/UI/AdjustTabView.swift")
-        let identity = try body(of: "private var isAdjustTabAtIdentity: Bool {", in: view)
-        XCTAssertTrue(identity.contains("state.colorGradingBlending == 0"))
-        XCTAssertTrue(identity.contains("state.colorGradingBalance == 0"))
-        let reset = try body(of: "private var resetAdjustmentsButton: some View {", in: view)
-        XCTAssertTrue(reset.contains("document.editState.colorGradingBlending = 0"))
-        XCTAssertTrue(reset.contains("document.editState.colorGradingBalance = 0"))
+        // Since B1 the identity check and Reset Adjustments read `AdjustSection`; both fields must be in the Color Grading section.
+        XCTAssertEqual(AdjustSection.section(for: \EditState.colorGradingBlending), .colorGrading)
+        XCTAssertEqual(AdjustSection.section(for: \EditState.colorGradingBalance), .colorGrading)
+        XCTAssertTrue(AdjustSection.resetAdjustmentsSections.contains(.colorGrading))
+        let identity = try body(of: "private var isAdjustTabAtIdentity: Bool {", in: view, length: 400)
+        XCTAssertTrue(identity.contains("AdjustSection.resetAdjustmentsSections"))
+        let reset = try body(of: "private var resetAdjustmentsButton: some View {", in: view, length: 400)
+        XCTAssertTrue(reset.contains("document.resetAdjustments()"))
     }
 
     func testThePerRangeResetLeavesTheGlobalSlidersAlone() throws {
@@ -55,8 +57,8 @@ final class VignetteSoftnessWiringTests: XCTestCase {
             .appendingPathComponent("Sources/UI/AdjustTabView.swift")
         let view = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(view.contains("label: \"Vignette Softness\", value: $document.editState.vignetteSoftness"))
-        XCTAssertTrue(view.contains("state.vignetteSoftness == 0"))
-        XCTAssertTrue(view.contains("document.editState.vignetteSoftness = 0"))
+        XCTAssertEqual(AdjustSection.section(for: \EditState.vignetteSoftness), .effects, "identity check and reset read AdjustSection")
+        XCTAssertTrue(AdjustSection.resetAdjustmentsSections.contains(.effects))
     }
 }
 
@@ -78,12 +80,9 @@ final class GlobalWheelWiringTests: XCTestCase {
         for binding in ["$document.editState.globalHue", "$document.editState.globalSaturation", "$document.editState.globalLuminance"] {
             XCTAssertTrue(text.contains("case .global: return \(binding)"), binding)
         }
-        XCTAssertTrue(text.contains("state.globalHue == 0"))
-        XCTAssertTrue(text.contains("state.globalSaturation == 0"))
-        XCTAssertTrue(text.contains("state.globalLuminance == 0"))
-        XCTAssertTrue(text.contains("document.editState.globalHue = 0"))
-        XCTAssertTrue(text.contains("document.editState.globalSaturation = 0"))
-        XCTAssertTrue(text.contains("document.editState.globalLuminance = 0"))
+        for keyPath in [\EditState.globalHue, \EditState.globalSaturation, \EditState.globalLuminance] {
+            XCTAssertEqual(AdjustSection.section(for: keyPath), .colorGrading, "the identity check and Reset Adjustments read AdjustSection")
+        }
     }
 
     func testThePerRangeResetStillTouchesOnlyTheSelectedRangeNotBlendingOrBalance() throws {

@@ -1538,19 +1538,19 @@ struct EditState: Equatable, Codable {
     /// KEPT — copied via `var s =
     /// self` below — so both compared images share one extent and align
     /// pixel-for-pixel, while every color/tone adjustment is reset to its
-    /// identity value. The Adjust tab's `resetAdjustmentsButton` field list plus the Looks tab's look/style fields
+    /// identity value. The Adjust tab's Reset Adjustments fields (`AdjustSection.resetAdjustmentsSections`) plus the Looks tab's look/style fields
     /// (`resettingLookAndStyle()`), PLUS clearing
     /// `redEyePoints` AND `retouchSpots` (pixel repair is retouching: the "before" side shows none) — a real
     /// difference, not an oversight, in red-eye's case:
     /// `EditPipeline`'s red-eye stage is active whenever `redEyePoints`
     /// is non-empty AND `redEyeStrength != 0`, and the identity/default
     /// `redEyeStrength` (0.7) is non-zero, so merely resetting the
-    /// sliders (as the Reset Adjustments button intentionally does,
-    /// leaving user-placed points alone) would still show red-eye
+    /// sliders (Reset Adjustments leaves red-eye alone altogether since B1,
+    /// points and sliders both) would still show red-eye
     /// correction applied on the "original" side — wrong for a view
     /// whose whole point is "zero retouching." This makes
-    /// `comparisonOriginal()` a superset of `resetAdjustmentsButton`'s
-    /// reset, not identical to it.
+    /// `comparisonOriginal()` a superset of Reset Adjustments, not identical
+    /// to it.
     func comparisonOriginal() -> EditState {
         var s = self
         // light/tone

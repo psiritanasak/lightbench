@@ -302,52 +302,55 @@ struct AdjustTabView: View {
         }
     }
 
+    /// An Edit-tab section with its header's edited dot and per-section reset (one labelled undo step).
+    private func section<Content: View>(
+        _ section: AdjustSection, _ isExpanded: Binding<Bool>, isResetEnabled: Bool = true,
+        @ViewBuilder _ content: @escaping () -> Content
+    ) -> some View {
+        AdjustSectionContainer(
+            title: section.title, isExpanded: isExpanded,
+            isEdited: section.isEdited(document.editState),
+            onReset: { resetSection(section) },
+            isResetEnabled: isResetEnabled,
+            content: content
+        )
+    }
+
+    /// Resets one section as one undo step, then drops UI state that pointed into what was just cleared.
+    private func resetSection(_ section: AdjustSection) {
+        document.resetSection(section)
+        switch section {
+        case .curve:
+            panel.selectedToneCurvePointIndex = nil
+        case .pointColor:
+            panel.selectedPointColorID = nil
+            interactionMode.disarmPointColorPick()
+        default:
+            break
+        }
+    }
+
     private var adjustBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Adjust")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
                 .textCase(.uppercase)
-            AdjustSectionContainer(title: "Light", isExpanded: $panel.isLightSectionExpanded) {
-                lightSection
-            }
+            section(.light, $panel.isLightSectionExpanded) { lightSection }
             Divider()
-            AdjustSectionContainer(title: "Curve", isExpanded: $panel.isCurveSectionExpanded) {
-                curveSection
-            }
+            section(.curve, $panel.isCurveSectionExpanded) { curveSection }
             Divider()
-            AdjustSectionContainer(title: "Color", isExpanded: $panel.isColorSectionExpanded) {
-                colorSection
-            }
+            section(.color, $panel.isColorSectionExpanded) { colorSection }
             Divider()
-            AdjustSectionContainer(
-                title: "Selective Color", isExpanded: $panel.isSelectiveColorSectionExpanded
-            ) {
-                selectiveColorSection
-            }
+            section(.selectiveColor, $panel.isSelectiveColorSectionExpanded) { selectiveColorSection }
             Divider()
-            AdjustSectionContainer(
-                title: "Point Color", isExpanded: pointColorSectionExpandedBinding
-            ) {
-                pointColorSection
-            }
+            section(.pointColor, pointColorSectionExpandedBinding) { pointColorSection }
             Divider()
-            AdjustSectionContainer(
-                title: "Black & White", isExpanded: $panel.isBlackAndWhiteSectionExpanded
-            ) {
-                blackAndWhiteSection
-            }
+            section(.blackAndWhite, $panel.isBlackAndWhiteSectionExpanded) { blackAndWhiteSection }
             Divider()
-            AdjustSectionContainer(
-                title: "Color Grading", isExpanded: $panel.isColorGradingSectionExpanded
-            ) {
-                colorGradingSection
-            }
+            section(.colorGrading, $panel.isColorGradingSectionExpanded) { colorGradingSection }
             Divider()
-            AdjustSectionContainer(title: "Effects", isExpanded: $panel.isEffectsSectionExpanded) {
-                effectsSection
-            }
-            Divider()
+            section(.effects, $panel.isEffectsSectionExpanded) { effectsSection }
             rawSectionContainer
             Divider()
             resetAdjustmentsButton
@@ -357,8 +360,8 @@ struct AdjustTabView: View {
     /// Tone/exposure-family controls, matching Apple Photos' own "Light"
     /// group — everything here operates on brightness/contrast/tonal
     /// range, not color. Just the rows — `AdjustSectionContainer` (see
-    /// this view's `body`) supplies the section's own header/icon/
-    /// disclosure chrome and its own `VStack(spacing: 14)` wrapper.
+    /// this view's `body`) supplies the section's own header
+    /// (chevron, title, edited dot, reset) and disclosure chrome and its own `VStack(spacing: 14)` wrapper.
     private var lightSection: some View {
         Group {
             Button {
@@ -1410,16 +1413,15 @@ struct AdjustTabView: View {
     /// for non-RAW photos rather than shown-and-disabled, because
     /// `CIRAWFilter`'s RAW-native controls structurally cannot apply to a
     /// JPEG and a greyed-out row would imply otherwise. Bundled with its
-    /// own `Divider` into ONE `@ViewBuilder` property so `body`'s `VStack`
+    /// own leading `Divider` (the only divider before it; `adjustBody` adds none) into ONE `@ViewBuilder` property so `body`'s `VStack`
     /// gains exactly one child either way — this file has a documented
     /// type-checker blow-up from over-packed `@ViewBuilder` closures (see
     /// `LooksTabView.presetsSection`'s own comment); don't repeat that.
     @ViewBuilder private var rawSectionContainer: some View {
         if isCurrentPhotoRaw {
             Divider()
-            AdjustSectionContainer(title: "RAW", isExpanded: $panel.isRawSectionExpanded) {
-                rawSection
-            }
+            // Reset RAW triggers a full re-decode, so it waits out a load/decode like the RAW sliders (`rawSection`'s `.disabled`).
+            section(.raw, $panel.isRawSectionExpanded, isResetEnabled: !document.isLoadingImage) { rawSection }
         }
     }
 
@@ -1467,10 +1469,9 @@ struct AdjustTabView: View {
     ///
     /// `rawWhiteBalanceNeutralPoints` (slice 4) has no row in this
     /// section — it's written only by the WB eyedropper tool, not
-    /// dragged like the others, and this is a known, accepted gap: it
-    /// has NO visible representation anywhere (see
-    /// `isAdjustTabAtIdentity`'s own doc comment below for the fuller
-    /// note on this).
+    /// dragged like the others. It has no row of its own, but since B1 it
+    /// still counts as a RAW edit: the RAW header's edited dot shows it and
+    /// the RAW header's reset (Reset RAW) clears it (`AdjustSection.raw`).
     private var rawSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             EditSliderRow(
@@ -1647,198 +1648,38 @@ struct AdjustTabView: View {
             .accessibilityLabel("Find Source Automatically")
     }
 
-    /// Resets every Light/Color/Selective Color/B&W/Effects/Red-Eye field
-    /// to its own default — the SAME identity value each field's own
-    /// `EditSliderRow`/`EditToggleRow` already resets to individually via
-    /// its per-row Reset button, just all at once. Deliberately does NOT
-    /// touch crop/straighten/perspective/transformScale/transformAspect/
-    /// flip (those live in the Crop tab, out of this button's scope,
-    /// matching how the reference
-    /// screenshot's own "Reset Adjustments" is scoped to the Adjust panel
-    /// it's shown in) and does NOT clear placed Red-Eye correction points
-    /// (a separate, more destructive action with its own dedicated
-    /// "Clear All Red-Eye Corrections" button above) — this only resets
-    /// continuous adjustment VALUES. `masks` (Phase 7 slice 2) follows the
-    /// identical pattern: deleting a mask is a list operation with its own
-    /// per-row trash button in `masksSection`, not something this button
-    /// touches — the omission is deliberate, mirroring `redEyePoints`, not
-    /// an oversight.
-    /// Reviewer-flagged, deliberate, documented gap: this deliberately
-    /// mirrors `comparisonOriginal()`'s field list (minus the Look/Style fields, which belong to the Looks tab's own reset), which does NOT include
-    /// any of the ELEVEN RAW-native fields (`boostAmount`, `rawExposureEV`,
-    /// `shadowBoostScale`, `rawWhiteBalanceNeutralPoints`,
-    /// `rawLuminanceNoiseReductionAdjust`, `rawColorNoiseReductionScale`,
-    /// `rawSharpnessScale`, `rawContrastAdjust`, `rawDetailAdjust`,
-    /// `rawMoireReductionAdjust`, `rawDecoderVersionPin` — see that
-    /// method's own doc comment: `EditPipeline` can't express any of them,
-    /// so resetting them here would trigger an unwanted full RAW re-decode
-    /// from what should be an instant, free action). Consequence: a RAW
-    /// photo with every OTHER field at identity but a non-default RAW
-    /// section slider shows this button (correctly) disabled, even though
-    /// the RAW section's own sliders are visibly non-identity —
-    /// `revertToOriginal()`'s literal `EditState()` commit is the control
-    /// that resets the other ten, not this one (`rawDecoderVersionPin` is
-    /// the one exception — see its own paragraph below).
+    /// "Reset Adjustments": resets every field of the sections in `AdjustSection.resetAdjustmentsSections` (the single source,
+    /// shared with the headers' edited dots and the per-section resets) to its own default, as one undo step. Those are the
+    /// Edit-tab sections except RAW. Deliberately does NOT touch crop/straighten/perspective/transformScale/transformAspect/flip
+    /// (Crop tab), the Red-eye tab's `redEyeSize`/`redEyeStrength`, placed Red-Eye correction points (own "Clear All Red-Eye
+    /// Corrections" button), or `masks` (a list operation with its own per-row trash button). It does clear `pointColors`.
     ///
-    /// `rawWhiteBalanceNeutralPoints` specifically is WORSE than the
-    /// other RAW-native fields here — reviewer-caught: it has no slider or
-    /// any other visible representation in this section AT ALL, so a
-    /// RAW-native WB eyedropper tap is genuinely invisible state once set:
-    /// neither this button, nor the RAW section's own sliders, show
-    /// anything changed. Only Undo or Revert to Original clears it.
-    /// Accepted as a known gap for this slice (see PROGRESS.md) rather
-    /// than adding a dedicated affordance — flag if a future session's UI
-    /// work in this file touches the RAW section, since a "neutral point
-    /// set (tap to clear)" indicator would be the natural fix.
+    /// RAW-native fields (`boostAmount`, `rawExposureEV`, `shadowBoostScale`, `rawWhiteBalanceNeutralPoints`,
+    /// `rawLuminanceNoiseReductionAdjust`, `rawColorNoiseReductionScale`, `rawSharpnessScale`, `rawContrastAdjust`,
+    /// `rawDetailAdjust`, `rawMoireReductionAdjust`) are deliberately NOT reset here: `EditPipeline` can't express them, so
+    /// resetting them would trigger a full RAW re-decode from what should be an instant action. Consequence: a RAW photo whose
+    /// only edit is a RAW slider shows this button disabled. They are reset by the RAW header's own Reset RAW (one undo step)
+    /// or by `revertToOriginal()`.
     ///
-    /// `rawDecoderVersionPin` (Phase 6 slice 7) has NO row here, and never
-    /// will — unlike the other ten RAW-native fields, it isn't a
-    /// creative/tunable control at all, so there's nothing to draw a
-    /// slider for. It exists purely so replaying a photo's saved edits
-    /// decodes identically after a future macOS/Core Image update, and is
-    /// set exactly once, automatically, the first time a RAW photo is
-    /// opened (see `EditState.rawDecoderVersionPin`'s and
-    /// `ImageDocumentModel.load(from:)`'s own doc comments). It's also the
-    /// one RAW-native field `revertToOriginal()` deliberately does NOT
-    /// reset — clearing a photo's determinism pin on revert would silently
-    /// let a later re-decode use a different decoder algorithm than the
-    /// rest of that photo's history did. If a future session is tempted to
-    /// "fix" the apparent missing UI row for this field, don't — the
-    /// omission is intentional, not an oversight.
+    /// `rawWhiteBalanceNeutralPoints` has no slider; since B1 the RAW header's edited dot shows it and Reset RAW clears it
+    /// (before B1 it was invisible state that only Undo or Revert to Original cleared).
+    ///
+    /// `rawDecoderVersionPin` (Phase 6 slice 7) has NO row here, and never will: it isn't a creative control, it exists purely
+    /// so replaying a photo's saved edits decodes identically after a future macOS/Core Image update, and is set exactly once,
+    /// automatically, the first time a RAW photo is opened (see `EditState.rawDecoderVersionPin`'s and
+    /// `ImageDocumentModel.load(from:)`'s doc comments). It is not part of any `AdjustSection` and `revertToOriginal()`
+    /// deliberately does NOT reset it: clearing the pin on revert would let a later re-decode use a different decoder algorithm
+    /// than the rest of that photo's history did. Don't "fix" the missing UI row.
     private var isAdjustTabAtIdentity: Bool {
-        let state = document.editState
-        return state.exposureEV == 0
-            && state.brightness == 0
-            && state.brilliance == 0
-            && state.contrast == 0
-            && state.curvesHighlights == 0
-            && state.curvesShadows == 0
-            && state.blackPoint == 0
-            && state.whites == 0
-            // A non-empty but identity-SHAPED curve reads as non-identity
-            // here, so Reset Adjustments stays enabled and clicking it
-            // deletes the points — consistent with how this button treats
-            // every other field. Same reasoning for the three per-channel
-            // curves (Curves v2 slice 3) — set via the Curve section's
-            // channel picker (`curveSection`), `applyingPreset(onto:)`, or
-            // sidecar decode, so this check and the reset button below must
-            // account for them.
-            && state.toneCurvePoints.isEmpty
-            && state.toneCurvePointsRed.isEmpty
-            && state.toneCurvePointsGreen.isEmpty
-            && state.toneCurvePointsBlue.isEmpty
-            && state.levelsBlackPoint == 0
-            && state.levelsWhitePoint == 1
-            && state.levelsGamma == 1.0
-            && state.whiteBalanceTemperature == 6500
-            && state.whiteBalanceTint == 0
-            && state.hslHue == 0
-            && state.vibrance == 0
-            && state.hslSaturation == 0
-            && state.selectiveColorRange == 0.5
-            && SelectiveColorBand.allCases.allSatisfy { band in
-                selectiveColorHueBinding(for: band).wrappedValue == 0
-                    && selectiveColorSaturationBinding(for: band).wrappedValue == 0
-                    && selectiveColorLuminanceBinding(for: band).wrappedValue == 0
-            }
-            && !state.blackAndWhite
-            && SelectiveColorBand.allCases.allSatisfy { state[keyPath: $0.grayMixKeyPath] == 0 }
-            && state.bwIntensity == 0 && state.bwNeutrals == 0 && state.bwTone == 0 && state.bwGrain == 0
-            // Color Grading's Hue fields are rendering-irrelevant at
-            // Saturation 0 (see `EditState.shadowHue`'s own doc comment),
-            // but are still checked/reset here for the same reason
-            // `vignetteRadius`/`selectiveColorRange` are just above: this
-            // button and check's own established convention is "every
-            // field is at its literal declared default," not "rendering is
-            // currently identical to identity."
-            && state.shadowHue == 0
-            && state.shadowSaturation == 0
-            && state.shadowLuminance == 0
-            && state.midtoneHue == 0
-            && state.midtoneSaturation == 0
-            && state.midtoneLuminance == 0
-            && state.highlightHue == 0
-            && state.highlightSaturation == 0
-            && state.highlightLuminance == 0
-            && state.globalHue == 0
-            && state.globalSaturation == 0
-            && state.globalLuminance == 0
-            && state.colorGradingBlending == 0
-            && state.colorGradingBalance == 0
-            && state.vignetteStrength == 0
-            && state.vignetteRadius == 0.5
-            && state.vignetteSoftness == 0
-            && state.texture == 0
-            && state.clarity == 0
-            && state.dehaze == 0
-            && state.sharpness == 0
-            && state.noiseReduction == 0
-            && state.defringePurple == 0
-            && state.defringeGreen == 0
-            && state.grain == 0
-            && state.redEyeSize == 0.5
-            && state.redEyeStrength == 0.7
+        !AdjustSection.resetAdjustmentsSections.contains { $0.isEdited(document.editState) }
     }
 
     private var resetAdjustmentsButton: some View {
         Button {
-            document.editState.exposureEV = 0
-            document.editState.brightness = 0
-            document.editState.brilliance = 0
-            document.editState.contrast = 0
-            document.editState.curvesHighlights = 0
-            document.editState.curvesShadows = 0
-            document.editState.blackPoint = 0
-            document.editState.whites = 0
-            document.editState.toneCurvePoints = []
-            document.editState.toneCurvePointsRed = []
-            document.editState.toneCurvePointsGreen = []
-            document.editState.toneCurvePointsBlue = []
-            document.editState.levelsBlackPoint = 0
-            document.editState.levelsWhitePoint = 1
-            document.editState.levelsGamma = 1.0
-            document.editState.whiteBalanceTemperature = 6500
-            document.editState.whiteBalanceTint = 0
-            document.editState.hslHue = 0
-            document.editState.vibrance = 0
-            document.editState.hslSaturation = 0
-            document.editState.selectiveColorRange = 0.5
-            for band in SelectiveColorBand.allCases {
-                selectiveColorHueBinding(for: band).wrappedValue = 0
-                selectiveColorSaturationBinding(for: band).wrappedValue = 0
-                selectiveColorLuminanceBinding(for: band).wrappedValue = 0
-            }
-            document.editState.blackAndWhite = false
-            for band in SelectiveColorBand.allCases { document.editState[keyPath: band.grayMixKeyPath] = 0 }
-            document.editState.bwIntensity = 0; document.editState.bwNeutrals = 0
-            document.editState.bwTone = 0; document.editState.bwGrain = 0
-            document.editState.shadowHue = 0
-            document.editState.shadowSaturation = 0
-            document.editState.shadowLuminance = 0
-            document.editState.midtoneHue = 0
-            document.editState.midtoneSaturation = 0
-            document.editState.midtoneLuminance = 0
-            document.editState.highlightHue = 0
-            document.editState.highlightSaturation = 0
-            document.editState.highlightLuminance = 0
-            document.editState.globalHue = 0
-            document.editState.globalSaturation = 0
-            document.editState.globalLuminance = 0
-            document.editState.colorGradingBlending = 0
-            document.editState.colorGradingBalance = 0
-            document.editState.vignetteStrength = 0
-            document.editState.vignetteRadius = 0.5
-            document.editState.vignetteSoftness = 0
-            document.editState.texture = 0
-            document.editState.clarity = 0
-            document.editState.dehaze = 0
-            document.editState.sharpness = 0
-            document.editState.noiseReduction = 0
-            document.editState.defringePurple = 0
-            document.editState.defringeGreen = 0
-            document.editState.grain = 0
-            document.editState.redEyeSize = 0.5
-            document.editState.redEyeStrength = 0.7
+            document.resetAdjustments()
+            panel.selectedToneCurvePointIndex = nil
+            panel.selectedPointColorID = nil
+            interactionMode.disarmPointColorPick()
         } label: {
             Text("Reset Adjustments")
                 .frame(maxWidth: .infinity)
@@ -1925,31 +1766,102 @@ struct AdjustTabView: View {
     }
 }
 
-/// A collapsible Adjust-tab section — an icon + title + native disclosure
-/// chevron (`DisclosureGroup`'s own, not hand-drawn) that expands to a
-/// `VStack(spacing: 14)` of whatever rows `content` provides. Every
-/// section's own computed property (`lightSection`, `colorSection`, etc.)
-/// supplies only its rows; this supplies the shared header/collapse
-/// chrome — matches Apple Photos' own per-section header treatment.
-/// Plain SwiftUI (`DisclosureGroup` is a built-in view, no custom
-/// gesture/AppKit-interop code), unrelated to this sidebar's documented
-/// `NSScrollView`-probing history (see the "StableScrollInsets saga" in
-/// `PROGRESS.md`) — that was a hand-written `NSViewRepresentable`, this
-/// is not.
+/// A collapsible Adjust-tab section header + body. The header is one row: a chevron, the title, a quiet dot while the section
+/// differs from its defaults, and (Edit tab only) a reset button that appears on hover over an edited header. The WHOLE row
+/// toggles the section (the old `DisclosureGroup` only toggled from its chevron). Every section's own computed property supplies
+/// just its rows; this supplies the header and a `VStack(spacing: 14)` around them. `isEdited` / `onReset` default to off so the
+/// Looks tab's three sections keep the plain header. The reset slot is always reserved, so hovering never shifts the title.
 struct AdjustSectionContainer<Content: View>: View {
     let title: String
     @Binding var isExpanded: Bool
+    var isEdited = false
+    var onReset: (() -> Void)?
+    /// False while the section's reset must not act (e.g. a RAW re-decode is in flight). Only matters when `onReset` is set.
+    var isResetEnabled = true
     @ViewBuilder let content: () -> Content
 
+    @State private var isHovering = false
+
+    init(
+        title: String, isExpanded: Binding<Bool>, isEdited: Bool = false, onReset: (() -> Void)? = nil,
+        isResetEnabled: Bool = true,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.title = title
+        self._isExpanded = isExpanded
+        self.isEdited = isEdited
+        self.onReset = onReset
+        self.isResetEnabled = isResetEnabled
+        self.content = content
+    }
+
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            VStack(alignment: .leading, spacing: 14) {
-                content()
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 14) {
+                    content()
+                }
+                .padding(.top, 8)
             }
-            .padding(.top, 8)
-        } label: {
-            // Quiet header: just the title (no per-section icon), small and medium weight; the chevron stays.
-            Text(title).font(.subheadline.weight(.medium))
         }
+    }
+
+    private var showsReset: Bool { onReset != nil && isEdited }
+
+    /// What VoiceOver reads after the title: the expanded/collapsed state (the old `DisclosureGroup` announced it) plus
+    /// ", Edited" while the section differs from its defaults, e.g. "Expanded, Edited".
+    static func accessibilityValue(isExpanded: Bool, isEdited: Bool) -> String {
+        (isExpanded ? "Expanded" : "Collapsed") + (isEdited ? ", Edited" : "")
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .frame(width: 12)
+                    Text(title)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                    if isEdited {
+                        Circle().fill(Theme.markOn).frame(width: 6, height: 6)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(Self.accessibilityValue(isExpanded: isExpanded, isEdited: isEdited))
+            .accessibilityAddTraits(.isHeader)
+
+            if onReset != nil {
+                Button {
+                    onReset?()
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .opacity(showsReset && isHovering ? 1 : 0)
+                .allowsHitTesting(showsReset && isHovering)
+                // Not focusable/activatable unless it can act; while edited it stays reachable for keyboard and VoiceOver
+                // even when not hovered. The reserved width is unchanged and nothing extra is drawn while hidden (opacity 0).
+                .disabled(!showsReset || !isResetEnabled)
+                .accessibilityLabel("Reset \(title)")
+                .accessibilityHidden(!showsReset)
+                .help("Reset \(title)")
+            }
+        }
+        .onHover { isHovering = $0 }
     }
 }

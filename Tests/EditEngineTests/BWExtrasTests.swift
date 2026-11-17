@@ -169,7 +169,9 @@ final class BWExtrasTests: XCTestCase {
         for label in ["Intensity", "Neutrals", "Tone", "Grain"] {
             XCTAssertTrue(ui.contains("label: \"\(label)\", value: $document.editState.bw"), label)
         }
-        XCTAssertTrue(ui.contains("state.bwIntensity == 0 && state.bwNeutrals == 0 && state.bwTone == 0 && state.bwGrain == 0"))
-        XCTAssertTrue(ui.contains("document.editState.bwIntensity = 0; document.editState.bwNeutrals = 0"))
+        for keyPath in [\EditState.bwIntensity, \EditState.bwNeutrals, \EditState.bwTone, \EditState.bwGrain] {
+            XCTAssertEqual(AdjustSection.section(for: keyPath), .blackAndWhite, "Reset Adjustments must see and clear it")
+        }
+        XCTAssertTrue(AdjustSection.resetAdjustmentsSections.contains(.blackAndWhite))
     }
 }

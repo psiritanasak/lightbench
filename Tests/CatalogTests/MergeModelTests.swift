@@ -501,16 +501,41 @@ final class MergeWiringTests: XCTestCase {
 
     func testThePhotoMenuItemIsLibraryOnlyNeedsTwoVisiblePhotosAndRespectsBusyState() throws {
         let app = try text("Sources/App/PhotoAppApp.swift")
-        XCTAssertTrue(app.contains("Button(\"Merge Photos to HDR…\") { catalog.mergeRequested = .hdr }"))
-        XCTAssertTrue(app.contains("Button(\"Merge Photos to Panorama…\") { catalog.mergeRequested = .panorama }"))
-        XCTAssertEqual(app.components(separatedBy: "catalog.selectedPhotosInDisplayedGrid.count < 2 || catalog.mergeBusy").count - 1, 2, "both merge items need 2+ visible photos")
-        XCTAssertTrue(app.contains("cull.isActive || !showLibrary || catalog.selectedPhotosInDisplayedGrid.count < 2 || catalog.mergeBusy"))
+        XCTAssertTrue(app.contains("Button(PhotoActionMenu.title(.mergeHDR)) { actions.perform(.run(.mergeHDR), clicked: nil) }"))
+        XCTAssertTrue(app.contains("Button(PhotoActionMenu.title(.mergePanorama)) { actions.perform(.run(.mergePanorama), clicked: nil) }"))
+        for id in ["mergeHDR", "mergePanorama"] {
+            XCTAssertTrue(app.contains(".disabled(!PhotoActionMenu.isEnabled(.\(id), target: actionTarget, context: actionContext))"), id)
+        }
+        // The rules the scene now reads: Library only, 2+ VISIBLE photos, not while a merge runs, not in the Editor or while culling.
+        var target = PhotoActionTarget()
+        target.count = 3
+        target.visibleCount = 1
+        XCTAssertFalse(PhotoActionMenu.isEnabled(.mergeHDR, target: target, context: PhotoActionContext()))
+        target.visibleCount = 2
+        for id in [PhotoActionID.mergeHDR, .mergePanorama] {
+            XCTAssertTrue(PhotoActionMenu.isEnabled(id, target: target, context: PhotoActionContext()))
+            var context = PhotoActionContext()
+            context.mode = .editor
+            XCTAssertFalse(PhotoActionMenu.isEnabled(id, target: target, context: context))
+            context.mode = .cull
+            XCTAssertFalse(PhotoActionMenu.isEnabled(id, target: target, context: context))
+            context = PhotoActionContext()
+            context.mergeBusy = true
+            XCTAssertFalse(PhotoActionMenu.isEnabled(id, target: target, context: context))
+        }
     }
 
     func testOtherToolsAreBlockedWhileAMergeIsPendingOrRunning() throws {
         let app = try text("Sources/App/PhotoAppApp.swift")
-        XCTAssertTrue(app.contains("catalog.selectedPhotos.isEmpty || document.isLoadInFlight || catalog.mergeBusy"), "Paste Settings")
-        XCTAssertTrue(app.contains("renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy"), "Rename Files")
+        // Paste Settings and Rename Files read the model, which waits for a merge.
+        var target = PhotoActionTarget()
+        target.count = 2
+        var merging = PhotoActionContext()
+        merging.hasCopiedSettings = true
+        XCTAssertTrue(PhotoActionMenu.isEnabled(.pasteSettings, target: target, context: merging))
+        merging.mergeBusy = true
+        XCTAssertFalse(PhotoActionMenu.isEnabled(.pasteSettings, target: target, context: merging), "Paste Settings")
+        XCTAssertFalse(PhotoActionMenu.isEnabled(.renameFiles, target: target, context: merging), "Rename Files")
         XCTAssertTrue(app.contains("renameModel.isPresentingSheet || catalog.mergeBusy"), "Undo Rename")
         let sheets = try text("Sources/UI/DuplicatesSheetView.swift")
         XCTAssertEqual(sheets.components(separatedBy: "catalog.mergeBusy").count - 1, 8, "keyword, info, duplicates, people and Auto Stack sheets block on a merge, and so do the XMP, Trash and Copy Photos dialogs")

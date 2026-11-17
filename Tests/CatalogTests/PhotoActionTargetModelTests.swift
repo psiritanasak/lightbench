@@ -53,6 +53,53 @@ final class PhotoActionTargetModelTests: XCTestCase {
         XCTAssertEqual(PhotoActionTarget.selection(catalog: model, cells: cells, selectedIDs: [], openEditKey: nil), .empty)
     }
 
+    /// The Photo menu's target: counts equal what the old items read, `isOpenPhoto` is "a photo is open" whatever the selection is.
+    func testMenuBarTargetCountsLikeTheOldItemsAndCopiesTheOpenPhotoWhateverIsSelected() async throws {
+        _ = try await db.setRating(5, forPhotoIDs: [ids[0], ids[1]])
+        let model = try await makeModel()
+        model.minimumRating = 3 // photos 1 and 2 show
+        model.setSelection([ids[0], ids[1], ids[2]]) // 3 is selected but hidden
+        let target = PhotoActionTarget.menuBar(catalog: model, showLibrary: true, openEditKey: nil, hasOpenImage: true)
+        XCTAssertEqual(target.count, model.selectedPhotos.count)
+        XCTAssertEqual(target.visibleCount, model.selectedPhotosInDisplayedGrid.count)
+        XCTAssertEqual(target.virtualCopyCount, model.virtualCopyTargets(showLibrary: true, openEditKey: nil).count)
+        XCTAssertEqual([target.count, target.visibleCount], [3, 2])
+        XCTAssertTrue(target.isOpenPhoto, "Copy Settings copies the open photo, which need not be selected")
+        XCTAssertFalse(PhotoActionTarget.menuBar(catalog: model, showLibrary: true, openEditKey: nil, hasOpenImage: false).isOpenPhoto)
+        var context = PhotoActionContext()
+        context.hasOpenImage = true
+        XCTAssertTrue(PhotoActionMenu.isEnabled(.copySettings, target: target, context: context))
+        model.setSelection([])
+        let none = PhotoActionTarget.menuBar(catalog: model, showLibrary: true, openEditKey: nil, hasOpenImage: true)
+        XCTAssertTrue(PhotoActionMenu.isEnabled(.copySettings, target: none, context: context), "no selection needed")
+        XCTAssertEqual([none.count, none.visibleCount], [0, 0])
+    }
+
+    /// While culling the menu-bar target computes none of the expensive values (every model item is off then). There is no counter on
+    /// `displayedPhotos`, so this pins the result (counts stay 0 despite a selection) and the early return by source in the wiring test.
+    func testMenuBarTargetWhileCullingComputesNoCounts() async throws {
+        let model = try await makeModel()
+        model.setSelection([ids[0], ids[1]])
+        let target = PhotoActionTarget.menuBar(catalog: model, showLibrary: true, cullActive: true, openEditKey: nil, hasOpenImage: true)
+        XCTAssertEqual([target.count, target.visibleCount, target.virtualCopyCount], [0, 0, 0])
+        XCTAssertTrue(target.isOpenPhoto)
+        let live = PhotoActionTarget.menuBar(catalog: model, showLibrary: true, cullActive: false, openEditKey: nil, hasOpenImage: true)
+        XCTAssertEqual([live.count, live.visibleCount], [2, 2])
+    }
+
+    /// In the Editor the visible selection is never computed (the library-only items are off), and Create Virtual Copy follows the
+    /// open version exactly as `virtualCopyTargets` does.
+    func testMenuBarTargetInTheEditorUsesTheOpenVersionAndNoVisibleCount() async throws {
+        let model = try await makeModel()
+        let open = try XCTUnwrap(model.photos.first { $0.id == ids[2] })
+        model.setSelection([ids[0], ids[1]])
+        let target = PhotoActionTarget.menuBar(catalog: model, showLibrary: false, openEditKey: open.editKey, hasOpenImage: true)
+        XCTAssertEqual(target.count, 2, "Paste Settings and Rename Files still act on the selection in the Editor")
+        XCTAssertEqual(target.visibleCount, 0)
+        XCTAssertEqual(target.virtualCopyCount, 1)
+        XCTAssertEqual(PhotoActionTarget.menuBar(catalog: model, showLibrary: false, openEditKey: nil, hasOpenImage: false).virtualCopyCount, 0)
+    }
+
     /// The cell menu's flag on an UNSELECTED collapsed-stack cell changes the cover only (not every member, which would feed
     /// "Move Rejected to Trash"). Mirrors `LibraryGridView.runFromCell`: the plan decides the selection move and the written ids.
     func testFlagOnAnUnselectedCollapsedStackCellChangesTheCoverOnly() async throws {

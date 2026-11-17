@@ -72,6 +72,38 @@ extension PhotoActionTarget {
     }
 }
 
+extension PhotoActionTarget {
+    /// The target of the Photo menu's items, built in the App scene's body (re-run on every edit publish and, while culling, on every
+    /// cull publish, so it stays cheap). While culling every model item is off, so nothing expensive is computed (only `isOpenPhoto`).
+    /// Otherwise the selection is counted only when something is selected, and the visible selection (a filter + sort of the library)
+    /// is computed at most once here, only in the Library with a non-empty selection. `virtualCopyTargets` is not called when that
+    /// visible selection already answers it (it returns exactly that in the Library); when it is empty (no selection, or one the filters
+    /// hide entirely) `virtualCopyTargets` runs and recomputes it to find the focused photo, as the old item did. `isOpenPhoto` is
+    /// `hasOpenImage`: Copy Settings (⇧⌘C) copies the open photo whatever the Library selection is.
+    @MainActor
+    static func menuBar(catalog: CatalogModel, showLibrary: Bool, cullActive: Bool = false, openEditKey: String?, hasOpenImage: Bool) -> PhotoActionTarget {
+        var target = PhotoActionTarget()
+        target.isOpenPhoto = hasOpenImage
+        if cullActive { return target }
+        var shownCount = 0
+        if !catalog.selectedPhotoIDs.isEmpty {
+            var count = 0
+            for photo in catalog.photos where catalog.isSelected(photo) { count += 1 }
+            target.count = count
+            if showLibrary {
+                shownCount = catalog.selectedPhotosInDisplayedGrid.count
+                target.visibleCount = shownCount
+            }
+        }
+        if showLibrary && shownCount > 0 {
+            target.virtualCopyCount = shownCount
+        } else {
+            target.virtualCopyCount = catalog.virtualCopyTargets(showLibrary: showLibrary, openEditKey: openEditKey).count
+        }
+        return target
+    }
+}
+
 /// Everything a grid cell needs to build its own menu target from values it already has (computed once per grid body).
 struct PhotoActionGridInput {
     var context: PhotoActionContext

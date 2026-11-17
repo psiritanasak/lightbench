@@ -113,4 +113,67 @@ final class PhotoActionWiringTests: XCTestCase {
         XCTAssertTrue(text.contains("right-click them and choose \\u{201c}Add to Collection\\u{201d}."))
         XCTAssertFalse(text.contains("selection menu in the toolbar"))
     }
+
+    // MARK: The Photo menu reads the model
+
+    func testThePhotoMenuTakesTitleAndEnabledStateFromTheModelAndRunsThroughThePerformer() throws {
+        let app = try source("Sources/App/PhotoAppApp.swift")
+        let ids = ["copySettings", "pasteSettings", "createVirtualCopy", "stackSelected", "unstack", "mergeHDR", "mergePanorama",
+                   "writeXMP", "readXMP", "renameFiles", "editKeywords", "editInfo"]
+        for id in ids {
+            XCTAssertTrue(app.contains("PhotoActionMenu.title(.\(id))"), id)
+            XCTAssertTrue(app.contains("actions.perform(.run(.\(id)), clicked: nil)"), id)
+            XCTAssertTrue(app.contains("PhotoActionMenu.isEnabled(.\(id), target: actionTarget, context: actionContext)"), id)
+        }
+        for literal in ["\"Merge Photos to HDR…\"", "\"Merge Photos to Panorama…\"", "\"Locate Selected…\"", "\"Copy Settings\"", "\"Paste Settings\"",
+                        "\"Create Virtual Copy\"", "\"Stack Selected\"", "\"Unstack\"", "\"Edit Keywords…\"", "\"Edit Info…\"",
+                        "\"Rename Files…\"", "\"Write Metadata to XMP…\"", "\"Read Metadata from XMP…\""] {
+            XCTAssertFalse(app.contains("Button(\(literal))"), "\(literal) is a model title now")
+        }
+        // The context, target and performer are bound once, outside the buttons; the scene cannot see the export or the grid's alert.
+        XCTAssertEqual(app.components(separatedBy: "PhotoActionTarget.menuBar(").count - 1, 1)
+        XCTAssertEqual(app.components(separatedBy: "PhotoActionContext.make(").count - 1, 1)
+        XCTAssertTrue(app.contains("cullActive: cull.isActive, showLibrary: showLibrary, exportActive: false"))
+        XCTAssertTrue(app.contains("open: nil, requestRemoval: nil, beginExport: nil"))
+        XCTAssertTrue(app.contains("cullActive: cull.isActive, openEditKey: document.currentEditKey, hasOpenImage: document.currentImage != nil"))
+        let performer = try source("Sources/UI/PhotoActionPerformer.swift")
+        let early = try XCTUnwrap(performer.range(of: "if cullActive { return target }")).lowerBound
+        let filter = try XCTUnwrap(performer.range(of: "catalog.selectedPhotosInDisplayedGrid.count")).lowerBound
+        XCTAssertLessThan(early, filter, "culling returns before the filter + sort")
+        XCTAssertFalse(app.contains("selectedPhotosInDisplayedGrid") || app.contains("virtualCopyTargets("), "the scene body never filters and sorts the library itself")
+        XCTAssertTrue(try source("Sources/UI/PhotoActionPerformer.swift").contains("context.editorPopoverOpen = catalog.editorPopoverOpen"))
+    }
+
+    /// The model titles that no other file uses are the single source of the label; the ones another file also spells (a sheet's own
+    /// title, the Editor rating bar's button) are different controls with their own wording, listed here so a new copy is a decision.
+    func testEachModelTitleLiteralLivesInOneFileUnlessAnotherControlLegitimatelySharesIt() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let sources = root.appendingPathComponent("Sources")
+        var files: [(String, String)] = []
+        let walker = try XCTUnwrap(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            files.append((url.lastPathComponent, try String(contentsOf: url, encoding: .utf8)))
+        }
+        let shared: [PhotoActionID: Set<String>] = [
+            .copySettings: ["EditorRatingBar.swift", "PasteSettingsModel.swift", "ContentView.swift"],
+            .pasteSettings: ["ImageDocumentModel.swift", "PasteSettingsModel.swift", "ContentView.swift"],
+            .collectionMenu: ["CatalogModel.swift", "ContentView.swift"],
+            .editKeywords: ["KeywordSheetView.swift", "CatalogModel.swift", "EditorKeywordsModel.swift"],
+            .editInfo: ["InfoSheetView.swift", "CatalogModel.swift", "EditorInfoModel.swift"],
+            .createVirtualCopy: ["CatalogModel.swift", "VirtualCopyModel.swift", "VirtualCopyFiles.swift"],
+            .writeXMP: ["XMPModel.swift"], .readXMP: ["CatalogModel.swift", "XMPModel.swift", "XMPImportPolicy.swift"],
+            .renameFiles: ["CatalogModel.swift", "RenameSheetView.swift", "RenameModel.swift", "ContentView.swift", "NamingTemplate.swift",
+                           "RenameSummary.swift", "CatalogDatabase.swift", "009_rename_log.swift"],
+            .moveToTrash: ["TrashModel.swift"], .export: ["ContentView.swift"],
+            .ratingMenu: ["LibraryGridView.swift", "LibraryFilterBar.swift"], .flagMenu: ["LibraryGridView.swift", "LibraryFilterBar.swift"],
+            .labelMenu: ["LibraryFilterBar.swift"], .metadataMenu: ["ExportOptionsView.swift"],
+            .clearSelection: ["InfoSheetView.swift", "PeopleSheetView.swift"]
+        ]
+        for id in PhotoActionID.allCases {
+            let literal = "\"\(PhotoActionMenu.title(id))\""
+            let holders = Set(files.filter { $0.1.contains(literal) }.map(\.0))
+            XCTAssertTrue(holders.contains("PhotoActionMenu.swift"), "\(id)")
+            XCTAssertEqual(holders.subtracting(["PhotoActionMenu.swift"]), shared[id] ?? [], "\(literal) appears in an unexpected file")
+        }
+    }
 }

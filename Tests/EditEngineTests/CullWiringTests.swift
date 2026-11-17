@@ -32,14 +32,30 @@ final class CullWiringTests: XCTestCase {
     func testPhotoMenuItemsThatActOnHiddenStateAreOffWhileCulling() throws {
         let app = try source("Sources/App/PhotoAppApp.swift")
         let text = app.joined(separator: "\n")
-        for (title, needle) in [("Copy Settings", "cull.isActive || document.currentImage == nil"),
-                                ("Paste Settings", "cull.isActive || pasteModel.copied == nil"),
-                                ("Edit Keywords", "cullActive: cull.isActive, libraryBlocked: keywordsLibraryBlocked"),
+        // Copy / Paste Settings, Create Virtual Copy, Stack, Merge, XMP and Rename Files read the model, which is off in `.cull`
+        // (`testTheModelItemsAreOffWhileCulling` below); the scene must hand it the cull state.
+        XCTAssertTrue(text.contains("cullActive: cull.isActive, showLibrary: showLibrary, exportActive: false"), "the model's cull mode comes from the cull model")
+        for (title, needle) in [("Edit Keywords", "cullActive: cull.isActive, libraryBlocked: keywordsLibraryBlocked"),
                                 ("Find Duplicates", "cull.isActive || !showLibrary || catalog.duplicatesSheetPresented"),
-                                ("Rename Files", "cull.isActive || catalog.selectedPhotos.isEmpty"),
                                 ("Undo Rename", "cull.isActive || !renameModel.canUndo")] {
             XCTAssertTrue(text.contains(needle), "\(title) must be disabled while culling")
         }
+    }
+
+    func testTheModelItemsAreOffWhileCulling() {
+        var target = PhotoActionTarget()
+        target.count = 3
+        target.visibleCount = 3
+        target.virtualCopyCount = 3
+        target.isOpenPhoto = true
+        var context = PhotoActionContext()
+        context.hasCopiedSettings = true
+        context.hasOpenImage = true
+        let ids: [PhotoActionID] = [.copySettings, .pasteSettings, .createVirtualCopy, .stackSelected, .unstack, .mergeHDR, .mergePanorama,
+                                    .writeXMP, .readXMP, .renameFiles, .editKeywords, .editInfo]
+        for id in ids { XCTAssertTrue(PhotoActionMenu.isEnabled(id, target: target, context: context), "\(id) is on in the Library") }
+        context.mode = .cull
+        for id in ids { XCTAssertFalse(PhotoActionMenu.isEnabled(id, target: target, context: context), "\(id) must be disabled while culling") }
     }
 
     /// A held key must not flag a run of photos: repeats are ignored for everything but moving.

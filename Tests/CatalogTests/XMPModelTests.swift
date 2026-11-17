@@ -284,7 +284,20 @@ final class XMPModelTests: XCTestCase {
     func testMenusAndSheetsAreWiredToTheXMPBusyFlag() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let app = try String(contentsOf: root.appendingPathComponent("Sources/App/PhotoAppApp.swift"), encoding: .utf8)
-        for needle in ["Button(\"Write Metadata to XMP…\")", "Button(\"Read Metadata from XMP…\")"] { XCTAssertTrue(app.contains(needle), needle) }
+        for id in ["writeXMP", "readXMP"] {
+            XCTAssertTrue(app.contains("Button(PhotoActionMenu.title(.\(id))) { actions.perform(.run(.\(id)), clicked: nil) }"), id)
+            XCTAssertTrue(app.contains("PhotoActionMenu.isEnabled(.\(id), target: actionTarget, context: actionContext)"), id)
+        }
+        let performer = try String(contentsOf: root.appendingPathComponent("Sources/UI/PhotoActionPerformer.swift"), encoding: .utf8)
+        XCTAssertTrue(performer.contains("context.fileToolBusy = catalog.fileToolBusy"))
+        // The menu items are off while the XMP (file-tool) work runs: the model rule the menu now reads.
+        var target = PhotoActionTarget()
+        target.visibleCount = 2
+        var busy = PhotoActionContext()
+        XCTAssertTrue(PhotoActionMenu.isEnabled(.writeXMP, target: target, context: busy))
+        busy.fileToolBusy = true
+        XCTAssertFalse(PhotoActionMenu.isEnabled(.writeXMP, target: target, context: busy))
+        XCTAssertFalse(PhotoActionMenu.isEnabled(.readXMP, target: target, context: busy))
         let content = try String(contentsOf: root.appendingPathComponent("Sources/UI/ContentView.swift"), encoding: .utf8)
         XCTAssertTrue(content.contains("isXMPBusy: catalog.xmpBusy"), "batch rename must see XMP work")
         let sheets = try String(contentsOf: root.appendingPathComponent("Sources/UI/DuplicatesSheetView.swift"), encoding: .utf8)

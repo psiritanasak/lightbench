@@ -350,8 +350,12 @@ final class EditorKeywordsWiringTests: XCTestCase {
 
     func testTheKeywordsItemIsContextAware() throws {
         let app = try source("Sources/App/PhotoAppApp.swift")
-        XCTAssertTrue(app.contains("catalog.keywordSheetRequested = true"))
-        XCTAssertTrue(app.contains("catalog.editorKeywordsToggleRequested = true"))
+        // The request strings moved to the performer (one `showLibrary` branch for the Photo menu, the cell menu and the bar).
+        let performer = try source("Sources/UI/PhotoActionPerformer.swift")
+        XCTAssertTrue(performer.contains("if showLibrary { catalog.keywordSheetRequested = true } else { catalog.editorKeywordsToggleRequested = true }"))
+        XCTAssertTrue(app.contains("Button(PhotoActionMenu.title(.editKeywords)) { actions.perform(.run(.editKeywords), clicked: nil) }"))
+        XCTAssertTrue(app.contains("libraryBlocked: keywordsLibraryBlocked"))
+        XCTAssertTrue(app.contains("let keywordsLibraryBlocked = !PhotoActionMenu.isEnabled(.editKeywords, target: actionTarget, context: actionContext)"))
         XCTAssertTrue(app.contains("EditorKeywordsMenuRules.isDisabled("))
         XCTAssertTrue(app.contains("popoverOpen: catalog.editorKeywordsOpen, infoOpen: catalog.editorInfoOpen"))
         XCTAssertTrue(app.contains("keywordsOpen: catalog.editorKeywordsOpen"), "Info is off while Keywords is open")

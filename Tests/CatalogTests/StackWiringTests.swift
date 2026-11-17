@@ -54,16 +54,25 @@ final class StackWiringTests: XCTestCase {
 
     func testThePhotoMenuHasTheStackItemsAndTheShortcutsAreListed() throws {
         let app = try source("Sources/App/PhotoAppApp.swift")
-        XCTAssertTrue(app.contains("Button(\"Stack Selected\")"))
-        XCTAssertTrue(app.contains("Button(\"Unstack\")"))
+        XCTAssertTrue(app.contains("Button(PhotoActionMenu.title(.stackSelected)) { actions.perform(.run(.stackSelected), clicked: nil) }"))
+        XCTAssertTrue(app.contains("Button(PhotoActionMenu.title(.unstack)) { actions.perform(.run(.unstack), clicked: nil) }"))
+        XCTAssertTrue(app.contains("PhotoActionMenu.isEnabled(.stackSelected, target: actionTarget, context: actionContext)"))
+        XCTAssertTrue(app.contains("PhotoActionMenu.isEnabled(.unstack, target: actionTarget, context: actionContext)"))
         XCTAssertTrue(app.contains("Button(\"Auto Stack…\") { catalog.autoStackSheetRequested = true }"))
         XCTAssertTrue(app.contains(".keyboardShortcut(\"g\", modifiers: .command)"))
         XCTAssertTrue(app.contains(".keyboardShortcut(\"g\", modifiers: [.command, .shift])"))
-        // Library only, and not while culling.
-        for item in ["Stack Selected", "Unstack", "Auto Stack…"] {
-            let from = try XCTUnwrap(app.range(of: "Button(\"\(item)\")")).lowerBound
-            let window = app[from...].prefix(900)
-            XCTAssertTrue(window.contains("cull.isActive || !showLibrary"), "\(item): Library only")
+        // Library only, and not while culling: Auto Stack still has its own window; Stack Selected / Unstack come from the model.
+        let from = try XCTUnwrap(app.range(of: "Button(\"Auto Stack…\")")).lowerBound
+        XCTAssertTrue(app[from...].prefix(900).contains("cull.isActive || !showLibrary"), "Auto Stack…: Library only")
+        var target = PhotoActionTarget()
+        target.count = 3
+        for action in [PhotoActionID.stackSelected, .unstack] {
+            XCTAssertTrue(PhotoActionMenu.isEnabled(action, target: target, context: PhotoActionContext()), "\(action)")
+            for mode in [PhotoActionContext.Mode.editor, .cull] {
+                var context = PhotoActionContext()
+                context.mode = mode
+                XCTAssertFalse(PhotoActionMenu.isEnabled(action, target: target, context: context), "\(action) off in \(mode)")
+            }
         }
         let keys = KeyboardShortcutCatalog.sections.flatMap(\.entries).map(\.keys)
         XCTAssertTrue(keys.contains("\u{2318}G  \u{21E7}\u{2318}G"))

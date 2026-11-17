@@ -256,9 +256,26 @@ final class EditorInfoWiringTests: XCTestCase {
     /// user is typing and menu shortcuts still fire (⌘Z, ⌘←, ⌘[ ...), so every one must name `catalog.editorPopoverOpen` (Info OR Keywords).
     private let guardedItems = [
         "Button(\"Undo\")", "Button(\"Redo\")", "Button(\"Previous Photo\")", "Button(\"Next Photo\")", "Button(\"Cull Photos\")",
-        "Button(\"Copy Settings\")", "Button(\"Paste Settings\")", "Button(\"Import Lightroom Settings…\")", "Button(\"Rotate Left\")",
-        "Button(\"Rotate Right\")", "Button(\"Create Virtual Copy\")", "Button(\"Stack Selected\")", "Button(\"Unstack\")"
+        "Button(\"Import Lightroom Settings…\")", "Button(\"Rotate Left\")", "Button(\"Rotate Right\")"
     ]
+
+    /// Copy / Paste Settings, Create Virtual Copy, Stack Selected and Unstack read `PhotoActionMenu`, which names the popover itself.
+    func testTheModelItemsAreOffWhileThePopoverIsOpen() throws {
+        let app = try source("Sources/App/PhotoAppApp.swift")
+        XCTAssertTrue(try source("Sources/UI/PhotoActionPerformer.swift").contains("context.editorPopoverOpen = catalog.editorPopoverOpen"))
+        XCTAssertTrue(app.contains("PhotoActionContext.make("))
+        var target = PhotoActionTarget()
+        target.count = 3
+        target.virtualCopyCount = 3
+        target.isOpenPhoto = true
+        var context = PhotoActionContext()
+        context.hasCopiedSettings = true
+        context.hasOpenImage = true
+        let ids: [PhotoActionID] = [.copySettings, .pasteSettings, .createVirtualCopy, .stackSelected, .unstack]
+        for id in ids { XCTAssertTrue(PhotoActionMenu.isEnabled(id, target: target, context: context), "\(id)") }
+        context.editorPopoverOpen = true
+        for id in ids { XCTAssertFalse(PhotoActionMenu.isEnabled(id, target: target, context: context), "\(id) must be off while the popover is open") }
+    }
 
     func testEveryItemThatCouldActMidTypingIsDisabledWhileThePopoverIsOpen() throws {
         let app = try source("Sources/App/PhotoAppApp.swift")
@@ -274,8 +291,9 @@ final class EditorInfoWiringTests: XCTestCase {
 
     func testTheEditInfoItemIsContextAware() throws {
         let app = try source("Sources/App/PhotoAppApp.swift")
-        XCTAssertTrue(app.contains("catalog.editorInfoToggleRequested = true"))
-        XCTAssertTrue(app.contains("catalog.infoSheetRequested = true"))
+        let performer = try source("Sources/UI/PhotoActionPerformer.swift")
+        XCTAssertTrue(performer.contains("if showLibrary { catalog.infoSheetRequested = true } else { catalog.editorInfoToggleRequested = true }"))
+        XCTAssertTrue(app.contains("let infoLibraryBlocked = !PhotoActionMenu.isEnabled(.editInfo, target: actionTarget, context: actionContext)"))
         XCTAssertTrue(app.contains("EditorInfoMenuRules.isDisabled("))
         XCTAssertTrue(app.contains("hasCatalogRow: catalog.editorPhotoInCatalog"))
         XCTAssertTrue(app.contains("popoverOpen: catalog.editorInfoOpen"))

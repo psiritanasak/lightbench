@@ -394,7 +394,7 @@ final class PhotoInfoWiringTests: XCTestCase {
 
     func testTheInfoSheetAndMenuItemsAreWired() throws {
         let app = try source("Sources/App/PhotoAppApp.swift")
-        XCTAssertTrue(app.contains("Button(\"Edit Info…\")"))
+        XCTAssertTrue(app.contains("Button(PhotoActionMenu.title(.editInfo)) { actions.perform(.run(.editInfo), clicked: nil) }"))
         XCTAssertTrue(app.contains(".keyboardShortcut(\"i\", modifiers: [.command])"))
         let sheets = try source("Sources/UI/DuplicatesSheetView.swift")
         XCTAssertTrue(sheets.contains("InfoSheetModifier("))

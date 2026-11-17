@@ -9,6 +9,17 @@ enum FlagStatus: Int, Codable, CaseIterable, Sendable, DatabaseValueConvertible 
     case rejected = -1
     case none = 0
     case picked = 1
+
+    // Moved unchanged from `Sources/UI/FlagStatusPresentation.swift` (pure strings, shared by the pure `PhotoActionMenu`).
+    var menuTitle: String {
+        switch self {
+        case .picked: return "Pick"
+        case .rejected: return "Reject"
+        case .none: return "Unflag"
+        }
+    }
+
+    static let menuOrder: [FlagStatus] = [.picked, .rejected, .none]
 }
 
 /// Lightroom-style color label. Raw values are what the `colorLabel` column
@@ -22,6 +33,20 @@ enum ColorLabel: Int, Codable, CaseIterable, Sendable, DatabaseValueConvertible 
     case green = 3
     case blue = 4
     case purple = 5
+
+    // Moved unchanged from `Sources/UI/ColorLabelPresentation.swift` (pure strings, shared by the pure `PhotoActionMenu`).
+    var menuTitle: String {
+        switch self {
+        case .none: return "No Label"
+        case .red: return "Red"
+        case .yellow: return "Yellow"
+        case .green: return "Green"
+        case .blue: return "Blue"
+        case .purple: return "Purple"
+        }
+    }
+
+    static let menuOrder: [ColorLabel] = [.none, .red, .yellow, .green, .blue, .purple]
 }
 
 /// A catalogued photo: metadata/path only, per Phase 4 slice 1's explicit

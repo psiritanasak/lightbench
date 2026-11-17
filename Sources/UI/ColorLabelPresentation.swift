@@ -14,17 +14,6 @@ extension ColorLabel {
         }
     }
 
-    var menuTitle: String {
-        switch self {
-        case .none: return "No Label"
-        case .red: return "Red"
-        case .yellow: return "Yellow"
-        case .green: return "Green"
-        case .blue: return "Blue"
-        case .purple: return "Purple"
-        }
-    }
-
     /// Spoken/accessibility name of the label itself ("Red label").
     var accessibilityName: String {
         self == .none ? "No label" : "\(menuTitle) label"
@@ -45,6 +34,4 @@ extension ColorLabel {
     func toggled(to target: ColorLabel) -> ColorLabel {
         self == target ? .none : target
     }
-
-    static let menuOrder: [ColorLabel] = [.none, .red, .yellow, .green, .blue, .purple]
 }

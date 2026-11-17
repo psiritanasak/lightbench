@@ -34,13 +34,4 @@ extension FlagStatus {
         }
     }
 
-    var menuTitle: String {
-        switch self {
-        case .picked: return "Pick"
-        case .rejected: return "Reject"
-        case .none: return "Unflag"
-        }
-    }
-
-    static let menuOrder: [FlagStatus] = [.picked, .rejected, .none]
 }

@@ -290,6 +290,7 @@ New findings (not in section 2; each is assigned to a slice below):
 ### Track B: Editor
 
 #### B1. Section header: edit dot, reset, on/off
+- **DONE 2026-11-17** (commit f03219e, not pushed; CLAUDE.md "Edit-panel section headers", IMPROVEMENTS.md D93; NOT checked on screen): custom header row (whole row toggles, edited dot, hover reset), pure `AdjustSection` (9 sections, 94 fields, coverage test), one labelled undo step per section reset and for Reset Adjustments (which now clears Point Color and leaves the Red-eye sliders alone). The per-section eye (D-5) stays deferred.
 - **Today**: `AdjustSectionContainer` (`AdjustTabView.swift:1972-1987`) is a
   `DisclosureGroup` with a title only.
 - **Change**: a custom header row: chevron, title, a small `Theme.markOn` dot

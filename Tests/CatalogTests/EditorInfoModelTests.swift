@@ -224,7 +224,10 @@ final class EditorInfoCatalogTests: XCTestCase {
         XCTAssertEqual(model.infoByPhotoID[master.id ?? -1]?.caption, "C")
         model.setInfo(PhotoInfo(title: "never"), fields: [], forPhotos: [master])
         XCTAssertEqual(model.infoByPhotoID[master.id ?? -1]?.title, "T2")
-        try await waitUntil("written") { try await db.allInfo()[master.id ?? -1]?.title == "T2" }
+        await model.waitForPendingWrites()
+        let stored = try await db.allInfo()[master.id ?? -1]
+        XCTAssertEqual(stored?.title, "T2")
+        XCTAssertEqual(stored?.caption, "C")
     }
 
     func testClearingEveryFieldRemovesTheMapEntry() async throws {

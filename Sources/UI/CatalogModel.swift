@@ -445,6 +445,75 @@ final class CatalogModel: ObservableObject {
 
     private let thumbnailCache = ThumbnailCache()
 
+    // MARK: - Ordered catalog writes (D94)
+
+    /// The tail of the serial write chain. Every "local-first" metadata setter (in-memory change first, database write after) queues its
+    /// write here instead of starting its own free-running `Task.detached`: two quick edits of the same row used to be able to reach
+    /// `CatalogDatabase` in reverse order, leaving the OLDER value stored while the screen showed the newer one.
+    private var pendingWrite: Task<Void, Never>?
+
+    /// Queues `operation` behind every write queued before it and returns its task. Called on the main actor, so queue order is call
+    /// order; each operation starts only after the previous one has finished, and runs off the main actor.
+    @discardableResult
+    private func enqueueWrite<T: Sendable>(_ operation: @escaping @Sendable () async -> T) -> Task<T, Never> {
+        let previous = pendingWrite
+        let task = Task.detached { () -> T in
+            await previous?.value
+            return await operation()
+        }
+        pendingWrite = Task.detached { _ = await task.value }
+        return task
+    }
+
+    /// A refresh must NEVER run inside a queued operation: it would read the database before later queued writes landed and republish the
+    /// older values over their local updates. Operations ask for one here instead; it runs on the main actor once the chain has drained
+    /// (re-checked until the tail stops changing), coalesced: any number of requests share one pass; a full request beats a
+    /// "only if this collection is still viewed" one.
+    private var refreshTask: Task<Void, Never>?
+    private var fullRefreshRequested = false
+    private var collectionRefreshesRequested: Set<Int64> = []
+
+    func scheduleRefreshAfterWrites(ifViewing collectionID: Int64? = nil) {
+        if let collectionID { collectionRefreshesRequested.insert(collectionID) } else { fullRefreshRequested = true }
+        guard refreshTask == nil else { return }
+        refreshTask = Task { [weak self] in
+            while let self, self.fullRefreshRequested || !self.collectionRefreshesRequested.isEmpty {
+                var tail = self.pendingWrite
+                while true {
+                    await tail?.value
+                    if self.pendingWrite == tail { break }
+                    tail = self.pendingWrite
+                }
+                let full = self.fullRefreshRequested
+                let ids = self.collectionRefreshesRequested
+                self.fullRefreshRequested = false
+                self.collectionRefreshesRequested = []
+                if full {
+                    await self.refresh()
+                } else {
+                    for id in ids.sorted() where self.viewedCollectionIDs.contains(id) { await self.refresh(); break }
+                }
+            }
+            self?.refreshTask = nil
+        }
+    }
+
+    /// Returns once every queued write has finished AND any refresh they asked for has run (re-checked until both are idle).
+    private func settleWrites() async {
+        while true {
+            let write = pendingWrite
+            let refreshing = refreshTask
+            await write?.value
+            await refreshing?.value
+            if pendingWrite == write && refreshTask == refreshing { return }
+        }
+    }
+
+    /// TESTS ONLY (the batch setters use `settleWrites` directly). Calling it from inside a queued operation deadlocks.
+    func waitForPendingWrites() async {
+        await settleWrites()
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.preferences = AppPreferences(defaults: defaults)
@@ -1506,8 +1575,8 @@ final class CatalogModel: ObservableObject {
         guard let database, let id = photo.id else { return }
         let clamped = min(max(rating, 0), 5)
         updatePhotoInPlace(id: id) { $0.rating = clamped }
-        Task.detached { [weak self] in
-            do { try await database.setRating(clamped, for: id) } catch { await self?.refresh() }
+        enqueueWrite { [weak self] in
+            do { try await database.setRating(clamped, for: id) } catch { await self?.scheduleRefreshAfterWrites() }
         }
     }
 
@@ -1516,8 +1585,8 @@ final class CatalogModel: ObservableObject {
     func setFlagStatus(_ status: FlagStatus, for photo: Photo) {
         guard let database, let id = photo.id else { return }
         updatePhotoInPlace(id: id) { $0.flagStatus = status }
-        Task.detached { [weak self] in
-            do { try await database.setFlagStatus(status, for: id) } catch { await self?.refresh() }
+        enqueueWrite { [weak self] in
+            do { try await database.setFlagStatus(status, for: id) } catch { await self?.scheduleRefreshAfterWrites() }
         }
     }
 
@@ -1529,12 +1598,11 @@ final class CatalogModel: ObservableObject {
         guard let database else { return nil }
         guard !photoIDs.isEmpty else { return [] }
         updatePhotosInPlace(ids: Set(photoIDs)) { $0.flagStatus = status }
-        do {
-            return try await database.setFlagStatus(status, forPhotoIDs: photoIDs)
-        } catch {
-            await refresh()
-            return nil
-        }
+        let outcome = await enqueueWrite { () -> Set<Int64>? in
+            do { return try await database.setFlagStatus(status, forPhotoIDs: photoIDs) } catch { return nil }
+        }.value
+        if outcome == nil { scheduleRefreshAfterWrites(); await settleWrites() }
+        return outcome
     }
 
     /// Sets the star rating (clamped 0...5, mirroring the database) of every photo in `photoIDs`: local-first with ONE publish of
@@ -1545,12 +1613,11 @@ final class CatalogModel: ObservableObject {
         guard !photoIDs.isEmpty else { return [] }
         let clamped = min(max(rating, 0), 5)
         updatePhotosInPlace(ids: Set(photoIDs)) { $0.rating = clamped }
-        do {
-            return try await database.setRating(clamped, forPhotoIDs: photoIDs)
-        } catch {
-            await refresh()
-            return nil
-        }
+        let outcome = await enqueueWrite { () -> Set<Int64>? in
+            do { return try await database.setRating(clamped, forPhotoIDs: photoIDs) } catch { return nil }
+        }.value
+        if outcome == nil { scheduleRefreshAfterWrites(); await settleWrites() }
+        return outcome
     }
 
     /// Sets the color label of every photo in `photoIDs` (same contract as `setRating(_:forPhotoIDs:)`).
@@ -1558,12 +1625,11 @@ final class CatalogModel: ObservableObject {
         guard let database else { return nil }
         guard !photoIDs.isEmpty else { return [] }
         updatePhotosInPlace(ids: Set(photoIDs)) { $0.colorLabel = label }
-        do {
-            return try await database.setColorLabel(label, forPhotoIDs: photoIDs)
-        } catch {
-            await refresh()
-            return nil
-        }
+        let outcome = await enqueueWrite { () -> Set<Int64>? in
+            do { return try await database.setColorLabel(label, forPhotoIDs: photoIDs) } catch { return nil }
+        }.value
+        if outcome == nil { scheduleRefreshAfterWrites(); await settleWrites() }
+        return outcome
     }
 
     /// Begins a duplicate scan of the photos the Library is currently drawing from (all photos, a collection, or a smart
@@ -1591,8 +1657,8 @@ final class CatalogModel: ObservableObject {
     func setColorLabel(_ label: ColorLabel, for photo: Photo) {
         guard let database, let id = photo.id else { return }
         updatePhotoInPlace(id: id) { $0.colorLabel = label }
-        Task.detached { [weak self] in
-            do { try await database.setColorLabel(label, for: id) } catch { await self?.refresh() }
+        enqueueWrite { [weak self] in
+            do { try await database.setColorLabel(label, for: id) } catch { await self?.scheduleRefreshAfterWrites() }
         }
     }
 
@@ -1812,10 +1878,10 @@ final class CatalogModel: ObservableObject {
     }
 
     private func persistInfo(_ database: CatalogDatabase, _ info: PhotoInfo, ids: [Int64], fields: InfoFields) {
-        Task.detached { [weak self] in
+        enqueueWrite { [weak self] in
             do { try await database.setInfo(info, forPhotoIDs: ids, fields: fields) } catch {
                 await MainActor.run { self?.importStatusMessage = "Couldn't save the info: \(error.localizedDescription)" }
-                await self?.refresh()
+                await self?.scheduleRefreshAfterWrites()
             }
         }
     }
@@ -1851,14 +1917,14 @@ final class CatalogModel: ObservableObject {
     func addKeywords(_ input: String, to photoIDs: [Int64]) -> [String] {
         let names = KeywordName.parse(input)
         guard let database, !names.isEmpty else { return names }
-        Task { [weak self] in
+        enqueueWrite { [weak self] in
             // No local guess: find-or-create gives ids only now, and refresh() replaces the maps wholesale.
             do {
                 _ = try await database.addKeywords(names, to: photoIDs)
             } catch {
-                self?.importStatusMessage = "Couldn't add keywords: \(error.localizedDescription)"
+                await MainActor.run { self?.importStatusMessage = "Couldn't add keywords: \(error.localizedDescription)" }
             }
-            await self?.refresh()
+            await self?.scheduleRefreshAfterWrites()
         }
         return names
     }
@@ -1875,18 +1941,20 @@ final class CatalogModel: ObservableObject {
     /// in `importStatusMessage` and the refresh puts the real state back.
     func applyKeywordEdits(adding: [String], removing: Set<Int64>, for photo: Photo) {
         guard let database, let photoID = photo.id, !adding.isEmpty || !removing.isEmpty else { return }
-        Task { [weak self] in
+        enqueueWrite { [weak self] in
             do {
                 let result = try await database.setKeywords(adding: adding, removing: removing, for: photoID)
-                guard let self else { return }
-                if result.isEmpty { keywordIDsByPhotoID.removeValue(forKey: photoID) } else { keywordIDsByPhotoID[photoID] = Set(result.compactMap(\.id)) }
-                let known = Set(keywords.compactMap(\.id))
-                let created = result.filter { !known.contains($0.id ?? -1) }
-                if !created.isEmpty { keywords = Self.sortedKeywords(keywords + created) }
+                await MainActor.run {
+                    guard let self else { return }
+                    if result.isEmpty { self.keywordIDsByPhotoID.removeValue(forKey: photoID) } else { self.keywordIDsByPhotoID[photoID] = Set(result.compactMap(\.id)) }
+                    let known = Set(self.keywords.compactMap(\.id))
+                    let created = result.filter { !known.contains($0.id ?? -1) }
+                    if !created.isEmpty { self.keywords = Self.sortedKeywords(self.keywords + created) }
+                }
             } catch {
-                self?.importStatusMessage = "Couldn't save keywords: \(error.localizedDescription)"
+                await MainActor.run { self?.importStatusMessage = "Couldn't save keywords: \(error.localizedDescription)" }
             }
-            await self?.refresh()
+            await self?.scheduleRefreshAfterWrites()
         }
     }
 
@@ -1897,8 +1965,8 @@ final class CatalogModel: ObservableObject {
             keywordIDsByPhotoID[photoID]?.remove(keywordID)
             if keywordIDsByPhotoID[photoID]?.isEmpty == true { keywordIDsByPhotoID.removeValue(forKey: photoID) }
         }
-        Task.detached { [weak self] in
-            do { try await database.removeKeyword(id: keywordID, from: photoIDs) } catch { await self?.refresh() }
+        enqueueWrite { [weak self] in
+            do { try await database.removeKeyword(id: keywordID, from: photoIDs) } catch { await self?.scheduleRefreshAfterWrites() }
         }
     }
 
@@ -1913,8 +1981,8 @@ final class CatalogModel: ObservableObject {
             if keywordIDsByPhotoID[photoID]?.isEmpty == true { keywordIDsByPhotoID.removeValue(forKey: photoID) }
         }
         if keywordFilterID == keywordID { keywordFilterID = nil }
-        Task.detached { [weak self] in
-            do { try await database.deleteKeyword(id: keywordID) } catch { await self?.refresh() }
+        enqueueWrite { [weak self] in
+            do { try await database.deleteKeyword(id: keywordID) } catch { await self?.scheduleRefreshAfterWrites() }
         }
     }
 
@@ -2082,7 +2150,7 @@ final class CatalogModel: ObservableObject {
         }
         recomputeFolderPhotoCounts()
 
-        Task.detached { [weak self] in
+        enqueueWrite { [weak self] in
             do {
                 try await database.setMembership(
                     photoID: photoID, collectionID: collectionID, isMember: willBeMember
@@ -2090,9 +2158,9 @@ final class CatalogModel: ObservableObject {
                 // Re-adding while viewing that same collection needs the
                 // row back at its correct sort position, which only a
                 // re-read knows — rare enough to just pay for.
-                if affectsCurrentFilter && willBeMember { await self?.refresh() }
+                if affectsCurrentFilter && willBeMember { await self?.scheduleRefreshAfterWrites() }
             } catch {
-                await self?.refresh()
+                await self?.scheduleRefreshAfterWrites()
             }
         }
     }
@@ -2130,38 +2198,13 @@ final class CatalogModel: ObservableObject {
         }
         recomputeFolderPhotoCounts()
 
-        Task.detached { [weak self] in
+        enqueueWrite { [weak self] in
             do {
                 try await database.addPhotos(photoIDs, toCollection: collectionID)
-                await self?.refreshIfViewingCollection(collectionID)
+                await self?.scheduleRefreshAfterWrites(ifViewing: collectionID)
             } catch {
-                await self?.refresh()
+                await self?.scheduleRefreshAfterWrites()
             }
-        }
-    }
-
-    /// Refreshes only if `collectionID` is STILL the active filter at
-    /// completion — re-checked here, on the `MainActor`, rather than a
-    /// flag captured before the (potentially large, batched) write
-    /// started. Reviewer-caught: capturing `affectsCurrentFilter` up
-    /// front would miss a filter change the user makes while this
-    /// write is still in flight — the same race `deleteCollection`'s own
-    /// `clearSelectedFilterIfCollectionDeleted` already avoids by
-    /// re-reading `selectedFilter` at completion instead of trusting a
-    /// captured value.
-    ///
-    /// With the `photos`-intersection above, every added photo was
-    /// already visible under whatever filter was active at call time —
-    /// so if that filter is STILL `.collection(collectionID)` here, every
-    /// added photo was already a member of it, making this refresh a
-    /// genuine no-op in practice. Kept anyway, matching `toggleMembership`'s
-    /// own "handled anyway, not left to depend on that reasoning staying
-    /// true" precedent — and it stops being a no-op the moment the target
-    /// collection differs from what was active at call time but matches
-    /// by completion (e.g. the user switches filters mid-write).
-    private func refreshIfViewingCollection(_ collectionID: Int64) async {
-        if viewedCollectionIDs.contains(collectionID) {
-            await refresh()
         }
     }
 

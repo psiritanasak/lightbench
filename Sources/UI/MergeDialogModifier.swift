@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Presents Photo Merge's confirmation dialog, progress row (the activity strip) and result (relayed to the window's feedback: a toast or an alert). Bundled inside `LibraryToolSheetsModifier` (not added to
-/// `ContentView` directly: its `body` is at the type-checker's limit). The Photo menu / selection menu only REQUEST through
+/// `ContentView` directly: its `body` is at the type-checker's limit). The Photo menu, the right-click menu and the selection bar only REQUEST through
 /// `catalog.mergeRequested`; a request made while another sheet or dialog is up is dropped (`blocked`).
 struct MergeDialogModifier: ViewModifier {
     @ObservedObject var catalog: CatalogModel

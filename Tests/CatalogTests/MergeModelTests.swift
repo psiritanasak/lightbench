@@ -519,21 +519,38 @@ final class MergeWiringTests: XCTestCase {
         XCTAssertTrue(model.contains("faces.isWorking || mergeBusy"), "batch rename must not start under a merge")
     }
 
+    /// Was a source pin on the toolbar's selection menu (removed with it): the merge items, the rename gates and the "same set the
+    /// merge acts on" rule now live in the model and the performer.
     func testTheSelectionMenuHasAMergeItemThatNeedsTwoVisiblePhotos() throws {
         let content = try text("Sources/UI/ContentView.swift")
-        XCTAssertTrue(content.contains("catalog.mergeRequested = .hdr"))
-        XCTAssertTrue(content.contains("catalog.mergeRequested = .panorama"))
-        XCTAssertTrue(content.contains("Merge to Panorama (\\(catalog.selectedPhotosInDisplayedGrid.count))…"))
-        XCTAssertTrue(content.contains("catalog.selectedPhotosInDisplayedGrid.count < 2 || otherSheetIsPresented || catalog.mergeBusy"),
-                      "the enabled state uses the SAME set the merge acts on")
-        XCTAssertTrue(content.contains("Merge to HDR (\\(catalog.selectedPhotosInDisplayedGrid.count))…"), "so does the label")
+        let performer = try text("Sources/UI/PhotoActionPerformer.swift")
+        XCTAssertTrue(performer.contains("catalog.mergeRequested = .hdr"))
+        XCTAssertTrue(performer.contains("catalog.mergeRequested = .panorama"))
+        // The enabled state reads `visibleCount` (the selected photos the grid SHOWS, the set the merge acts on), not the raw count.
+        var target = PhotoActionTarget()
+        target.count = 3
+        target.visibleCount = 1
+        XCTAssertFalse(PhotoActionMenu.isEnabled(.mergeHDR, target: target, context: PhotoActionContext()), "one shown photo is not enough")
+        target.visibleCount = 2
+        XCTAssertTrue(PhotoActionMenu.isEnabled(.mergeHDR, target: target, context: PhotoActionContext()))
+        XCTAssertTrue(PhotoActionMenu.isEnabled(.mergePanorama, target: target, context: PhotoActionContext()))
+        var merging = PhotoActionContext()
+        merging.mergeBusy = true
+        XCTAssertFalse(PhotoActionMenu.isEnabled(.mergeHDR, target: target, context: merging))
+        var loading = PhotoActionContext()
+        loading.loadInFlight = true
+        XCTAssertFalse(PhotoActionMenu.isEnabled(.mergeHDR, target: target, context: loading))
+        // Rename Files waits for a merge and for the file tools (was the selection menu's own `.disabled`); Undo Rename stays in the Photo menu.
+        for flag in [{ (c: inout PhotoActionContext) in c.mergeBusy = true }, { (c: inout PhotoActionContext) in c.fileToolBusy = true },
+                     { (c: inout PhotoActionContext) in c.loadInFlight = true }] {
+            var c = PhotoActionContext()
+            flag(&c)
+            XCTAssertFalse(PhotoActionMenu.isEnabled(.renameFiles, target: target, context: c))
+        }
         XCTAssertTrue(content.contains("isMerging: catalog.mergeBusy"), "rename/undo re-check the merge flag")
-        XCTAssertTrue(content.contains("|| document.isLoadInFlight || catalog.mergeBusy || catalog.fileToolBusy\n                        )"), "selection-menu Rename Files")
-        XCTAssertTrue(content.contains("renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy || catalog.fileToolBusy)"), "selection-menu Undo Rename")
         // `otherSheetIsPresented` now forwards to `PhotoActionContext` (its model test covers every flag, merge included); the context
         // builder must feed it the merge flag, the pending paste and the export state.
         XCTAssertTrue(content.contains("private var otherSheetIsPresented: Bool { photoActionContext.otherSheetIsPresented }"))
-        let performer = try text("Sources/UI/PhotoActionPerformer.swift")
         XCTAssertTrue(performer.contains("context.mergeBusy = catalog.mergeBusy"), "otherSheetIsPresented includes a merge")
         XCTAssertTrue(performer.contains("context.pastePending = pasteModel.pendingTargets != nil"))
         XCTAssertTrue(content.contains("exportActive: exportModel.isPresentingOptions || exportModel.isExporting"))

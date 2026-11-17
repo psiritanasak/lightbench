@@ -112,6 +112,17 @@ final class PhotoActionMenuTests: XCTestCase {
 
     // MARK: Targets
 
+    func testRatingFlagAndLabelNeedAVisibleSelectedPhoto() {
+        var target = PhotoActionTarget()
+        target.count = 3
+        target.visibleCount = 0 // everything selected is hidden by the filters
+        for action in [PhotoActionID.ratingMenu, .flagMenu, .labelMenu] {
+            XCTAssertFalse(enabled(action, target, library), "\(action): a write that reaches no photo")
+        }
+        target.visibleCount = 1
+        for action in [PhotoActionID.ratingMenu, .flagMenu, .labelMenu] { XCTAssertTrue(enabled(action, target, library), "\(action)") }
+    }
+
     func testEmptyTarget() {
         let context = library
         XCTAssertFalse(enabled(.ratingMenu, .empty, context))
@@ -549,7 +560,7 @@ final class PhotoActionMenuTests: XCTestCase {
         case .clearSelection: old = false
         // Sources/UI/ContentView.swift ~1738, the toolbar Export button: `photosToExport.isEmpty || exportModel.isExporting || renameModel.isWorking`.
         case .export: old = t.count == 0 || c.renameWorking
-        // Sources/UI/LibraryGridView.swift cell menu: the star/flag/label taps, Make Cover, Remove from Stack, Remove from Library and
+        // Sources/UI/LibraryGridView.swift cell menu: Make Cover, Remove from Stack, Remove from Library and
         // the open action carry no `.disabled` at all.
         case .ratingMenu, .flagMenu, .labelMenu, .openInEditor, .makeCover, .removeFromStack, .removeFromLibrary: old = false
         default: XCTFail("no reference for \(action)"); old = false
@@ -562,7 +573,8 @@ final class PhotoActionMenuTests: XCTestCase {
     /// waits for a rename.
     private func planGate(_ action: PhotoActionID, _ c: PhotoActionContext, _ t: PhotoActionTarget) -> Bool {
         switch action {
-        case .ratingMenu, .flagMenu, .labelMenu, .makeCover, .removeFromStack, .removeFromLibrary: return t.count == 0
+        case .ratingMenu, .flagMenu, .labelMenu: return t.visibleCount == 0
+        case .makeCover, .removeFromStack, .removeFromLibrary: return t.count == 0
         case .openInEditor: return t.count == 0 || c.renameWorking
         case .export: return c.exportActive
         default: return false

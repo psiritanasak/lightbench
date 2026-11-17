@@ -76,7 +76,7 @@ struct LibraryEmptyCollectionView: View {
 
     private var advice: String {
         guard isFolder else {
-            return "Select photos in All Photos, then choose \u{201c}Add to Collection\u{201d} from the selection menu in the toolbar."
+            return "Select photos in All Photos, then right-click them and choose \u{201c}Add to Collection\u{201d}."
         }
         return (includesSubfolders || subfolderSettingOn)
             ? "Import photos from this folder, or choose another folder."

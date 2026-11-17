@@ -216,7 +216,8 @@ enum PhotoActionMenu {
         case .openInEditor:
             return library && t.count > 0 && !c.renameWorking
         case .ratingMenu, .flagMenu, .labelMenu:
-            return library && t.count > 0
+            // They write the photos the grid shows, so a selection hidden entirely by the filters must not offer a silent no-op.
+            return library && t.visibleCount > 0
         case .collectionMenu:
             return library && c.hasCollections && t.count > 0
         case .editKeywords:
@@ -258,7 +259,7 @@ enum PhotoActionMenu {
         case .export:
             return t.count > 0 && !c.exportActive && !c.renameWorking
         case .clearSelection:
-            // Deliberately NOT gated on `count` (IMPROVEMENTS.md D33; see the comment in `ContentView.libraryToolbarItems`): `count`
+            // Deliberately NOT gated on `count` (IMPROVEMENTS.md D33; see `LibrarySelectionBar`'s type comment): `count`
             // excludes selected ids whose photos are not loaded, and the old toolbar "Clear Selection" had no gate so such a ghost
             // selection can always be cleared.
             return library

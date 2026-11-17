@@ -3,8 +3,8 @@ import Foundation
 import ImageIO
 
 /// The UI-facing coordinator for Photo Merge (HDR bracket now; panorama later) — kept in `Sources/UI` while `PhotoMerger` stays UI-free,
-/// mirroring `EnhanceModel`/`PhotoEnhancer`. Owned by `CatalogModel` (like `faces` / `duplicates`) so the Scene-level Photo menu and the
-/// selection menu can reach it without `ContentView` growing; `MergeDialogModifier` presents its confirmation, progress and result.
+/// mirroring `EnhanceModel`/`PhotoEnhancer`. Owned by `CatalogModel` (like `faces` / `duplicates`) so the Scene-level Photo menu, the right-click menu and the
+/// selection bar's More menu can reach it without `ContentView` growing; `MergeDialogModifier` presents its confirmation, progress and result.
 ///
 /// Flow: a menu item REQUESTS a merge of the selected, visible photos -> `pending` is set and a confirmation dialog explains what will happen
 /// (frame count, output size, tripod vs auto-align) -> `confirm` resolves write access to the output folder (the first selected photo's folder),

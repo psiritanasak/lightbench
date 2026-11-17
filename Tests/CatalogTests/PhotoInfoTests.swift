@@ -400,7 +400,7 @@ final class PhotoInfoWiringTests: XCTestCase {
         XCTAssertTrue(sheets.contains("InfoSheetModifier("))
         XCTAssertTrue(sheets.contains("KeywordSheetModifier(catalog: catalog, blocked: blocked || catalog.infoSheetPhotoIDs != nil"),
                       "the keyword sheet must not open over the info sheet")
-        XCTAssertTrue(try source("Sources/UI/ContentView.swift").contains("catalog.infoSheetRequested = true"))
+        XCTAssertTrue(try source("Sources/UI/PhotoActionPerformer.swift").contains("catalog.infoSheetRequested = true"))
         let catalog = try source("Sources/UI/CatalogModel.swift")
         XCTAssertTrue(catalog.contains("keywordSheetPhotoIDs != nil || infoSheetPhotoIDs != nil"), "batch rename must see an open info sheet")
     }

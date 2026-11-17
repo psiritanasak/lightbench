@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 /// Coordinates the Library's "Write Metadata to XMP…" and "Read Metadata from XMP…" commands (rating, reject, colour label,
-/// keywords ⇄ standard `.xmp` sidecars). Owned by `CatalogModel` like `merge`, so the Scene-level Photo menu and the selection menu
+/// keywords ⇄ standard `.xmp` sidecars). Owned by `CatalogModel` like `merge`, so the Scene-level Photo menu, the right-click menu and the selection bar
 /// reach it; `XMPDialogModifier` presents the confirmation, progress and result. Writing happens ONLY when the user asks.
 ///
 /// Flow: a menu item REQUESTS -> `pending` + a confirmation dialog -> `confirm` resolves write access to each distinct folder (one prompt

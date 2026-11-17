@@ -236,7 +236,7 @@ final class ImportCopyModel: ObservableObject {
             let known = Set((await catalog.cataloguedPathOwners()).keys.map(canonical))
             let inLibrary = plan.copyItems.filter { known.contains(canonical($0.source.path)) }
             if !inLibrary.isEmpty {
-                statusMessage = "\(inLibrary.count) of these photos are already in the Library, so they cannot be moved away from it from here. Use Copy, or trash them from the Library (Photo ▸ Move Selected to Trash…). Nothing was copied or moved."
+                statusMessage = "\(inLibrary.count) of these photos are already in the Library, so they cannot be moved away from it from here. Use Copy, or trash them from the Library (right-click the photos, then Move to Trash…). Nothing was copied or moved."
                 return
             }
         }

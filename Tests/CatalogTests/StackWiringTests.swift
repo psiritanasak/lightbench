@@ -69,13 +69,18 @@ final class StackWiringTests: XCTestCase {
         XCTAssertTrue(keys.contains("\u{2318}G  \u{21E7}\u{2318}G"))
     }
 
-    func testTheSelectionMenuHasTheStackItemsNextToEditInfo() throws {
-        let content = try source("Sources/UI/ContentView.swift")
-        XCTAssertTrue(content.contains("Button(\"Stack Selected (\\(selectedPhotosVisibleInGrid.count))\")"))
-        XCTAssertTrue(content.contains("Button(\"Unstack (\\(selectedPhotosVisibleInGrid.count))\")"))
-        let info = try XCTUnwrap(content.range(of: "Button(\"Edit Info (")).lowerBound
-        let stack = try XCTUnwrap(content.range(of: "Button(\"Stack Selected (")).lowerBound
+    /// Was a source pin on the toolbar's selection menu (removed with it): the stack items now come from the model, in the menu
+    /// layout, after Edit Info; the selection bar's More menu draws that layout.
+    func testTheStackItemsSitAfterEditInfoInTheModelLayoutAndTheBarDrawsIt() throws {
+        let flat = PhotoActionMenu.layout.flatMap { $0 }
+        let info = try XCTUnwrap(flat.firstIndex(of: .editInfo))
+        let stack = try XCTUnwrap(flat.firstIndex(of: .stackMenu))
         XCTAssertLessThan(info, stack)
+        XCTAssertEqual(PhotoActionMenu.submenuItems(.stackMenu).prefix(2), [.stackSelected, .unstack])
+        let bar = try source("Sources/UI/LibrarySelectionBar.swift")
+        XCTAssertTrue(bar.contains("PhotoActionMenuItems("), "the More menu is the full model layout")
+        let performer = try source("Sources/UI/PhotoActionPerformer.swift")
+        XCTAssertTrue(performer.contains("catalog.stackSelected()") && performer.contains("catalog.unstackSelected()"))
     }
 
     // MARK: The grid reads cells; everything else reads the flat list

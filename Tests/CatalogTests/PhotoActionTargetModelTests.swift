@@ -92,4 +92,37 @@ final class PhotoActionTargetModelTests: XCTestCase {
         XCTAssertEqual(flagged[ids[1]], FlagStatus.none)
         XCTAssertEqual(flagged[ids[2]], FlagStatus.none)
     }
+
+    /// The selection bar's rating / flag / label (the performer with no clicked photo and no batch ids) writes every selected photo the
+    /// grid SHOWS and none that the filters hide.
+    func testBarCommandsWriteTheVisibleSelectionAndNotHiddenPhotos() async throws {
+        _ = try await db.setRating(5, forPhotoIDs: [ids[0], ids[1]])
+        let model = try await makeModel()
+        model.minimumRating = 3 // photos 1 and 2 show; 3 and 4 are hidden
+        model.setSelection([ids[0], ids[1], ids[2]]) // 3 is selected but hidden
+        let performer = PhotoActionPerformer(
+            catalog: model, document: ImageDocumentModel(), pasteModel: PasteSettingsModel(), renameModel: RenameModel(), showLibrary: true)
+        performer.perform(.rate(2), clicked: nil)
+        performer.perform(.flag(.rejected), clicked: nil)
+        performer.perform(.label(.red), clicked: nil)
+        // Poll the DATABASE row (the model updates its own list before the write lands).
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            let written = try await db.photo(atPath: "/tmp/pat/t2.jpg")
+            if written?.colorLabel == .red && written?.rating == 2 && written?.flagStatus == .rejected { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        var rows: [Photo?] = []
+        for n in 1...4 { rows.append(try await db.photo(atPath: "/tmp/pat/t\(n).jpg")) }
+        for index in 0...1 {
+            XCTAssertEqual(rows[index]?.rating, 2)
+            XCTAssertEqual(rows[index]?.flagStatus, .rejected)
+            XCTAssertEqual(rows[index]?.colorLabel, .red)
+        }
+        for index in 2...3 {
+            XCTAssertEqual(rows[index]?.rating, 0, "hidden or unselected photos are untouched")
+            XCTAssertEqual(rows[index]?.flagStatus, FlagStatus.none)
+            XCTAssertEqual(rows[index]?.colorLabel, ColorLabel.none)
+        }
+    }
 }

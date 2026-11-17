@@ -1,8 +1,8 @@
 import AppKit
 import Foundation
 
-/// "Move Rejected to Trash…" and "Move Selected to Trash…" in the Library. Owned by `CatalogModel` like `xmp`/`merge`, so the Scene-level Photo
-/// menu and the selection menu reach it; `TrashDialogModifier` presents the confirmation, progress and result. The decisions are
+/// "Move Rejected to Trash…" and "Move to Trash…" (right-click menu, selection bar) in the Library. Owned by `CatalogModel` like `xmp`/`merge`, so the Scene-level Photo
+/// menu, the right-click menu and the selection bar reach it; `TrashDialogModifier` presents the confirmation, progress and result. The decisions are
 /// `TrashPlan` (what moves) and `TrashEngine` (the moves); this class is the flow around them.
 ///
 /// Safety rules (tested): nothing happens without a destructive-role confirmation that states the scope; files go to the Trash only

@@ -247,8 +247,22 @@ struct LibraryGridView: View {
     /// changes. `.onKeyPress` only fires while this container genuinely
     /// holds focus, so typing in the search field is naturally unaffected.
     @FocusState private var isGridFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The selection bar shows while two or more ids are selected (the raw ids, ghosts included).
+    private var showsSelectionBar: Bool { catalog.selectedPhotoIDs.count >= 2 }
 
     var body: some View {
+        // The cells and the resolved focus are built ONCE per body: a focused photo hidden inside a collapsed stack rings its
+        // stack's cell (`StackFocus`). The menu inputs too (a cell builds its own target only from values it already has); the
+        // selection bar reads the same target, so the library is filtered and sorted once per body, not once per consumer.
+        let items = catalog.gridPhotos
+        let focusKey = catalog.resolvedFocusPath(in: items)
+        let selectionIDs = PhotoActionTarget.ghostFreeSelection(catalog: catalog, cells: items)
+        let actions = PhotoActionGridInput(
+            context: actionContext, selection: selectionIDs,
+            selectionTarget: PhotoActionTarget.selection(catalog: catalog, cells: items, selectedIDs: selectionIDs, openEditKey: performer.openEditKey),
+            openEditKey: performer.openEditKey)
         VStack(spacing: 0) {
             // Grid-scoped controls live here, not ContentView's main
             // toolbar — that toolbar is already crowded (Import Folder/
@@ -278,16 +292,6 @@ struct LibraryGridView: View {
                     // over the Library grid (precedent: `EditorFilmstripView`'s
                     // filmstrip) — lets arrow-key focus changes below scroll
                     // the newly-focused cell into view.
-                    // The cells and the resolved focus are built ONCE per body: a focused photo hidden inside a collapsed stack rings its
-                    // stack's cell (`StackFocus`).
-                    let items = catalog.gridPhotos
-                    let focusKey = catalog.resolvedFocusPath(in: items)
-                    // The menu inputs are built ONCE per body (a cell builds its own target only from values it already has).
-                    let selectionIDs = PhotoActionTarget.ghostFreeSelection(catalog: catalog, cells: items)
-                    let actions = PhotoActionGridInput(
-                        context: actionContext, selection: selectionIDs,
-                        selectionTarget: PhotoActionTarget.selection(catalog: catalog, cells: items, selectedIDs: selectionIDs, openEditKey: performer.openEditKey),
-                        openEditKey: performer.openEditKey)
                     ScrollViewReader { proxy in
                         ScrollView {
                             Group {
@@ -394,10 +398,19 @@ struct LibraryGridView: View {
             .onCommand(#selector(NSText.selectAll(_:))) { catalog.selectAllGridCells(in: catalog.gridPhotos) }
             .onAppear { isGridFocused = true }
             .onDisappear { justifiedRestoreTask?.cancel() }
+            // Outside the feedback-area marker above, so toasts and the activity strip stay above the bar. Keyed on the RAW selected ids (D33).
+            if showsSelectionBar {
+                LibrarySelectionBar(
+                    collections: catalog.collections, context: actionContext, target: actions.selectionTarget,
+                    perform: { command in cellPerformer.perform(command, clicked: nil) },
+                    onDidAct: { isGridFocused = true })
+                    .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
+            }
             if !catalog.photos.isEmpty {
                 thumbnailSizeBar
             }
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: showsSelectionBar)
         .alert(
             "Remove from Library?",
             isPresented: Binding(

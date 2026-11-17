@@ -73,4 +73,44 @@ final class PhotoActionWiringTests: XCTestCase {
         XCTAssertTrue(items.contains(".foregroundStyle(.red)"))
         XCTAssertFalse(items.contains(".secondary") || items.contains(".accentColor"))
     }
+
+    // MARK: The selection bar replaced the toolbar's selection menu
+
+    func testTheToolbarSelectionMenuIsGone() throws {
+        let content = try source("Sources/UI/ContentView.swift")
+        // Each needle was in the removed toolbar block and nowhere else in ContentView (checked when the block was deleted).
+        for needle in ["\"Selected\", systemImage: \"checkmark.circle\"", "Stack Selected (", "catalog.mergeRequested", "catalog.xmpRequested",
+                       "trashRequested = .selected", "pasteModel.requestPaste(", "Clear Selection", "Locate Selected"] {
+            XCTAssertFalse(content.contains(needle), needle)
+        }
+        // The toolbar keeps its Export button.
+        XCTAssertTrue(content.contains("exportModel.beginExport()") && content.contains("exportButtonTitle"))
+    }
+
+    func testTheBarIsMountedOutsideTheFeedbackAreaOnRawIDsAndTheGridStaysFocused() throws {
+        let grid = try source("Sources/UI/LibraryGridView.swift")
+        XCTAssertTrue(grid.contains("catalog.selectedPhotoIDs.count >= 2"), "the raw ids, ghosts included (D33)")
+        let area = try XCTUnwrap(grid.range(of: ".feedbackArea()")).lowerBound
+        let bar = try XCTUnwrap(grid.range(of: "LibrarySelectionBar(")).lowerBound
+        let sizeBar = try XCTUnwrap(grid.range(of: "thumbnailSizeBar\n")).lowerBound
+        XCTAssertLessThan(area, bar)
+        XCTAssertLessThan(bar, sizeBar, "between the grid and the thumbnail-size bar")
+        XCTAssertTrue(grid.contains("onDidAct: { isGridFocused = true }"))
+        XCTAssertTrue(grid.contains("accessibilityReduceMotion"))
+        let barSource = try source("Sources/UI/LibrarySelectionBar.swift")
+        XCTAssertTrue(barSource.contains("PhotoActionMenuItems(") && barSource.contains("ViewThatFits(in: .horizontal)"))
+        XCTAssertFalse(barSource.contains("ToastCenter") || barSource.contains("ActivityCenter"))
+        XCTAssertFalse(barSource.contains(".feedbackArea()") || barSource.contains(".alert(") || barSource.contains(".sheet("))
+        XCTAssertFalse(barSource.contains("CellPlan") || barSource.contains("forCell"), "the bar target has no cell")
+        XCTAssertTrue(barSource.contains("perform(.run(.clearSelection))"))
+        XCTAssertFalse(barSource.contains("gridPhotos") || barSource.contains("selectedPhotos."), "the bar reads the grid's target, no second filter + sort")
+        XCTAssertTrue(barSource.contains("alignment: .leading") && !barSource.contains(".fixedSize(horizontal: true"), "Clear sits at the right edge")
+        XCTAssertFalse(barSource.contains(".disabled(!isEnabled(.clearSelection"), "Clear is never gated (D33)")
+    }
+
+    func testTheEmptyCollectionAdvicePointsAtTheRightClickMenu() throws {
+        let text = try source("Sources/UI/EmptyStates.swift")
+        XCTAssertTrue(text.contains("right-click them and choose \\u{201c}Add to Collection\\u{201d}."))
+        XCTAssertFalse(text.contains("selection menu in the toolbar"))
+    }
 }

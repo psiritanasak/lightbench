@@ -214,7 +214,7 @@ final class CatalogModel: ObservableObject {
     @Published var autoStackSheetRequested = false
     @Published var autoStackSheetPresented = false
     let autoStack = AutoStackModel()
-    /// Photo Merge (see `MergeModel`): the Photo / selection menus set `mergeRequested`; `MergeDialogModifier` performs it. `mergeBusy` mirrors
+    /// Photo Merge (see `MergeModel`): the Photo menu, right-click menu and selection bar set `mergeRequested`; `MergeDialogModifier` performs it. `mergeBusy` mirrors
     /// "a merge confirmation is up or a merge is running" so views observing only this model can block on it.
     @Published var mergeRequested: MergeModel.Kind?
     @Published var mergeBusy = false

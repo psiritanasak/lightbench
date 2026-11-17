@@ -8,6 +8,9 @@ import SwiftUI
 /// back to editing mode).
 struct LibraryGridView: View {
     @ObservedObject var catalog: CatalogModel
+    /// The busy state the photo action menu gates on, and what runs a chosen item (both built by `ContentView`).
+    let actionContext: PhotoActionContext
+    let performer: PhotoActionPerformer
     let onOpen: (Photo) -> Void
 
     /// D2 (IMPROVEMENTS.md): drives both the grid's column minimum and
@@ -132,27 +135,51 @@ struct LibraryGridView: View {
     }
 
     /// One grid cell, shared by the square grid and the justified rows (`width`/`height` = the thumbnail's frame). Cell identity, the keyboard focus ring,
-    /// the thumbnail revision and the open / remove closures are the same in both layouts.
+    /// the thumbnail revision and the open / menu closures are the same in both layouts.
     @ViewBuilder
-    private func thumbnailCell(_ item: StackGridItem, focusKey: String?, width: Double, height: Double) -> some View {
+    private func thumbnailCell(_ item: StackGridItem, focusKey: String?, width: Double, height: Double, actions: PhotoActionGridInput) -> some View {
         let photo = item.photo
         LibraryThumbnailCell(
             catalog: catalog, item: item, cellSize: width, cellHeight: isJustified ? height : nil,
             isFocused: focusKey == photo.editKey,
             thumbnailRevision: catalog.thumbnailRevisions[photo.editKey, default: 0],
+            actions: actions,
             onOpen: { onOpen(photo) },
             onClick: { clickCount, command, shift in
                 handleCellClick(item, clickCount: clickCount, command: command, shift: shift)
+            },
+            onAction: { command, target in
+                runFromCell(command, item: item, target: target, selection: actions.selection)
             }
-        ) {
-            Task {
-                guard let copies = await LibraryRemovalText.copyCount(for: photo, loading: { try await catalog.copiesByMaster() }) else {
-                    catalog.importStatusMessage = "Couldn't count this photo's virtual copies, so nothing was removed."
-                    return
-                }
-                copiesPendingRemoval = copies
-                photoPendingRemoval = photo
+        )
+    }
+
+    /// The performer with the grid's own hooks: open a photo, and the removal confirmation below.
+    private var cellPerformer: PhotoActionPerformer {
+        var performer = performer
+        performer.open = onOpen
+        performer.requestRemoval = { photo in requestRemoval(of: photo) }
+        return performer
+    }
+
+    /// An item chosen from a cell's menu (right-click or the ellipsis). On an unselected or partly selected cell the menu acted on that cell
+    /// alone, so the selection first moves to it (every model that reads the selection then acts on exactly the target); on a selected
+    /// cell it acts on the selection. `target.cell` is set only when the target is exactly this cell: that is when its photo is `clicked`.
+    private func runFromCell(_ command: PhotoActionCommand, item: StackGridItem, target: PhotoActionTarget, selection: Set<Int64>) {
+        let plan = PhotoActionMenu.cellPlan(for: item, hasCell: target.cell != nil, selection: selection)
+        if plan.selectsCellFirst { catalog.selectOnlyGridCell(item) }
+        cellPerformer.perform(command, clicked: plan.passesClicked ? item.photo : nil, batchIDs: plan.batchIDs)
+    }
+
+    /// Asks for the removal confirmation of `photo` (the alert below): counts its virtual copies first.
+    private func requestRemoval(of photo: Photo) {
+        Task {
+            guard let copies = await LibraryRemovalText.copyCount(for: photo, loading: { try await catalog.copiesByMaster() }) else {
+                catalog.importStatusMessage = "Couldn't count this photo's virtual copies, so nothing was removed."
+                return
             }
+            copiesPendingRemoval = copies
+            photoPendingRemoval = photo
         }
     }
 
@@ -199,7 +226,7 @@ struct LibraryGridView: View {
         )
     }
 
-    /// D5 (IMPROVEMENTS.md): the photo a "Remove from Library" tap is
+    /// D5 (IMPROVEMENTS.md): the photo a remove-from-library request is
     /// asking to confirm. Lives here, not `ContentView`, deliberately —
     /// `ContentView.body` was already split once specifically because a
     /// 5th `.alert` pushed the type-checker past its limit (see that
@@ -255,6 +282,12 @@ struct LibraryGridView: View {
                     // stack's cell (`StackFocus`).
                     let items = catalog.gridPhotos
                     let focusKey = catalog.resolvedFocusPath(in: items)
+                    // The menu inputs are built ONCE per body (a cell builds its own target only from values it already has).
+                    let selectionIDs = PhotoActionTarget.ghostFreeSelection(catalog: catalog, cells: items)
+                    let actions = PhotoActionGridInput(
+                        context: actionContext, selection: selectionIDs,
+                        selectionTarget: PhotoActionTarget.selection(catalog: catalog, cells: items, selectedIDs: selectionIDs, openEditKey: performer.openEditKey),
+                        openEditKey: performer.openEditKey)
                     ScrollViewReader { proxy in
                         ScrollView {
                             Group {
@@ -266,7 +299,7 @@ struct LibraryGridView: View {
                                         HStack(alignment: .top, spacing: Self.gridSpacing) {
                                             ForEach(row.items, id: \.index) { placed in
                                                 let item = items[placed.index]
-                                                thumbnailCell(item, focusKey: focusKey, width: placed.width, height: row.height)
+                                                thumbnailCell(item, focusKey: focusKey, width: placed.width, height: row.height, actions: actions)
                                                     // Same identity rule as the square grid (stack role in the id).
                                                     .id(item.cellID)
                                             }
@@ -281,7 +314,7 @@ struct LibraryGridView: View {
                                     // arrows, scroll-to and focus advance below walk the SAME cells (`gridCellPhotos`); Cull and the Editor filmstrip
                                     // fold stacks with their own cells (`CullSession`, `filmstripItems`); every other tool keeps the flat list.
                                     ForEach(items) { item in
-                                        thumbnailCell(item, focusKey: focusKey, width: cellSize, height: cellSize)
+                                        thumbnailCell(item, focusKey: focusKey, width: cellSize, height: cellSize, actions: actions)
                                         // The cell's identity includes its stack role: a photo that becomes a stack cover (or stops being
                                         // one) gets a NEW cell view, so its badge and caption never go stale. Scroll-to does NOT use this id: it targets the `ForEach` identity (`item.id`), see `scroll(_:to:)`.
                                         .id(item.cellID)
@@ -817,11 +850,14 @@ private struct LibraryThumbnailCell: View {
     /// see `.task(id:)` below for why this needs to be part of the task's
     /// own identity, not just re-read inside an unchanged task.
     let thumbnailRevision: Int
+    /// The menu inputs the grid built once for this body.
+    let actions: PhotoActionGridInput
     /// Opens the photo in the Editor (a double-click, VoiceOver's default action).
     let onOpen: () -> Void
     /// A click on the cell body: AppKit's click count and the Command / Shift state. The grid decides what it means (`GridSelection`).
     let onClick: (_ clickCount: Int, _ command: Bool, _ shift: Bool) -> Void
-    let onRequestRemoval: () -> Void
+    /// A menu item chosen from this cell, with the target the menu was built for. The grid decides what it means (`runFromCell`).
+    let onAction: (PhotoActionCommand, PhotoActionTarget) -> Void
 
     @State private var image: CGImage?
     @State private var hasEdits = false
@@ -837,6 +873,22 @@ private struct LibraryThumbnailCell: View {
     @State private var isMissing = false
     /// The pointer is over this cell (drives `CellChrome`'s dimming).
     @State private var isHovered = false
+
+    /// The menu's target: the selection when this cell is selected, else this cell alone (`PhotoActionTarget.forCell`).
+    private var menuTarget: PhotoActionTarget {
+        PhotoActionTarget.forCell(
+            item, isMissing: isMissing, memberships: catalog.membershipsByPhotoID[photo.id ?? -1, default: []],
+            selection: actions.selection, selectionTarget: actions.selectionTarget, openEditKey: actions.openEditKey)
+    }
+
+    /// The context menu's and the ellipsis menu's content.
+    @ViewBuilder
+    private var menuItems: some View {
+        let target = menuTarget
+        PhotoActionMenuItems(target: target, context: actions.context, collections: catalog.collections) { command in
+            onAction(command, target)
+        }
+    }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -1018,111 +1070,9 @@ private struct LibraryThumbnailCell: View {
                 .accessibilityAddTraits(photo.flagStatus == .picked ? [.isSelected] : [])
 
                 Menu {
-                    ForEach(catalog.collections) { collection in
-                        Button {
-                            catalog.toggleMembership(of: photo, in: collection)
-                        } label: {
-                            let isMember = catalog.membershipsByPhotoID[photo.id ?? -1, default: []]
-                                .contains(collection.id ?? -1)
-                            HStack {
-                                Text(collection.name)
-                                Spacer()
-                                if isMember {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                            // D6 (IMPROVEMENTS.md): the checkmark above is
-                            // glyph-only, so membership state is invisible
-                            // to VoiceOver reading this menu item — fold it
-                            // into the item's own label instead.
-                            .accessibilityElement(children: .combine)
-                            .accessibilityLabel(isMember ? "\(collection.name), member" : collection.name)
-                        }
-                    }
-                    if !catalog.collections.isEmpty {
-                        Divider()
-                    }
-                    ForEach(FlagStatus.menuOrder, id: \.self) { status in
-                        Button {
-                            catalog.setFlagStatus(status, for: photo)
-                        } label: {
-                            HStack {
-                                Text(status.menuTitle)
-                                Spacer()
-                                if photo.flagStatus == status {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                            // D6 (IMPROVEMENTS.md): same fix as the
-                            // collection items above — the checkmark is
-                            // glyph-only, so fold the current state into
-                            // the item's label for VoiceOver.
-                            .accessibilityElement(children: .combine)
-                            .accessibilityLabel(
-                                photo.flagStatus == status ? "\(status.menuTitle), current" : status.menuTitle
-                            )
-                        }
-                    }
-                    Divider()
-                    ForEach(ColorLabel.menuOrder, id: \.self) { label in
-                        Button {
-                            catalog.setColorLabel(label, for: photo)
-                        } label: {
-                            HStack {
-                                Text(label.menuTitle)
-                                Spacer()
-                                if photo.colorLabel == label {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                            .accessibilityElement(children: .combine)
-                            .accessibilityLabel(
-                                photo.colorLabel == label ? "\(label.menuTitle), current" : label.menuTitle
-                            )
-                        }
-                    }
-                    Divider()
-                    if item.stackID != nil {
-                        if !item.isCover {
-                            Button { Task { await catalog.makeCover(photo) } } label: { Label("Make Cover", systemImage: "star.square") }
-                        }
-                        Button { Task { await catalog.removeFromStack(photo) } } label: { Label("Remove from Stack", systemImage: "rectangle.stack.badge.minus") }
-                        Divider()
-                    }
-                    Button {
-                        catalog.createVirtualCopy(of: photo) // same open-version / flush hooks as the Photo menu (set by ContentView)
-                    } label: {
-                        Label("Create Virtual Copy", systemImage: "square.on.square")
-                    }
-                    .disabled(isMissing)
-                    if isMissing {
-                        Divider()
-                        Button {
-                            Task { await catalog.relocatePhoto(photo) }
-                        } label: {
-                            Label("Locate…", systemImage: "questionmark.folder")
-                        }
-                    }
-                    Divider()
-                    Button(role: .destructive) {
-                        onRequestRemoval()
-                    } label: {
-                        // `role: .destructive` alone doesn't render red text
-                        // on a macOS `Menu` item the way it does in an
-                        // `.alert` — caught live (the alert's own Remove
-                        // button DID render correctly). Explicit red tint
-                        // added so the destructive action actually reads as
-                        // dangerous, not just semantically marked as such.
-                        Label {
-                            Text("Remove from Library")
-                                .foregroundStyle(.red)
-                        } icon: {
-                            Image(systemName: "trash")
-                                .foregroundStyle(.red)
-                        }
-                    }
+                    menuItems
                 } label: {
-                    Image(systemName: "folder.badge.plus")
+                    Image(systemName: "ellipsis.circle")
                         .font(.caption2)
                 }
                 .buttonStyle(.plain)
@@ -1178,6 +1128,8 @@ private struct LibraryThumbnailCell: View {
         }
         // The card's edge belongs to the cell: a click there selects instead of clearing.
         .contentShape(Rectangle().inset(by: -CellChrome.selectionPlateOutset))
+        // The same items as the ellipsis button. The target is built when the menu opens, from values this cell already has.
+        .contextMenu { menuItems }
         // ONE single-click recogniser (no `count: 2` one, so SwiftUI never waits to see if a second click follows): a click selects at once,
         // and AppKit's click count on the event tells the second click of a double-click apart.
         .onTapGesture {

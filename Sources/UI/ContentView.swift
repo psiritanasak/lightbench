@@ -1342,9 +1342,21 @@ struct ContentView: View {
     }
 
     /// True while any other sheet/dialog a keyword sheet could collide with is up (or a long operation runs).
-    private var otherSheetIsPresented: Bool {
-        renameModel.isPresentingSheet || renameModel.isWorking || exportModel.isPresentingOptions
-            || exportModel.isExporting || pasteModel.pendingTargets != nil || catalog.mergeBusy || catalog.fileToolBusy
+    private var otherSheetIsPresented: Bool { photoActionContext.otherSheetIsPresented }
+
+    /// The busy state the photo action menu gates on (`PhotoActionContext.otherSheetIsPresented` is the one definition of the expression above).
+    /// Kept out of `body`.
+    private var photoActionContext: PhotoActionContext {
+        PhotoActionContext.make(
+            catalog: catalog, document: document, pasteModel: pasteModel, renameModel: renameModel, cullActive: cull.isActive,
+            showLibrary: showLibrary, exportActive: exportModel.isPresentingOptions || exportModel.isExporting)
+    }
+
+    /// Runs a chosen photo action; the grid adds its own open / removal hooks.
+    private var photoActionPerformer: PhotoActionPerformer {
+        PhotoActionPerformer(
+            catalog: catalog, document: document, pasteModel: pasteModel, renameModel: renameModel, showLibrary: showLibrary,
+            beginExport: { exportModel.beginExport() })
     }
 
     private var mainContent: some View {
@@ -1918,7 +1930,7 @@ struct ContentView: View {
         HSplitView {
             CollectionSidebarView(catalog: catalog)
                 .frame(minWidth: Theme.Metrics.sidebarMinWidth, idealWidth: Theme.Metrics.sidebarIdealWidth, maxWidth: Theme.Metrics.sidebarMaxWidth)
-            LibraryGridView(catalog: catalog) { photo in
+            LibraryGridView(catalog: catalog, actionContext: photoActionContext, performer: photoActionPerformer) { photo in
                 // Switch to the Editor pane BEFORE the (possibly async, for
                 // RAW) load completes, not after — so a RAW photo's loading
                 // indicator (`document.isLoadingImage`) is actually visible

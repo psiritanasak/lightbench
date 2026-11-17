@@ -95,7 +95,11 @@ final class StackWiringTests: XCTestCase {
         XCTAssertFalse(grid.contains(".id(photo.editKey)"), "an editKey id would keep a stale badge across a role change")
         XCTAssertTrue(grid.contains("minus.circle.fill"), "a partly selected stack shows a mixed checkbox")
         XCTAssertTrue(grid.contains("selectionState != .none"))
-        XCTAssertTrue(grid.contains("Make Cover") && grid.contains("Remove from Stack"))
+        // The cell menu's stack items now come from the model; the performer runs them on the clicked cell's photo.
+        XCTAssertEqual(PhotoActionMenu.title(.makeCover), "Make Cover")
+        XCTAssertEqual(PhotoActionMenu.title(.removeFromStack), "Remove from Stack")
+        let performer = try source("Sources/UI/PhotoActionPerformer.swift")
+        XCTAssertTrue(performer.contains("catalog.makeCover(clicked)") && performer.contains("catalog.removeFromStack(clicked)"))
     }
 
     /// Cull, the Editor filmstrip and ⌘←/⌘→ walk the stack-aware CELLS (`StackDisplay`); every tool that acts on "the photos in view" keeps

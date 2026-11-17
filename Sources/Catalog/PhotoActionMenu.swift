@@ -272,7 +272,8 @@ enum PhotoActionMenu {
 
     // MARK: - Entries
 
-    /// The rows to draw, grouped (draw a divider between groups). Hidden items and empty groups are dropped. The collection
+    /// The rows to draw, grouped (draw a divider between groups). Hidden items and empty groups are dropped (`PhotoActionMenuItems` relies on
+    /// that: it identifies a group by its first entry's id). The collection
     /// submenu has no children here: the UI fills them from the catalog's collections (`collectionCommand(for:target:)` names the command).
     static func entries(target: PhotoActionTarget, context: PhotoActionContext) -> [[Entry]] {
         layout.compactMap { group in
@@ -338,6 +339,32 @@ enum PhotoActionMenu {
         guard !cellIDs.isEmpty, cellIDs.allSatisfy(selection.contains) else { return .cell(cellIDs) }
         return .selection
     }
+
+    /// What choosing an item from a cell's menu does. Rating / flag / label from ONE cell's menu always act on that cell's own photo (a
+    /// collapsed stack's cover), exactly like the cell's buttons and the P / X / U / 0-9 keys; a selection larger than the cell is
+    /// written as a whole.
+    /// - `selectsCellFirst`: the click target is `.cell` (the cell was unselected or partly selected), so the selection moves to the cell
+    ///   first and every other item acts on all its photos.
+    /// - `passesClicked`: the cell is the whole target (`hasCell`), so cell-scoped items get its photo.
+    /// - `batchIDs`: `[clicked photo id]` whenever `hasCell` (in either branch: a plain click on a stack already selects all its members,
+    ///   so a ticked stack that is the whole selection still writes the cover only); nil (the visible selection) only for a selection
+    ///   larger than this cell.
+    struct CellPlan: Equatable, Sendable {
+        var selectsCellFirst: Bool
+        var passesClicked: Bool
+        /// The only ids rating / flag / label write; nil = the visible selection.
+        var batchIDs: [Int64]?
+    }
+
+    static func cellPlan(for item: StackGridItem, hasCell: Bool, selection: Set<Int64>) -> CellPlan {
+        let own = item.photo.id.map { [$0] } ?? []
+        switch clickTarget(cellIDs: StackSelection.ids(for: item), selection: selection) {
+        case .selection:
+            return CellPlan(selectsCellFirst: false, passesClicked: hasCell, batchIDs: hasCell ? own : nil)
+        case .cell:
+            return CellPlan(selectsCellFirst: true, passesClicked: hasCell, batchIDs: own)
+        }
+    }
 }
 
 extension PhotoActionTarget {
@@ -354,19 +381,27 @@ extension PhotoActionTarget {
         let ids = StackSelection.ids(for: item)
         let cell = Cell(isMissing: isMissing, inStack: item.stackID != nil, isCover: item.isCover,
                         isVirtualCopy: item.photo.isVirtualCopy, memberships: memberships)
+        // Copy Settings copies the photo open in the Editor, so a cell menu offers it only when THIS cell's own photo (a collapsed stack's
+        // cover) is the open one: never for another photo, nor for a stack whose open photo is a hidden member.
+        let cellPhotoIsOpen = openEditKey.map { $0 == item.photo.editKey } ?? false
         switch PhotoActionMenu.clickTarget(cellIDs: ids, selection: selection) {
         case .selection:
-            guard selection == Set(ids) else { return selectionTarget }
             var target = selectionTarget
-            target.cell = cell
+            target.isOpenPhoto = cellPhotoIsOpen
+            if selection == Set(ids) {
+                // The cell is the whole selection: rating / flag / label act on, and their checkmarks show, the clicked photo only.
+                target.cell = cell
+                target.ratings = [item.photo.rating]
+                target.flags = [item.photo.flagStatus]
+                target.labels = [item.photo.colorLabel]
+            }
             return target
         case .cell:
-            let photos = item.role == .collapsedStack ? item.visibleMembers : [item.photo]
+            // The cell is the whole target: rating, flag and label write (and their checkmarks show) the clicked photo only, as the
+            // cell's own buttons and keys do (`PhotoActionMenu.cellPlan`).
             return PhotoActionTarget(
-                count: ids.count, visibleCount: ids.count, virtualCopyCount: ids.count,
-                isOpenPhoto: openEditKey.map { key in photos.contains { $0.editKey == key } } ?? false,
-                ratings: Set(photos.map(\.rating)), flags: Set(photos.map(\.flagStatus)),
-                labels: Set(photos.map(\.colorLabel)), cell: cell)
+                count: ids.count, visibleCount: ids.count, virtualCopyCount: ids.count, isOpenPhoto: cellPhotoIsOpen,
+                ratings: [item.photo.rating], flags: [item.photo.flagStatus], labels: [item.photo.colorLabel], cell: cell)
         }
     }
 }

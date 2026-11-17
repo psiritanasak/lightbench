@@ -201,7 +201,11 @@ final class VirtualCopyReviewTests: XCTestCase {
     func testTheGridMenuAndThePhotoMenuShareTheOpenVersionHooks() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let grid = try String(contentsOf: root.appendingPathComponent("Sources/UI/LibraryGridView.swift"), encoding: .utf8)
-        XCTAssertTrue(grid.contains("catalog.createVirtualCopy(of: photo)"))
+        XCTAssertFalse(grid.contains("catalog.createVirtualCopy(of: photo)"), "the cell menu goes through the performer")
+        let performer = try String(contentsOf: root.appendingPathComponent("Sources/UI/PhotoActionPerformer.swift"), encoding: .utf8)
+        XCTAssertTrue(performer.contains("catalog.createVirtualCopies("))
+        XCTAssertTrue(performer.contains("flushEdits: { document.flushPendingSidecarSave() }") && performer.contains("openVersion: document.currentEditKey.map { ($0, document.editState) }"),
+                      "the same open-version / flush hooks as the Photo menu")
         let content = try String(contentsOf: root.appendingPathComponent("Sources/UI/ContentView.swift"), encoding: .utf8)
         XCTAssertTrue(content.contains("catalog.openVersionProvider = { document.currentEditKey.map { ($0, document.editState) } }"))
         XCTAssertTrue(content.contains("catalog.flushOpenEdits = { document.flushPendingSidecarSave() }"))

@@ -530,6 +530,12 @@ final class MergeWiringTests: XCTestCase {
         XCTAssertTrue(content.contains("isMerging: catalog.mergeBusy"), "rename/undo re-check the merge flag")
         XCTAssertTrue(content.contains("|| document.isLoadInFlight || catalog.mergeBusy || catalog.fileToolBusy\n                        )"), "selection-menu Rename Files")
         XCTAssertTrue(content.contains("renameModel.isWorking || document.isLoadInFlight || catalog.mergeBusy || catalog.fileToolBusy)"), "selection-menu Undo Rename")
-        XCTAssertTrue(content.contains("pasteModel.pendingTargets != nil || catalog.mergeBusy"), "otherSheetIsPresented includes a merge")
+        // `otherSheetIsPresented` now forwards to `PhotoActionContext` (its model test covers every flag, merge included); the context
+        // builder must feed it the merge flag, the pending paste and the export state.
+        XCTAssertTrue(content.contains("private var otherSheetIsPresented: Bool { photoActionContext.otherSheetIsPresented }"))
+        let performer = try text("Sources/UI/PhotoActionPerformer.swift")
+        XCTAssertTrue(performer.contains("context.mergeBusy = catalog.mergeBusy"), "otherSheetIsPresented includes a merge")
+        XCTAssertTrue(performer.contains("context.pastePending = pasteModel.pendingTargets != nil"))
+        XCTAssertTrue(content.contains("exportActive: exportModel.isPresentingOptions || exportModel.isExporting"))
     }
 }

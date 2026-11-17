@@ -352,7 +352,58 @@ final class PhotoActionMenuTests: XCTestCase {
         XCTAssertEqual(target.count, 3)
         XCTAssertEqual(target.cell?.inStack, true)
         XCTAssertEqual(target.cell?.isCover, true)
-        XCTAssertTrue(target.isOpenPhoto, "any member being open counts")
+        XCTAssertFalse(target.isOpenPhoto, "a hidden member being open does not make the cover's menu offer Copy Settings")
+        let cover = PhotoActionTarget.forCell(item, isMissing: false, selection: [], selectionTarget: .empty, openEditKey: "/p/1.jpg")
+        XCTAssertTrue(cover.isOpenPhoto, "the cover itself being open does")
+    }
+
+    func testForCellOfAStackChecksTheCoverOnly() {
+        let members = [photo(1, rating: 2, flag: .picked), photo(2, rating: 5, flag: .rejected), photo(3)]
+        let item = StackGridItem(photo: members[0], role: .collapsedStack, stackID: 9, visibleMembers: members, hiddenMemberCount: 2, isCover: true)
+        let target = PhotoActionTarget.forCell(item, isMissing: false, selection: [], selectionTarget: .empty, openEditKey: nil)
+        XCTAssertEqual(target.ratings, [2])
+        XCTAssertEqual(target.flags, [.picked])
+        // The same stack already selected as a whole (a plain click selects every member): the checkmarks still show the cover.
+        let ticked = PhotoActionTarget.forCell(item, isMissing: false, selection: [1, 2, 3], selectionTarget: selection, openEditKey: nil)
+        XCTAssertNotNil(ticked.cell)
+        XCTAssertEqual(ticked.ratings, [2])
+        XCTAssertEqual(ticked.flags, [.picked])
+        XCTAssertEqual(ticked.labels, [.none])
+    }
+
+    func testCopySettingsOnACellNeedsTheCLICKEDCellsPhotoOpen() {
+        // Right-click A while B is open: no Copy, whether A is alone, unselected, or selected among others (B among them too).
+        let a = plainItem(1)
+        let openB = "/p/2.jpg"
+        let unselected = PhotoActionTarget.forCell(a, isMissing: false, selection: [2], selectionTarget: selection, openEditKey: openB)
+        XCTAssertFalse(unselected.isOpenPhoto)
+        let among = PhotoActionTarget.forCell(a, isMissing: false, selection: [1, 2, 3], selectionTarget: selection, openEditKey: openB)
+        XCTAssertFalse(among.isOpenPhoto)
+        XCTAssertFalse(enabled(.copySettings, among, library))
+        let alone = PhotoActionTarget.forCell(a, isMissing: false, selection: [1], selectionTarget: selection, openEditKey: "/p/1.jpg")
+        XCTAssertTrue(alone.isOpenPhoto)
+        XCTAssertTrue(enabled(.copySettings, alone, library))
+    }
+
+    // MARK: Cell plan (what choosing an item from a cell does)
+
+    func testCellPlanForEachKindOfClick() {
+        let plain = plainItem(1)
+        let unselected = PhotoActionMenu.cellPlan(for: plain, hasCell: true, selection: [])
+        XCTAssertEqual(unselected, .init(selectsCellFirst: true, passesClicked: true, batchIDs: [1]))
+        let alone = PhotoActionMenu.cellPlan(for: plain, hasCell: true, selection: [1])
+        XCTAssertEqual(alone, .init(selectsCellFirst: false, passesClicked: true, batchIDs: [1]), "selected alone: the cell is the whole target")
+        let among = PhotoActionMenu.cellPlan(for: plain, hasCell: false, selection: [1, 2, 3])
+        XCTAssertEqual(among, .init(selectsCellFirst: false, passesClicked: false, batchIDs: nil))
+        let stack = collapsedItem([1, 2, 3])
+        let partly = PhotoActionMenu.cellPlan(for: stack, hasCell: true, selection: [1, 2])
+        XCTAssertEqual(partly, .init(selectsCellFirst: true, passesClicked: true, batchIDs: [1]), "a partly selected stack acts on the cover only")
+        let fullWhole = PhotoActionMenu.cellPlan(for: stack, hasCell: true, selection: [1, 2, 3])
+        XCTAssertEqual(fullWhole, .init(selectsCellFirst: false, passesClicked: true, batchIDs: [1]), "a ticked stack that is the whole selection still writes the cover only")
+        let fullAmong = PhotoActionMenu.cellPlan(for: stack, hasCell: false, selection: [1, 2, 3, 4])
+        XCTAssertEqual(fullAmong, .init(selectsCellFirst: false, passesClicked: false, batchIDs: nil))
+        let unselectedStack = PhotoActionMenu.cellPlan(for: stack, hasCell: true, selection: [])
+        XCTAssertEqual(unselectedStack.batchIDs, [1])
     }
 
     func testForCellSetsTheCellOnlyWhenTheSelectionEqualsTheCell() {
@@ -362,7 +413,9 @@ final class PhotoActionMenuTests: XCTestCase {
         XCTAssertEqual(alone.count, selection.count, "it is the selection's target with the cell details attached")
         let among = PhotoActionTarget.forCell(item, isMissing: false, selection: [1, 2, 3], selectionTarget: selection, openEditKey: nil)
         XCTAssertNil(among.cell)
-        XCTAssertEqual(among, selection)
+        var expected = selection
+        expected.isOpenPhoto = false // no open photo given: the clicked cell's own photo is what counts
+        XCTAssertEqual(among, expected)
         let other = PhotoActionTarget.forCell(item, isMissing: false, selection: [2], selectionTarget: selection, openEditKey: nil)
         XCTAssertEqual(other.count, 1)
         XCTAssertNotNil(other.cell)

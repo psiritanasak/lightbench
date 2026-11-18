@@ -1,9 +1,27 @@
 import CoreGraphics
 
 /// The Compare feature's UI-facing mode — what the toolbar `Menu` binds to.
-/// `.off` means no compare at all (the single-image view, unchanged).
+/// `.off` means no compare at all (the single-image view, unchanged). `.before` shows the unedited photo in the single-image
+/// view (B4's `\` toggle); it is one state with the compare modes, so Before and Compare can never be on together.
 enum CompareViewMode: Equatable {
-    case off, sideBySide, split
+    case off, sideBySide, split, before
+
+    // MARK: Transitions
+
+    /// `\`: off -> before, before -> off, a compare mode -> before.
+    func toggledBefore() -> CompareViewMode { self == .before ? .off : .before }
+
+    /// `Y`: side by side -> off, anything else (off, split, before) -> side by side.
+    func toggledSideBySide() -> CompareViewMode { self == .sideBySide ? .off : .sideBySide }
+
+    /// A two-image compare is showing (side by side or split). Before is a single image, so it is not comparing.
+    var isComparing: Bool { self == .sideBySide || self == .split }
+
+    /// Whether a change from `from` to `to` resets zoom and pan. Only off <-> before keeps them, so the same detail can be compared.
+    static func resetsZoom(from: CompareViewMode, to: CompareViewMode) -> Bool {
+        let keeps = (from == .off && to == .before) || (from == .before && to == .off)
+        return !keeps
+    }
 }
 
 /// Which way the Split mode's divider runs. `.vertical` = a vertical LINE

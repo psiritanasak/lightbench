@@ -20,7 +20,9 @@ final class KeyboardShortcutCatalogTests: XCTestCase {
     // MARK: menu shortcuts vs the source
 
     /// `.keyboardShortcut("z", modifiers: [.command, .shift])` -> `cmd+shift+z`, in a fixed modifier order.
-    private func menuSpecs(in text: String) throws -> Set<String> {
+    private func menuSpecs(in text: String) throws -> Set<String> { Set(try menuSpecList(in: text)) }
+
+    private func menuSpecList(in text: String) throws -> [String] {
         let pattern = #"\.keyboardShortcut\(\s*(?:"(.)"|\.(\w+))\s*(?:,\s*modifiers:\s*(\[[^\]]*\]|\.\w+))?\s*\)"#
         let regex = try NSRegularExpression(pattern: pattern)
         // A shortcut mentioned in a comment is not a real one.
@@ -29,7 +31,7 @@ final class KeyboardShortcutCatalogTests: XCTestCase {
             return String(line[..<range.lowerBound])
         }.joined(separator: "\n")
         let order = ["cmd", "shift", "opt", "ctrl"]
-        var specs = Set<String>()
+        var specs = [String]()
         for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
             func group(_ i: Int) -> String? { Range(match.range(at: i), in: text).map { String(text[$0]) } }
             let key: String
@@ -44,7 +46,7 @@ final class KeyboardShortcutCatalogTests: XCTestCase {
                 default: break
                 }
             }
-            specs.insert((modifiers.sorted { order.firstIndex(of: $0)! < order.firstIndex(of: $1)! } + [key]).joined(separator: "+"))
+            specs.append((modifiers.sorted { order.firstIndex(of: $0)! < order.firstIndex(of: $1)! } + [key]).joined(separator: "+"))
         }
         return specs
     }
@@ -57,6 +59,32 @@ final class KeyboardShortcutCatalogTests: XCTestCase {
         })
         XCTAssertEqual(listed, inSource, "a menu shortcut was added, changed or removed without updating the Help list")
         XCTAssertFalse(inSource.isEmpty, "the parser found the shortcuts")
+    }
+
+    func testNoMenuShortcutIsUsedTwiceAndNoCatalogRowsShareOne() throws {
+        let combined = try source("Sources/App/PhotoAppApp.swift") + "\n" + source("Sources/UI/AboutAndHelp.swift")
+        let all = try menuSpecList(in: combined)
+        XCTAssertFalse(all.isEmpty)
+        XCTAssertEqual(all.count, Set(all).count, "a menu shortcut is bound twice: \(all)")
+        let listed = sources.compactMap { source -> String? in
+            if case .menu(let spec) = source { return spec }
+            return nil
+        }
+        XCTAssertEqual(listed.count, Set(listed).count, "two catalog menu rows list the same spec")
+    }
+
+    func testNoMenuShortcutEqualsAGridCommandChord() throws {
+        let combined = try source("Sources/App/PhotoAppApp.swift") + "\n" + source("Sources/UI/AboutAndHelp.swift")
+        let specs = Set(try menuSpecList(in: combined))
+        var checked: Set<String> = []
+        for character in printable {
+            // `GridSelection.commandKey` refuses Shift, so only plain ⌘ chords exist.
+            guard GridSelection.commandKey(character: character, command: true, shift: false, option: false, control: false) != nil else { continue }
+            let spec = "cmd+" + String(character).lowercased()
+            checked.insert(spec)
+            XCTAssertFalse(specs.contains(spec), "\(spec) is a grid key")
+        }
+        XCTAssertEqual(checked, ["cmd+a", "cmd+d"], "the sweep must actually find the grid chords")
     }
 
     func testTheSpecParserSeesModifiersAndNamedKeys() throws {

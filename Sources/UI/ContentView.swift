@@ -1142,7 +1142,8 @@ struct ContentView: View {
     /// for crop-editing mode at the same time.
     private var compareRenderConfig: CompareRenderConfig? {
         switch compareMode {
-        case .off:
+        case .off, .before:
+            // `.before` has no compare render config: it is the single-image view (the original state is substituted by the caller).
             return nil
         case .sideBySide:
             return CompareRenderConfig(originalState: compareOriginalEditState, mode: .sideBySide)

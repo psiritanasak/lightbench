@@ -104,6 +104,28 @@ final class SliderResetModelTests: XCTestCase {
         let rows = try source("Sources/UI/EditControlRows.swift")
         XCTAssertFalse(rows.contains("SliderResetAffordance"))
         XCTAssertTrue(rows.contains(".accessibilityActions {"))
+        // Strengthened: take the text from the slider to just before `private var isDefault` (the end of `EditSliderRow.body`),
+        // cut out the `.accessibilityActions { ... }` builder (its closing brace is the next lone `}` at 16 spaces of indent,
+        // which does not change the slider's identity), drop `//` comment lines, then require that the only modifiers left
+        // are exactly the expected set and that no `if` / `switch` remains.
+        let start = try XCTUnwrap(rows.range(of: "ThinSlider(value: $value"))
+        let tail = String(rows[start.lowerBound...])
+        let end = try XCTUnwrap(tail.range(of: "private var isDefault"))
+        var region = String(tail[..<end.lowerBound])
+        let builder = try XCTUnwrap(region.range(of: ".accessibilityActions {"))
+        let close = try XCTUnwrap(region[builder.upperBound...].range(of: "\n                }\n"))
+        region.removeSubrange(builder.lowerBound..<close.upperBound)
+        region = region.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        let calls = try NSRegularExpression(pattern: "\\.([A-Za-z]+)\\s*[({]")
+        let names = Set(calls.matches(in: region, range: NSRange(region.startIndex..., in: region)).compactMap {
+            Range($0.range(at: 1), in: region).map { String(region[$0]) }
+        })
+        // Calls written with `(` or with a trailing closure `{` both count, so a wrapper like `.resetAffordance { }` would show up here.
+        XCTAssertEqual(names, ["accessibilityLabel", "onHover"], "\(names)")
+        XCTAssertFalse(region.contains(".modifier("))
+        XCTAssertNil(region.range(of: "\\b(if|switch)\\b", options: .regularExpression), region)
     }
 
     func testNoCountTwoRecogniserInTheSliderFiles() throws {

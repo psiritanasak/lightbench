@@ -201,5 +201,11 @@ struct LibraryFilterState: Equatable {
         [isRatingActive, isFlagActive, isLabelActive, isKeywordActive, isSearchActive, isPersonActive].filter { $0 }.count
     }
     var isActive: Bool { activeCount > 0 }
+
+    /// The active filters that live in the narrow filter bar's "Filters" menu: rating, flag, label, keyword, person. SEARCH is excluded
+    /// because the search field stays visible in every layout. Invariant: `activeCount == menuFilterCount + (isSearchActive ? 1 : 0)`.
+    var menuFilterCount: Int {
+        [isRatingActive, isFlagActive, isLabelActive, isKeywordActive, isPersonActive].filter { $0 }.count
+    }
 }
 

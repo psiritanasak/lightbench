@@ -91,4 +91,11 @@ final class EditPanelDefaultsWiringTests: XCTestCase {
         XCTAssertFalse(adjust.contains("HistogramDisplayMode.allCases"))
         XCTAssertTrue(try source("Sources/UI/ContentView.swift").contains("mode: $adjustPanel.histogramDisplayMode"))
     }
+
+    /// B2: the Edit sidebar shows its scroll bar (user decision 2026-11-17), set right before the tab scroll memory.
+    func testTheEditSidebarShowsItsScrollBar() throws {
+        let content = try source("Sources/UI/ContentView.swift")
+        XCTAssertEqual(count(of: ".scrollIndicators(.hidden)", in: content), 0)
+        XCTAssertTrue(content.contains(".scrollIndicators(.visible)\n        .tabScrollMemory(tab: selectedTab, memory: $tabMemory)"))
+    }
 }

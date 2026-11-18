@@ -2531,26 +2531,16 @@ struct ContentView: View {
         // position to the top explicitly, overriding whatever implicit
         // macOS focus-driven auto-scroll was otherwise moving it.
         .defaultScrollAnchor(.top)
-        // User asked for a thinner sidebar scrollbar (this ScrollView wraps
-        // ALL sidebar tabs — Adjust/Crop/Filters/Clean Up — not just
-        // Adjust). Deliberately hidden entirely rather than shrunk — pure
-        // SwiftUI, zero AppKit interop. This exact `ScrollView` has a
-        // documented, hard-won history: a prior fix reaching into
-        // `NSScrollView`/`NSScroller` internals to solve a DIFFERENT bug
-        // (sidebar content-shift-on-scroll) went through two reviewer
-        // passes (FIX FIRST, then APPROVE) and passed all tests, then broke
-        // ALL slider click/drag interaction live and had to be reverted
-        // (see "Sidebar content-shift-on-scroll bug" in PROGRESS.md).
-        // Reviewer-confirmed: `.scrollIndicators` is a pure visibility
-        // toggle with no gesture/hit-testing side effects, so it can't
-        // reproduce that regression. Note: hiding indicators was ALSO one
-        // of five things already tried against the content-shift bug
-        // itself (PROGRESS.md) and did NOT fix it — that bug is unrelated
-        // and remains open; this change is purely cosmetic. Scrolling
-        // itself (trackpad/mouse wheel/keyboard) is unaffected — only the
-        // visible track/thumb (and the ability to drag it directly) is
-        // gone.
-        .scrollIndicators(.hidden)
+        // The scroll bar is shown (B2, user decision 2026-11-17; it had been
+        // hidden since 2026-09-03, when a THINNER bar was asked for). This
+        // ScrollView wraps every Editor tab. `.scrollIndicators` is a pure
+        // visibility switch; never reach into `NSScrollView` / `NSScroller`
+        // here: an earlier fix that did broke all slider dragging (see the
+        // "Sidebar content-shift-on-scroll bug" in docs/PROGRESS_HISTORY.md).
+        // Showing or hiding the bar does not affect that bug (hiding was one
+        // of the five things tried against it); that bug is still open. The
+        // system "Show scroll bars" setting still decides overlay vs always.
+        .scrollIndicators(.visible)
         .tabScrollMemory(tab: selectedTab, memory: $tabMemory)
     }
 

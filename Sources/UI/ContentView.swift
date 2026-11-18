@@ -28,6 +28,8 @@ struct ContentView: View {
     /// The culling pass (owned by `PhotoAppApp`: the Photo menu starts it and routes ⌘Z to it). While it is active the window shows
     /// `CullView` instead of the Library or the Editor.
     @ObservedObject var cull: CullModel
+    /// The View menu's link to this view (owned by `PhotoAppApp`). A plain `let`: only `EditorViewBridgeModifier` observes it.
+    let bridge: EditorViewBridge
 
     /// What batch rename must re-check at APPLY and UNDO time (see `RenameModel`): a load in flight,
     /// a running Export/Enhance, or an open paste confirmation makes renaming unsafe right now.
@@ -587,6 +589,7 @@ struct ContentView: View {
         c.renameWorking = renameModel.isWorking
         c.modalUp = NSApp.keyWindow?.attachedSheet != nil || anySheetPresented || otherSheetIsPresented
         c.editorPopoverOpen = catalog.editorPopoverOpen || isHistoryPresented
+        c.canExport = showLibrary && !exportDisabled
         c.canCompare = EditorRailActionRules.canCompare(hasImage: c.hasOpenImage, isCropping: isCroppingActive, armed: armedModes)
         c.canRevert = EditorRailActionRules.canRevert(
             hasImage: c.hasOpenImage, isEffectivelyIdentity: document.editState.isEffectivelyIdentity, loadInFlight: c.loadInFlight)
@@ -596,8 +599,23 @@ struct ContentView: View {
         return c
     }
 
-    /// Runs an Editor view command. Re-checks the rule at run time, so a stale request cannot bypass it. Library-side commands,
-    /// Revert, Filmstrip and Export belong to the menu batch and do nothing here yet.
+    /// The coarse state the View menu reads, published by `EditorViewBridgeModifier` (no zoom, pan or slider state: the scene re-runs
+    /// its body whenever this changes). Export is only evaluated in the Library: `photosToExport` filters the whole library.
+    private var editorViewStatus: EditorViewStatus {
+        let hasImage = document.currentImage != nil
+        return EditorViewStatus(
+            compareMode: compareMode, selectedTab: selectedTab, filmstripVisible: isFilmstripVisible,
+            canCompare: EditorRailActionRules.canCompare(hasImage: hasImage, isCropping: isCroppingActive, armed: armedModes),
+            canRevert: EditorRailActionRules.canRevert(
+                hasImage: hasImage, isEffectivelyIdentity: document.editState.isEffectivelyIdentity, loadInFlight: document.isLoadInFlight),
+            canExport: showLibrary && !exportDisabled, hasOpenImage: hasImage,
+            blocked: anySheetPresented || otherSheetIsPresented || isHistoryPresented)
+    }
+
+    /// The toolbar Export button's own disabled expression, shared with the View menu's status.
+    private var exportDisabled: Bool { photosToExport.isEmpty || exportModel.isExporting || renameModel.isWorking }
+
+    /// Runs a view command (from the View menu or a bare key). Re-checks the rule at run time, so a stale request cannot bypass it.
     private func performViewCommand(_ command: ViewCommand) {
         guard ViewCommandRules.isEnabled(command, context: viewCommandContext()) else { return }
         switch command {
@@ -607,21 +625,28 @@ struct ContentView: View {
             if let next = ViewCommandRules.compareMode(after: command, from: compareMode) { compareMode = next }
         case .selectTab(let tab):
             selectedTab = tab
-        case .showEditor, .toggleFilmstrip, .revertToOriginal, .export:
-            break
+        case .showEditor:
+            // Switches only, like the toolbar toggle: it does not open the focused photo.
+            showLibrary = false
+        case .toggleFilmstrip:
+            isFilmstripVisible.toggle()
+        case .revertToOriginal:
+            document.revertToOriginal()
+        case .export:
+            exportModel.beginExport()
         }
     }
 
-    /// A bare-letter app key typed in the Editor. Ignored while a text field has focus (the search field, a slider type-in, a sheet or
+    /// A bare-letter app key typed in the Library (E) or the Editor. Ignored while a text field has focus (the search field, a slider type-in, a sheet or
     /// popover field: all have an `NSTextView` first responder), while any sheet or popover is up, and with Command / Control.
     /// A held key is swallowed (handled, nothing done) so it neither flickers nor beeps.
     private func handleAppKey(_ keyPress: KeyPress) -> KeyPress.Result {
-        guard !showLibrary, !cull.isActive, let character = keyPress.characters.first else { return .ignored }
+        guard !cull.isActive, let character = keyPress.characters.first else { return .ignored }
         let modifiers = keyPress.modifiers
         let modalUp = NSApp.keyWindow?.attachedSheet != nil || anySheetPresented || otherSheetIsPresented
             || catalog.editorPopoverOpen || isHistoryPresented
         guard let command = AppKeyGate.resolve(
-            character: character, mode: .editor,
+            character: character, mode: showLibrary ? .library : .editor,
             command: modifiers.contains(.command), control: modifiers.contains(.control),
             option: modifiers.contains(.option), shift: modifiers.contains(.shift),
             textFieldFocused: NSApp.keyWindow?.firstResponder is NSTextView, modalUp: modalUp, isRepeat: false),
@@ -1491,6 +1516,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: showLibrary) { _, _ in isHistoryPresented = false }
+        .modifier(EditorViewBridgeModifier(bridge: bridge, status: editorViewStatus, perform: { performViewCommand($0) }))
         .modifier(EditorBeforeLifecycle(compareMode: $compareMode, armedAny: armedModes.any, showLibrary: showLibrary,
                                         focusImagePane: { isImagePaneFocused = true }))
         .modifier(EditorInfoLifecycle(model: editorInfo, catalog: catalog, meta: editorMeta, editKey: document.currentEditKey, showLibrary: showLibrary,
@@ -1811,7 +1837,7 @@ struct ContentView: View {
                 } label: {
                     Label(exportButtonTitle, systemImage: "square.and.arrow.up")
                 }
-                .disabled(photosToExport.isEmpty || exportModel.isExporting || renameModel.isWorking)
+                .disabled(exportDisabled)
                 .help(exportButtonTitle)
 
                 Button {
@@ -1886,7 +1912,10 @@ struct ContentView: View {
                     await document.load(photo: photo)
                 }
             }
+            .appKeys { handleAppKey($0) }
         }
+        // Catches the app keys that bubble up from the sidebar or the filter bar (the grid's own handler calls `handleAppKey` first).
+        .onKeyPress { keyPress in handleAppKey(keyPress) }
     }
 
     /// The single-photo editor — unchanged from before the Library grid was added, just extracted out of `mainContent` so
@@ -2622,7 +2651,7 @@ struct ContentView: View {
 #Preview {
     ContentView(
         document: ImageDocumentModel(), catalog: CatalogModel(), pasteModel: PasteSettingsModel(),
-        renameModel: RenameModel(), cull: CullModel(), showLibrary: .constant(false)
+        renameModel: RenameModel(), cull: CullModel(), bridge: EditorViewBridge(), showLibrary: .constant(false)
     )
     .environmentObject(ToastCenter())
 }

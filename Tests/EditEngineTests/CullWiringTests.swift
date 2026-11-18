@@ -58,6 +58,31 @@ final class CullWiringTests: XCTestCase {
         for id in ids { XCTAssertFalse(PhotoActionMenu.isEnabled(id, target: target, context: context), "\(id) must be disabled while culling") }
     }
 
+    /// The View menu and the bare app keys are off while the cull view is up: the pure rules say so for every command and key, and the
+    /// scene / `ContentView` build the context from the cull model.
+    func testViewMenuAndAppKeysAreOffWhileCulling() throws {
+        var context = ViewCommandContext()
+        context.hasOpenImage = true
+        context.canCompare = true
+        context.canRevert = true
+        context.canExport = true
+        let commands: [ViewCommand] = [.showLibrary, .showEditor, .toggleBefore, .toggleSideBySide, .setCompare(.split),
+                                       .selectTab(.crop), .toggleFilmstrip, .revertToOriginal, .export]
+        context.mode = .library
+        XCTAssertTrue(ViewCommandRules.isEnabled(.showEditor, context: context), "the rules are not simply always off")
+        context.mode = .cull
+        for command in commands { XCTAssertFalse(ViewCommandRules.isEnabled(command, context: context), "\(command) must be off while culling") }
+        for scalar in 32...126 {
+            let character = Character(UnicodeScalar(UInt8(scalar)))
+            XCTAssertNil(AppKeyCommand.command(for: character, mode: .cull), "\"\(character)\" must not be an app key while culling")
+        }
+        let app = try source("Sources/App/PhotoAppApp.swift").joined(separator: "\n")
+        XCTAssertTrue(app.contains("c.mode = cull.isActive ? .cull : (showLibrary ? .library : .editor)"), "the scene builds the view context from the cull model")
+        let content = try source("Sources/UI/ContentView.swift").joined(separator: "\n")
+        XCTAssertTrue(content.contains("c.mode = cull.isActive ? .cull : (showLibrary ? .library : .editor)"))
+        XCTAssertTrue(content.contains("guard !cull.isActive, let character = keyPress.characters.first else { return .ignored }"))
+    }
+
     /// A held key must not flag a run of photos: repeats are ignored for everything but moving.
     func testKeyRepeatOnlyMovesNeverFlags() throws {
         let view = try source("Sources/UI/CullView.swift").joined(separator: "\n")

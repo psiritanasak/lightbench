@@ -44,6 +44,12 @@ struct PhotoAppApp: App {
     /// Scene-level command can't read a view's private state.
     @State private var showLibrary = false
 
+    /// The View menu's link to `ContentView` (requests in, coarse Editor status out).
+    @StateObject private var bridge = EditorViewBridge()
+
+    /// The grid layout (square / justified), the same key the grid and its bottom bar use.
+    @AppStorage(LibraryGridLayout.storageKey) private var gridLayout: String = LibraryGridLayout.square
+
     /// The Preferences window's state (⌘,).
     @StateObject private var preferences = PreferencesModel()
 
@@ -62,7 +68,7 @@ struct PhotoAppApp: App {
         // duplicate window). A `Window` scene has exactly one instance, so no open event can add one.
         Window("Lightbench", id: "main") {
             ContentView(
-                document: document, catalog: catalog, pasteModel: pasteModel, renameModel: renameModel, cull: cull,
+                document: document, catalog: catalog, pasteModel: pasteModel, renameModel: renameModel, cull: cull, bridge: bridge,
                 showLibrary: $showLibrary
             )
             .environmentObject(toasts)
@@ -81,6 +87,25 @@ struct PhotoAppApp: App {
             .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         }
         .commands {
+            // Bound ONCE per body pass on purpose. `catalog.displayedPhotos`
+            // is a full filter+sort of the library, and this Scene's body
+            // re-evaluates on every `document.editState` publish — i.e. on
+            // every slider tick while editing. Asking each item separately
+            // would pay it twice per tick. MEASURED (see PROGRESS.md):
+            // 0.37ms per apply at 1,000 photos, 3.61ms at 10,000.
+            let neighbors = photoNeighbors
+            // The photo actions take their title, hidden state and enabled state from `PhotoActionMenu` and run through the
+            // performer, like the grid's cell menu and the selection bar. The scene cannot see `ExportModel` (so `exportActive` is
+            // false: a request during an export is still dropped by each modifier's `blocked`) nor the grid's removal alert.
+            let actionContext = PhotoActionContext.make(
+                catalog: catalog, document: document, pasteModel: pasteModel, renameModel: renameModel,
+                cullActive: cull.isActive, showLibrary: showLibrary, exportActive: false)
+            let actionTarget = PhotoActionTarget.menuBar(
+                catalog: catalog, showLibrary: showLibrary, cullActive: cull.isActive, openEditKey: document.currentEditKey, hasOpenImage: document.currentImage != nil)
+            let actions = PhotoActionPerformer(
+                catalog: catalog, document: document, pasteModel: pasteModel, renameModel: renameModel, showLibrary: showLibrary,
+                open: nil, requestRemoval: nil, beginExport: nil)
+            let viewContext = viewCommandContext()
             // No "New Window" for the same reason (a Dock click with no window still reopens one).
             CommandGroup(replacing: .newItem) {}
             AboutAndHelpCommands()
@@ -117,32 +142,16 @@ struct PhotoAppApp: App {
                 Button("Restore Catalog from Backup…") { catalog.backupRequested = .restore }
                     .disabled(cull.isActive || catalog.backupBusy || catalog.isRenameInProgress || renameModel.isWorking)
             }
-            CommandMenu("Photo") {
-                // Bound ONCE per body pass on purpose. `catalog.displayedPhotos`
-                // is a full filter+sort of the library, and this Scene's body
-                // re-evaluates on every `document.editState` publish — i.e. on
-                // every slider tick while editing. Asking each item separately
-                // would pay it twice per tick. MEASURED (see PROGRESS.md):
-                // 0.37ms per apply at 1,000 photos, 3.61ms at 10,000.
-                let neighbors = photoNeighbors
-                // The photo actions take their title, hidden state and enabled state from `PhotoActionMenu` and run through the
-                // performer, like the grid's cell menu and the selection bar. The scene cannot see `ExportModel` (so `exportActive` is
-                // false: a request during an export is still dropped by each modifier's `blocked`) nor the grid's removal alert.
-                let actionContext = PhotoActionContext.make(
-                    catalog: catalog, document: document, pasteModel: pasteModel, renameModel: renameModel,
-                    cullActive: cull.isActive, showLibrary: showLibrary, exportActive: false)
-                let actionTarget = PhotoActionTarget.menuBar(
-                    catalog: catalog, showLibrary: showLibrary, cullActive: cull.isActive, openEditKey: document.currentEditKey, hasOpenImage: document.currentImage != nil)
-                let actions = PhotoActionPerformer(
-                    catalog: catalog, document: document, pasteModel: pasteModel, renameModel: renameModel, showLibrary: showLibrary,
-                    open: nil, requestRemoval: nil, beginExport: nil)
-                Button("Previous Photo") { open(neighbors.previous) }
-                    .keyboardShortcut(.leftArrow, modifiers: .command)
-                    .disabled(catalog.editorPopoverOpen || neighbors.previous == nil || renameModel.isWorking)
-                Button("Next Photo") { open(neighbors.next) }
-                    .keyboardShortcut(.rightArrow, modifiers: .command)
-                    .disabled(catalog.editorPopoverOpen || neighbors.next == nil || renameModel.isWorking)
-                Divider()
+            // View menu items go into the system View menu (`before: .toolbar`), never a second menu of the same name. They only REQUEST
+            // through `EditorViewBridge`: `ContentView` performs the request (it owns the compare / tab / filmstrip state) and re-checks the
+            // same rule. Bare letters are NOT menu equivalents (a bare-letter key equivalent could swallow typing); only ⌘ chords are.
+            CommandGroup(before: .toolbar) {
+                Button("Library") { bridge.request = .showLibrary }
+                    .keyboardShortcut("1", modifiers: .command)
+                    .disabled(!ViewCommandRules.isEnabled(.showLibrary, context: viewContext))
+                Button("Editor") { bridge.request = .showEditor }
+                    .keyboardShortcut("2", modifiers: .command)
+                    .disabled(!ViewCommandRules.isEnabled(.showEditor, context: viewContext))
                 // Culling: a full-window Pick / Reject review of the photos the Library is showing.
                 Button("Cull Photos") {
                     guard !renameModel.isWorking else { return }
@@ -152,6 +161,62 @@ struct PhotoAppApp: App {
                 .help("Review photos one by one. Esc returns to the Library.")
                 .disabled(catalog.editorPopoverOpen || cull.isActive || catalog.photos.isEmpty || renameModel.isWorking || document.isLoadInFlight)
                 Divider()
+                Button("Previous Photo") { open(neighbors.previous) }
+                    .keyboardShortcut(.leftArrow, modifiers: .command)
+                    .disabled(catalog.editorPopoverOpen || neighbors.previous == nil || renameModel.isWorking)
+                Button("Next Photo") { open(neighbors.next) }
+                    .keyboardShortcut(.rightArrow, modifiers: .command)
+                    .disabled(catalog.editorPopoverOpen || neighbors.next == nil || renameModel.isWorking)
+                Divider()
+                viewToggle("Show Before", .toggleBefore, viewContext)
+                    .disabled(!ViewCommandRules.isEnabled(.toggleBefore, context: viewContext))
+                Menu("Compare") {
+                    viewToggle("Off", .setCompare(.off), viewContext)
+                        .disabled(!ViewCommandRules.isEnabled(.setCompare(.off), context: viewContext))
+                    viewToggle("Side by Side", .setCompare(.sideBySide), viewContext)
+                        .disabled(!ViewCommandRules.isEnabled(.setCompare(.sideBySide), context: viewContext))
+                    viewToggle("Split", .setCompare(.split), viewContext)
+                        .disabled(!ViewCommandRules.isEnabled(.setCompare(.split), context: viewContext))
+                }
+                viewToggle("Show Filmstrip", .toggleFilmstrip, viewContext)
+                    .disabled(!ViewCommandRules.isEnabled(.toggleFilmstrip, context: viewContext))
+                // The six panels, in rail order (`EditorTab.railTabs`). Written out, not a loop: the shortcut list is checked against
+                // the literal `.keyboardShortcut(` lines.
+                Menu("Editor Panel") {
+                    viewToggle(EditorTab.adjust.railTitle, .selectTab(.adjust), viewContext)
+                        .keyboardShortcut("1", modifiers: [.command, .option])
+                        .disabled(!ViewCommandRules.isEnabled(.selectTab(.adjust), context: viewContext))
+                    viewToggle(EditorTab.looks.railTitle, .selectTab(.looks), viewContext)
+                        .keyboardShortcut("2", modifiers: [.command, .option])
+                        .disabled(!ViewCommandRules.isEnabled(.selectTab(.looks), context: viewContext))
+                    viewToggle(EditorTab.retouch.railTitle, .selectTab(.retouch), viewContext)
+                        .keyboardShortcut("3", modifiers: [.command, .option])
+                        .disabled(!ViewCommandRules.isEnabled(.selectTab(.retouch), context: viewContext))
+                    viewToggle(EditorTab.redEye.railTitle, .selectTab(.redEye), viewContext)
+                        .keyboardShortcut("4", modifiers: [.command, .option])
+                        .disabled(!ViewCommandRules.isEnabled(.selectTab(.redEye), context: viewContext))
+                    viewToggle(EditorTab.masks.railTitle, .selectTab(.masks), viewContext)
+                        .keyboardShortcut("5", modifiers: [.command, .option])
+                        .disabled(!ViewCommandRules.isEnabled(.selectTab(.masks), context: viewContext))
+                    viewToggle(EditorTab.crop.railTitle, .selectTab(.crop), viewContext)
+                        .keyboardShortcut("6", modifiers: [.command, .option])
+                        .disabled(!ViewCommandRules.isEnabled(.selectTab(.crop), context: viewContext))
+                }
+                Divider()
+                // Library only (the layout and subfolder choices are the grid's own: the same `@AppStorage` key and the same catalog flag).
+                Toggle("Square Grid", isOn: Binding(
+                    get: { gridLayout != LibraryGridLayout.justified },
+                    set: { _ in gridLayout = LibraryGridLayout.square }))
+                    .disabled(cull.isActive || !showLibrary)
+                Toggle("Justified Rows", isOn: Binding(
+                    get: { gridLayout == LibraryGridLayout.justified },
+                    set: { _ in gridLayout = LibraryGridLayout.justified }))
+                    .disabled(cull.isActive || !showLibrary)
+                Toggle("Show Photos in Subfolders", isOn: $catalog.showPhotosInSubfolders)
+                    .disabled(cull.isActive || !showLibrary)
+                Divider()
+            }
+            CommandMenu("Photo") {
                 // Copy/Paste Edit Settings — Lightroom's own Photo-menu
                 // placement and shortcuts. Paste Settings here shows the
                 // SAME confirmation dialog the Library toolbar's own
@@ -183,6 +248,10 @@ struct PhotoAppApp: App {
                 Button("Rotate Right") { document.rotate(.right) }
                     .keyboardShortcut("]", modifiers: .command)
                     .disabled(!canRotate || catalog.editorPopoverOpen)
+                // Editor-only: ONE undo step (the same `revertToOriginal` as the rail's Revert). `ContentView` performs the request.
+                Button("Revert to Original") { bridge.request = .revertToOriginal }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(!ViewCommandRules.isEnabled(.revertToOriginal, context: viewContext))
                 // Virtual copies: another independent edit version of the same file (Lightroom's own ⌘'). Library: the selected visible
                 // photos, else the focused one; Editor: the open photo/version. Edits made so far in the Editor are flushed first.
                 Button(PhotoActionMenu.title(.createVirtualCopy)) { actions.perform(.run(.createVirtualCopy), clicked: nil) }
@@ -279,6 +348,34 @@ struct PhotoAppApp: App {
                             backupsFolder: { catalog.backupsFolderURL })
                 .tint(Theme.controlTint)
         }
+    }
+
+    /// The state `ViewCommandRules` reads for the menu bar: the Editor's coarse status from the bridge plus what the scene can see. The sheet
+    /// flags are only a first line (the scene cannot see every alert); `ContentView` re-checks the rule with the full picture when it runs.
+    private func viewCommandContext() -> ViewCommandContext {
+        var c = ViewCommandContext()
+        let status = bridge.status
+        c.mode = cull.isActive ? .cull : (showLibrary ? .library : .editor)
+        c.hasOpenImage = status.hasOpenImage
+        c.loadInFlight = document.isLoadInFlight
+        c.renameWorking = renameModel.isWorking
+        c.modalUp = renameModel.isPresentingSheet || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
+            || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || status.blocked
+        c.editorPopoverOpen = catalog.editorPopoverOpen
+        c.canCompare = status.canCompare
+        c.canRevert = status.canRevert
+        c.canExport = status.canExport
+        c.compareMode = status.compareMode
+        c.selectedTab = status.selectedTab
+        c.filmstripVisible = status.filmstripVisible
+        return c
+    }
+
+    /// A checkable View-menu item: a `Toggle` (the checkmark comes from `ViewCommandRules.isChecked`) whose change only REQUESTS the command.
+    private func viewToggle(_ title: String, _ command: ViewCommand, _ context: ViewCommandContext) -> some View {
+        Toggle(title, isOn: Binding(
+            get: { ViewCommandRules.isChecked(command, context: context) },
+            set: { _ in bridge.request = command }))
     }
 
     /// What ⌘← and ⌘→ would open, both resolved from ONE pass over

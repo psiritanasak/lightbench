@@ -9,7 +9,7 @@ struct LibraryGridBottomBar: View {
     @Binding var thumbnailSize: Double
     let sizeRange: ClosedRange<Double>
 
-    private var isJustified: Bool { gridLayout == "justified" }
+    private var isJustified: Bool { gridLayout == LibraryGridLayout.justified }
 
     private var status: (text: String, isWarning: Bool)? {
         LibraryFilterBar.hint(forSearch: catalog.searchText, scanStatus: catalog.metadataScanStatusText,
@@ -34,12 +34,12 @@ struct LibraryGridBottomBar: View {
             .help("Sort order")
             .fixedSize()
             // Layout: square cells (default) or justified rows (each photo at its own aspect ratio). Flat buttons, the grey `isOn` chip marks the choice.
-            Button { gridLayout = "square" } label: { Image(systemName: "square.grid.2x2") }
+            Button { gridLayout = LibraryGridLayout.square } label: { Image(systemName: "square.grid.2x2") }
                 .buttonStyle(FlatButtonStyle(isOn: !isJustified))
                 .help("Square grid")
                 .accessibilityLabel("Square grid")
                 .accessibilityAddTraits(!isJustified ? [.isSelected] : [])
-            Button { gridLayout = "justified" } label: { Image(systemName: "rectangle.grid.1x2") }
+            Button { gridLayout = LibraryGridLayout.justified } label: { Image(systemName: "rectangle.grid.1x2") }
                 .buttonStyle(FlatButtonStyle(isOn: isJustified))
                 .help("Justified rows: every photo keeps its shape")
                 .accessibilityLabel("Justified rows")

@@ -193,4 +193,49 @@ final class ViewCommandsTests: XCTestCase {
         XCTAssertNil(gate(modal: true))
         XCTAssertNil(gate(rep: true))
     }
+
+    // MARK: View menu wiring (source pins)
+
+    private func source(_ path: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+    }
+
+    func testTheViewItemsLiveInTheSystemViewMenuAndAreGatedByTheRules() throws {
+        let app = try source("Sources/App/PhotoAppApp.swift")
+        XCTAssertTrue(app.contains("CommandGroup(before: .toolbar)"))
+        XCTAssertFalse(app.contains("CommandMenu(\"View\")"), "a second View menu would sit beside the system one")
+        for command in [".showLibrary", ".showEditor", ".toggleBefore", ".setCompare(.off)", ".setCompare(.sideBySide)", ".setCompare(.split)",
+                        ".toggleFilmstrip", ".selectTab(.adjust)", ".selectTab(.looks)", ".selectTab(.retouch)", ".selectTab(.redEye)",
+                        ".selectTab(.masks)", ".selectTab(.crop)", ".revertToOriginal"] {
+            XCTAssertTrue(app.contains(".disabled(!ViewCommandRules.isEnabled(\(command), context: viewContext))"), "\(command) must be gated by the rules")
+        }
+        XCTAssertTrue(app.contains("Button(\"Revert to Original\")"))
+    }
+
+    func testTheBridgeStatusCarriesNoZoomOrSliderState() {
+        // The scene re-runs its body whenever the status changes, so it may only hold coarse fields. A new field must be added here on purpose.
+        let fields = Set(Mirror(reflecting: EditorViewStatus()).children.compactMap(\.label))
+        XCTAssertEqual(fields, ["compareMode", "selectedTab", "filmstripVisible", "canCompare", "canRevert", "canExport", "hasOpenImage", "blocked"])
+    }
+
+    func testTheSceneTreatsTheWindowsOwnModalsAsBlocking() throws {
+        let app = try source("Sources/App/PhotoAppApp.swift")
+        XCTAssertTrue(app.contains("|| status.blocked"))
+        let content = try source("Sources/UI/ContentView.swift")
+        XCTAssertTrue(content.contains("blocked: anySheetPresented || otherSheetIsPresented || isHistoryPresented)"))
+    }
+
+    func testTheGridLayoutKeyIsDefinedOnceAndSharedByTheGridTheBarAndTheMenu() throws {
+        for file in ["Sources/UI/LibraryGridView.swift", "Sources/UI/LibraryGridBottomBar.swift", "Sources/App/PhotoAppApp.swift"] {
+            XCTAssertFalse(try source(file).contains("\"PhotoApp.libraryGridLayout\""), "\(file) must use LibraryGridLayout.storageKey")
+        }
+        XCTAssertEqual(LibraryGridLayout.storageKey, "PhotoApp.libraryGridLayout")
+    }
+
+    func testTheLibraryRoutesAppKeysThroughTheGridAndTheRoot() throws {
+        let content = try source("Sources/UI/ContentView.swift")
+        XCTAssertTrue(content.contains(".appKeys { handleAppKey($0) }"))
+        XCTAssertTrue(try source("Sources/UI/LibraryGridView.swift").contains("if appKeys?(keyPress) == .handled { return .handled }"))
+    }
 }

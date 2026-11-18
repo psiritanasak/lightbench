@@ -12,6 +12,15 @@ struct LibraryGridView: View {
     let actionContext: PhotoActionContext
     let performer: PhotoActionPerformer
     let onOpen: (Photo) -> Void
+    /// The bare app keys (E opens the Editor), offered BEFORE the grid's own keys. Set with `appKeys(_:)`; declared after `onOpen` so the
+    /// trailing-closure call site keeps matching `onOpen`.
+    var appKeys: ((KeyPress) -> KeyPress.Result)?
+
+    func appKeys(_ handler: @escaping (KeyPress) -> KeyPress.Result) -> LibraryGridView {
+        var copy = self
+        copy.appKeys = handler
+        return copy
+    }
 
     /// D2 (IMPROVEMENTS.md): drives both the grid's column minimum and
     /// each cell's own frame size (see `LibraryThumbnailCell.cellSize`).
@@ -30,8 +39,8 @@ struct LibraryGridView: View {
 
     /// "square" (default: the fixed-column grid of square cells) or "justified" (rows of equal height, each photo at its own aspect ratio, rows
     /// stretched to the full width: `JustifiedRows`). The size slider's value is the cell edge in square mode and the ROW HEIGHT in justified mode.
-    @AppStorage("PhotoApp.libraryGridLayout") private var gridLayout: String = "square"
-    private var isJustified: Bool { gridLayout == "justified" }
+    @AppStorage(LibraryGridLayout.storageKey) private var gridLayout: String = LibraryGridLayout.square
+    private var isJustified: Bool { gridLayout == LibraryGridLayout.justified }
 
     /// Single source of truth for the slider's bounds — reviewer-caught:
     /// the floor and the read-site/migration clamps below used to
@@ -534,6 +543,8 @@ struct LibraryGridView: View {
     /// correct even if a future macOS attaches other incidental flags to
     /// arrow/character events.
     private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        // The bare app keys come first (they never use Command or Control, so none of the keys below is shadowed).
+        if appKeys?(keyPress) == .handled { return .handled }
         // Command-A / Command-D (A1): select every photo shown / clear the selection. Checked before the modifier guard below.
         if let command = GridSelection.commandKey(
             character: keyPress.characters.first, command: keyPress.modifiers.contains(.command),

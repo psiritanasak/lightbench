@@ -314,6 +314,7 @@ New findings (not in section 2; each is assigned to a slice below):
   per-range resets; keep them, the header reset clears the whole section.
 
 #### B2. Panel defaults and the histogram
+- **DONE 2026-11-18** (CLAUDE.md "Edit panel defaults + one histogram", IMPROVEMENTS.md D96; plan `.plans/B2_plan.md`). Defaults taken: open sections persist across launches (first run = Light + Color); solo on the Edit tab only; the Levels block's histogram removed (it duplicated the pinned one), click the pinned histogram to switch mode; scroll bar shown (user decision). Levels handles under the pinned histogram NOT built. NOT checked on screen. The text below is the original brief.
 - **Today**: all sections collapsed; scroll bar hidden; two histograms; the
   pinned header's channel mode comes from the Levels picker inside Light.
 - **Change**: Light and Color open on first run (stored state wins after
@@ -457,10 +458,10 @@ New findings (not in section 2; each is assigned to a slice below):
 |---|---|---|---|---|
 | 0 | R0 baseline | done | | see its results |
 | 1 | A1 click selects | done 2026-11-10 | | see the slice |
-| 2 | C1 toasts + progress | L | medium (many call sites) | removes the most interruptions |
-| 3 | B1 section header | M | low | makes the Edit panel readable |
+| 2 | C1 toasts + progress | done 2026-11-13 | | see the slice |
+| 3 | B1 section header | done 2026-11-17 | | see the slice |
 | 4 | A2 right-click + selection bar | done 2026-11-17 | | see the slice |
-| 5 | B2 panel defaults + histogram | S-M | low | |
+| 5 | B2 panel defaults + histogram | done 2026-11-18 | | see the slice |
 | 6 | B3 slider row | S | low | |
 | 7 | A3 + B4 menus and shortcuts | M | low | after A2 so names come from one model |
 | 8 | C2 sheet scaffold | M | low | |

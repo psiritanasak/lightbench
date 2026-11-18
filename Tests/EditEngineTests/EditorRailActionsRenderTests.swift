@@ -71,4 +71,14 @@ final class EditorRailActionsRenderTests: XCTestCase {
         // The History entry is disabled with no image, so "on" alone is the visible difference only if it still tints; compare on/off.
         XCTAssertEqual(differingEntries(render(history: false), render(history: true)), [3])
     }
+
+    /// Before is not Compare: the rail's Compare entry stays unlit (same pixels as Off), the highlight follows `isComparing` only.
+    func testBeforeDoesNotLightTheCompareEntry() throws {
+        XCTAssertEqual(differingEntries(render(compare: .off), render(compare: .before)), [])
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/UI/EditorRailActions.swift")
+        let source = try String(contentsOf: path, encoding: .utf8)
+        XCTAssertFalse(source.contains("compareMode != .off"), "the Compare entry must not light for Before")
+        XCTAssertEqual(source.components(separatedBy: "compareMode.isComparing").count - 1, 3)
+    }
 }

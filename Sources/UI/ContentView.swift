@@ -576,6 +576,60 @@ struct ContentView: View {
         panOffset = ZoomPanGeometry.clampedPan(newPan, zoom: newZoom)
     }
 
+    // MARK: - View commands and bare app keys (A3 / B4)
+
+    /// The state `ViewCommandRules` reads, built fresh when a command runs.
+    private func viewCommandContext() -> ViewCommandContext {
+        var c = ViewCommandContext()
+        c.mode = cull.isActive ? .cull : (showLibrary ? .library : .editor)
+        c.hasOpenImage = document.currentImage != nil
+        c.loadInFlight = document.isLoadInFlight
+        c.renameWorking = renameModel.isWorking
+        c.modalUp = NSApp.keyWindow?.attachedSheet != nil || anySheetPresented || otherSheetIsPresented
+        c.editorPopoverOpen = catalog.editorPopoverOpen || isHistoryPresented
+        c.canCompare = EditorRailActionRules.canCompare(hasImage: c.hasOpenImage, isCropping: isCroppingActive, armed: armedModes)
+        c.canRevert = EditorRailActionRules.canRevert(
+            hasImage: c.hasOpenImage, isEffectivelyIdentity: document.editState.isEffectivelyIdentity, loadInFlight: c.loadInFlight)
+        c.compareMode = compareMode
+        c.selectedTab = selectedTab
+        c.filmstripVisible = isFilmstripVisible
+        return c
+    }
+
+    /// Runs an Editor view command. Re-checks the rule at run time, so a stale request cannot bypass it. Library-side commands,
+    /// Revert, Filmstrip and Export belong to the menu batch and do nothing here yet.
+    private func performViewCommand(_ command: ViewCommand) {
+        guard ViewCommandRules.isEnabled(command, context: viewCommandContext()) else { return }
+        switch command {
+        case .showLibrary:
+            showLibrary = true
+        case .toggleBefore, .toggleSideBySide, .setCompare:
+            if let next = ViewCommandRules.compareMode(after: command, from: compareMode) { compareMode = next }
+        case .selectTab(let tab):
+            selectedTab = tab
+        case .showEditor, .toggleFilmstrip, .revertToOriginal, .export:
+            break
+        }
+    }
+
+    /// A bare-letter app key typed in the Editor. Ignored while a text field has focus (the search field, a slider type-in, a sheet or
+    /// popover field: all have an `NSTextView` first responder), while any sheet or popover is up, and with Command / Control.
+    /// A held key is swallowed (handled, nothing done) so it neither flickers nor beeps.
+    private func handleAppKey(_ keyPress: KeyPress) -> KeyPress.Result {
+        guard !showLibrary, !cull.isActive, let character = keyPress.characters.first else { return .ignored }
+        let modifiers = keyPress.modifiers
+        let modalUp = NSApp.keyWindow?.attachedSheet != nil || anySheetPresented || otherSheetIsPresented
+            || catalog.editorPopoverOpen || isHistoryPresented
+        guard let command = AppKeyGate.resolve(
+            character: character, mode: .editor,
+            command: modifiers.contains(.command), control: modifiers.contains(.control),
+            option: modifiers.contains(.option), shift: modifiers.contains(.shift),
+            textFieldFocused: NSApp.keyWindow?.firstResponder is NSTextView, modalUp: modalUp, isRepeat: false),
+            ViewCommandRules.isEnabled(command, context: viewCommandContext()) else { return .ignored }
+        if keyPress.phase != .repeat { performViewCommand(command) }
+        return .handled
+    }
+
     // MARK: - D8 (IMPROVEMENTS.md): keyboard paths for the point-placement/pan overlays
 
     /// One dispatch point for every key the image pane handles while it
@@ -587,6 +641,10 @@ struct ContentView: View {
     /// macOS tags arrow-key events with `.numericPad`/`.function`
     /// regardless of any real modifier.
     private func handleImagePaneKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        // The bare app keys (`\` Y G E L Q M R) come FIRST: the modifier guard below rejects Option, which `\` needs on German and
+        // French layouts, and the point-placement branch returns early. None of them is Escape, Return, an arrow or Delete
+        // (`ViewCommandsTests.testAppKeysNeverShadowControlKeys`), so nothing below is shadowed.
+        if handleAppKey(keyPress) == .handled { return .handled }
         let semanticModifiers: EventModifiers = [.command, .option, .control]
         guard keyPress.modifiers.isDisjoint(with: semanticModifiers) else { return .ignored }
 
@@ -1433,6 +1491,8 @@ struct ContentView: View {
             }
         }
         .onChange(of: showLibrary) { _, _ in isHistoryPresented = false }
+        .modifier(EditorBeforeLifecycle(compareMode: $compareMode, armedAny: armedModes.any, showLibrary: showLibrary,
+                                        focusImagePane: { isImagePaneFocused = true }))
         .modifier(EditorInfoLifecycle(model: editorInfo, catalog: catalog, meta: editorMeta, editKey: document.currentEditKey, showLibrary: showLibrary,
                                       toggle: toggleEditorInfo, focusImagePane: { isImagePaneFocused = true }))
         .modifier(EditorKeywordsLifecycle(model: editorKeywords, catalog: catalog, editKey: document.currentEditKey, showLibrary: showLibrary,
@@ -1482,7 +1542,9 @@ struct ContentView: View {
         // A Compare-mode switch gets a fresh zoom/pan — the fit rect
         // differs between single-image, Side by Side's halves, and Split,
         // so a pan/zoom computed for one doesn't map cleanly onto another.
-        .onChange(of: compareMode) { _, _ in
+        // Off <-> Before keeps zoom and pan (the same detail is compared); every other switch resets them.
+        .onChange(of: compareMode) { old, new in
+            guard CompareViewMode.resetsZoom(from: old, to: new) else { return }
             zoomScale = 1
             panOffset = .zero
         }
@@ -1842,16 +1904,24 @@ struct ContentView: View {
                 }
             }
         }
+        // Catches the app keys that bubble up from the sidebar, a focused slider, the tone curve or the wheel (the image pane's own
+        // handler calls `handleAppKey` first). Whether a press bubbles through `HSplitView` is a by-eye check.
+        .onKeyPress { keyPress in handleAppKey(keyPress) }
+    }
+
+    /// Which point tools are armed (the Compare rules and the Before key read it).
+    private var armedModes: EditorRailActionRules.ArmedModes {
+        EditorRailActionRules.ArmedModes(
+            whiteBalance: isPickingWhiteBalance, redEye: isPlacingRedEyeCorrections, colorRange: isPickingColorRange,
+            pointColor: isPickingPointColor, subject: isPickingSubject, retouchSpot: isPlacingRetouchSpot,
+            targeted: isTargetedArmed)
     }
 
     /// The rail's second group (Undo / Redo / Revert / History / Compare / Filmstrip / Enhance) with its availability rules
     /// (`EditorRailActionRules`) fed from this view's armed-tool state. Extracted: this file's type-checker ceiling.
     private var editorRailActions: some View {
         let hasImage = document.currentImage != nil
-        let armed = EditorRailActionRules.ArmedModes(
-            whiteBalance: isPickingWhiteBalance, redEye: isPlacingRedEyeCorrections, colorRange: isPickingColorRange,
-            pointColor: isPickingPointColor, subject: isPickingSubject, retouchSpot: isPlacingRetouchSpot,
-            targeted: isTargetedArmed)
+        let armed = armedModes
         return EditorRailActions(
             document: document, compareMode: $compareMode, splitOrientation: $splitOrientation,
             isHistoryPresented: $isHistoryPresented, isFilmstripVisible: $isFilmstripVisible,
@@ -1892,7 +1962,7 @@ struct ContentView: View {
                 GeometryReader { proxy in
                     ZStack {
                         MetalImageView(
-                            image: document.currentImage, editState: displayEditState, compare: compareRenderConfig,
+                            image: document.currentImage, editState: compareMode == .before ? compareOriginalEditState : displayEditState, compare: compareRenderConfig,
                             zoomScale: zoomScale, panOffset: panOffset, zoomEnabled: canZoom,
                             onScrollZoom: { fraction, delta in handleScrollZoom(paneFraction: fraction, delta: delta) }
                         )
@@ -1927,6 +1997,7 @@ struct ContentView: View {
                             ZoomPercentageHUD(zoomScale: zoomScale)
                         }
                     }
+                    .modifier(BeforeChipOverlay(compareMode: compareMode))
                     // D8 (IMPROVEMENTS.md): the Editor's first
                     // `.focusable()`/`.onKeyPress` — see
                     // `isImagePaneFocused`'s own doc comment for why this,

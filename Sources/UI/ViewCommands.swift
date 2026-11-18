@@ -48,13 +48,13 @@ enum ViewCommandRules {
         case .showLibrary, .showEditor:
             return free
         case .toggleBefore, .toggleSideBySide, .setCompare:
-            return editor && c.canCompare && free
+            return editor && c.hasOpenImage && c.canCompare && free
         case .selectTab(let tab):
             return editor && free && EditorTab.railTabs.contains(tab)
         case .toggleFilmstrip:
             return editor && free
         case .revertToOriginal:
-            return editor && c.canRevert && !c.loadInFlight && !c.renameWorking && free
+            return editor && c.hasOpenImage && c.canRevert && !c.loadInFlight && !c.renameWorking && free
         case .export:
             return c.mode == .library && c.canExport && !c.renameWorking && !c.modalUp
         }

@@ -114,6 +114,24 @@ final class KeyboardShortcutCatalogTests: XCTestCase {
         }
     }
 
+    // MARK: bare app keys vs AppKeyCommand (Editor; the Library's E arrives with the View menu batch)
+
+    func testEveryListedEditorAppKeyIsReallyOneAndEveryEditorAppKeyIsListed() {
+        var listed = Set<Character>()
+        for source in sources {
+            guard case .appKey(let characters, let mode) = source else { continue }
+            XCTAssertEqual(mode, .editor)
+            for character in characters {
+                XCTAssertNotNil(AppKeyCommand.command(for: character, mode: mode), "\(character) is listed but is not an app key")
+                listed.insert(character)
+            }
+        }
+        for character in printable where AppKeyCommand.command(for: character, mode: .editor) != nil {
+            XCTAssertTrue(listed.contains(Character(character.lowercased())), "\"\(character)\" is an Editor app key that the Help list does not mention")
+        }
+        XCTAssertEqual(listed, Set("\\ygelqmr"))
+    }
+
     func testZeroIsDocumentedAsAPhotoKeyOnlyWhereItRatesAndTheEditorKeepsItForZoom() {
         XCTAssertNotNil(PhotoKeyCommand.command(for: "0", allowsZero: true))
         XCTAssertNil(PhotoKeyCommand.command(for: "0", allowsZero: false), "in the Editor 0 resets the zoom")

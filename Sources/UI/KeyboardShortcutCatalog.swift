@@ -11,6 +11,8 @@ struct ShortcutEntry: Equatable {
         case menu(String)
         /// Characters handled by `PhotoKeyCommand` (the Library grid, the Editor and Culling share it); `allowsZero: false` means the characters must ALSO work in the Editor, where `0` is zoom-reset instead of a rating.
         case photoKeys(String, allowsZero: Bool)
+        /// Bare characters handled by `AppKeyCommand` in `mode` (case-insensitive; listed lower case). Checked in both directions.
+        case appKey(String, mode: PhotoActionContext.Mode)
         /// A culling key, handled by `CullKeyAction`.
         case cull(CullKey)
         /// Anything else: a snippet that must still appear in `file`.
@@ -96,6 +98,11 @@ enum KeyboardShortcutCatalog {
         ShortcutSection(title: "Editor", entries: [
             ShortcutEntry(keys: "Click the histogram", action: "Switch the histogram between Luminance and RGB",
                           source: .code(file: "Sources/UI/EditorHistogramHeader.swift", contains: "mode = mode.next")),
+            ShortcutEntry(keys: "\\", action: "Show the original photo (Before); press again to go back to your edits",
+                          source: .appKey("\\", mode: .editor)),
+            ShortcutEntry(keys: "Y", action: "Side by Side compare on / off", source: .appKey("y", mode: .editor)),
+            ShortcutEntry(keys: "G", action: "Back to the Library", source: .appKey("g", mode: .editor)),
+            ShortcutEntry(keys: "E  L  Q  M  R", action: "Open the Edit / Looks / Retouch / Masks / Crop panel", source: .appKey("elqmr", mode: .editor)),
             ShortcutEntry(keys: "0", action: "Reset the zoom (when zoomed in)",
                           source: .code(file: "Sources/UI/ContentView.swift", contains: "if keyPress.key == \"0\" {")),
             ShortcutEntry(keys: "\u{2190} \u{2192} \u{2191} \u{2193}", action: "Pan when zoomed in",

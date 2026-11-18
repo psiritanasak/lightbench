@@ -33,7 +33,8 @@ struct EditorRailActions: View {
             entry("Undo", Symbol.undo, enabled: document.canUndo) { document.undo() }
             entry("Redo", Symbol.redo, enabled: document.canRedo) { document.redo() }
             entry("Revert", Symbol.revert,
-                  enabled: EditorRailActionRules.canRevert(hasImage: hasImage, isEffectivelyIdentity: document.editState.isEffectivelyIdentity)) {
+                  enabled: EditorRailActionRules.canRevert(hasImage: hasImage, isEffectivelyIdentity: document.editState.isEffectivelyIdentity,
+                                                           loadInFlight: document.isLoadInFlight)) {
                 document.revertToOriginal()
             }
             entry("History", Symbol.history, on: isHistoryPresented,
@@ -64,20 +65,20 @@ struct EditorRailActions: View {
                 }
             }
         } label: {
-            RailEntryLabel(title: "Compare", symbol: Symbol.compare, isOn: compareMode != .off, isEnabled: canCompare, showsTitle: false)
+            RailEntryLabel(title: "Compare", symbol: Symbol.compare, isOn: compareMode.isComparing, isEnabled: canCompare, showsTitle: false)
         }
         // `.button` + `.plain` so the label is drawn like the other entries' plain buttons; the tint keeps the root accent from colouring
         // the idle state (it was blue all the time) — grey like its neighbours, a white icon on a grey chip only while Compare is on.
         .menuStyle(.button)
         .buttonStyle(.plain)
-        .tint(RailEntryLabel.color(isOn: compareMode != .off, isEnabled: canCompare))
+        .tint(RailEntryLabel.color(isOn: compareMode.isComparing, isEnabled: canCompare))
         .menuIndicator(.hidden)
         // Same fixed cell as every other entry: a bare borderless `Menu` pads itself and would push the entries below it out of line.
         .frame(width: EditorToolRailMetrics.width - 8, height: RailEntryLabel.iconOnlyHeight)
         .disabled(!canCompare)
         .help("Compare")
         .accessibilityLabel("Compare")
-        .accessibilityAddTraits(compareMode != .off ? [.isSelected] : [])
+        .accessibilityAddTraits(compareMode.isComparing ? [.isSelected] : [])
     }
 
     private func entry(_ title: String, _ symbol: String, on: Bool = false, enabled: Bool = true,

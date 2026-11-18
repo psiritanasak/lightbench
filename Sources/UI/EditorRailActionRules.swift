@@ -5,8 +5,9 @@ import Foundation
 enum EditorRailActionRules {
     /// Revert to Original. `isEffectivelyIdentity`, not `== .identity`: a RAW photo's `rawDecoderVersionPin` is invisible bookkeeping
     /// set on every open, not a user edit (see `EditState.isEffectivelyIdentity`).
-    static func canRevert(hasImage: Bool, isEffectivelyIdentity: Bool) -> Bool {
-        hasImage && !isEffectivelyIdentity
+    /// A photo load in flight blocks it too (the open photo is about to change): the rail and the Revert menu item / key share this one rule.
+    static func canRevert(hasImage: Bool, isEffectivelyIdentity: Bool, loadInFlight: Bool) -> Bool {
+        hasImage && !isEffectivelyIdentity && !loadInFlight
     }
 
     /// Enhance is blocked while a photo load, another enhance, or a batch rename is in flight (a second click must not start a second

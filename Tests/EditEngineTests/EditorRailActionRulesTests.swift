@@ -3,9 +3,10 @@ import XCTest
 
 final class EditorRailActionRulesTests: XCTestCase {
     func testRevertNeedsAnImageAndARealEdit() {
-        XCTAssertTrue(EditorRailActionRules.canRevert(hasImage: true, isEffectivelyIdentity: false))
-        XCTAssertFalse(EditorRailActionRules.canRevert(hasImage: true, isEffectivelyIdentity: true))
-        XCTAssertFalse(EditorRailActionRules.canRevert(hasImage: false, isEffectivelyIdentity: false))
+        XCTAssertTrue(EditorRailActionRules.canRevert(hasImage: true, isEffectivelyIdentity: false, loadInFlight: false))
+        XCTAssertFalse(EditorRailActionRules.canRevert(hasImage: true, isEffectivelyIdentity: true, loadInFlight: false))
+        XCTAssertFalse(EditorRailActionRules.canRevert(hasImage: false, isEffectivelyIdentity: false, loadInFlight: false))
+        XCTAssertFalse(EditorRailActionRules.canRevert(hasImage: true, isEffectivelyIdentity: false, loadInFlight: true), "a load in flight blocks Revert")
     }
 
     func testEnhanceIsBlockedByEachInFlightOperation() {

@@ -28,6 +28,14 @@ final class ViewCommandsTests: XCTestCase {
         XCTAssertEqual(allCommands.map { enabled($0, editor) }, [true, true, true, true, true, true, true, true, false])
     }
 
+    func testCompareAndRevertNeedAnOpenImage() {
+        var c = context(.editor)
+        c.hasOpenImage = false
+        for command in [ViewCommand.toggleBefore, .toggleSideBySide, .setCompare(.split), .revertToOriginal] {
+            XCTAssertFalse(enabled(command, c), "\(command)")
+        }
+    }
+
     func testEverythingIsOffWhileCulling() {
         var c = context(.cull)
         for command in allCommands { XCTAssertFalse(enabled(command, c), "\(command)") }
@@ -156,6 +164,18 @@ final class ViewCommandsTests: XCTestCase {
         XCTAssertNil(AppKeyCommand.command(for: "\\", mode: .library))
         let editorKeys = ascii.filter { AppKeyCommand.command(for: $0, mode: .editor) != nil }
         XCTAssertEqual(Set(editorKeys.map { Character($0.lowercased()) }), Set("geqlmry\\"))
+    }
+
+    /// The image pane calls the app keys FIRST, so none may be a key an armed tool or the grid needs:
+    /// Escape, Return, Enter, Tab, Delete / Backspace, Space and the four arrows (AppKit's function-key characters).
+    func testAppKeysNeverShadowControlKeys() {
+        let control: [Character] = ["\u{1b}", "\r", "\u{3}", "\t", "\u{7f}", "\u{8}", " ",
+                                    "\u{F700}", "\u{F701}", "\u{F702}", "\u{F703}", "\u{F728}"]
+        for ch in control {
+            for mode in [PhotoActionContext.Mode.editor, .library, .cull] {
+                XCTAssertNil(AppKeyCommand.command(for: ch, mode: mode), "\(ch.unicodeScalars.first!.value) in \(mode)")
+            }
+        }
     }
 
     func testTheGate() {

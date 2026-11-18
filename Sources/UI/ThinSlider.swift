@@ -54,10 +54,10 @@ enum ThinSliderGeometry {
     /// A keyboard action on a focused `ThinSlider`.
     enum Key { case decrease, increase, minimum, maximum }
 
-    /// What a key does to `value`: arrows move one step (the same 1/20th VoiceOver uses), `coarse` (Shift) moves four steps, Home / End
-    /// jump to the ends. Always clamped to `range`; a zero-width range stays put.
-    static func keyed(_ value: Double, key: Key, coarse: Bool, in range: ClosedRange<Double>) -> Double {
-        let amount = step(in: range) * (coarse ? 4 : 1)
+    /// What a key does to `value`: arrows move one step (the same 1/20th VoiceOver uses), `coarse` (Shift) moves four steps, `fine`
+    /// (Option) a quarter of that (both together: one step), Home / End jump to the ends (and ignore both). Always clamped to `range`; a zero-width range stays put.
+    static func keyed(_ value: Double, key: Key, coarse: Bool, fine: Bool = false, in range: ClosedRange<Double>) -> Double {
+        let amount = step(in: range) * (coarse ? 4 : 1) / (fine ? ThinSliderDrag.fineDivisor : 1)
         let current = value.clamped(to: range)
         switch key {
         case .decrease: return Swift.max(current - amount, range.lowerBound)
@@ -65,6 +65,107 @@ enum ThinSliderGeometry {
         case .minimum: return range.lowerBound
         case .maximum: return range.upperBound
         }
+    }
+}
+
+/// The pure maths of one press-and-drag on a `ThinSlider`, SwiftUI-free so it is unit-tested. A slider that can reset (it has a
+/// double-click handler) writes nothing until the pointer has moved `moveThreshold`, so the first click of a double-click never moves
+/// the thumb; a slider that cannot reset writes the pointer's value on press, exactly as before. Holding Option makes the drag
+/// RELATIVE and `fineDivisor` times slower, re-anchored at the last event so pressing or releasing Option mid-drag never jumps.
+struct ThinSliderDrag: Equatable {
+    /// Option-drag and Option-arrow speed: a quarter.
+    static let fineDivisor: Double = 4
+    /// Horizontal points a press on a resettable slider must move before it writes, so a click alone (the first half of a
+    /// double-click) never moves the thumb. Picked by eye, a guess: not measured against real hand jitter.
+    static let moveThreshold: Double = 3
+
+    struct Track: Equatable {
+        var width: Double
+        var thumbWidth: Double
+        var range: ClosedRange<Double>
+
+        /// Today's mapping: the value under a pointer at `x`.
+        func absolute(atX x: Double) -> Double {
+            let f = ThinSliderGeometry.fraction(atX: x, trackWidth: width, thumbWidth: thumbWidth)
+            return ThinSliderGeometry.value(atFraction: f, in: range)
+        }
+    }
+
+    enum Start: Equatable { case none, write(Double), reset }
+
+    enum Mode: Equatable {
+        /// The press was a double-click: everything after it is ignored.
+        case consumed
+        /// Resettable, no movement yet.
+        case pending(pressX: Double)
+        /// `value = value(atX:)`, the long-standing tracking.
+        case absolute
+        case relative(anchorX: Double, anchorValue: Double, fine: Bool)
+    }
+
+    private(set) var mode: Mode
+    private(set) var lastX: Double
+    private(set) var lastValue: Double
+
+    static func begin(
+        x: Double, value: Double, clickCount: Int, optionHeld: Bool, canReset: Bool, track: Track
+    ) -> (ThinSliderDrag, Start) {
+        if canReset && clickCount >= 2 {
+            return (ThinSliderDrag(mode: .consumed, lastX: x, lastValue: value), .reset)
+        }
+        if optionHeld {
+            let mode = Mode.relative(anchorX: x, anchorValue: value, fine: true)
+            return (ThinSliderDrag(mode: mode, lastX: x, lastValue: value), .none)
+        }
+        if canReset {
+            return (ThinSliderDrag(mode: .pending(pressX: x), lastX: x, lastValue: value), .none)
+        }
+        let written = track.absolute(atX: x)
+        return (ThinSliderDrag(mode: .absolute, lastX: x, lastValue: written), .write(written))
+    }
+
+    /// The value to write for a pointer at `x`, or nil to write nothing (no movement yet, a double-click, or an unchanged value).
+    mutating func move(toX x: Double, optionHeld: Bool, track: Track) -> Double? {
+        var result: Double?
+        switch mode {
+        case .consumed:
+            result = nil
+        case .pending(let pressX):
+            if optionHeld {
+                mode = .relative(anchorX: lastX, anchorValue: lastValue, fine: true)
+                result = relativeValue(atX: x, track: track)
+            } else if abs(x - pressX) < Self.moveThreshold {
+                result = nil
+            } else {
+                mode = .absolute
+                result = track.absolute(atX: x)
+            }
+        case .absolute:
+            if optionHeld {
+                mode = .relative(anchorX: lastX, anchorValue: lastValue, fine: true)
+                result = relativeValue(atX: x, track: track)
+            } else {
+                result = track.absolute(atX: x)
+            }
+        case .relative(_, _, let fine):
+            if optionHeld != fine {
+                mode = .relative(anchorX: lastX, anchorValue: lastValue, fine: optionHeld)
+            }
+            result = relativeValue(atX: x, track: track)
+        }
+        lastX = x
+        guard let value = result, value != lastValue else { return nil }
+        lastValue = value
+        return value
+    }
+
+    private func relativeValue(atX x: Double, track: Track) -> Double? {
+        guard case .relative(let anchorX, let anchorValue, let fine) = mode else { return nil }
+        let usable = track.width - track.thumbWidth
+        guard usable > 0 else { return nil }
+        let span = track.range.upperBound - track.range.lowerBound
+        let delta = (x - anchorX) * span / usable / (fine ? Self.fineDivisor : 1)
+        return Swift.min(Swift.max(anchorValue + delta, track.range.lowerBound), track.range.upperBound)
     }
 }
 
@@ -118,6 +219,9 @@ struct ThinSlider: View {
     /// A gradient replaces the filled part (a bar filled up to the thumb would muddy a bipolar ramp; the thumb alone marks the
     /// value) and gives the thumb a hairline outline.
     var track: [Color]? = nil
+    /// A double-click on the track (the second mouse-down) calls this. With it set, a press writes nothing until the pointer has
+    /// moved `ThinSliderDrag.moveThreshold` (so a click does not jump the thumb); `nil` keeps click-to-jump.
+    var onDoubleClick: (() -> Void)? = nil
 
     /// The filled part of the track is a dimmer white than the thumb, so the thumb is the one bright mark.
     static let filledTrackOpacity = 0.55
@@ -128,6 +232,10 @@ struct ThinSlider: View {
     /// Keyboard focus is reached with Tab only (full keyboard access): a drag deliberately does NOT take focus, because the image
     /// pane and the Library grid take it back on click and a slider stealing it would stop their arrow-key handling.
     @FocusState private var isFocused: Bool
+    /// The current press's `startLocation` and its drag maths. A different `startLocation` begins a new session (the tone curve
+    /// editor's self-healing rule), so a dropped `onEnded` cannot leak a stale session into the next press.
+    @State private var dragStart: CGPoint?
+    @State private var drag: ThinSliderDrag?
 
     var body: some View {
         GeometryReader { proxy in
@@ -160,11 +268,36 @@ struct ThinSlider: View {
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { drag in
-                        let f = ThinSliderGeometry.fraction(
-                            atX: drag.location.x, trackWidth: trackWidth, thumbWidth: thumbWidth
+                    .onChanged { gesture in
+                        let track = ThinSliderDrag.Track(
+                            width: Double(trackWidth), thumbWidth: Double(thumbWidth), range: range
                         )
-                        value = ThinSliderGeometry.value(atFraction: f, in: range)
+                        let optionHeld = NSEvent.modifierFlags.contains(.option)
+                        let x = Double(gesture.location.x)
+                        if dragStart != gesture.startLocation || drag == nil {
+                            dragStart = gesture.startLocation
+                            let (session, start) = ThinSliderDrag.begin(
+                                x: Double(gesture.startLocation.x), value: value,
+                                clickCount: onDoubleClick == nil ? 1 : Self.pressClickCount(),
+                                optionHeld: optionHeld, canReset: onDoubleClick != nil, track: track
+                            )
+                            drag = session
+                            switch start {
+                            case .none: break
+                            case .write(let written): value = written
+                            case .reset: onDoubleClick?()
+                            }
+                            if x == Double(gesture.startLocation.x) { return }
+                        }
+                        guard var session = drag else { return }
+                        if let written = session.move(toX: x, optionHeld: optionHeld, track: track) {
+                            value = written
+                        }
+                        drag = session
+                    }
+                    .onEnded { _ in
+                        dragStart = nil
+                        drag = nil
                     }
             )
         }
@@ -186,10 +319,18 @@ struct ThinSlider: View {
         }
     }
 
-    /// Left / Down and Right / Up step, Home / End jump; Shift steps four at a time. Command / Option / Control are left alone (menu
-    /// shortcuts such as ⌘← win). Plain arrows carry the numeric-pad / function flags, so the check is `isDisjoint`, not "is empty".
+    /// The click count of the mouse-down that started this press (1 when the current event is not one). UNVERIFIED: that the first
+    /// `onChanged` of a `minimumDistance: 0` drag runs while `NSApp.currentEvent` is still that mouse-down (the grid only relies on it
+    /// inside `onTapGesture`); until checked live, a track double-click may not report 2.
+    private static func pressClickCount() -> Int {
+        guard let event = NSApp.currentEvent, event.type == .leftMouseDown else { return 1 }
+        return event.clickCount
+    }
+
+    /// Left / Down and Right / Up step, Home / End jump; Shift steps four at a time, Option a quarter of a step. Command / Control are
+    /// left alone (menu shortcuts such as ⌘← win). Plain arrows carry the numeric-pad / function flags, so the check is `isDisjoint`, not "is empty".
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
-        guard press.modifiers.isDisjoint(with: [.command, .option, .control]) else { return .ignored }
+        guard press.modifiers.isDisjoint(with: [.command, .control]) else { return .ignored }
         let key: ThinSliderGeometry.Key
         switch press.key {
         case .leftArrow, .downArrow: key = .decrease
@@ -198,7 +339,10 @@ struct ThinSlider: View {
         case .end: key = .maximum
         default: return .ignored
         }
-        value = ThinSliderGeometry.keyed(value, key: key, coarse: press.modifiers.contains(.shift), in: range)
+        value = ThinSliderGeometry.keyed(
+            value, key: key, coarse: press.modifiers.contains(.shift),
+            fine: press.modifiers.contains(.option), in: range
+        )
         return .handled
     }
 }

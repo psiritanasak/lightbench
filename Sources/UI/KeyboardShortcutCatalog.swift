@@ -111,6 +111,12 @@ enum KeyboardShortcutCatalog {
             ShortcutEntry(keys: "\u{2325}-click a section title", action: "Edit tab: open only that section and close the others",
                           source: .code(file: "Sources/UI/AdjustTabView.swift", contains: "case .solo: onSolo?()")),
         ]),
+        ShortcutSection(title: "Sliders", entries: [
+            ShortcutEntry(keys: "\u{2325}-drag a slider", action: "Fine adjustment (a quarter of the speed)",
+                          source: .code(file: "Sources/UI/ThinSlider.swift", contains: "static let fineDivisor: Double = 4")),
+            ShortcutEntry(keys: "\u{2325} \u{2190} \u{2192}", action: "Fine step on a focused slider",
+                          source: .code(file: "Sources/UI/ThinSlider.swift", contains: "fine: press.modifiers.contains(.option)")),
+        ]),
         ShortcutSection(title: "Tone curve editor (with a point selected)", entries: [
             ShortcutEntry(keys: "\u{2190} \u{2192} \u{2191} \u{2193}", action: "Nudge the point (hold Shift for bigger steps)",
                           source: .code(file: "Sources/UI/ToneCurveEditorView.swift", contains: "let step = keyPress.modifiers.contains(.shift) ? ToneCurveEditing.coarseNudgeStep : ToneCurveEditing.nudgeStep")),

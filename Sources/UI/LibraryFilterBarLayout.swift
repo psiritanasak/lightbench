@@ -7,7 +7,7 @@ import Foundation
 /// The view's `ViewThatFits` is the runtime switch; `mode(forWidth:showsPeople:)` is its exact PREDICTION, valid because every child
 /// of the full row has a constant ideal width. A render test (batch 3) keeps the two equal.
 ///
-/// Every constant below is a PROPOSAL, not a measurement: batch 3's render test pins them to the real view (and may change them).
+/// The pop-up widths are measured (see `ratingWidth`); the other constants are by-eye choices that a render test pins to the real view.
 enum LibraryFilterBarLayout {
     /// Left and right padding of the bar.
     static let horizontalPadding: CGFloat = 12
@@ -21,9 +21,13 @@ enum LibraryFilterBarLayout {
     /// The search field's minimum width in the collapsed row.
     static let searchCollapsedMinWidth: CGFloat = 140
 
-    static let ratingWidth: CGFloat = 110
-    static let flagWidth: CGFloat = 130
-    static let labelWidth: CGFloat = 130
+    /// Pop-up widths. Measured 2026-11-18 (offscreen NSHostingView, `.fixedSize()`, a default menu-style Picker with hidden label,
+    /// all options present): a pop-up is as wide as its LONGEST option whichever one is selected. Rating 121.5 pt, Flag 132.5 pt
+    /// ("Hide Rejected"), Label 106.0 pt (measured with the colour swatches in the options); each rounded up to the next 10 pt.
+    /// Keyword and Person show a variable name (with a count), so they were not measured: they keep their old caps and truncate.
+    static let ratingWidth: CGFloat = 130
+    static let flagWidth: CGFloat = 140
+    static let labelWidth: CGFloat = 110
     static let keywordWidth: CGFloat = 150
     static let personWidth: CGFloat = 140
 

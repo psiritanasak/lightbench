@@ -7,11 +7,11 @@ import XCTest
 /// no blue anywhere. Menus themselves are AppKit-drawn (manual check), so the bar is rendered with its pop-ups closed.
 @MainActor
 final class LibraryFilterBarTests: XCTestCase {
-    private let size = CGSize(width: 900, height: 44)
+    private let size = CGSize(width: LibraryFilterBarLayout.fullRowWidth(showsPeople: false) + 40, height: 44)
 
     private func render(_ catalog: CatalogModel, height: CGFloat? = nil) -> NSBitmapImageRep {
         let size = CGSize(width: self.size.width, height: height ?? self.size.height)
-        let view = LibraryFilterBar(catalog: catalog).environment(\.colorScheme, .dark).environment(\.controlActiveState, .key)
+        let view = LibraryFilterBar(catalog: catalog, layout: .full).environment(\.colorScheme, .dark).environment(\.controlActiveState, .key)
             .frame(width: size.width, height: size.height, alignment: .top).background(Theme.panel)
         let hosting = NSHostingView(rootView: view)
         hosting.frame = NSRect(origin: .zero, size: size)
@@ -95,19 +95,19 @@ final class LibraryFilterBarTests: XCTestCase {
         }
         XCTAssertEqual(pixelsBelowRow(idleRep), 0)
         XCTAssertEqual(pixelsBelowRow(badRep), 0, "a warning adds no line under the bar")
-        // The help button is the right-most control: its region (last 40 pt) holds amber pixels only for the warning.
-        func amberInHelpSlot(_ rep: NSBitmapImageRep) -> Int {
+        // The help button sits right after the search field; amber pixels anywhere in the bar appear only for the warning.
+        func amberInBar(_ rep: NSBitmapImageRep) -> Int {
             var n = 0
             for y in 0..<(44 * scale) {
-                for x in ((Int(size.width) - 40) * scale)..<rep.pixelsWide {
+                for x in 0..<rep.pixelsWide {
                     guard let p = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
                     if p.redComponent > 0.6 && p.redComponent > p.blueComponent + 0.2 { n += 1 }
                 }
             }
             return n
         }
-        XCTAssertEqual(amberInHelpSlot(idleRep), 0)
-        XCTAssertGreaterThan(amberInHelpSlot(badRep), 10, "the amber triangle replaces the question mark")
+        XCTAssertEqual(amberInBar(idleRep), 0)
+        XCTAssertGreaterThan(amberInBar(badRep), 10, "the amber triangle replaces the question mark")
     }
 
     func testTheSavedQueryOfASelectedSmartCollectionAlsoShowsTheScanProgress() {
@@ -199,5 +199,12 @@ final class LibraryFilterBarTests: XCTestCase {
         let files = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".swift") }
         let holders = try files.filter { try String(contentsOf: dir.appendingPathComponent($0), encoding: .utf8).contains("Picker(\"Sort\"") }
         XCTAssertEqual(holders, ["LibraryGridBottomBar.swift"])
+    }
+
+    func testTheBarUsesViewThatFitsAndTheLayoutRules() throws {
+        let bar = try source("Sources/UI/LibraryFilterBar.swift")
+        XCTAssertTrue(bar.contains("ViewThatFits(in: .horizontal)"))
+        // The bar reads its widths from the layout rules through this alias (a doc-comment mention would not count).
+        XCTAssertTrue(bar.contains("private typealias L = LibraryFilterBarLayout\n"))
     }
 }

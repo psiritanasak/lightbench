@@ -269,6 +269,7 @@ New findings (not in section 2; each is assigned to a slice below):
   Dragging must not start the double-click or the ⇧-range.
 
 #### A5. Filter bar
+- **DONE 2026-11-18** (CLAUDE.md "Library filter bar", IMPROVEMENTS.md D97; plan `.plans/A5_plan.md`; built in a parallel worktree). Defaults taken: Sort and the status line moved to the grid's bottom bar (left of the layout buttons); two modes only (full / collapsed "Filters (n)"), n excludes search; the Clear slot always reserved; no new shortcut. NOT checked on screen. The text below is the original brief.
 - **Today**: 6-7 fixed-width pop-ups + search in one row; a hint line that
   appears below and pushes the grid (`LibraryFilterBar.swift`).
 - **Change**: search field first and wide; Sort moves to the right end next
@@ -467,7 +468,7 @@ New findings (not in section 2; each is assigned to a slice below):
 | 8 | C2 sheet scaffold | M | low | |
 | 9 | A4 sidebar | M | medium (drag vs click) | |
 | 10 | B5 tool panels | M | low | |
-| 11 | A5 filter bar | S | low | R0 showed truncation at 900 pt |
+| 11 | A5 filter bar | done 2026-11-18 | | see the slice |
 | 12 | C3 tokens | L (mechanical) | low, wide | last, touches everything |
 
 C1 and C2 can each be split over two sessions (the kit, then the call sites)

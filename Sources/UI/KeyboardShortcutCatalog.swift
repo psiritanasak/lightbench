@@ -94,6 +94,8 @@ enum KeyboardShortcutCatalog {
                           source: .code(file: "Sources/UI/CollectionSidebarView.swift", contains: "expandedFolders = SidebarRows.expanding(catalog.selectedFilter")),
         ]),
         ShortcutSection(title: "Editor", entries: [
+            ShortcutEntry(keys: "Click the histogram", action: "Switch the histogram between Luminance and RGB",
+                          source: .code(file: "Sources/UI/EditorHistogramHeader.swift", contains: "mode = mode.next")),
             ShortcutEntry(keys: "0", action: "Reset the zoom (when zoomed in)",
                           source: .code(file: "Sources/UI/ContentView.swift", contains: "if keyPress.key == \"0\" {")),
             ShortcutEntry(keys: "\u{2190} \u{2192} \u{2191} \u{2193}", action: "Pan when zoomed in",

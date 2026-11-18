@@ -10,4 +10,10 @@ enum HistogramDisplayMode: String, CaseIterable, Identifiable {
     case rgb = "RGB"
 
     var id: String { rawValue }
+
+    /// The mode a click on the histogram switches to (wraps around).
+    var next: HistogramDisplayMode { self == .luminance ? .rgb : .luminance }
+
+    /// What `HistogramView` draws in this mode.
+    var channels: HistogramChannelOverlay { self == .rgb ? .allChannels : .luminanceOnly }
 }

@@ -1,11 +1,11 @@
 import SwiftUI
 
 /// The pinned header above the Edit tab's sidebar scroll: the live histogram plus a one-line EXIF strip, so the histogram stays visible while
-/// the sliders scroll. It shows the SAME data as the Light section's Levels histogram (`ImageDocumentModel.recomputeHistogram`, which holds
-/// the not-yet-applied Levels sliders at identity), so it is a histogram of the edit as it stands BEFORE Levels. Height budget about 100-110 pt.
+/// the sliders scroll. It is the only histogram; it is the Levels input (`ImageDocumentModel.recomputeHistogram` holds the Levels sliders at
+/// identity), i.e. the edit as it stands BEFORE Levels. A click on it cycles the mode (Luminance / RGB). Height budget about 100-110 pt.
 struct EditorHistogramHeader: View {
     let data: HistogramData
-    var channels: HistogramChannelOverlay = .allChannels
+    @Binding var mode: HistogramDisplayMode
     let cameraInfo: PhotoMetadataReader.Fields?
 
     /// The header belongs to the Edit tab only.
@@ -13,8 +13,21 @@ struct EditorHistogramHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HistogramView(data: data, channels: channels)
-                .help("Histogram of the edited photo, before Levels")
+            Button { mode = mode.next } label: {
+                HistogramView(data: data, channels: mode.channels)
+                    .overlay(alignment: .topTrailing) {
+                        Text(mode.rawValue).font(.caption2).foregroundStyle(Theme.textSecondary)
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(Theme.panel.opacity(0.7), in: RoundedRectangle(cornerRadius: 3))
+                            .padding(4)
+                    }
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Histogram of the edited photo, before Levels. Click to switch between Luminance and RGB.")
+            .accessibilityLabel("Histogram")
+            .accessibilityValue(mode.rawValue)
+            .accessibilityHint("Switches between Luminance and RGB")
             // The text lines are read as ONE VoiceOver element; the histogram itself stays hidden (see `HistogramView`).
             VStack(alignment: .leading, spacing: 3) {
                 if let exposure = cameraInfo.flatMap(ExifStripText.exposureLine) {

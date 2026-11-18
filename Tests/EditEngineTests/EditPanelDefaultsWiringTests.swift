@@ -58,4 +58,37 @@ final class EditPanelDefaultsWiringTests: XCTestCase {
         let end = try XCTUnwrap(text.range(of: "private func setSections", range: start.upperBound..<text.endIndex))
         XCTAssertTrue(String(text[start.lowerBound..<end.lowerBound]).contains("onSolo: { setSections { $0.solo(section) } }"))
     }
+
+    // MARK: One histogram
+
+    private func codeOnly(_ text: String) -> String {
+        text.components(separatedBy: "\n").map { line in
+            guard let range = line.range(of: "//") else { return line }
+            return String(line[..<range.lowerBound])
+        }.joined(separator: "\n")
+    }
+
+    func testHistogramViewIsDrawnOnlyByThePinnedHeader() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/UI")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil).filter { $0.pathExtension == "swift" }
+        XCTAssertFalse(files.isEmpty)
+        for file in files {
+            let text = codeOnly(try String(contentsOf: file, encoding: .utf8))
+            let n = count(of: "HistogramView(", in: text)
+            if file.lastPathComponent == "EditorHistogramHeader.swift" {
+                XCTAssertEqual(n, 1)
+            } else {
+                XCTAssertEqual(n, 0, "\(file.lastPathComponent) must not draw its own HistogramView")
+            }
+        }
+    }
+
+    func testAdjustTabViewDoesNotReadTheHistogramModeAndContentViewBindsIt() throws {
+        // The mode value itself still lives in `AdjustPanelState` (declared in AdjustTabView.swift); only its use as a control is gone.
+        let adjust = codeOnly(try source("Sources/UI/AdjustTabView.swift"))
+        XCTAssertFalse(adjust.contains("panel.histogramDisplayMode"))
+        XCTAssertFalse(adjust.contains("HistogramDisplayMode.allCases"))
+        XCTAssertTrue(try source("Sources/UI/ContentView.swift").contains("mode: $adjustPanel.histogramDisplayMode"))
+    }
 }

@@ -147,7 +147,7 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var historyEntries: [HistoryEntry] = []
     @Published private(set) var currentHistoryIndex = 0
 
-    /// Live Levels histogram — luminance plus per-channel R/G/B, each
+    /// The Editor's histogram (the Levels input) — luminance plus per-channel R/G/B, each
     /// `HistogramComputer.binCount` values normalized 0...1. Empty (`.empty`)
     /// until the first debounced recompute finishes (or if no image is
     /// loaded). See `recomputeHistogram()` for what state it actually

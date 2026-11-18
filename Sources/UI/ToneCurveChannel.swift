@@ -10,9 +10,8 @@ import SwiftUI
 /// `String, CaseIterable, Identifiable` with the rawValue doubling as the
 /// display label — the same shape as `HistogramDisplayMode`, not
 /// `SelectiveColorBand`'s own `switch`-based `label`, because this enum
-/// drives a segmented `Picker` exactly like `HistogramDisplayMode` already
-/// does one section above this one in the sidebar (the Levels Luminance/
-/// RGB picker), not a row of tappable swatches.
+/// drives a segmented `Picker` (the house pattern for a small fixed choice),
+/// not a row of tappable swatches.
 enum ToneCurveChannel: String, CaseIterable, Identifiable {
     case composite = "RGB"
     case red = "Red"

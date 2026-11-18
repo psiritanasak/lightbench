@@ -2479,7 +2479,7 @@ struct ContentView: View {
             if EditorHistogramHeader.isShown(on: selectedTab) {
                 EditorHistogramHeader(
                     data: document.histogramData,
-                    channels: adjustPanel.histogramDisplayMode == .rgb ? .allChannels : .luminanceOnly,
+                    mode: $adjustPanel.histogramDisplayMode,
                     cameraInfo: document.cameraInfo)
                 Divider()
             }

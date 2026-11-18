@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 /// It must stay owned by `ContentView`, NOT by `AdjustTabView`: `editControls`
 /// picks the tab body with a `switch`, so the Adjust subtree is torn down when
 /// the user switches to Crop. Child-owned `@State` would therefore re-collapse
-/// every section, reset the histogram picker to Luminance and the selective-
+/// every section, reset the histogram mode to Luminance and the selective-
 /// color band to Red on every tab round-trip. Hoisting it here keeps the
 /// previous (correct) behavior, where these lived on `ContentView` directly.
 ///
@@ -37,7 +37,7 @@ struct AdjustPanelState {
     /// with the handle). `RetouchOverlayGeometry.newSpotRadius` clamps it.
     var retouchNewSpotRadius = RetouchOverlayGeometry.defaultNewRadius
 
-    /// Whether the Levels histogram shows luminance only or luminance +
+    /// Whether the pinned header's histogram (`EditorHistogramHeader`, the only histogram) shows luminance only or luminance +
     /// per-channel RGB overlays. Presentation-only — `HistogramData` always
     /// carries all four; this just controls what `HistogramView` draws.
     /// Defaults to `.luminance` to match this histogram's original look.
@@ -410,18 +410,7 @@ struct AdjustTabView: View {
                 range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
             Text("Levels").font(.caption).foregroundStyle(Theme.textSecondary)
-            Picker("", selection: $panel.histogramDisplayMode) {
-                ForEach(HistogramDisplayMode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.small) // 2026-11-05: the narrower Adjust panel (300pt) must fit these pickers
-            .labelsHidden()
-            HistogramView(
-                data: document.histogramData,
-                channels: panel.histogramDisplayMode == .rgb ? .allChannels : .luminanceOnly
-            )
+                .help("The histogram at the top of the panel shows the photo before Levels")
             EditSliderRow(
                 label: "Levels Black", value: $document.editState.levelsBlackPoint,
                 range: 0...1, identity: 0, displayMultiplier: 100
@@ -459,8 +448,8 @@ struct AdjustTabView: View {
                 .foregroundStyle(Theme.textSecondary)
             targetedButton(.curve)
             // Curves v2 slice 3: which of the four curves the canvas below
-            // shows/edits. A segmented `Picker`, matching `lightSection`'s
-            // own `histogramDisplayMode` picker one section above — NOT
+            // shows/edits. A segmented `Picker` (the house pattern for a
+            // small fixed choice) — NOT
             // `SelectiveColorBand`'s row-of-tappable-swatch-circles pattern,
             // whose selection ring is drawn in `Color.white` (see that
             // section below): a selected white RGB swatch ringed in white

@@ -330,6 +330,7 @@ New findings (not in section 2; each is assigned to a slice below):
   give each its own, visible, mode control.
 
 #### B3. Slider row
+- **DONE 2026-11-18** (CLAUDE.md "Slider row", IMPROVEMENTS.md D98; plan `.plans/B3_plan.md`). Decisions: a plain click on an Edit slider's track no longer jumps (user, 2026-11-18); double-click on the name or track resets as one labelled undo step; ⌥-drag / ⌥-arrows fine on every ThinSlider; reset icon on hover or when edited; no keyboard reset key. NOT checked on screen. The text below is the original brief.
 - **Today**: `EditControlRows.swift:41-110`: label, readout, reset icon;
   click the readout to type; no double-click reset.
 - **Change**: double-click on the label or the track resets (one undo step);
@@ -463,7 +464,7 @@ New findings (not in section 2; each is assigned to a slice below):
 | 3 | B1 section header | done 2026-11-17 | | see the slice |
 | 4 | A2 right-click + selection bar | done 2026-11-17 | | see the slice |
 | 5 | B2 panel defaults + histogram | done 2026-11-18 | | see the slice |
-| 6 | B3 slider row | S | low | |
+| 6 | B3 slider row | done 2026-11-18 | | see the slice |
 | 7 | A3 + B4 menus and shortcuts | M | low | after A2 so names come from one model |
 | 8 | C2 sheet scaffold | M | low | |
 | 9 | A4 sidebar | M | medium (drag vs click) | |

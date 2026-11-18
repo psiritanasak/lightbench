@@ -23,6 +23,7 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let showPhotosInSubfolders = "prefs.v1.showPhotosInSubfolders"
         static let findSmallFaces = "prefs.v1.findSmallFaces"
         static let quickRawPreviews = "prefs.v1.quickRawPreviews"
+        static let editPanelOpenSections = "prefs.v1.editPanelOpenSections"
     }
 
     let defaults: UserDefaults
@@ -62,6 +63,13 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
     var showPhotosInSubfolders: Bool {
         get { bool(Key.showPhotosInSubfolders, default: false) }
         nonmutating set { defaults.set(newValue, forKey: Key.showPhotosInSubfolders) }
+    }
+
+    /// Editor: the names (`AdjustSection` raw values) of the open Edit-tab sections. nil = never stored (the panel then opens Light and Color);
+    /// `[]` = all closed. A value of the wrong type reads as nil; setting nil removes the key.
+    var editPanelOpenSections: [String]? {
+        get { defaults.stringArray(forKey: Key.editPanelOpenSections) }
+        nonmutating set { defaults.set(newValue, forKey: Key.editPanelOpenSections) }
     }
 
     /// Library: while a RAW photo's real thumbnail is still rendering, show the camera's embedded JPEG preview in its cell (it has the camera's

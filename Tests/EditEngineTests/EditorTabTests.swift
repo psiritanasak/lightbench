@@ -77,13 +77,15 @@ final class EditorTabTests: XCTestCase {
         }
     }
 
-    /// The Looks tab opens with its two grids visible; Presets (a plain list) and the Adjust sections stay collapsed.
-    func testLooksAndStyleOpenByDefaultWhileEverythingElseStaysCollapsed() {
+    /// The Looks tab opens with its two grids visible; Presets (a plain list) stays collapsed. On the Edit tab Light and Color are open, Curve is not.
+    func testLooksStyleLightAndColorOpenByDefault() {
         let panel = AdjustPanelState()
         XCTAssertTrue(panel.isLooksSectionExpanded)
         XCTAssertTrue(panel.isStyleSectionExpanded)
         XCTAssertFalse(panel.isPresetsSectionExpanded)
-        XCTAssertFalse(panel.isLightSectionExpanded)
+        XCTAssertTrue(panel.editSections.isOpen(.light))
+        XCTAssertTrue(panel.editSections.isOpen(.color))
+        XCTAssertFalse(panel.editSections.isOpen(.curve))
     }
 
     // MARK: - Tool rail

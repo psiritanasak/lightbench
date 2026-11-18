@@ -44,6 +44,21 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(again.backupsToKeep, 12)
     }
 
+    func testEditPanelOpenSectionsIsNilUntilStoredAndRoundTrips() {
+        let defaults = makeDefaults()
+        let prefs = AppPreferences(defaults: defaults)
+        XCTAssertNil(prefs.editPanelOpenSections)
+        prefs.editPanelOpenSections = ["light"]
+        XCTAssertEqual(AppPreferences(defaults: defaults).editPanelOpenSections, ["light"])
+        prefs.editPanelOpenSections = []
+        XCTAssertEqual(prefs.editPanelOpenSections, [], "all closed is stored, not nil")
+        defaults.set(3, forKey: AppPreferences.Key.editPanelOpenSections)
+        XCTAssertNil(prefs.editPanelOpenSections, "a wrong type reads as never stored")
+        prefs.editPanelOpenSections = ["curve"]
+        prefs.editPanelOpenSections = nil
+        XCTAssertNil(defaults.object(forKey: AppPreferences.Key.editPanelOpenSections))
+    }
+
     func testShowPhotosInSubfoldersDefaultsToOffAndRoundTrips() {
         let defaults = makeDefaults()
         XCTAssertFalse(AppPreferences(defaults: defaults).showPhotosInSubfolders, "off by default: nothing changes for existing users")

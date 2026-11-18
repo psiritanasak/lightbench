@@ -11,30 +11,22 @@ import UniformTypeIdentifiers
 /// color band to Red on every tab round-trip. Hoisting it here keeps the
 /// previous (correct) behavior, where these lived on `ContentView` directly.
 ///
-/// It also carries the Looks tab's section flags (`isLooksSectionExpanded`, `isStyleSectionExpanded`,
-/// `isPresetsSectionExpanded`), read by `LooksTabView` — the struct keeps its Adjust-era name. Every Adjust section defaults
-/// collapsed; the Looks tab's Looks and Style flags default OPEN (see below).
+/// The Edit tab's nine sections are ONE value, `editSections`: Light and Color are open on first run, and after that
+/// the set stored in `AppPreferences.editPanelOpenSections` (written by `AdjustTabView.setSections`). The struct also
+/// carries the Looks tab's section flags (`isLooksSectionExpanded`, `isStyleSectionExpanded`, `isPresetsSectionExpanded`),
+/// read by `LooksTabView` (the struct keeps its Adjust-era name); Looks and Style default OPEN, Presets closed.
 struct AdjustPanelState {
-    /// Which Adjust-tab sections are expanded — Apple-Photos-style
-    /// collapsible sections. Defaults `false` (all collapsed) per user
-    /// request; one bool each rather than a `Set`, matching this file's
-    /// existing convention of separate named fields per presentation-only
-    /// concern.
-    var isLightSectionExpanded = false
-    /// Curves v2 slice 2B: whether the "Curve" section is expanded.
-    /// Collapsed by default, same reasoning as every other section bool —
-    /// also means the ScrollView vertical-drag risk documented on
-    /// `ToneCurveEditorView` is inert for anyone who never opens it.
-    var isCurveSectionExpanded = false
-    var isColorSectionExpanded = false
-    var isSelectiveColorSectionExpanded = false
-    var isBlackAndWhiteSectionExpanded = false
-    /// Color Grading Slice B: whether the "Color Grading" section is
-    /// expanded. Collapsed by default, same reasoning as every other
-    /// section bool — also means the wheel's own drag interaction is inert
-    /// for anyone who never opens it.
-    var isColorGradingSectionExpanded = false
-    var isEffectsSectionExpanded = false
+    /// Which Edit-tab sections are open (see the type comment for the defaults and persistence).
+    var editSections = AdjustSectionExpansion()
+
+    /// Applies a new Edit-tab expansion in this ONE value; returns true when Point Color went from open to closed
+    /// (the caller must then disarm the Point Color eyedropper). Clears `selectedPointColorID` only on that transition.
+    mutating func applyExpansion(_ next: AdjustSectionExpansion) -> Bool {
+        let closedPointColor = editSections.isOpen(.pointColor) && !next.isOpen(.pointColor)
+        editSections = next
+        if closedPointColor { selectedPointColorID = nil }
+        return closedPointColor
+    }
 
     /// Which Selective Color property the Targeted tool changes (presentation state, like the band selection).
     var targetedSelectiveProperty: SelectiveColorProperty = .saturation
@@ -59,7 +51,7 @@ struct AdjustPanelState {
     var selectedSelectiveColorBand: SelectiveColorBand = .red
 
     /// Phase 5 slice 2: whether the Presets section is expanded. Same
-    /// reasoning as the six section bools above — must survive a Crop tab
+    /// reasoning as `editSections` — must survive a Crop tab
     /// round-trip.
     var isPresetsSectionExpanded = false
 
@@ -69,10 +61,6 @@ struct AdjustPanelState {
 
     /// Whether the Style (preset grid + Tone/Color pad + strength) section is expanded. Open by default, same reasoning as Looks.
     var isStyleSectionExpanded = true
-
-    /// Phase 6 slice 2: whether the RAW section is expanded. Same
-    /// reasoning as every other section bool above.
-    var isRawSectionExpanded = false
 
 
     /// Which mask's sliders + on-image overlay are shown.
@@ -89,10 +77,6 @@ struct AdjustPanelState {
     /// Which Depth Range mask (if any) has "Show Selection" switched on: a tint of what it selects (window and Invert, not a combine mode), drawn over the photo by `ContentView`.
     /// Presentation-only; it only draws while that mask is also the selected one.
     var depthSelectionMaskID: UUID?
-
-    /// Point Color Slice B: whether the "Point Color" section is expanded.
-    /// Same reasoning as every other section bool above.
-    var isPointColorSectionExpanded = false
 
     /// Which point color instance's sliders + eyedropper are shown.
     /// Presentation-only, exactly like `selectedMaskID` above — stored as
@@ -304,15 +288,34 @@ struct AdjustTabView: View {
 
     /// An Edit-tab section with its header's edited dot and per-section reset (one labelled undo step).
     private func section<Content: View>(
-        _ section: AdjustSection, _ isExpanded: Binding<Bool>, isResetEnabled: Bool = true,
+        _ section: AdjustSection, isResetEnabled: Bool = true,
         @ViewBuilder _ content: @escaping () -> Content
     ) -> some View {
         AdjustSectionContainer(
-            title: section.title, isExpanded: isExpanded,
+            title: section.title, isExpanded: expandedBinding(section),
             isEdited: section.isEdited(document.editState),
             onReset: { resetSection(section) },
             isResetEnabled: isResetEnabled,
             content: content
+        )
+    }
+
+    /// The ONE path that changes which Edit-tab sections are open: one write of `panel`, then persist, then disarm.
+    private func setSections(_ change: (inout AdjustSectionExpansion) -> Void) {
+        var next = panel
+        var sections = next.editSections
+        change(&sections)
+        guard sections != next.editSections else { return }
+        let closedPointColor = next.applyExpansion(sections)
+        panel = next
+        AppPreferences.shared.editPanelOpenSections = sections.stored
+        if closedPointColor { interactionMode.disarmPointColorPick() }
+    }
+
+    private func expandedBinding(_ section: AdjustSection) -> Binding<Bool> {
+        Binding(
+            get: { panel.editSections.isOpen(section) },
+            set: { open in setSections { $0.set(section, open: open) } }
         )
     }
 
@@ -336,21 +339,21 @@ struct AdjustTabView: View {
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
                 .textCase(.uppercase)
-            section(.light, $panel.isLightSectionExpanded) { lightSection }
+            section(.light) { lightSection }
             Divider()
-            section(.curve, $panel.isCurveSectionExpanded) { curveSection }
+            section(.curve) { curveSection }
             Divider()
-            section(.color, $panel.isColorSectionExpanded) { colorSection }
+            section(.color) { colorSection }
             Divider()
-            section(.selectiveColor, $panel.isSelectiveColorSectionExpanded) { selectiveColorSection }
+            section(.selectiveColor) { selectiveColorSection }
             Divider()
-            section(.pointColor, pointColorSectionExpandedBinding) { pointColorSection }
+            section(.pointColor) { pointColorSection }
             Divider()
-            section(.blackAndWhite, $panel.isBlackAndWhiteSectionExpanded) { blackAndWhiteSection }
+            section(.blackAndWhite) { blackAndWhiteSection }
             Divider()
-            section(.colorGrading, $panel.isColorGradingSectionExpanded) { colorGradingSection }
+            section(.colorGrading) { colorGradingSection }
             Divider()
-            section(.effects, $panel.isEffectsSectionExpanded) { effectsSection }
+            section(.effects) { effectsSection }
             rawSectionContainer
             Divider()
             resetAdjustmentsButton
@@ -1276,23 +1279,6 @@ struct AdjustTabView: View {
 
     // MARK: - Point Color
 
-    /// ONE write through `panel`, not two sequential ones (a second read-modify-write through the
-    /// `@Binding` could clobber the first with a stale snapshot), and disarms the eyedropper on collapse.
-    private var pointColorSectionExpandedBinding: Binding<Bool> {
-        Binding(
-            get: { panel.isPointColorSectionExpanded },
-            set: { newValue in
-                var next = panel
-                next.isPointColorSectionExpanded = newValue
-                if !newValue { next.selectedPointColorID = nil }
-                panel = next
-                if !newValue {
-                    interactionMode.disarmPointColorPick()
-                }
-            }
-        )
-    }
-
     /// No add-then-pick-a-kind step, unlike `masksSection` — there is only
     /// one kind, so "Add Point Color" immediately selects the new instance
     /// AND arms its eyedropper in one action (mirroring `addMask(kind:
@@ -1421,7 +1407,7 @@ struct AdjustTabView: View {
         if isCurrentPhotoRaw {
             Divider()
             // Reset RAW triggers a full re-decode, so it waits out a load/decode like the RAW sliders (`rawSection`'s `.disabled`).
-            section(.raw, $panel.isRawSectionExpanded, isResetEnabled: !document.isLoadingImage) { rawSection }
+            section(.raw, isResetEnabled: !document.isLoadingImage) { rawSection }
         }
     }
 

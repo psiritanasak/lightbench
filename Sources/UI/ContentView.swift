@@ -452,9 +452,9 @@ struct ContentView: View {
     /// (like Point Color's section-collapse disarm).
     private var targetedSectionOpen: Bool {
         TargetedAdjustmentRules.sectionIsOpen(
-            tool: targetedTool, curveExpanded: adjustPanel.isCurveSectionExpanded,
-            selectiveColorExpanded: adjustPanel.isSelectiveColorSectionExpanded,
-            blackAndWhiteExpanded: adjustPanel.isBlackAndWhiteSectionExpanded)
+            tool: targetedTool, curveExpanded: adjustPanel.editSections.isOpen(.curve),
+            selectiveColorExpanded: adjustPanel.editSections.isOpen(.selectiveColor),
+            blackAndWhiteExpanded: adjustPanel.editSections.isOpen(.blackAndWhite))
     }
 
     /// Pushes/pops the crosshair exactly once per transition (a stray pop would pop someone else's cursor).
@@ -513,7 +513,8 @@ struct ContentView: View {
     /// inside `AdjustTabView` because `editControls` swaps tab bodies with a
     /// `switch`, which would destroy child-owned `@State` on every switch to
     /// Crop and back — see `AdjustPanelState`'s own doc comment.
-    @State private var adjustPanel = AdjustPanelState()
+    @State private var adjustPanel = AdjustPanelState(
+        editSections: AdjustSectionExpansion(stored: AppPreferences.shared.editPanelOpenSections))
     /// Per-tab sidebar scroll offsets and the retouch-spot / Point Color selections remembered across tab switches (`TabMemory`).
     @State private var tabMemory = TabMemory()
     /// The Looks tab's thumbnail previews. Owned here, not by `LooksTabView`, which is torn down on every tab switch.

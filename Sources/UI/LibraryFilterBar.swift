@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Library's filter bar: Sort, Rating, Flag, Label and Keyword pop-ups (showing only their current value — the options say what each
+/// The Library's filter bar: Rating, Flag, Label and Keyword pop-ups (showing only their current value — the options say what each
 /// is) and the search field. A filter that is away from its default sits on a grey chip, and a small clear button appears only while any
 /// filter is active (sort alone never counts). Extracted from `LibraryGridView` so it can be rendered in tests.
 struct LibraryFilterBar: View {
@@ -32,15 +32,6 @@ struct LibraryFilterBar: View {
         let state = catalog.libraryFilterState
         VStack(alignment: .trailing, spacing: 0) {
             HStack(spacing: 12) {
-                Picker("Sort", selection: $catalog.sortOption) {
-                    ForEach(LibrarySortOption.allCases) { option in
-                        Text(option.label).tag(option)
-                    }
-                }
-                .labelsHidden()
-                .accessibilityLabel("Sort")
-                .frame(maxWidth: 140)
-
                 Picker("Rating", selection: $catalog.minimumRating) {
                     Text("Any Rating").tag(0)
                     ForEach(1...5, id: \.self) { stars in
@@ -122,28 +113,20 @@ struct LibraryFilterBar: View {
                     .frame(maxWidth: 260)
                     .accessibilityLabel("Search")
 
+                // While the search has an unreadable term the glyph turns into the amber triangle (the text itself is in the grid's bottom bar).
+                let warning = searchHint.flatMap { $0.isWarning ? $0.text : nil }
                 Button { showingSearchHelp.toggle() } label: {
-                    Image(systemName: "questionmark.circle")
+                    Image(systemName: warning == nil ? "questionmark.circle" : "exclamationmark.triangle.fill")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Theme.textSecondary)
-                .help("Search syntax")
+                .foregroundStyle(warning == nil ? Theme.textSecondary : Theme.warning)
+                .help(warning.map { "\($0). Click for the search syntax." } ?? "Search syntax")
                 .accessibilityLabel("Search syntax help")
+                .accessibilityValue(warning ?? "")
                 .popover(isPresented: $showingSearchHelp, arrowEdge: .bottom) { SearchHelpView() }
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
-            // Scan progress, or why the query shows nothing (an unreadable field value). Its own line: the picker row is too tight
-            // to share (measured live: inline it was squeezed to zero width).
-            if let hint = searchHint {
-                Text(hint.text)
-                    .font(.caption)
-                    .foregroundStyle(hint.isWarning ? Theme.warning : Theme.textSecondary)
-                    .lineLimit(1)
-                    .padding(.horizontal)
-                    .padding(.bottom, 6)
-                    .accessibilityLabel(hint.text)
-            }
         }
     }
 }

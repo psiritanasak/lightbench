@@ -716,54 +716,14 @@ struct LibraryGridView: View {
 
     private var filterBar: some View { LibraryFilterBar(catalog: catalog) }
 
+    /// The bar under the grid (`LibraryGridBottomBar`): the status slot, Sort, the layout buttons and the size slider.
     /// D2 (IMPROVEMENTS.md): bottom-right thumbnail-size slider, Photos'
     /// own convention. `ThinSlider`, this app's custom-styled slider
     /// (`Sources/UI/ThinSlider.swift`) — not the native SwiftUI `Slider`,
     /// which was deliberately replaced app-wide already because its
     /// glossy 3D knob doesn't restyle to match the flat dark theme.
     private var thumbnailSizeBar: some View {
-        HStack(spacing: 10) {
-            Spacer()
-            // Layout: square cells (default) or justified rows (each photo at its own aspect ratio). Flat buttons, the grey `isOn` chip marks the choice.
-            Button { gridLayout = "square" } label: { Image(systemName: "square.grid.2x2") }
-                .buttonStyle(FlatButtonStyle(isOn: !isJustified))
-                .help("Square grid")
-                .accessibilityLabel("Square grid")
-                .accessibilityAddTraits(!isJustified ? [.isSelected] : [])
-            Button { gridLayout = "justified" } label: { Image(systemName: "rectangle.grid.1x2") }
-                .buttonStyle(FlatButtonStyle(isOn: isJustified))
-                .help("Justified rows: every photo keeps its shape")
-                .accessibilityLabel("Justified rows")
-                .accessibilityAddTraits(isJustified ? [.isSelected] : [])
-            Image(systemName: "photo")
-                .font(.caption)
-                .foregroundStyle(Theme.textSecondary)
-                .accessibilityHidden(true)
-            // Floor raised from 100 to 120 alongside the cell-width fix
-            // below (live-caught overlap bug) — this comment went through
-            // two reviewer-caught inaccuracies before landing on real,
-            // measured numbers, see the icon row's own `HStack` doc
-            // comment for the full history: at the icon row's ORIGINAL
-            // font sizes/spacing, 120 was measured as 9pt BELOW the
-            // row's true minimum (actively insufficient, not "zero-slack"
-            // as an earlier version of this exact comment claimed); the
-            // `.caption2` icon shrink alone still left 120 above the
-            // minimum; only tightening the row's own spacing (6→4) is
-            // what actually brought the row under 120 with real margin.
-            ThinSlider(
-                value: $thumbnailSize,
-                range: Self.thumbnailSizeRange,
-                valueDescription: { "\(Int($0.rounded())) points" }
-            )
-                .frame(width: 100)
-                .accessibilityLabel(isJustified ? "Row height" : "Thumbnail size")
-            Image(systemName: "photo")
-                .font(.body)
-                .foregroundStyle(Theme.textSecondary)
-                .accessibilityHidden(true)
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
+        LibraryGridBottomBar(catalog: catalog, gridLayout: $gridLayout, thumbnailSize: $thumbnailSize, sizeRange: Self.thumbnailSizeRange)
     }
 
     private static func isFolderCollection(_ catalog: CatalogModel) -> Bool {

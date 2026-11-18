@@ -75,27 +75,39 @@ final class LibraryFilterBarTests: XCTestCase {
 
     // MARK: Search hint
 
-    func testAnUnreadableSearchTermShowsAWarningHintAndTheIdleBarDoesNot() throws {
+    func testAnUnreadableSearchTermKeepsTheBarHeightAndShowsTheAmberGlyphAtTheHelpButton() throws {
         let idle = try makeCatalog()
         let bad = try makeCatalog()
         bad.searchText = "iso:abc"
-        // The hint has its own line UNDER the bar: render taller and compare only that strip (the search field's own text
-        // differs between the two catalogs, so comparing the whole picture would pass even with no hint at all).
-        let idleRep = render(idle, height: 70)
-        let badRep = render(bad, height: 70)
+        // The hint text now lives in the grid's bottom bar, so the filter bar is the same height with and without a warning:
+        // render taller and require nothing below the row in either picture.
+        let idleRep = render(idle, height: 70), badRep = render(bad, height: 70)
         let scale = idleRep.pixelsWide / Int(size.width)
-        func stripDifference(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> Int {
+        func pixelsBelowRow(_ rep: NSBitmapImageRep) -> Int {
             var n = 0
-            for y in (50 * scale)..<a.pixelsHigh {
-                for x in 0..<a.pixelsWide {
-                    guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                    if abs(p.redComponent - q.redComponent) + abs(p.greenComponent - q.greenComponent) > 0.1 { n += 1 }
+            for y in (50 * scale)..<rep.pixelsHigh {
+                for x in 0..<rep.pixelsWide {
+                    guard let p = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    if p.redComponent > 0.3 || p.greenComponent > 0.3 { n += 1 }
                 }
             }
             return n
         }
-        XCTAssertGreaterThan(stripDifference(idleRep, badRep), 40, "the warning text appears under the bar")
-        XCTAssertEqual(stripDifference(idleRep, render(try makeCatalog(), height: 70)), 0, "an idle bar has nothing under it")
+        XCTAssertEqual(pixelsBelowRow(idleRep), 0)
+        XCTAssertEqual(pixelsBelowRow(badRep), 0, "a warning adds no line under the bar")
+        // The help button is the right-most control: its region (last 40 pt) holds amber pixels only for the warning.
+        func amberInHelpSlot(_ rep: NSBitmapImageRep) -> Int {
+            var n = 0
+            for y in 0..<(44 * scale) {
+                for x in ((Int(size.width) - 40) * scale)..<rep.pixelsWide {
+                    guard let p = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    if p.redComponent > 0.6 && p.redComponent > p.blueComponent + 0.2 { n += 1 }
+                }
+            }
+            return n
+        }
+        XCTAssertEqual(amberInHelpSlot(idleRep), 0)
+        XCTAssertGreaterThan(amberInHelpSlot(badRep), 10, "the amber triangle replaces the question mark")
     }
 
     func testTheSavedQueryOfASelectedSmartCollectionAlsoShowsTheScanProgress() {
@@ -136,21 +148,11 @@ final class LibraryFilterBarTests: XCTestCase {
         XCTAssertEqual(differing(render(active), idleRep), 0, "cleared bar equals the idle bar")
     }
 
-    func testSortAloneNeverShowsTheActiveCue() throws {
+    func testSortIsNoLongerInTheFilterBar() throws {
         let idle = try makeCatalog()
         let sorted = try makeCatalog()
         sorted.sortOption = .nameAZ
-        // The Sort pop-up's own text changes, but no chip / clear button: compare only the area right of the sort pop-up.
-        let a = render(idle), b = render(sorted)
-        var n = 0
-        let scale = a.pixelsWide / Int(size.width)
-        for y in 0..<a.pixelsHigh {
-            for x in (170 * scale)..<(700 * scale) {
-                guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                if abs(p.redComponent - q.redComponent) > 0.05 { n += 1 }
-            }
-        }
-        XCTAssertEqual(n, 0, "no chip or clear button for a sort change")
+        XCTAssertEqual(differing(render(idle), render(sorted)), 0, "the bar is pixel-identical whatever the sort")
     }
 
     func testTheBarHasNoBlue() throws {
@@ -176,5 +178,26 @@ final class LibraryFilterBarTests: XCTestCase {
         let start = try XCTUnwrap(source.range(of: "struct SearchHelpView: View {"))
         let body = String(source[start.upperBound...])
         XCTAssertTrue(body.contains(".background(Theme.panel)"), "the popover content must sit on a solid panel (readability over a busy grid)")
+    }
+
+    // MARK: Source pins (batch 2)
+
+    private func source(_ relative: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+    }
+
+    func testSortLivesInTheBottomBarOnly() throws {
+        XCTAssertFalse(try source("Sources/UI/LibraryFilterBar.swift").contains("Picker(\"Sort\""))
+        XCTAssertFalse(try source("Sources/UI/LibraryFilterBar.swift").contains(".padding(.bottom, 6)"), "no hint line under the row")
+        let bottom = try source("Sources/UI/LibraryGridBottomBar.swift")
+        XCTAssertTrue(bottom.contains("Picker(\"Sort\""))
+        XCTAssertTrue(bottom.contains("LibraryFilterBar.hint("))
+        XCTAssertTrue(try source("Sources/UI/LibraryGridView.swift").contains("LibraryGridBottomBar("))
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/UI")
+        let files = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".swift") }
+        let holders = try files.filter { try String(contentsOf: dir.appendingPathComponent($0), encoding: .utf8).contains("Picker(\"Sort\"") }
+        XCTAssertEqual(holders, ["LibraryGridBottomBar.swift"])
     }
 }

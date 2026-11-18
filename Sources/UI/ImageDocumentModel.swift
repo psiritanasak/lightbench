@@ -2288,6 +2288,22 @@ final class ImageDocumentModel: ObservableObject {
         resetSections([section], summary: "Reset \(section.title)")
     }
 
+    /// A slider row's reset (double-click on its name or track, its reset icon, VoiceOver): ONE labelled undo step ("Reset Exposure").
+    /// The write goes through the row's own binding (it may be a mask's or a Point Color's field), so it runs here, between flushing
+    /// any pending burst into its own step and committing. A write that changes nothing adds no history step, but `editState`'s `didSet`
+    /// does not skip equal values (it still schedules a sidecar save), so callers must not write an unchanged value (the row's
+    /// `requestReset` returns early at the default).
+    func performLabelledEdit(_ summary: String, _ write: () -> Void) {
+        finalizePendingCommit()
+        write()
+        historyCommitWorkItem?.cancel()
+        historyCommitWorkItem = nil
+        guard isBurstPending else { return }
+        isBurstPending = false
+        history.commit(editState, summary: summary)
+        refreshHistoryState()
+    }
+
     /// "Reset Adjustments": every Edit-tab section except RAW, as ONE labelled step. Leaves geometry, red-eye, retouch, masks,
     /// look/style and every RAW field (including the determinism pin) alone.
     func resetAdjustments() {

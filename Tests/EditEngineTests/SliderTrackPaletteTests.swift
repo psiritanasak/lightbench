@@ -280,7 +280,7 @@ final class SliderTrackPaletteTests: XCTestCase {
     func testEditSliderRowPassesItsTrackToTheSlider() throws {
         let rows = try source("Sources/UI/EditControlRows.swift")
         XCTAssertTrue(rows.contains("var track: [Color]? = nil"))
-        XCTAssertTrue(rows.contains("ThinSlider(value: $value, range: range, valueDescription: format, track: track)"))
+        XCTAssertTrue(rows.contains("ThinSlider(value: $value, range: range, valueDescription: format, track: track, onDoubleClick: requestReset)"))
     }
 
     func testTheColorSectionUsesTheRamps() throws {

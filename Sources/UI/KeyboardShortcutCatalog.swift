@@ -112,6 +112,8 @@ enum KeyboardShortcutCatalog {
                           source: .code(file: "Sources/UI/AdjustTabView.swift", contains: "case .solo: onSolo?()")),
         ]),
         ShortcutSection(title: "Sliders", entries: [
+            ShortcutEntry(keys: "Double-click a slider's name or track", action: "Edit panel sliders: reset to the default (one undo step)",
+                          source: .code(file: "Sources/UI/EditControlRows.swift", contains: "onDoubleClick: requestReset")),
             ShortcutEntry(keys: "\u{2325}-drag a slider", action: "Fine adjustment (a quarter of the speed)",
                           source: .code(file: "Sources/UI/ThinSlider.swift", contains: "static let fineDivisor: Double = 4")),
             ShortcutEntry(keys: "\u{2325} \u{2190} \u{2192}", action: "Fine step on a focused slider",

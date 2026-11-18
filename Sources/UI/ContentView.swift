@@ -2518,6 +2518,7 @@ struct ContentView: View {
             // Both `HSplitView` panes start at the SAME native y-offset below the window's toolbar chrome; a small fixed top
             // clearance (there is no tab bar above the photo any more, so nothing needs measuring to line the two up).
             .padding(.top, 12)
+            .editSliderResets(document)
             // Belt-and-suspenders: guarantees this content block always
             // fills the full width the ScrollView offers.
             .frame(maxWidth: .infinity, alignment: .leading)

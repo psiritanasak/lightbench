@@ -37,11 +37,17 @@ struct EditSliderRow: View {
     /// entry and sidecar save for an interaction where nothing changed).
     @State private var seedText = ""
     @FocusState private var isTextFieldFocused: Bool
+    @Environment(\.sliderResetAction) private var resetAction
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(label)
+                    .contentShape(Rectangle())
+                    // A1's pattern: the click count is read inside ONE tap gesture (a two-tap recogniser would delay the
+                    // first click); the label has no single-click action.
+                    .onTapGesture { if (NSApp.currentEvent?.clickCount ?? 1) >= 2 { requestReset() } }
+                    .help("Double-click to reset")
                 Spacer()
                 if isEditingText {
                     TextField("", text: $editingText)
@@ -95,7 +101,7 @@ struct EditSliderRow: View {
                         .accessibilityAction { beginEditingText() }
                 }
                 Button {
-                    value = identity
+                    requestReset()
                 } label: {
                     Image(systemName: "arrow.uturn.backward")
                 }
@@ -103,10 +109,30 @@ struct EditSliderRow: View {
                 .foregroundStyle(Theme.textSecondary)
                 .disabled(value == identity)
                 .accessibilityLabel("Reset \(label)")
+                .accessibilityHidden(value == identity)
             }
-            ThinSlider(value: $value, range: range, valueDescription: format, track: track)
+            ThinSlider(value: $value, range: range, valueDescription: format, track: track, onDoubleClick: requestReset)
                 .accessibilityLabel(label)
+                // ONE view identity for the slider: the action is offered through `accessibilityActions`, never by switching
+                // between modified and unmodified content (that rebuilds the slider mid-drag when the value leaves the default).
+                .accessibilityActions {
+                    if value != identity { Button("Reset \(label)") { requestReset() } }
+                }
         }
+    }
+
+    /// The one reset path (icon, label double-click, track double-click, VoiceOver): ONE labelled undo step, nothing written at
+    /// the default (no phantom sidecar save), and any half-typed readout is cancelled first so its later focus-loss commit
+    /// cannot overwrite the reset.
+    private func requestReset() {
+        if isEditingText {
+            editingText = seedText
+            isTextFieldFocused = false
+            isEditingText = false
+        }
+        guard value != identity else { return }
+        let target = identity
+        resetAction.perform("Reset \(label)") { value = target }
     }
 
     private func beginEditingText() {

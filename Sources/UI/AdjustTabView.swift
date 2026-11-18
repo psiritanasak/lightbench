@@ -296,6 +296,7 @@ struct AdjustTabView: View {
             isEdited: section.isEdited(document.editState),
             onReset: { resetSection(section) },
             isResetEnabled: isResetEnabled,
+            onSolo: { setSections { $0.solo(section) } },
             content: content
         )
     }
@@ -1764,6 +1765,8 @@ struct AdjustSectionContainer<Content: View>: View {
     var onReset: (() -> Void)?
     /// False while the section's reset must not act (e.g. a RAW re-decode is in flight). Only matters when `onReset` is set.
     var isResetEnabled = true
+    /// Option-click on the header: show only this section. Nil (the Looks tab) = no solo, no hint.
+    var onSolo: (() -> Void)?
     @ViewBuilder let content: () -> Content
 
     @State private var isHovering = false
@@ -1771,6 +1774,7 @@ struct AdjustSectionContainer<Content: View>: View {
     init(
         title: String, isExpanded: Binding<Bool>, isEdited: Bool = false, onReset: (() -> Void)? = nil,
         isResetEnabled: Bool = true,
+        onSolo: (() -> Void)? = nil,
         @ViewBuilder content: @escaping () -> Content
     ) {
         self.title = title
@@ -1778,6 +1782,7 @@ struct AdjustSectionContainer<Content: View>: View {
         self.isEdited = isEdited
         self.onReset = onReset
         self.isResetEnabled = isResetEnabled
+        self.onSolo = onSolo
         self.content = content
     }
 
@@ -1801,10 +1806,20 @@ struct AdjustSectionContainer<Content: View>: View {
         (isExpanded ? "Expanded" : "Collapsed") + (isEdited ? ", Edited" : "")
     }
 
+    enum HeaderClick: Equatable { case toggle, solo }
+
+    /// Option-click solos, but only where a solo action exists.
+    static func headerClick(optionHeld: Bool, canSolo: Bool) -> HeaderClick {
+        optionHeld && canSolo ? .solo : .toggle
+    }
+
     private var header: some View {
         HStack(spacing: 6) {
             Button {
-                isExpanded.toggle()
+                switch Self.headerClick(optionHeld: NSEvent.modifierFlags.contains(.option), canSolo: onSolo != nil) {
+                case .solo: onSolo?()
+                case .toggle: isExpanded.toggle()
+                }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.right")
@@ -1827,6 +1842,7 @@ struct AdjustSectionContainer<Content: View>: View {
             .accessibilityLabel(title)
             .accessibilityValue(Self.accessibilityValue(isExpanded: isExpanded, isEdited: isEdited))
             .accessibilityAddTraits(.isHeader)
+            .modifier(SoloAffordance(title: title, onSolo: onSolo))
 
             if onReset != nil {
                 Button {
@@ -1849,5 +1865,21 @@ struct AdjustSectionContainer<Content: View>: View {
             }
         }
         .onHover { isHovering = $0 }
+    }
+}
+
+/// The hint and VoiceOver action for a header that can solo; applies nothing when `onSolo` is nil.
+private struct SoloAffordance: ViewModifier {
+    let title: String
+    let onSolo: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        if let onSolo {
+            content
+                .help("Option-click to show only \(title)")
+                .accessibilityAction(named: "Show Only \(title)") { onSolo() }
+        } else {
+            content
+        }
     }
 }

@@ -106,6 +106,8 @@ enum KeyboardShortcutCatalog {
                           source: .code(file: "Sources/UI/ContentView.swift", contains: "if isPaintingBrush {")),
             ShortcutEntry(keys: "Space + drag", action: "Pan while the Remove tool is active",
                           source: .code(file: "Sources/UI/ContentView.swift", contains: "RetouchZoomRules.spaceIsHandTool(toolActive: retouchToolActive)")),
+            ShortcutEntry(keys: "\u{2325}-click a section title", action: "Edit tab: open only that section and close the others",
+                          source: .code(file: "Sources/UI/AdjustTabView.swift", contains: "case .solo: onSolo?()")),
         ]),
         ShortcutSection(title: "Tone curve editor (with a point selected)", entries: [
             ShortcutEntry(keys: "\u{2190} \u{2192} \u{2191} \u{2193}", action: "Nudge the point (hold Shift for bigger steps)",

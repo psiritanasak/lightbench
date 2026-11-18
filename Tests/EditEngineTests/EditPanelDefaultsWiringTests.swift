@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import PhotoApp
 
@@ -40,5 +41,21 @@ final class EditPanelDefaultsWiringTests: XCTestCase {
         let body = String(text[start.lowerBound..<end.lowerBound])
         XCTAssertEqual(count(of: "panel = next", in: body), 1)
         XCTAssertTrue(body.contains("interactionMode.disarmPointColorPick()"))
+    }
+
+    func testHeaderClickTable() {
+        typealias C = AdjustSectionContainer<EmptyView>
+        XCTAssertEqual(C.headerClick(optionHeld: false, canSolo: false), .toggle)
+        XCTAssertEqual(C.headerClick(optionHeld: false, canSolo: true), .toggle)
+        XCTAssertEqual(C.headerClick(optionHeld: true, canSolo: false), .toggle)
+        XCTAssertEqual(C.headerClick(optionHeld: true, canSolo: true), .solo)
+    }
+
+    func testSoloIsEditTabOnlyAndGoesThroughSetSections() throws {
+        XCTAssertFalse(try source("Sources/UI/LooksTabView.swift").contains("onSolo"))
+        let text = try source("Sources/UI/AdjustTabView.swift")
+        let start = try XCTUnwrap(text.range(of: "private func section<Content: View>("))
+        let end = try XCTUnwrap(text.range(of: "private func setSections", range: start.upperBound..<text.endIndex))
+        XCTAssertTrue(String(text[start.lowerBound..<end.lowerBound]).contains("onSolo: { setSections { $0.solo(section) } }"))
     }
 }

@@ -229,6 +229,7 @@ New findings (not in section 2; each is assigned to a slice below):
   today. Move, do not rewrite, them.
 
 #### A3. Menu bar and shortcuts
+- **DONE 2026-11-19** with B4 (commits 7522292, c44024e, bd639bd, 118afc1; IMPROVEMENTS.md D99). View items went into the system View menu; editor panels are ⌥⌘1-6 plus bare E/L/Q/M/R; `\` toggles (not hold).
 - **Today**: Photo menu, 25 items; File has Backup / Copy Photos; no View
   menu; no Library ↔ Editor shortcut.
 - **Change**:
@@ -343,6 +344,7 @@ New findings (not in section 2; each is assigned to a slice below):
   double-click (`ToneCurveEditorView.swift:242-246`): leave it.
 
 #### B4. Before/after and Editor shortcuts
+- **DONE 2026-11-19** together with A3 (see A3).
 - `\` toggles the unedited photo while held or toggled (uses the existing
   `comparisonOriginal()`); Y = Side by Side; the rail tabs get their keys
   (A3 decides which); ⌘⇧R = Revert. A "Before" chip on the canvas while it
@@ -465,7 +467,7 @@ New findings (not in section 2; each is assigned to a slice below):
 | 4 | A2 right-click + selection bar | done 2026-11-17 | | see the slice |
 | 5 | B2 panel defaults + histogram | done 2026-11-18 | | see the slice |
 | 6 | B3 slider row | done 2026-11-18 | | see the slice |
-| 7 | A3 + B4 menus and shortcuts | M | low | after A2 so names come from one model |
+| 7 | A3 + B4 menus and shortcuts | done 2026-11-19 | | see the slice |
 | 8 | C2 sheet scaffold | M | low | |
 | 9 | A4 sidebar | M | medium (drag vs click) | |
 | 10 | B5 tool panels | M | low | |

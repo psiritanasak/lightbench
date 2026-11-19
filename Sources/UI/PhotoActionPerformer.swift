@@ -91,8 +91,13 @@ extension PhotoActionTarget {
             for photo in catalog.photos where catalog.isSelected(photo) { count += 1 }
             target.count = count
             if showLibrary {
-                shownCount = catalog.selectedPhotosInDisplayedGrid.count
+                let shown = catalog.selectedPhotosInDisplayedGrid
+                shownCount = shown.count
                 target.visibleCount = shownCount
+                // For the Rating / Flag / Label checkmarks (one value across the visible selection checks it); already computed above.
+                target.ratings = Set(shown.map(\.rating))
+                target.flags = Set(shown.map(\.flagStatus))
+                target.labels = Set(shown.map(\.colorLabel))
             }
         }
         if showLibrary && shownCount > 0 {

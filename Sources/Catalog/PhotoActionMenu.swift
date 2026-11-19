@@ -217,7 +217,8 @@ enum PhotoActionMenu {
             return library && t.count > 0 && !c.renameWorking
         case .ratingMenu, .flagMenu, .labelMenu:
             // They write the photos the grid shows, so a selection hidden entirely by the filters must not offer a silent no-op.
-            return library && t.visibleCount > 0
+            // A3: the menu bar is the first surface reachable behind a sheet, so a Library sheet or a running tool also turns them off.
+            return library && t.visibleCount > 0 && !c.sheetUp && !c.otherSheetIsPresented && !c.trashBusy
         case .collectionMenu:
             return library && c.hasCollections && t.count > 0
         case .editKeywords:
@@ -248,7 +249,8 @@ enum PhotoActionMenu {
             return library && t.visibleCount > 0 && !c.fileToolBusy && !c.mergeBusy && !c.sheetUp && !renameBusy
                 && !c.loadInFlight && !c.otherSheetIsPresented
         case .renameFiles:
-            return t.count > 0 && !renameBusy && !c.loadInFlight && !c.mergeBusy && !c.fileToolBusy && !c.sheetUp
+            // Library only since A3 (it moved to the Library menu): in the Editor a hidden Library selection must not enable it.
+            return library && t.count > 0 && !renameBusy && !c.loadInFlight && !c.mergeBusy && !c.fileToolBusy && !c.sheetUp
         case .locate:
             return library && t.count > 0 && !c.renameInProgress
         case .removeFromLibrary:

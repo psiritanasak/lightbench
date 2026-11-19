@@ -134,11 +134,20 @@ struct PhotoAppApp: App {
             // Catalog safety, in the File menu: a backup is a consistent snapshot of the catalog (ratings, flags, labels, keywords, collections,
             // presets, people); a restore is staged and applied at the next launch. Both only REQUEST (`CatalogBackupDialogModifier` acts).
             CommandGroup(after: .newItem) {
+                Menu("Import") {
+                    ImportMenuItems(
+                        catalog: catalog, document: document, renameModel: renameModel, showLibrary: $showLibrary,
+                        openDisabled: cull.isActive || renameModel.isWorking || document.isLoadInFlight || catalog.toolSheetIsBusy || catalog.isRenameInProgress || renameModel.isPresentingSheet || catalog.editorPopoverOpen,
+                        importDisabled: cull.isActive || catalog.isRenameInProgress || catalog.importCopyBusy || renameModel.isWorking || document.isLoadInFlight || catalog.toolSheetIsBusy || renameModel.isPresentingSheet || catalog.editorPopoverOpen,
+                        copyPhotosDisabled: cull.isActive || !showLibrary || catalog.isRenameInProgress || catalog.fileToolBusy || catalog.mergeBusy || renameModel.isWorking)
+                }
+                // Library only; the request goes through the bridge and `ContentView` performs it (it owns the export model).
+                Button(PhotoActionMenu.title(.export)) { bridge.request = .export }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .disabled(!ViewCommandRules.isEnabled(.export, context: viewContext))
                 Divider()
                 Button("Back Up Catalog…") { catalog.backupRequested = .backUp }
                     .disabled(cull.isActive || catalog.backupBusy)
-                Button("Copy Photos into Library…") { catalog.importCopyRequested = true }
-                    .disabled(cull.isActive || !showLibrary || catalog.isRenameInProgress || catalog.fileToolBusy || catalog.mergeBusy || renameModel.isWorking)
                 Button("Restore Catalog from Backup…") { catalog.backupRequested = .restore }
                     .disabled(cull.isActive || catalog.backupBusy || catalog.isRenameInProgress || renameModel.isWorking)
             }
@@ -217,6 +226,20 @@ struct PhotoAppApp: App {
                 Divider()
             }
             CommandMenu("Photo") {
+                // Rating / Flag / Label write the Library's VISIBLE SELECTION (the grid keys 1-5, P X U, 6-9 write the focused photo). Built from the
+                // same model entries as the cell menu and the selection bar, run through the same performer.
+                ForEach([PhotoActionID.ratingMenu, .flagMenu, .labelMenu], id: \.self) { id in
+                    if let entry = PhotoActionMenu.entry(for: id, target: actionTarget, context: actionContext) {
+                        Menu(entry.title) {
+                            ForEach(entry.children, id: \.id) { child in
+                                PhotoActionLeaf(entry: child) { actions.perform($0, clicked: nil) }
+                            }
+                        }
+                        .disabled(!entry.isEnabled)
+                        .help("Writes the photos the Library is showing that are selected, not only the focused photo.")
+                    }
+                }
+                Divider()
                 // Copy/Paste Edit Settings — Lightroom's own Photo-menu
                 // placement and shortcuts. Paste Settings here shows the
                 // SAME confirmation dialog the Library toolbar's own
@@ -284,12 +307,23 @@ struct PhotoAppApp: App {
                 // Photo stacks (Library only; the grid ignores ⌘ chords, so these are menu items). Manual stack operations act on the whole
                 // SELECTION, including photos the filters hide (the result message says so); they move no files, so only the sheets that
                 // edit the selection or its stacks block them.
-                Button(PhotoActionMenu.title(.stackSelected)) { actions.perform(.run(.stackSelected), clicked: nil) }
-                    .keyboardShortcut("g", modifiers: .command)
-                    .disabled(!PhotoActionMenu.isEnabled(.stackSelected, target: actionTarget, context: actionContext))
-                Button(PhotoActionMenu.title(.unstack)) { actions.perform(.run(.unstack), clicked: nil) }
-                    .keyboardShortcut("g", modifiers: [.command, .shift])
-                    .disabled(!PhotoActionMenu.isEnabled(.unstack, target: actionTarget, context: actionContext))
+                Menu(PhotoActionMenu.title(.stackMenu)) {
+                    Button(PhotoActionMenu.title(.stackSelected)) { actions.perform(.run(.stackSelected), clicked: nil) }
+                        .keyboardShortcut("g", modifiers: .command)
+                        .disabled(!PhotoActionMenu.isEnabled(.stackSelected, target: actionTarget, context: actionContext))
+                    Button(PhotoActionMenu.title(.unstack)) { actions.perform(.run(.unstack), clicked: nil) }
+                        .keyboardShortcut("g", modifiers: [.command, .shift])
+                        .disabled(!PhotoActionMenu.isEnabled(.unstack, target: actionTarget, context: actionContext))
+                }
+            }
+            // Library-wide tools (moved here from the Photo menu, code unchanged). Every item is off in the Editor.
+            CommandMenu("Library") {
+                // Library-only; only REQUESTS (`DuplicatesSheetModifier` drops it while another sheet is up).
+                Button("Find Duplicates…") { catalog.duplicatesSheetRequested = true }
+                    .disabled(
+                        cull.isActive || !showLibrary || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
+                            || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
+                    )
                 // Library-only; only REQUESTS (`AutoStackSheetModifier` drops it while another sheet is up). No default shortcut.
                 Button("Auto Stack…") { catalog.autoStackSheetRequested = true }
                     .disabled(
@@ -297,33 +331,36 @@ struct PhotoAppApp: App {
                             || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.mergeBusy || catalog.fileToolBusy
                             || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
-                // Library-only; only REQUESTS (`DuplicatesSheetModifier` drops it while another sheet is up).
-                Button("Find Duplicates…") { catalog.duplicatesSheetRequested = true }
-                    .disabled(
-                        cull.isActive || !showLibrary || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil
-                            || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
-                    )
-                // Library-only; only REQUESTS (`RecentlyDeletedSheetModifier` drops it while another sheet is up). No default shortcut.
-                Button("Recently Deleted…") { catalog.recentlyDeletedRequested = true }
-                    .disabled(cull.isActive || !showLibrary || catalog.toolSheetIsBusy || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight)
                 // Library-only; only REQUESTS (`PeopleSheetModifier` drops it while another sheet is up). No default shortcut.
                 Button("People…") { catalog.peopleSheetRequested = true }
                     .disabled(
                         cull.isActive || !showLibrary || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || catalog.duplicatesSheetPresented
                             || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
-                // Library-only; only REQUESTS (`MergeDialogModifier` drops it while another sheet is up). Needs 2+ visible selected photos.
-                Button(PhotoActionMenu.title(.mergeHDR)) { actions.perform(.run(.mergeHDR), clicked: nil) }
-                    .disabled(!PhotoActionMenu.isEnabled(.mergeHDR, target: actionTarget, context: actionContext))
-                Button(PhotoActionMenu.title(.mergePanorama)) { actions.perform(.run(.mergePanorama), clicked: nil) }
-                    .disabled(!PhotoActionMenu.isEnabled(.mergePanorama, target: actionTarget, context: actionContext))
-                // Library-only; only REQUEST (`XMPDialogModifier` drops them while another sheet is up). Act on the selected visible photos.
-                Button(PhotoActionMenu.title(.writeXMP)) { actions.perform(.run(.writeXMP), clicked: nil) }
-                    .disabled(!PhotoActionMenu.isEnabled(.writeXMP, target: actionTarget, context: actionContext))
-                Button(PhotoActionMenu.title(.readXMP)) { actions.perform(.run(.readXMP), clicked: nil) }
-                    .disabled(!PhotoActionMenu.isEnabled(.readXMP, target: actionTarget, context: actionContext))
+                Divider()
+                Menu(PhotoActionMenu.title(.mergeMenu)) {
+                    // Library-only; only REQUESTS (`MergeDialogModifier` drops it while another sheet is up). Needs 2+ visible selected photos.
+                    Button(PhotoActionMenu.title(.mergeHDR)) { actions.perform(.run(.mergeHDR), clicked: nil) }
+                        .disabled(!PhotoActionMenu.isEnabled(.mergeHDR, target: actionTarget, context: actionContext))
+                    Button(PhotoActionMenu.title(.mergePanorama)) { actions.perform(.run(.mergePanorama), clicked: nil) }
+                        .disabled(!PhotoActionMenu.isEnabled(.mergePanorama, target: actionTarget, context: actionContext))
+                }
+                Menu(PhotoActionMenu.title(.metadataMenu)) {
+                    // Library-only; only REQUEST (`XMPDialogModifier` drops them while another sheet is up). Act on the selected visible photos.
+                    Button(PhotoActionMenu.title(.writeXMP)) { actions.perform(.run(.writeXMP), clicked: nil) }
+                        .disabled(!PhotoActionMenu.isEnabled(.writeXMP, target: actionTarget, context: actionContext))
+                    Button(PhotoActionMenu.title(.readXMP)) { actions.perform(.run(.readXMP), clicked: nil) }
+                        .disabled(!PhotoActionMenu.isEnabled(.readXMP, target: actionTarget, context: actionContext))
+                }
+                Divider()
                 Button(PhotoActionMenu.title(.renameFiles)) { actions.perform(.run(.renameFiles), clicked: nil) }
                     .disabled(!PhotoActionMenu.isEnabled(.renameFiles, target: actionTarget, context: actionContext))
+                Button("Undo Rename") { renameModel.request = .undo }
+                    .disabled(
+                        cull.isActive || !renameModel.canUndo || renameModel.isWorking || renameModel.isPresentingSheet || catalog.mergeBusy || catalog.fileToolBusy
+                            || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented || !showLibrary
+                    )
+                Divider()
                 // Library-only, destructive: only REQUEST (`TrashDialogModifier` confirms, naming what the Library is showing).
                 Button("Move Rejected to Trash…") { catalog.trashRequested = .rejected }
                     .disabled(
@@ -331,11 +368,9 @@ struct PhotoAppApp: App {
                             || catalog.duplicatesSheetPresented || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || renameModel.isWorking
                             || renameModel.isPresentingSheet || document.isLoadInFlight
                     )
-                Button("Undo Rename") { renameModel.request = .undo }
-                    .disabled(
-                        cull.isActive || !renameModel.canUndo || renameModel.isWorking || renameModel.isPresentingSheet || catalog.mergeBusy || catalog.fileToolBusy
-                            || document.isLoadInFlight || catalog.keywordSheetPhotoIDs != nil || catalog.infoSheetPhotoIDs != nil || catalog.duplicatesSheetPresented || catalog.peopleSheetPresented || catalog.autoStackSheetPresented
-                    )
+                // Library-only; only REQUESTS (`RecentlyDeletedSheetModifier` drops it while another sheet is up). No default shortcut.
+                Button("Recently Deleted…") { catalog.recentlyDeletedRequested = true }
+                    .disabled(cull.isActive || !showLibrary || catalog.toolSheetIsBusy || renameModel.isWorking || renameModel.isPresentingSheet || document.isLoadInFlight)
             }
         }
         Window("Keyboard Shortcuts", id: AboutAndHelpCommands.shortcutsWindowID) {

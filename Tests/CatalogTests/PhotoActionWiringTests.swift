@@ -114,6 +114,46 @@ final class PhotoActionWiringTests: XCTestCase {
         XCTAssertFalse(text.contains("selection menu in the toolbar"))
     }
 
+    // MARK: A3 batch 4: Photo menu trimmed, Library menu, File menu
+
+    func testTheLibraryMenuHoldsTheMovedItemsAndThePhotoMenuNoLongerDoes() throws {
+        let app = try source("Sources/App/PhotoAppApp.swift")
+        let libraryStart = try XCTUnwrap(app.range(of: "CommandMenu(\"Library\")")).upperBound
+        let photoStart = try XCTUnwrap(app.range(of: "CommandMenu(\"Photo\")")).upperBound
+        XCTAssertLessThan(photoStart, libraryStart, "Library is declared after Photo")
+        let photo = String(app[photoStart..<libraryStart])
+        let library = String(app[libraryStart...])
+        let moved = ["Find Duplicates…", "Auto Stack…", "People…", "Recently Deleted…", "Move Rejected to Trash…", "Undo Rename",
+                     ".mergeHDR", ".mergePanorama", ".writeXMP", ".readXMP", ".renameFiles"]
+        for needle in moved {
+            XCTAssertTrue(library.contains(needle), "\(needle) is in the Library menu")
+            XCTAssertFalse(photo.contains(needle), "\(needle) left the Photo menu")
+        }
+        XCTAssertTrue(photo.contains("PhotoActionMenu.entry(for: id, target: actionTarget, context: actionContext)"))
+        XCTAssertTrue(photo.contains(".ratingMenu, .flagMenu, .labelMenu"))
+        XCTAssertTrue(photo.contains("Menu(PhotoActionMenu.title(.stackMenu))"))
+        let undo = try XCTUnwrap(library.range(of: "Button(\"Undo Rename\")")).lowerBound
+        XCTAssertTrue(library[undo...].prefix(800).contains("catalog.autoStackSheetPresented || !showLibrary"), "Library only, appended at the end")
+        XCTAssertTrue(library[undo...].prefix(800).contains("cull.isActive || !renameModel.canUndo"))
+    }
+
+    func testTheFileMenuImportsThroughTheSharedHelperAndExportsThroughTheBridge() throws {
+        let app = try source("Sources/App/PhotoAppApp.swift")
+        // The menu's Import gates mirror `DroppedItems.refusal`: culling, rename working / in progress, a load in flight, a busy tool sheet.
+        for needle in [
+            "openDisabled: cull.isActive || renameModel.isWorking || document.isLoadInFlight || catalog.toolSheetIsBusy || catalog.isRenameInProgress || renameModel.isPresentingSheet || catalog.editorPopoverOpen,",
+            "importDisabled: cull.isActive || catalog.isRenameInProgress || catalog.importCopyBusy || renameModel.isWorking || document.isLoadInFlight || catalog.toolSheetIsBusy || renameModel.isPresentingSheet || catalog.editorPopoverOpen,"] {
+            XCTAssertTrue(app.contains(needle), needle)
+        }
+        let content = try source("Sources/UI/ContentView.swift")
+        XCTAssertTrue(app.contains("Menu(\"Import\")") && app.contains("ImportMenuItems("))
+        XCTAssertTrue(content.contains("ImportMenuItems("))
+        XCTAssertEqual(content.components(separatedBy: "catalog.importFolderTree()").count - 1, 1, "one definition")
+        XCTAssertFalse(app.contains("catalog.importFolderTree()"))
+        XCTAssertTrue(app.contains("Button(PhotoActionMenu.title(.export)) { bridge.request = .export }"))
+        XCTAssertTrue(app.contains(".keyboardShortcut(\"e\", modifiers: [.command, .shift])"))
+    }
+
     // MARK: The Photo menu reads the model
 
     func testThePhotoMenuTakesTitleAndEnabledStateFromTheModelAndRunsThroughThePerformer() throws {
@@ -138,7 +178,7 @@ final class PhotoActionWiringTests: XCTestCase {
         XCTAssertTrue(app.contains("cullActive: cull.isActive, openEditKey: document.currentEditKey, hasOpenImage: document.currentImage != nil"))
         let performer = try source("Sources/UI/PhotoActionPerformer.swift")
         let early = try XCTUnwrap(performer.range(of: "if cullActive { return target }")).lowerBound
-        let filter = try XCTUnwrap(performer.range(of: "catalog.selectedPhotosInDisplayedGrid.count")).lowerBound
+        let filter = try XCTUnwrap(performer.range(of: "let shown = catalog.selectedPhotosInDisplayedGrid")).lowerBound
         XCTAssertLessThan(early, filter, "culling returns before the filter + sort")
         XCTAssertFalse(app.contains("selectedPhotosInDisplayedGrid") || app.contains("virtualCopyTargets("), "the scene body never filters and sorts the library itself")
         XCTAssertTrue(try source("Sources/UI/PhotoActionPerformer.swift").contains("context.editorPopoverOpen = catalog.editorPopoverOpen"))

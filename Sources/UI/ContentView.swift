@@ -1806,26 +1806,11 @@ struct ContentView: View {
                 Label(showLibrary ? "Editor" : "Library", systemImage: showLibrary ? "photo" : "square.grid.2x2")
             }
             Menu {
-                Button("Open…") {
-                    guard !renameModel.isWorking else { return }
-                    // Switch to the Editor BEFORE the load, so a RAW photo's loading indicator is visible (same order as a grid tap).
-                    guard let url = document.chooseImageURL() else { return }
-                    showLibrary = false
-                    Task { await document.load(from: url) }
-                }
-                .disabled(renameModel.isWorking)
-                Button("Import Folder…") {
-                    catalog.importFolder()
-                }
-                .disabled(catalog.isRenameInProgress || catalog.importCopyBusy)
-                Button("Import Folder Tree…") {
-                    catalog.importFolderTree()
-                }
-                .disabled(catalog.isRenameInProgress || catalog.importCopyBusy)
-                Button("Copy Photos into Library…") {
-                    catalog.importCopyRequested = true
-                }
-                .disabled(catalog.isRenameInProgress || catalog.fileToolBusy || catalog.mergeBusy || document.isLoadInFlight)
+                ImportMenuItems(
+                    catalog: catalog, document: document, renameModel: renameModel, showLibrary: $showLibrary,
+                    openDisabled: renameModel.isWorking,
+                    importDisabled: catalog.isRenameInProgress || catalog.importCopyBusy,
+                    copyPhotosDisabled: catalog.isRenameInProgress || catalog.fileToolBusy || catalog.mergeBusy || document.isLoadInFlight)
             } label: {
                 Label("Add Photos", systemImage: "plus")
             }
@@ -2720,5 +2705,41 @@ struct FeedbackHostModifier: ViewModifier {
             .onAppear { toasts.setAppActive(NSApp.isActive) }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in toasts.setAppActive(false) }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in toasts.setAppActive(true) }
+    }
+}
+
+/// The four import entries shared by the toolbar's Add Photos menu and the File menu's Import submenu, so each action has one definition.
+/// Each caller passes its own disabled state (the menu adds `cull.isActive ||`: the toolbar is hidden in Cull, the menu is not; the Copy
+/// Photos gate differs between the two on purpose and is kept as it was).
+struct ImportMenuItems: View {
+    let catalog: CatalogModel
+    let document: ImageDocumentModel
+    let renameModel: RenameModel
+    @Binding var showLibrary: Bool
+    let openDisabled: Bool
+    let importDisabled: Bool
+    let copyPhotosDisabled: Bool
+
+    var body: some View {
+        Button("Open…") {
+            guard !renameModel.isWorking else { return }
+            // Switch to the Editor BEFORE the load, so a RAW photo's loading indicator is visible (same order as a grid tap).
+            guard let url = document.chooseImageURL() else { return }
+            showLibrary = false
+            Task { await document.load(from: url) }
+        }
+        .disabled(openDisabled)
+        Button("Import Folder…") {
+            catalog.importFolder()
+        }
+        .disabled(importDisabled)
+        Button("Import Folder Tree…") {
+            catalog.importFolderTree()
+        }
+        .disabled(importDisabled)
+        Button("Copy Photos into Library…") {
+            catalog.importCopyRequested = true
+        }
+        .disabled(copyPhotosDisabled)
     }
 }

@@ -67,6 +67,7 @@ enum KeyboardShortcutCatalog {
             ShortcutEntry(keys: "\u{2325}\u{2318}1 \u{2013} 6", action: "Editor: open the Edit / Looks / Retouch / Red-eye / Masks / Crop panel",
                           sources: [.menu("cmd+opt+1"), .menu("cmd+opt+2"), .menu("cmd+opt+3"), .menu("cmd+opt+4"), .menu("cmd+opt+5"), .menu("cmd+opt+6")]),
             ShortcutEntry(keys: "\u{21E7}\u{2318}R", action: "Revert the open photo to its original (one undo step)", source: .menu("cmd+shift+r")),
+            ShortcutEntry(keys: "\u{21E7}\u{2318}E", action: "Export the selected photos (Library; File \u{25B8} Export\u{2026})", source: .menu("cmd+shift+e")),
         ]),
         ShortcutSection(title: "Rating, flags and labels (Library, Editor, Culling)", entries: [
             ShortcutEntry(keys: "1 \u{2013} 5", action: "Rate the photo (in the Library: the focused photo, not the whole selection); pressing 0 in the Library or while culling clears the rating",

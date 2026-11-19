@@ -31,11 +31,11 @@ struct PhotoActionMenuItems: View {
             .disabled(!entry.isEnabled)
         } else if !entry.children.isEmpty {
             Menu(entry.title) {
-                ForEach(entry.children, id: \.id) { child in leaf(child) }
+                ForEach(entry.children, id: \.id) { child in PhotoActionLeaf(entry: child, perform: perform) }
             }
             .disabled(!entry.isEnabled)
         } else {
-            leaf(entry)
+            PhotoActionLeaf(entry: entry, perform: perform)
         }
     }
 
@@ -59,18 +59,30 @@ struct PhotoActionMenuItems: View {
         }
     }
 
-    @ViewBuilder
-    private func leaf(_ entry: PhotoActionMenu.Entry) -> some View {
+}
+
+/// One leaf row of a photo-action menu (a button, with the checkmark + VoiceOver pattern for rating / flag / label rows and the red
+/// destructive label). Shared by the cell menus (`PhotoActionMenuItems`) and the Photo menu's Rating / Flag / Label submenus.
+struct PhotoActionLeaf: View {
+    let entry: PhotoActionMenu.Entry
+    let perform: (PhotoActionCommand) -> Void
+
+    var body: some View {
         Button(role: entry.isDestructive ? .destructive : nil) {
             if let command = entry.command { perform(command) }
         } label: {
-            label(for: entry)
+            label
         }
         .disabled(!entry.isEnabled)
     }
 
     @ViewBuilder
-    private func label(for entry: PhotoActionMenu.Entry) -> some View {
+    private var label: some View {
+        labelContent(for: entry)
+    }
+
+    @ViewBuilder
+    private func labelContent(for entry: PhotoActionMenu.Entry) -> some View {
         if entry.isDestructive {
             // `role: .destructive` alone does not render red text on a macOS `Menu` item (seen live on the old cell menu).
             Label {

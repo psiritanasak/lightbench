@@ -89,6 +89,18 @@ final class PhotoActionMenuTests: XCTestCase {
         XCTAssertEqual(rating.children[2].command, .rate(2))
     }
 
+    func testAnUnratedPhotoChecksNoRatingAndRenameFilesIsOffInTheEditor() throws {
+        let unrated = PhotoActionTarget(count: 1, visibleCount: 1, virtualCopyCount: 1, ratings: [0], flags: [.none], labels: [.none])
+        let rows = PhotoActionMenu.entries(target: unrated, context: library).flatMap { $0 }
+        let rating = try XCTUnwrap(rows.first { $0.action == .ratingMenu })
+        XCTAssertEqual(rating.children.filter(\.isChecked).map(\.title), ["No Rating"])
+        // A3: a hidden Library selection must not enable Rename Files while the Editor is showing.
+        var editor = library
+        editor.mode = .editor
+        XCTAssertFalse(PhotoActionMenu.isEnabled(.renameFiles, target: unrated, context: editor))
+        XCTAssertTrue(PhotoActionMenu.isEnabled(.renameFiles, target: unrated, context: library))
+    }
+
     func testACheckmarkShowsOnlyWhenTheTargetHasExactlyOneValue() throws {
         let mixed = PhotoActionTarget(count: 2, visibleCount: 2, ratings: [1, 2], flags: [.picked, .none], labels: [])
         let rows = PhotoActionMenu.entries(target: mixed, context: library).flatMap { $0 }
@@ -286,10 +298,11 @@ final class PhotoActionMenuTests: XCTestCase {
         var context = library
         context.mode = .editor
         for action in [PhotoActionID.openInEditor, .ratingMenu, .flagMenu, .labelMenu, .collectionMenu, .stackSelected, .unstack,
-                       .mergeHDR, .mergePanorama, .writeXMP, .readXMP, .locate, .moveToTrash, .clearSelection] {
+                       .mergeHDR, .mergePanorama, .writeXMP, .readXMP, .locate, .moveToTrash, .clearSelection,
+                       .renameFiles /* A3: Library only */] {
             XCTAssertFalse(enabled(action, selection, context), "\(action)")
         }
-        for action in [PhotoActionID.copySettings, .pasteSettings, .renameFiles, .createVirtualCopy] {
+        for action in [PhotoActionID.copySettings, .pasteSettings, .createVirtualCopy] {
             XCTAssertTrue(enabled(action, selection, context), "\(action)")
         }
     }
@@ -345,6 +358,13 @@ final class PhotoActionMenuTests: XCTestCase {
             XCTAssertFalse(enabled(action, target, library), "\(action)")
         }
         XCTAssertTrue(enabled(.clearSelection, target, library))
+    }
+
+    func testAnUnselectedUnratedCellChecksNoRatingEvenWithAMixedSelectionElsewhere() throws {
+        let mixed = PhotoActionTarget(count: 3, visibleCount: 3, virtualCopyCount: 3, ratings: [1, 3, 5], flags: [.none], labels: [.none])
+        let target = PhotoActionTarget.forCell(plainItem(5), isMissing: false, selection: [1, 2, 3], selectionTarget: mixed, openEditKey: nil)
+        let rating = try XCTUnwrap(PhotoActionMenu.entry(for: .ratingMenu, target: target, context: library))
+        XCTAssertEqual(rating.children.filter(\.isChecked).map(\.title), ["No Rating"])
     }
 
     func testForCellBuildsACellTargetWhenTheCellIsNotSelected() {
@@ -499,8 +519,10 @@ final class PhotoActionMenuTests: XCTestCase {
         }
 
         // Sources/App/PhotoAppApp.swift, item "Rename Files…".
+        // A3 (deliberate change, not drift): Rename Files moved to the Library menu and is now Library only, so the menu-bar item is also off
+        // in the Editor (`c.mode != .library`). Cell and bar targets are always Library mode, so only the menu bar is affected.
         static func menuRename(_ c: PhotoActionContext, _ t: PhotoActionTarget) -> Bool {
-            c.mode == .cull || t.count == 0 || c.renameWorking || c.loadInFlight || c.mergeBusy || c.fileToolBusy
+            c.mode != .library || t.count == 0 || c.renameWorking || c.loadInFlight || c.mergeBusy || c.fileToolBusy
                 || c.keywordSheetOpen || c.infoSheetOpen || c.duplicatesSheetOpen || c.peopleSheetOpen || c.autoStackSheetOpen
         }
 
@@ -535,9 +557,11 @@ final class PhotoActionMenuTests: XCTestCase {
     /// Items only the plan puts behind the Library (no old expression named it) or behind cull / the popover (no old surface that
     /// can be reached then names it): added to the old union so the comparison covers the whole model.
     private func planAddition(_ action: PhotoActionID, _ c: PhotoActionContext) -> Bool {
-        let libraryOnly: Set<PhotoActionID> = [.ratingMenu, .flagMenu, .labelMenu, .openInEditor, .clearSelection, .collectionMenu, .locate, .moveToTrash, .stackSelected, .unstack, .mergeHDR, .mergePanorama, .writeXMP, .readXMP]
+        let libraryOnly: Set<PhotoActionID> = [.ratingMenu, .flagMenu, .labelMenu, .openInEditor, .clearSelection, .collectionMenu, .locate, .moveToTrash, .stackSelected, .unstack, .mergeHDR, .mergePanorama, .writeXMP, .readXMP, .renameFiles /* A3 */]
         let popoverExempt: Set<PhotoActionID> = [.editKeywords, .editInfo, .renameFiles]
-        return c.mode == .cull || (c.editorPopoverOpen && !popoverExempt.contains(action)) || (libraryOnly.contains(action) && c.mode != .library)
+        // A3: Rating / Flag / Label are also off behind a Library sheet or a running tool (the menu bar is the first surface reachable then).
+        let behindSheet = [PhotoActionID.ratingMenu, .flagMenu, .labelMenu].contains(action) && (c.sheetUp || c.otherSheetIsPresented || c.trashBusy)
+        return c.mode == .cull || behindSheet || (c.editorPopoverOpen && !popoverExempt.contains(action)) || (libraryOnly.contains(action) && c.mode != .library)
     }
 
     private func oldDisabled(_ action: PhotoActionID, _ c: PhotoActionContext, _ t: PhotoActionTarget) -> Bool {

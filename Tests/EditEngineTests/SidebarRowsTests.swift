@@ -141,12 +141,12 @@ final class SidebarRowsTests: XCTestCase {
         // 10 > 11 (Alps), 10 > 12 (Zoo); 1 is an album (not a folder).
         let cols = sample.collections
         let memberships: [Int64: Set<Int64>] = [100: [10], 101: [11], 102: [11, 1], 103: [10, 11], 104: [12], 105: [1]]
-        let direct = SidebarRows.folderPhotoCounts(collections: cols, membershipsByPhotoID: memberships, includeSubfolders: false)
+        let direct = SidebarRows.collectionPhotoCounts(collections: cols, membershipsByPhotoID: memberships, includeSubfolders: false)
         XCTAssertEqual(direct[10], 2)
         XCTAssertEqual(direct[11], 3)
         XCTAssertEqual(direct[12], 1)
-        XCTAssertNil(direct[1], "albums get no count")
-        let total = SidebarRows.folderPhotoCounts(collections: cols, membershipsByPhotoID: memberships, includeSubfolders: true)
+        XCTAssertEqual(direct[1], 2, "an album counts its direct members (102, 105)")
+        let total = SidebarRows.collectionPhotoCounts(collections: cols, membershipsByPhotoID: memberships, includeSubfolders: true)
         XCTAssertEqual(total[10], 5, "100, 101, 102, 103 and 104: a photo in a folder AND its subfolder (103) counts once")
         XCTAssertEqual(total[11], 3)
         XCTAssertEqual(total[12], 1)
@@ -155,20 +155,38 @@ final class SidebarRowsTests: XCTestCase {
 
     func testFolderCountsSurviveAParentCycle() {
         let cols = [collection(1, "a", folder: true, parent: 2), collection(2, "b", folder: true, parent: 1)]
-        let counts = SidebarRows.folderPhotoCounts(collections: cols, membershipsByPhotoID: [7: [1]], includeSubfolders: true)
+        let counts = SidebarRows.collectionPhotoCounts(collections: cols, membershipsByPhotoID: [7: [1]], includeSubfolders: true)
         XCTAssertEqual(counts[1], 1)
         XCTAssertEqual(counts[2], 1)
     }
 
-    func testRowsCarryCountsOnlyOnFolderRowsAndOnlyWhenGiven() {
+    func testRowsCarryCountsOnlyWhenGiven() {
         let without = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [10])
         XCTAssertTrue(without.allSatisfy { $0.count == nil })
         let counts: [Int64: Int] = [10: 5, 11: 3]
-        let rows = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [10], folderCounts: counts)
+        let rows = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [10], collectionCounts: counts)
         XCTAssertEqual(rows.first { $0.id == "folder-10" }?.count, 5)
         XCTAssertEqual(rows.first { $0.id == "folder-11" }?.count, 3)
         XCTAssertEqual(rows.first { $0.id == "folder-20" }?.count, 0, "a folder missing from the map is empty")
-        XCTAssertNil(rows.first { $0.id == "collection-1" }?.count)
+        XCTAssertEqual(rows.first { $0.id == "collection-1" }?.count, 0, "an album missing from the map is empty")
         XCTAssertNil(rows.first { $0.id == "all" }?.count)
+    }
+
+    func testAllPhotosShowsItsCountAndAlbumsShowDirectMembers() {
+        let rows = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [],
+                                    collectionCounts: [1: 4], allPhotosCount: 9)
+        XCTAssertEqual(rows.first { $0.id == "all" }?.count, 9)
+        XCTAssertEqual(rows.first { $0.id == "collection-1" }?.count, 4)
+    }
+
+    func testSmartCollectionMissingFromTheMapShowsNoNumberNeverZero() throws {
+        let smartID = try XCTUnwrap(sample.smart.first?.id)
+        let none = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [])
+        XCTAssertNil(none.first { $0.id == "smart-\(smartID)" }?.count)
+        let empty = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [], smartCounts: [:])
+        XCTAssertTrue(empty.filter { $0.id.hasPrefix("smart-") }.allSatisfy { $0.count == nil })
+        let known = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [],
+                                     smartCounts: [smartID: 0])
+        XCTAssertEqual(known.first { $0.id == "smart-\(smartID)" }?.count, 0, "a known zero is shown")
     }
 }

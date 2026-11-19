@@ -26,7 +26,8 @@ struct SidebarRow: Identifiable, Equatable {
     var isExpanded = false
     var folderID: Int64?
     var parentFolderID: Int64?
-    /// Folder rows only: the number shown beside the title (nil = none), see `SidebarRows.folderPhotoCounts`.
+    /// The number shown beside the title (nil = none): All Photos, collections, smart collections (only once known) and folders. See
+    /// `SidebarRows.collectionPhotoCounts`.
     var count: Int?
 }
 
@@ -34,21 +35,24 @@ enum SidebarRows {
     /// The rows, top to bottom: All Photos, Collections (+ "New Collection…"), Smart Collections (+ "Save Current Filters…"), then the
     /// Folders tree (only when there are folders). Folder children are listed only under EXPANDED folders (collapsed by default).
     static func rows(collections: [PhotoCollection], smartCollections: [SmartCollection], expandedFolders: Set<Int64>,
-                     folderCounts: [Int64: Int]? = nil) -> [SidebarRow] {
-        var rows: [SidebarRow] = [SidebarRow(id: "all", kind: .item, title: "All Photos", filter: .allPhotos, source: .allPhotos)]
+                     collectionCounts: [Int64: Int]? = nil, allPhotosCount: Int? = nil,
+                     smartCounts: [Int64: Int]? = nil) -> [SidebarRow] {
+        var rows: [SidebarRow] = [SidebarRow(id: "all", kind: .item, title: "All Photos", filter: .allPhotos, source: .allPhotos,
+                                             count: allPhotosCount)]
 
         rows.append(SidebarRow(id: "header-collections", kind: .header, title: "Collections"))
         for collection in collections where !collection.isFolder {
             guard let id = collection.id else { continue }
             rows.append(SidebarRow(id: "collection-\(id)", kind: .item, title: collection.name, filter: .collection(id),
-                                   source: .collection(collection)))
+                                   source: .collection(collection), count: collectionCounts.map { $0[id, default: 0] }))
         }
         rows.append(SidebarRow(id: "action-new-collection", kind: .action, title: "New Collection…", action: .newCollection))
 
         rows.append(SidebarRow(id: "header-smart", kind: .header, title: "Smart Collections"))
         for smart in smartCollections {
             guard let id = smart.id else { continue }
-            rows.append(SidebarRow(id: "smart-\(id)", kind: .item, title: smart.name, filter: .smartCollection(id), source: .smart(smart)))
+            rows.append(SidebarRow(id: "smart-\(id)", kind: .item, title: smart.name, filter: .smartCollection(id), source: .smart(smart),
+                                   count: smartCounts?[id]))
         }
         rows.append(SidebarRow(id: "action-save-filters", kind: .action, title: "Save Current Filters…", action: .saveFilters))
 
@@ -62,7 +66,7 @@ enum SidebarRows {
                 let expanded = expandedFolders.contains(id) && !children.isEmpty
                 rows.append(SidebarRow(id: "folder-\(id)", kind: .item, title: folder.name, filter: .collection(id), source: .folder(folder),
                                        depth: depth, hasChildren: !children.isEmpty, isExpanded: expanded, folderID: id,
-                                       parentFolderID: folder.parentId, count: folderCounts.map { $0[id, default: 0] }))
+                                       parentFolderID: folder.parentId, count: collectionCounts.map { $0[id, default: 0] }))
                 if expanded { for child in children { append(child, depth: depth + 1) } }
             }
             for root in (byParent[nil] ?? []).sorted(by: { $0.name < $1.name }) { append(root, depth: 0) }
@@ -70,15 +74,17 @@ enum SidebarRows {
         return rows
     }
 
-    /// Photos per folder from the membership map: the folder's own members, or (`includeSubfolders`) the distinct photos in it or any folder
-    /// below it (a photo in a folder and its subfolder counts once). Folders only; a photo's non-folder memberships are ignored.
-    static func folderPhotoCounts(collections: [PhotoCollection], membershipsByPhotoID: [Int64: Set<Int64>],
-                                  includeSubfolders: Bool) -> [Int64: Int] {
+    /// Photos per collection from the membership map. A non-folder collection (album) counts its direct members. A folder counts its own
+    /// members, or (`includeSubfolders`) the distinct photos in it or any folder below it (a photo in a folder and its subfolder counts once).
+    static func collectionPhotoCounts(collections: [PhotoCollection], membershipsByPhotoID: [Int64: Set<Int64>],
+                                     includeSubfolders: Bool) -> [Int64: Int] {
+        let albumIDs = Set(collections.filter { !$0.isFolder }.compactMap(\.id))
         let folders = collections.filter(\.isFolder)
         let parentByID = Dictionary(folders.compactMap { folder in folder.id.map { ($0, folder.parentId) } }, uniquingKeysWith: { first, _ in first })
         var counts: [Int64: Int] = [:]
         for memberships in membershipsByPhotoID.values {
             var covered = Set<Int64>()
+            for id in memberships where albumIDs.contains(id) { counts[id, default: 0] += 1 }
             for id in memberships where parentByID[id] != nil {
                 var current: Int64? = id
                 // Walk up the parent chain (stopping at a cycle); a direct count marks only the folder itself.

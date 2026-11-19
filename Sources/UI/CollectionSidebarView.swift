@@ -54,7 +54,8 @@ struct CollectionSidebarView: View {
     private var rows: [SidebarRow] {
         SidebarRows.rows(
             collections: catalog.collections, smartCollections: catalog.smartCollections, expandedFolders: expandedFolders,
-            folderCounts: catalog.folderPhotoCounts)
+            collectionCounts: catalog.collectionPhotoCounts, allPhotosCount: catalog.photoCount,
+            smartCounts: nil)
     }
 
     var body: some View {

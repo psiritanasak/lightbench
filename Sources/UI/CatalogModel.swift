@@ -73,7 +73,7 @@ final class CatalogModel: ObservableObject {
         didSet {
             guard oldValue != showPhotosInSubfolders else { return }
             preferences.showPhotosInSubfolders = showPhotosInSubfolders
-            recomputeFolderPhotoCounts()
+            recomputeCollectionPhotoCounts()
             if case .collection(let id) = selectedFilter, collections.first(where: { $0.id == id })?.isFolder == true {
                 selectedPhotoIDs.removeAll()
                 gridSelectionAnchor = nil
@@ -81,10 +81,10 @@ final class CatalogModel: ObservableObject {
             }
         }
     }
-    /// Folder id → the number the sidebar shows beside it (direct, or the subtree total while `showPhotosInSubfolders` is on). Stored, not
+    /// Collection id → the number the sidebar shows beside it (albums: direct members; folders: direct, or the subtree total while `showPhotosInSubfolders` is on). Stored, not
     /// computed in the sidebar's body: it is O(photos x depth) and the sidebar redraws on every grid click. Kept in step with `collections`,
-    /// `membershipsByPhotoID` and the flag by `recomputeFolderPhotoCounts()` (assigns only on a real change).
-    @Published private(set) var folderPhotoCounts: [Int64: Int] = [:]
+    /// `membershipsByPhotoID` and the flag by `recomputeCollectionPhotoCounts()` (assigns only on a real change).
+    @Published private(set) var collectionPhotoCounts: [Int64: Int] = [:]
     /// photoID → the set of collectionIDs it belongs to, rebuilt from
     /// `allMemberships()` on every `refresh()`. Keeping this as one
     /// client-side map (rather than a query per grid cell) is what makes
@@ -706,7 +706,7 @@ final class CatalogModel: ObservableObject {
             let memberships = try await database.allMemberships()
             membershipsByPhotoID = Dictionary(grouping: memberships, by: \.photoId)
                 .mapValues { Set($0.map(\.collectionId)) }
-            recomputeFolderPhotoCounts()
+            recomputeCollectionPhotoCounts()
             let loadedKeywords = try await database.allKeywords()
             let keywordLinks = try await database.allKeywordLinks()
             keywords = Self.sortedKeywords(loadedKeywords)
@@ -889,10 +889,10 @@ final class CatalogModel: ObservableObject {
         return seen
     }
 
-    private func recomputeFolderPhotoCounts() {
-        let counts = SidebarRows.folderPhotoCounts(collections: collections, membershipsByPhotoID: membershipsByPhotoID,
-                                                   includeSubfolders: showPhotosInSubfolders)
-        if counts != folderPhotoCounts { folderPhotoCounts = counts }
+    private func recomputeCollectionPhotoCounts() {
+        let counts = SidebarRows.collectionPhotoCounts(collections: collections, membershipsByPhotoID: membershipsByPhotoID,
+                                                      includeSubfolders: showPhotosInSubfolders)
+        if counts != collectionPhotoCounts { collectionPhotoCounts = counts }
     }
 
     func descendantFolderIDs(of folderID: Int64) -> Set<Int64> { Self.descendantFolderIDs(of: folderID, in: collections) }
@@ -1692,12 +1692,15 @@ final class CatalogModel: ObservableObject {
         if photos.count < before { photoCount = max(0, photoCount - (before - photos.count)) }
         selectedPhotoIDs.remove(id)
         if !photo.isVirtualCopy { selectedPhotoIDs.subtract(removedCopyIDs) } // the cascade took the copies; they must not stay selected
-        membershipsByPhotoID.removeValue(forKey: id)
-        recomputeFolderPhotoCounts()
-        keywordIDsByPhotoID.removeValue(forKey: id)
-        infoByPhotoID.removeValue(forKey: id)
-        personIDsByPhotoID.removeValue(forKey: id)
-        metadataByPhotoID.removeValue(forKey: id)
+        // The cascaded copies joined the master's collections, so their memberships (and per-photo maps) go with it.
+        for removedID in removedCopyIDs.union([id]) {
+            membershipsByPhotoID.removeValue(forKey: removedID)
+            keywordIDsByPhotoID.removeValue(forKey: removedID)
+            infoByPhotoID.removeValue(forKey: removedID)
+            personIDsByPhotoID.removeValue(forKey: removedID)
+            metadataByPhotoID.removeValue(forKey: removedID)
+        }
+        recomputeCollectionPhotoCounts()
         // The database trigger dissolves a stack left with fewer than two members; mirror that now, then re-read once the delete landed.
         pruneStacks(removingMasters: photo.isVirtualCopy ? [] : [id])
         invalidateThumbnail(for: URL(fileURLWithPath: photo.path))
@@ -2148,7 +2151,7 @@ final class CatalogModel: ObservableObject {
                 photos.removeAll { $0.id == photoID }
             }
         }
-        recomputeFolderPhotoCounts()
+        recomputeCollectionPhotoCounts()
 
         enqueueWrite { [weak self] in
             do {
@@ -2196,7 +2199,7 @@ final class CatalogModel: ObservableObject {
         for photoID in photoIDs {
             membershipsByPhotoID[photoID, default: []].insert(collectionID)
         }
-        recomputeFolderPhotoCounts()
+        recomputeCollectionPhotoCounts()
 
         enqueueWrite { [weak self] in
             do {

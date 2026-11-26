@@ -16,6 +16,10 @@ import UniformTypeIdentifiers
 /// carries the Looks tab's section flags (`isLooksSectionExpanded`, `isStyleSectionExpanded`, `isPresetsSectionExpanded`),
 /// read by `LooksTabView` (the struct keeps its Adjust-era name); Looks and Style default OPEN, Presets closed.
 struct AdjustPanelState {
+    /// Which Masks-detail / Crop-tab groups are open (UI only, not an `EditState` field and not an `AdjustSection`).
+    /// Everything starts open: the Masks detail's Combine group only appears when another mask exists.
+    var toolSections: Set<ToolSection> = Set(ToolSection.allCases)
+
     /// Which Edit-tab sections are open (see the type comment for the defaults and persistence).
     var editSections = AdjustSectionExpansion()
 
@@ -923,81 +927,30 @@ struct AdjustTabView: View {
 
     private var masksSection: some View {
         Group {
-            // Phase 7 slices 3-5: a 2x2 grid, not a single row or a Menu --
-            // introducing a new mask KIND is exactly the moment
-            // discoverability matters more than a compact control; a menu
-            // click would bury the new option right when it most needs to
-            // be seen. Live-verified (slice 4): the ORIGINAL "Add Radial"/
-            // "Add Linear" labels, extended to a third "Add Brush" button
-            // in one row, truncated to "Add Ra…"/"Add Lin…"/"Add Bru…" at
-            // the sidebar's default width -- the SIDEBAR itself didn't
-            // need to grow, but the labels did need to shrink; dropping
-            // the shared "Add" prefix (kept in each button's own
-            // accessibility label instead) fit all three. Adding a FOURTH
-            // kind this slice (`.luminanceRange`) switched from that
-            // single row to a 2x2 grid rather than a lone full-width
-            // fourth button: at the sidebar's 260-380pt width a half-width
-            // cell is ~115-180pt, comfortably more room per label than the
-            // row of three already proved sufficient, and a lone full-width
-            // button under three narrow ones would read as a different
-            // CLASS of action, which it isn't. Plain nested `HStack`s, not
-            // `LazyVGrid` -- this file has a documented Swift type-checker
-            // blow-up history with over-packed `@ViewBuilder` closures.
+            // Seven icon + caption tiles in rows of four (4 + 3). Plain `HStack` rows, not `LazyVGrid`: this file has a
+            // documented Swift type-checker blow-up history with over-packed `@ViewBuilder` closures. Each tile keeps the
+            // long "Add <Kind> Mask" accessibility label (the caption drops the shared "Add"/"Mask" words to fit).
             VStack(spacing: 8) {
-                HStack {
-                    Button("Radial") {
-                        addMask(kind: .radial)
-                    }
-                    .buttonStyle(FlatButtonStyle(fullWidth: true))
-                    .accessibilityLabel("Add Radial Mask")
-                    Button("Linear") {
-                        addMask(kind: .linear)
-                    }
-                    .buttonStyle(FlatButtonStyle(fullWidth: true))
-                    .accessibilityLabel("Add Linear Mask")
-                }
-                HStack {
-                    Button("Brush") {
-                        addMask(kind: .brush)
-                    }
-                    .buttonStyle(FlatButtonStyle(fullWidth: true))
-                    .accessibilityLabel("Add Brush Mask")
-                    Button("Luminance") {
+                HStack(spacing: 8) {
+                    maskAddTile(.radial, caption: "Radial", label: "Add Radial Mask") { addMask(kind: .radial) }
+                    maskAddTile(.linear, caption: "Linear", label: "Add Linear Mask") { addMask(kind: .linear) }
+                    maskAddTile(.brush, caption: "Brush", label: "Add Brush Mask") { addMask(kind: .brush) }
+                    maskAddTile(.luminanceRange, caption: "Luminance", label: "Add Luminance Range Mask") {
                         addMask(kind: .luminanceRange)
                     }
-                    .buttonStyle(FlatButtonStyle(fullWidth: true))
-                    .accessibilityLabel("Add Luminance Range Mask")
                 }
-                // Phase 7 slice 5 second half: a third row, one new
-                // half-width "Color" button plus an explicit empty cell —
-                // NOT a bare full-width button, which "would read as a
-                // different CLASS of action" per this section's own
-                // comment above; NOT re-gridding to 3+2 either, which
-                // would move four already live-verified buttons for the
-                // sake of one new one.
-                HStack {
-                    Button("Color") {
-                        addMask(kind: .colorRange)
-                    }
-                    .buttonStyle(FlatButtonStyle(fullWidth: true))
-                    .accessibilityLabel("Add Color Range Mask")
-                    Button(document.isSelectingSubject ? "Finding…" : "Subject") {
-                        addSubjectMask()
-                    }
-                    .buttonStyle(FlatButtonStyle(fullWidth: true))
-                    .disabled(document.isSelectingSubject)
-                    .accessibilityLabel("Add Subject Mask")
-                    .accessibilityValue(document.isSelectingSubject ? "Finding subject" : "")
-                }
-                // Depth Range: a fourth row — the new button plus an explicit empty cell, the same shape as the "Color" row (see that comment).
-                HStack {
-                    Button(document.isGeneratingDepth ? "Reading…" : "Depth") {
-                        addDepthMask()
-                    }
-                    .buttonStyle(FlatButtonStyle(fullWidth: true))
-                    .disabled(document.isGeneratingDepth)
-                    .accessibilityLabel("Add Depth Range Mask")
-                    .accessibilityValue(document.isGeneratingDepth ? "Reading depth" : "")
+                HStack(spacing: 8) {
+                    maskAddTile(.colorRange, caption: "Color", label: "Add Color Range Mask") { addMask(kind: .colorRange) }
+                    maskAddTile(
+                        .subject, caption: document.isSelectingSubject ? "Finding…" : "Subject",
+                        label: "Add Subject Mask", value: document.isSelectingSubject ? "Finding subject" : "",
+                        isDisabled: document.isSelectingSubject
+                    ) { addSubjectMask() }
+                    maskAddTile(
+                        .depthRange, caption: document.isGeneratingDepth ? "Reading…" : "Depth",
+                        label: "Add Depth Range Mask", value: document.isGeneratingDepth ? "Reading depth" : "",
+                        isDisabled: document.isGeneratingDepth
+                    ) { addDepthMask() }
                     Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
                 }
             }
@@ -1024,6 +977,24 @@ struct AdjustTabView: View {
         ForEach(Array(document.editState.masks.enumerated()), id: \.element.id) { index, mask in
             maskRow(number: index + 1, mask: mask)
         }
+    }
+
+    /// One "add a mask" tile: the kind's icon over a one-word caption.
+    private func maskAddTile(
+        _ kind: MaskKind, caption: String, label: String, value: String = "", isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: maskKindIcon(kind)).font(.system(size: 14))
+                Text(caption).lineLimit(1).minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(FlatButtonStyle(fullWidth: true, compact: true))
+        .disabled(isDisabled)
+        .accessibilityLabel(label)
+        .accessibilityValue(value)
     }
 
     /// Label "Mask N" comes from ARRAY POSITION, not a persisted name field
@@ -1145,6 +1116,7 @@ struct AdjustTabView: View {
             // typed value into Mask 2's field instead of Mask 1's.
             MaskDetailView(
                 mask: binding,
+                toolSections: $panel.toolSections,
                 onBeginBrushStroke: binding.wrappedValue.kind == .brush ? { beginBrushStroke(for: id) } : nil,
                 onBeginColorPick: binding.wrappedValue.kind == .colorRange ? { beginColorPick(for: id) } : nil,
                 onRecomputeSubject: binding.wrappedValue.kind == .subject ? { document.selectSubject(replacing: id) } : nil,
@@ -1739,6 +1711,22 @@ struct AdjustTabView: View {
                 track: SliderTrackPalette.selectiveLuminance(panel.selectedSelectiveColorBand)
             ) { String(format: "%+.0f%%", $0 * 100) }
         }
+    }
+}
+
+/// The collapsible groups of the Masks detail and the Crop tab. Presentation only; the Edit tab's own sections are `AdjustSection`.
+enum ToolSection: String, CaseIterable, Hashable {
+    case maskAdjustments, maskShape, maskCombine
+    case cropAuto, cropStraighten, cropRotate, cropAspect, cropInsets
+}
+
+extension Binding where Value == Set<ToolSection> {
+    /// A Bool binding for one group's open state.
+    func isOpen(_ section: ToolSection) -> Binding<Bool> {
+        Binding<Bool>(
+            get: { wrappedValue.contains(section) },
+            set: { if $0 { wrappedValue.insert(section) } else { wrappedValue.remove(section) } }
+        )
     }
 }
 

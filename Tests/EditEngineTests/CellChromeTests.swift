@@ -43,14 +43,14 @@ final class CellChromeTests: XCTestCase {
     }
 
     /// Live-caught (2026-10-09): the row `.opacity` was once attached AFTER the cell's outer VStack closed, which dimmed the thumbnail and
-    /// filename too. It must follow the control row's own `HStack(spacing: 4) { … }`: the braces from that HStack's opening to the modifier
+    /// filename too. It must follow the control row's own `HStack(spacing: Theme.Space.xs) { … }`: the braces from that HStack's opening to the modifier
     /// must balance to exactly zero (the HStack is closed, and nothing bigger is).
     func testTheRowOpacityIsAttachedToTheControlRowAndNothingBigger() throws {
         let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/UI/LibraryGridView.swift")
         let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
         let modifier = try XCTUnwrap(lines.firstIndex { $0.contains(".opacity(CellChrome.rowOpacity(") })
-        let start = try XCTUnwrap(lines[..<modifier].lastIndex { $0.contains("HStack(spacing: 4) {") })
+        let start = try XCTUnwrap(lines[..<modifier].lastIndex { $0.contains("HStack(spacing: Theme.Space.xs) {") })
         var depth = 0
         for line in lines[start..<modifier] {
             let code = line.components(separatedBy: "//").first ?? ""

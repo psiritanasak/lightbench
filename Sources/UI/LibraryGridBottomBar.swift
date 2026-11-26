@@ -18,7 +18,7 @@ struct LibraryGridBottomBar: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Theme.Space.px10) {
             statusSlot
             Image(systemName: "arrow.up.arrow.down")
                 .font(.caption)

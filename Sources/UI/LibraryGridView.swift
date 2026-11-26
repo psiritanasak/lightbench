@@ -753,9 +753,9 @@ struct LibraryGridView: View {
     /// filtered-to-nothing grid would misleadingly look like an empty
     /// library.
     private var noMatchesState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Theme.Space.s) {
             Image(systemName: "line.3.horizontal.decrease.circle")
-                .font(.system(size: 40))
+                .font(Theme.Font.hero40())
                 .foregroundStyle(Theme.textSecondary)
             Text("No photos match")
                 .font(.headline)
@@ -875,9 +875,9 @@ private struct LibraryThumbnailCell: View {
     }
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: Theme.Space.xs) {
             ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: Theme.Radius.m)
                     .fill(Color.gray.opacity(0.2))
                 // D5 (IMPROVEMENTS.md): `isMissing` takes priority over a
                 // cached `image` — `ThumbnailCache` serves a once-decoded
@@ -928,7 +928,7 @@ private struct LibraryThumbnailCell: View {
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                             .frame(width: cellSize, height: imageHeight)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
                     } else {
                         // Feedback while the thumbnail decodes — most visible
                         // right after re-sorting, which scrambles which photos
@@ -959,7 +959,7 @@ private struct LibraryThumbnailCell: View {
                             .fill(.black.opacity(0.35))
                             .frame(width: 22, height: 22)
                         Image(systemName: selectionState == .all ? "checkmark.circle.fill" : (selectionState == .partial ? "minus.circle.fill" : "circle"))
-                            .font(.system(size: 18))
+                            .font(Theme.Font.glyph18())
                             .foregroundStyle(.white)
                     }
                     // Dimmed (never hidden) until hover / selection: see `CellChrome`.
@@ -967,7 +967,7 @@ private struct LibraryThumbnailCell: View {
                                                      anySelected: !catalog.selectedPhotoIDs.isEmpty))
                 }
                 .buttonStyle(.plain)
-                .padding(6)
+                .padding(Theme.Space.px6)
                 .accessibilityLabel("Select photo")
                 .accessibilityValue(selectionState == .partial ? "Partly selected" : "")
                 .accessibilityAddTraits(isCellSelected ? [.isSelected] : [])
@@ -995,7 +995,7 @@ private struct LibraryThumbnailCell: View {
                         .fill(photo.colorLabel.color)
                         .overlay(Circle().stroke(.black.opacity(0.5), lineWidth: 1))
                         .frame(width: 12, height: 12)
-                        .padding(6)
+                        .padding(Theme.Space.px6)
                         .accessibilityHidden(true)
                 }
             }
@@ -1003,7 +1003,7 @@ private struct LibraryThumbnailCell: View {
             // selection card (a grey plate around the whole cell), so "keyboard-focused" never reads as "export-selected". Same technique as
             // `EditorFilmstripView`'s current-photo ring (there at `Theme.selectedOutline`).
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: Theme.Radius.m)
                     .stroke(Color.white, lineWidth: isFocused ? 2 : 0)
             )
 
@@ -1029,7 +1029,7 @@ private struct LibraryThumbnailCell: View {
             // 113pt visible-ink, i.e. 4pt/7pt of slack under the 120
             // floor — the number `.clipped()`'s own doc comment below
             // needs to be true for "backstop, not load-bearing" to hold.
-            HStack(spacing: 4) {
+            HStack(spacing: Theme.Space.xs) {
                 StarRatingRow(rating: photo.rating) { newRating in
                     catalog.setRating(newRating, for: photo)
                 }
@@ -1225,9 +1225,9 @@ private struct LibraryThumbnailCell: View {
     /// once `CatalogModel.isPhotoConfirmedMissing(_:)` confirms the file
     /// is genuinely gone — see `.task(id:)` above.
     private var missingPlaceholder: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: Theme.Space.xs) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 20))
+                .font(Theme.Font.glyph20())
                 .foregroundStyle(Theme.warning)
             Text("Missing")
                 .font(.caption2)
@@ -1245,11 +1245,11 @@ private struct LibraryThumbnailCell: View {
                 .fill(.black.opacity(0.35))
                 .frame(width: 22, height: 22)
             Image(systemName: "square.on.square")
-                .font(.system(size: 11))
+                .font(Theme.Font.body())
                 .foregroundStyle(.white)
         }
-        .padding(6)
-        .padding(.top, 22) // below the selection checkbox, which sits in the same corner
+        .padding(Theme.Space.px6)
+        .padding(.top, Theme.Space.px22) // below the selection checkbox, which sits in the same corner
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(photo.versionName ?? "Virtual copy")
     }
@@ -1274,11 +1274,11 @@ private struct LibraryThumbnailCell: View {
                 switch StackCellPresentation.badge(for: item) {
                 case .count(let count):
                     Text("\(count)")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(Theme.Font.body(.semibold))
                         .foregroundStyle(.white)
                 case .marker:
                     Image(systemName: "square.stack")
-                        .font(.system(size: 11))
+                        .font(Theme.Font.body())
                         .foregroundStyle(.white)
                 case .none:
                     EmptyView()
@@ -1287,7 +1287,7 @@ private struct LibraryThumbnailCell: View {
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .padding(6)
+        .padding(Theme.Space.px6)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(StackCellPresentation.badgeAccessibilityLabel(for: item))
     }
@@ -1298,10 +1298,10 @@ private struct LibraryThumbnailCell: View {
                 .fill(.black.opacity(0.35))
                 .frame(width: 22, height: 22)
             Image(systemName: "slider.horizontal.3")
-                .font(.system(size: 11))
+                .font(Theme.Font.body())
                 .foregroundStyle(.white)
         }
-        .padding(6)
+        .padding(Theme.Space.px6)
         // D6 (IMPROVEMENTS.md): explicit `.accessibilityElement` rather
         // than relying on label propagation up from the `Image` child —
         // matches every other element in this file's own new pattern.
@@ -1320,7 +1320,7 @@ struct StarRatingRow: View {
     let onSet: (Int) -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: Theme.Space.px2) {
             ForEach(1...5, id: \.self) { star in
                 Button {
                     onSet(star == rating ? 0 : star)

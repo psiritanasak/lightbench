@@ -32,9 +32,9 @@ struct LibraryEmptyLibraryView: View {
     @ObservedObject var catalog: CatalogModel
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: Theme.Space.px14) {
             Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 44))
+                .font(Theme.Font.hero44())
                 .foregroundStyle(Theme.textSecondary)
             Text("Add your photos")
                 .font(.title2.weight(.semibold))
@@ -43,7 +43,7 @@ struct LibraryEmptyLibraryView: View {
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 420)
-            HStack(spacing: 10) {
+            HStack(spacing: Theme.Space.px10) {
                 Button("Import Folder\u{2026}") { catalog.importFolder() }
                     .buttonStyle(FlatButtonStyle(prominent: true))
                 Button("Import Folder Tree\u{2026}") { catalog.importFolderTree() }
@@ -84,9 +84,9 @@ struct LibraryEmptyCollectionView: View {
     }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Theme.Space.s) {
             Image(systemName: isFolder ? "folder" : "rectangle.stack")
-                .font(.system(size: 40))
+                .font(Theme.Font.hero40())
                 .foregroundStyle(Theme.textSecondary)
             Text(title)
                 .font(.headline)
@@ -104,9 +104,9 @@ struct CatalogOpenFailedView: View {
     var message: String
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: Theme.Space.px10) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 40))
+                .font(Theme.Font.hero40())
                 .foregroundStyle(Theme.warning)
             Text("The photo catalog couldn\u{2019}t be opened")
                 .font(.headline)
@@ -133,9 +133,9 @@ struct EditorNoPhotoView: View {
     @State private var visible = false
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: Theme.Space.px10) {
             Image(systemName: "photo")
-                .font(.system(size: 40))
+                .font(Theme.Font.hero40())
                 .foregroundStyle(Theme.textSecondary)
             Text("No photo open")
                 .font(.headline)

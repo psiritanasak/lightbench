@@ -43,7 +43,7 @@ struct LibrarySelectionBar: View {
                 }
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Theme.Space.m)
         .frame(height: Theme.Metrics.barHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.panel)

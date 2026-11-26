@@ -25,14 +25,13 @@ struct PeopleSheetView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("People").font(.headline)
+        SheetScaffold(title: "People", size: .large, status: SheetStatus.classifying(model.statusMessage),
+                      actions: .done(returnKey: false), onDismiss: onDone) {
             Text("Faces are found and grouped on this Mac and stored only in your catalog. They are not written to your photo files, sidecars or exports. Grouping is automatic and cautious: check it, merge people who were split, and use “Not this person” on mistakes.")
                 .font(.caption).foregroundStyle(Theme.textSecondary)
 
             scanRow
             if let summary = model.summary { Text(summary).font(.caption).foregroundStyle(Theme.textSecondary) }
-            if let message = model.statusMessage { Text(message).font(.caption).foregroundStyle(Theme.warning) }
 
             HStack(alignment: .top, spacing: 14) {
                 peopleList.frame(width: 250)
@@ -40,14 +39,7 @@ struct PeopleSheetView: View {
                 detail.frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(height: 360)
-
-            HStack {
-                Spacer()
-                Button("Done", action: onDone).keyboardShortcut(.cancelAction).buttonStyle(FlatButtonStyle(prominent: true))
-            }
         }
-        .padding(20)
-        .frame(width: 780)
         .task { await model.reload() }
         .onChange(of: model.selection) { _, _ in
             nameText = selectedPerson?.name ?? ""

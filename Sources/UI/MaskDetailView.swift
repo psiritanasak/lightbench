@@ -103,6 +103,8 @@ enum SubjectSelectionState {
 
 struct MaskDetailView: View {
     @Binding var mask: Mask
+    /// Which of the Adjustments / Shape / Combine groups are open (UI only, owned by `AdjustPanelState`).
+    @Binding var toolSections: Set<ToolSection>
     /// `.brush` only — called when "Paint Stroke"/"Redraw Stroke" is
     /// tapped. `nil` for every other kind (mirrors
     /// `RedEyeOverlayView.onTap`'s optional-closure shape for an
@@ -148,15 +150,18 @@ struct MaskDetailView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Adjustments").font(.caption).foregroundStyle(Theme.textSecondary)
-            toneRows
-            colorRows
-            Text(shapeSectionTitle).font(.caption).foregroundStyle(Theme.textSecondary)
-            shapeRows
+        VStack(alignment: .leading, spacing: 12) {
+            AdjustSectionContainer(title: "Adjustments", isExpanded: $toolSections.isOpen(.maskAdjustments)) {
+                toneRows
+                colorRows
+            }
+            AdjustSectionContainer(title: shapeSectionTitle, isExpanded: $toolSections.isOpen(.maskShape)) {
+                shapeRows
+            }
             if !combineTargets.isEmpty {
-                Text("Combine").font(.caption).foregroundStyle(Theme.textSecondary)
-                combineRows
+                AdjustSectionContainer(title: "Combine", isExpanded: $toolSections.isOpen(.maskCombine)) {
+                    combineRows
+                }
             }
         }
     }
@@ -262,8 +267,9 @@ struct MaskDetailView: View {
                         .accessibilityAddTraits(showsDepthSelection ? [.isSelected] : [])
                         .accessibilityLabel(showsDepthSelection ? "Hide Depth Selection" : "Show Depth Selection")
                 }
-                Text("0% is the farthest part of the photo, 100% the nearest. The window between Far and Near is selected.")
-                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                HelpCaption(
+                    short: "The window between Far and Near is selected.",
+                    help: "0% is the farthest part of the photo, 100% the nearest. The window between Far and Near is selected.")
             }
         }
     }

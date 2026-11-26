@@ -18,9 +18,26 @@ struct CropTabView: View {
     let autoCropAspectRatio: () -> Double?
     /// Same rule as the Photo-menu items (`RotateAvailability`).
     let rotateEnabled: Bool
+    /// Which groups are open (`AdjustPanelState.toolSections`; UI only).
+    @Binding var toolSections: Set<ToolSection>
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
+            autoGroup
+            straightenGroup
+            rotateFlipGroup
+            aspectGroup
+            insetsGroup
+            Button("Reset") { onReset() }
+                .buttonStyle(.flat)
+                .disabled(document.currentImage == nil)
+        }
+    }
+
+    /// Group headers are the shared `AdjustSectionContainer` (title + chevron, no dot or reset); the open state lives in
+    /// `AdjustPanelState.toolSections` so it survives a tab round-trip.
+    private var autoGroup: some View {
+        AdjustSectionContainer(title: "Auto", isExpanded: $toolSections.isOpen(.cropAuto)) {
             Button {
                 document.autoStraighten()
             } label: {
@@ -43,6 +60,11 @@ struct CropTabView: View {
             .buttonStyle(.flat)
             .disabled(document.currentImage == nil || document.isAutoCropping || document.isAutoStraightening || document.isAutoUprighting)
             .help("Crop to the largest rectangle with no empty corners (replaces the current crop; keeps the selected Aspect)")
+        }
+    }
+
+    private var straightenGroup: some View {
+        AdjustSectionContainer(title: "Straighten & Perspective", isExpanded: $toolSections.isOpen(.cropStraighten)) {
             EditSliderRow(
                 label: "Straighten", value: $document.editState.straightenAngle,
                 range: -45...45, identity: 0
@@ -63,14 +85,25 @@ struct CropTabView: View {
                 label: "Stretch", value: $document.editState.transformAspect,
                 range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
+        }
+    }
+
+    private var rotateFlipGroup: some View {
+        AdjustSectionContainer(title: "Rotate & Flip", isExpanded: $toolSections.isOpen(.cropRotate)) {
             rotateRow
             EditToggleRow(label: "Flip Horizontal", value: $document.editState.flipHorizontal)
             EditToggleRow(label: "Flip Vertical", value: $document.editState.flipVertical)
+        }
+    }
 
-            Divider()
+    private var aspectGroup: some View {
+        AdjustSectionContainer(title: "Aspect", isExpanded: $toolSections.isOpen(.cropAspect)) {
             aspectSection
-            Divider()
+        }
+    }
 
+    private var insetsGroup: some View {
+        AdjustSectionContainer(title: "Insets", isExpanded: $toolSections.isOpen(.cropInsets)) {
             EditSliderRow(
                 label: "Crop Top", value: $document.editState.cropInsetTop,
                 range: 0...0.45, identity: 0, displayMultiplier: 100
@@ -87,10 +120,6 @@ struct CropTabView: View {
                 label: "Crop Right", value: $document.editState.cropInsetRight,
                 range: 0...0.45, identity: 0, displayMultiplier: 100
             ) { String(format: "%.0f%%", $0 * 100) }
-
-            Button("Reset") { onReset() }
-                .buttonStyle(.flat)
-                .disabled(document.currentImage == nil)
         }
     }
 
@@ -140,9 +169,6 @@ struct CropTabView: View {
     /// selected preset shows a checkmark.
     private var aspectSection: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Aspect")
-                .font(.headline)
-                .padding(.bottom, 2)
             ForEach(CropAspectPreset.allCases, id: \.self) { preset in
                 Button {
                     onSelectAspect(preset)

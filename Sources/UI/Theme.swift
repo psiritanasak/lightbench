@@ -12,6 +12,10 @@ enum Theme {
         static let adjustPanelMinWidth: CGFloat = 300, adjustPanelMaxWidth: CGFloat = 380
         /// The bar under the Editor photo (rating / flag / label); also the height of an icon-only rail cell.
         static let barHeight: CGFloat = 36
+        /// The three sheet widths (`SheetSize`): one place so every sheet lines up. By-eye conventions, not measurements.
+        static let sheetSmallWidth: CGFloat = 460, sheetMediumWidth: CGFloat = 580, sheetLargeWidth: CGFloat = 780
+        /// The padding inside every sheet (`SheetScaffold`).
+        static let sheetPadding: CGFloat = 20
     }
 
     /// The solid dark panel behind sidebars: the Editor's Adjust panel, the tool rail, the rating bar, the filmstrip and the Library's
@@ -45,6 +49,8 @@ enum Theme {
     static let controlTint = Color(white: 0.85)
     /// The one caution colour (amber): missing files, notes that something will not behave as expected. Reject keeps red.
     static let warning = Color(red: 0.89, green: 0.66, blue: 0.24)
+    /// Something the user asked for failed or was refused (an invalid name template, a write error). Red, readable on `panel`; distinct from the amber `warning` (cautions). The Reject flag, colour labels and the Delete menu items keep their own reds.
+    static let error = Color(red: 0.94, green: 0.38, blue: 0.34)
 }
 
 extension View {

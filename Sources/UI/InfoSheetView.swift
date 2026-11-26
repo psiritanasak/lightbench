@@ -103,9 +103,15 @@ struct InfoSheetView: View {
 
     private var copyCount: Int { livePhotos.filter(\.isVirtualCopy).count }
 
+    private func save() {
+        let change = draft.change
+        if !change.fields.isEmpty { catalog.setInfo(change.info, fields: change.fields, for: photoIDs) }
+        onDone()
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Info for \(livePhotos.count) Photo\(livePhotos.count == 1 ? "" : "s")").font(.headline)
+        SheetScaffold(title: "Info for \(livePhotos.count) Photo\(livePhotos.count == 1 ? "" : "s")", size: .small,
+                      actions: .commit(verb: "Save"), onDismiss: onDone, onPrimary: save) {
             if hiddenCount > 0 {
                 Text("\(hiddenCount) of them \(hiddenCount == 1 ? "is" : "are") hidden by the current filters and will be changed too.")
                     .font(.caption).foregroundStyle(Theme.warning)
@@ -118,21 +124,7 @@ struct InfoSheetView: View {
                 .font(.caption).foregroundStyle(Theme.textSecondary)
 
             InfoFieldsView(draft: draft, edit: { draft.edit($0, to: $1) }, clear: { draft.clear($0) })
-
-            HStack {
-                Spacer()
-                Button("Cancel", action: onDone).keyboardShortcut(.cancelAction).buttonStyle(.flat)
-                Button("Save") {
-                    let change = draft.change
-                    if !change.fields.isEmpty { catalog.setInfo(change.info, fields: change.fields, for: photoIDs) }
-                    onDone()
-                }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(FlatButtonStyle(prominent: true))
-            }
         }
-        .padding(20)
-        .frame(width: 460)
     }
 }
 

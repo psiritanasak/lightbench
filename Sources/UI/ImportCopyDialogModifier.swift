@@ -34,9 +34,35 @@ struct ImportCopySheetView: View {
     private var sizeText: String { ByteCountFormatter.string(fromByteCount: model.setup?.totalBytes ?? 0, countStyle: .file) }
 
     var body: some View {
+        let count = model.setup?.sources.count ?? 0
+        SheetScaffold(
+            title: "Copy \(count) Photo\(count == 1 ? "" : "s") into the Library",
+            size: .medium,
+            status: model.sheetError.map { SheetStatus(text: $0, tone: .error) },
+            // No default button: a destructive Move must never be one stray Return away.
+            actions: .commit(verb: model.options.mode == .move ? "Copy and Trash Originals" : "Copy", enabled: model.canCopy,
+                             primaryIsDefault: false),
+            onDismiss: { model.cancel() },
+            onPrimary: { model.requestStart(providers: providers, catalog: catalog) },
+            content: { bodyContent }
+        )
+        // Move only: a destructive confirmation with NO default button (Return must not confirm), like the Trash commands.
+        .confirmationDialog(
+            ImportCopyModel.moveConfirmationTitle(count: model.setup?.sources.count ?? 0),
+            isPresented: $model.confirmingMove,
+            titleVisibility: .visible
+        ) {
+            Button("Copy and Move to Trash", role: .destructive) { model.confirm(providers: providers, catalog: catalog, moveConfirmed: true) }
+            Button("Cancel", role: .cancel) { model.confirmingMove = false }
+        } message: {
+            Text(ImportCopyModel.moveConfirmationMessage(
+                source: model.setup?.sourceFolder.lastPathComponent ?? "", destination: model.destination?.lastPathComponent ?? ""
+            ))
+        }
+    }
+
+    private var bodyContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            let count = model.setup?.sources.count ?? 0
-            Text("Copy \(count) Photo\(count == 1 ? "" : "s") into the Library").font(.headline)
             Text("From “\(model.setup?.sourceFolder.lastPathComponent ?? "")” · \(sizeText). \(ImportCopyModel.sheetIntro(mode: model.options.mode))")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
@@ -68,7 +94,7 @@ struct ImportCopySheetView: View {
                         .font(.system(.body, design: .monospaced))
                 }
                 if let error = model.templateError {
-                    Text(error.errorDescription ?? "Invalid template").font(.caption).foregroundStyle(.red)
+                    Text(error.errorDescription ?? "Invalid template").font(.caption).foregroundStyle(Theme.error)
                 } else {
                     Text("Tokens: {name} {seq} {seq:4} {date} {datetime} — the file extension is kept. {name} keeps the original name.")
                         .font(.caption2)
@@ -104,37 +130,6 @@ struct ImportCopySheetView: View {
                         .truncationMode(.middle)
                 }
             }
-
-            if let error = model.sheetError {
-                Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel") { model.cancel() }
-                    .buttonStyle(.flat)
-                    .keyboardShortcut(.cancelAction)
-                Button(model.options.mode == .move ? "Copy and Trash Originals" : "Copy") {
-                    model.requestStart(providers: providers, catalog: catalog)
-                }
-                .buttonStyle(FlatButtonStyle(prominent: true))
-                .disabled(!model.canCopy)
-            }
-        }
-        .padding()
-        .frame(width: 560)
-        // Move only: a destructive confirmation with NO default button (Return must not confirm), like the Trash commands.
-        .confirmationDialog(
-            ImportCopyModel.moveConfirmationTitle(count: model.setup?.sources.count ?? 0),
-            isPresented: $model.confirmingMove,
-            titleVisibility: .visible
-        ) {
-            Button("Copy and Move to Trash", role: .destructive) { model.confirm(providers: providers, catalog: catalog, moveConfirmed: true) }
-            Button("Cancel", role: .cancel) { model.confirmingMove = false }
-        } message: {
-            Text(ImportCopyModel.moveConfirmationMessage(
-                source: model.setup?.sourceFolder.lastPathComponent ?? "", destination: model.destination?.lastPathComponent ?? ""
-            ))
         }
     }
 }

@@ -45,14 +45,24 @@ final class CatalogModel: ObservableObject {
     }
     /// The title of every catalog result.
     nonisolated static let feedbackTitle = "Photo Catalog"
-    @Published private(set) var photos: [Photo] = []
+    @Published private(set) var photos: [Photo] = [] { didSet { scheduleSmartCollectionCounts() } }
     @Published private(set) var collections: [PhotoCollection] = []
     /// Phase 5 slice 2: named, saved edit-state "looks", applicable to any
     /// photo. Loaded in `refresh()` alongside `collections` — same shape,
     /// same reasoning.
     @Published private(set) var presets: [Preset] = []
     /// Saved filter sets shown in the sidebar, sorted by name; loaded in `refresh()`.
-    @Published private(set) var smartCollections: [SmartCollection] = []
+    /// Photos per smart collection, computed off the main thread (`CatalogModel+SidebarCounts.swift`). A smart collection missing
+    /// from the map has no count yet; the sidebar shows nothing for it, never 0. Written only by `scheduleSmartCollectionCounts`
+    /// (not `private(set)`: that extension lives in another file).
+    @Published var smartCollectionCounts: [Int64: Int] = [:]
+    /// Every photo in the catalog, read in `refresh()` ONLY while a plain collection is viewed (when `photos` holds just that
+    /// collection) and smart collections exist; nil otherwise. The counts run over it, with `photos` rows put in its place.
+    var smartCountBasePhotos: [Photo]?
+    var smartCountTask: Task<Void, Never>?
+    /// True while `photos` holds every photo (set right after `refresh()` assigns it), false while it holds one collection.
+    var photosAreWholeCatalog = true
+    @Published private(set) var smartCollections: [SmartCollection] = [] { didSet { scheduleSmartCollectionCounts() } }
     private var smartCollectionLoadError: String?
     /// Which photos `photos` reflects. Setting this re-filters `photos` —
     /// see `didSet` below and `refresh()`. Also clears `selectedPhotoIDs`
@@ -92,12 +102,12 @@ final class CatalogModel: ObservableObject {
     /// dictionary lookup.
     @Published private(set) var membershipsByPhotoID: [Int64: Set<Int64>] = [:]
     /// All keywords, sorted case-insensitively by name (refreshed with everything else).
-    @Published private(set) var keywords: [Keyword] = []
+    @Published private(set) var keywords: [Keyword] = [] { didSet { scheduleSmartCollectionCounts() } }
     /// photoID → the keyword ids on it; same role/discipline as `membershipsByPhotoID`.
-    @Published private(set) var keywordIDsByPhotoID: [Int64: Set<Int64>] = [:]
+    @Published private(set) var keywordIDsByPhotoID: [Int64: Set<Int64>] = [:] { didSet { scheduleSmartCollectionCounts() } }
     /// photoID → Library info (title, caption, creator, copyright). Keyed by the MASTER photo id only: a virtual copy has no
     /// entry of its own (read through `info(for:)` / `inheritingFromMasters`).
-    @Published private(set) var infoByPhotoID: [Int64: PhotoInfo] = [:]
+    @Published private(set) var infoByPhotoID: [Int64: PhotoInfo] = [:] { didSet { scheduleSmartCollectionCounts() } }
     /// Which photos are checked in the Library grid, for batch export —
     /// pure in-memory UI state (unlike every other `@Published` mutation
     /// in this class, this never touches the database, so it needs no
@@ -191,7 +201,7 @@ final class CatalogModel: ObservableObject {
     @Published private(set) var people: [PersonSummary] = []
     @Published private(set) var personIDsByPhotoID: [Int64: Set<Int64>] = [:]
     /// The cached camera data (EXIF) the Library search's `iso:`/`camera:`/`date:`… fields read; see `CatalogModel+Metadata.swift`.
-    @Published private(set) var metadataByPhotoID: [Int64: PhotoMetadata] = [:]
+    @Published private(set) var metadataByPhotoID: [Int64: PhotoMetadata] = [:] { didSet { scheduleSmartCollectionCounts() } }
     /// Non-nil while the background metadata scan runs ("Reading camera data… 120/1097").
     @Published private(set) var metadataScanProgress: MetadataScanner.Progress?
     var metadataScanTask: Task<Void, Never>?
@@ -740,11 +750,17 @@ final class CatalogModel: ObservableObject {
             switch selectedFilter {
             case .allPhotos, .smartCollection:
                 photos = try await database.allPhotos()
+                photosAreWholeCatalog = true
+                smartCountBasePhotos = nil // only AFTER `photos` is whole: a recount in between must not see a collection-only list
             case .collection(let collectionID):
+                // A failed read keeps the previous base (possibly nil: the counts then clear, never run over the collection).
+                if smartCollections.isEmpty { smartCountBasePhotos = nil }
+                else if let loaded = try? await database.allPhotos() { smartCountBasePhotos = loaded }
                 let viewed = viewedCollectionIDs(of: collectionID)
                 photos = viewed.count > 1
                     ? try await database.photos(inCollections: Array(viewed).sorted())
                     : try await database.photos(inCollection: collectionID)
+                photosAreWholeCatalog = false
             }
             // Its own do/catch like the face read: a failed camera-data read keeps the previous map.
             // Virtual copies have no camera data / faces of their own: they inherit their master's, so search and the Person filter see them.
@@ -1690,6 +1706,7 @@ final class CatalogModel: ObservableObject {
         // Keep the empty-state decision honest: `photoCount` is only re-read by `refresh()`, which this path skips on success.
         // Only when the list actually got shorter (a repeated Remove on the same cell must not under-count).
         if photos.count < before { photoCount = max(0, photoCount - (before - photos.count)) }
+        smartCountBasePhotos?.removeAll { $0.id == id || (photo.isVirtualCopy == false && $0.masterId == id) }
         selectedPhotoIDs.remove(id)
         if !photo.isVirtualCopy { selectedPhotoIDs.subtract(removedCopyIDs) } // the cascade took the copies; they must not stay selected
         // The cascaded copies joined the master's collections, so their memberships (and per-photo maps) go with it.

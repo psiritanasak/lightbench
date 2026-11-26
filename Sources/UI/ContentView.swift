@@ -1219,7 +1219,7 @@ struct ContentView: View {
     /// `nil` when Compare is off (the default, unchanged single-image
     /// render path); otherwise bundles everything `ImageRenderer` needs.
     /// Compare never runs on the Crop tab (see the toolbar `Menu`'s
-    /// `.disabled(...)` and the tab-change reset — it survives every tab but Crop and Clean Up,
+    /// `.disabled(...)` and the tab-change reset — it survives every tab but Crop,
     /// `EditorTab.keepsCompareAndZoom`), so
     /// `compareOriginalEditState`/`displayEditState` are never substituting
     /// for crop-editing mode at the same time.
@@ -1502,7 +1502,7 @@ struct ContentView: View {
         }
         // Each point tool belongs to one tab (`EditorTab.switchEffects`): a switch disarms the armed mode and clears the mask / Point
         // Color / retouch selections unless the destination tab owns them, so no overlay stays live on a tab with no way to turn it off. Compare and
-        // zoom survive a switch to any tab that shows the live image (before/after while browsing looks) but reset on Crop/Clean Up
+        // zoom survive a switch to any tab that shows the live image (before/after while browsing looks) but reset on Crop
         // (`EditorTab.keepsCompareAndZoom`; the rail's Compare entry (`EditorRailActionRules.canCompare`) and `canZoom` already gate Crop).
         // A closed popover leaves keyboard focus nowhere: hand it back to the image pane (Escape/arrows/Delete live there). Not in
         // Library mode (the grid claims its own focus), and not when the click that dismissed the popover landed on a text field
@@ -2596,7 +2596,6 @@ struct ContentView: View {
                     )
                 case .looks:
                     LooksTabView(document: document, catalog: catalog, previews: lookPreviews, panel: $adjustPanel)
-                case .cleanUp: PlaceholderTab(message: "Clean Up isn't available yet.")
                 }
             }
             .padding(.horizontal)

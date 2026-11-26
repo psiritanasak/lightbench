@@ -23,15 +23,3 @@ struct ZoomPercentageHUD: View {
     }
 }
 
-/// Stand-in body for an `EditorTab` that has no implementation yet (Clean Up) — the tab
-/// bar started as a mirror of Apple Photos' tab set, so that tab exists in the UI before its feature does.
-struct PlaceholderTab: View {
-    let message: String
-
-    var body: some View {
-        Text(message)
-            .foregroundStyle(Theme.textSecondary)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 40)
-    }
-}

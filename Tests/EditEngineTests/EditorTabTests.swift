@@ -4,14 +4,13 @@ import XCTest
 
 final class EditorTabTests: XCTestCase {
     func testTabOrderAndLabels() {
-        XCTAssertEqual(EditorTab.allCases, [.adjust, .looks, .retouch, .redEye, .masks, .crop, .cleanUp])
-        XCTAssertEqual(EditorTab.allCases.map(\.label), ["Adjust", "Looks", "Retouch", "Red-Eye", "Masks", "Crop", "Clean Up"])
+        XCTAssertEqual(EditorTab.allCases, [.adjust, .looks, .retouch, .redEye, .masks, .crop])
+        XCTAssertEqual(EditorTab.allCases.map(\.label), ["Adjust", "Looks", "Retouch", "Red-Eye", "Masks", "Crop"])
     }
 
-    func testCompareAndZoomSurviveEverywhereButCropAndCleanUp() {
+    func testCompareAndZoomSurviveEverywhereButCrop() {
         for tab in [EditorTab.adjust, .looks, .retouch, .redEye, .masks] { XCTAssertTrue(tab.keepsCompareAndZoom, tab.label) }
         XCTAssertFalse(EditorTab.crop.keepsCompareAndZoom)
-        XCTAssertFalse(EditorTab.cleanUp.keepsCompareAndZoom)
     }
 
     // MARK: - Point-tool ownership (what a tab switch does to armed modes and selections)
@@ -68,7 +67,7 @@ final class EditorTabTests: XCTestCase {
     /// Behaviour of the tabs that exist on the rail today is unchanged: leaving for Looks or Crop clears every selection and
     /// disarms every armed mode, exactly as `disarmsPointModes` did.
     func testLooksAndCropStillClearEverything() {
-        for tab in [EditorTab.looks, .crop, .cleanUp] {
+        for tab in [EditorTab.looks, .crop] {
             for mode in allModes where mode != .none {
                 XCTAssertTrue(tab.switchEffects(armed: mode).disarmsMode, "\(mode) -> \(tab.label)")
             }
@@ -90,10 +89,9 @@ final class EditorTabTests: XCTestCase {
 
     // MARK: - Tool rail
 
-    func testRailShowsTheToolsInOrderAndNotTheInertCleanUp() {
+    func testRailShowsTheToolsInOrder() {
         XCTAssertEqual(EditorTab.railTabs, [.adjust, .looks, .retouch, .redEye, .masks, .crop])
         XCTAssertEqual(EditorTab.railTabs.map(\.railTitle), ["Edit", "Looks", "Retouch", "Red-eye", "Masks", "Crop"])
-        XCTAssertFalse(EditorTab.railTabs.contains(.cleanUp))
     }
 
     func testRailSymbolsAreDistinctAndRealSystemSymbols() {

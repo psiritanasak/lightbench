@@ -20,6 +20,19 @@ struct SheetStatus: Equatable {
     enum Tone: Equatable { case info, caution, error }
     var text: String
     var tone: Tone = .info
+
+    /// A model's free-text `statusMessage` as a footer status: a failure ("Couldn't...", "...failed", "That didn't work", "isn't ready")
+    /// is `.error`, a refusal or partial result ("Nothing to...", "Cancelled", "could not be compared", "no face print", "gap changed",
+    /// a Rename in progress) is `.caution`, anything else is a plain `.info` result.
+    static func classifying(_ text: String?) -> SheetStatus? {
+        guard let text else { return nil }
+        let lower = text.lowercased()
+        let errors = ["couldn't", "failed", "didn't work", "isn't ready"]
+        let cautions = ["nothing to", "cancelled", "could not be compared", "no face print", "gap changed", "no photos to", "in progress"]
+        if errors.contains(where: lower.contains) { return SheetStatus(text: text, tone: .error) }
+        if cautions.contains(where: lower.contains) { return SheetStatus(text: text, tone: .caution) }
+        return SheetStatus(text: text, tone: .info)
+    }
 }
 
 /// What a sheet's footer offers, in the macOS order (the primary action last, at the right).
@@ -32,6 +45,9 @@ struct SheetStatus: Equatable {
 enum SheetActions: Equatable {
     case done(returnKey: Bool = true)
     case commit(verb: String, enabled: Bool = true, primaryIsDefault: Bool = true, cancelEnabled: Bool = true)
+    /// A sheet that stays open after its verb (Auto Stack's Apply) and whose body owns the Return default: a flat Done (Esc, disabled
+    /// while `doneEnabled` is false, e.g. mid-apply) then the prominent verb at the right, with no key binding of its own.
+    case doneAndApply(verb: String, enabled: Bool = true, doneEnabled: Bool = true)
 }
 
 /// One footer button, resolved from `SheetActions` (pure, so the order and the key bindings are testable).
@@ -56,6 +72,9 @@ enum SheetFooterRules {
             return [SheetButtonSpec(title: "Cancel", prominent: false, shortcut: .cancelAction, enabled: cancelEnabled, isPrimary: false),
                     SheetButtonSpec(title: verb, prominent: true, shortcut: primaryIsDefault ? .defaultAction : .none, enabled: enabled,
                                     isPrimary: true)]
+        case .doneAndApply(let verb, let enabled, let doneEnabled):
+            return [SheetButtonSpec(title: "Done", prominent: false, shortcut: .cancelAction, enabled: doneEnabled, isPrimary: false),
+                    SheetButtonSpec(title: verb, prominent: true, shortcut: .none, enabled: enabled, isPrimary: true)]
         }
     }
 

@@ -40,6 +40,27 @@ final class SheetScaffoldTests: XCTestCase {
         XCTAssertEqual(buttons.map(\.shortcut), [.cancelAction, .none], "no default button: one stray Return must not trash anything")
     }
 
+    func testDoneAndApplyIsFlatDoneThenProminentVerbWithNoReturn() {
+        let actions = SheetActions.doneAndApply(verb: "Apply", enabled: false, doneEnabled: false)
+        let buttons = SheetFooterRules.buttons(for: actions)
+        XCTAssertEqual(buttons.map(\.title), ["Done", "Apply"])
+        XCTAssertEqual(buttons.map(\.prominent), [false, true])
+        XCTAssertEqual(buttons.map(\.shortcut), [.cancelAction, .none], "the body owns Return; Apply is never the default")
+        XCTAssertEqual(buttons.map(\.enabled), [false, false])
+        XCTAssertEqual(buttons.map(\.isPrimary), [false, true])
+        XCTAssertFalse(SheetFooterRules.needsHiddenEscape(for: actions))
+        XCTAssertEqual(SheetFooterRules.buttons(for: .doneAndApply(verb: "Apply")).map(\.enabled), [true, true])
+    }
+
+    func testStatusClassificationOfModelMessages() {
+        XCTAssertNil(SheetStatus.classifying(nil))
+        XCTAssertEqual(SheetStatus.classifying("Rejected 3 photos.")?.tone, .info)
+        XCTAssertEqual(SheetStatus.classifying("The scan failed: x")?.tone, .error)
+        XCTAssertEqual(SheetStatus.classifying("Couldn't apply the stacks: x")?.tone, .error)
+        XCTAssertEqual(SheetStatus.classifying("Nothing to reject.")?.tone, .caution)
+        XCTAssertEqual(SheetStatus.classifying("Cancelled. Nothing was changed.")?.tone, .caution)
+    }
+
     func testEnabledFlagsReachTheButtons() {
         let buttons = SheetFooterRules.buttons(for: .commit(verb: "Rename", enabled: false, cancelEnabled: false))
         XCTAssertEqual(buttons.map(\.enabled), [false, false])

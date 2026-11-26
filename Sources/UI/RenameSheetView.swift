@@ -18,9 +18,24 @@ struct RenameSheetView: View {
     }
 
     var body: some View {
+        SheetScaffold(
+            title: "Rename \(model.photoCount) Photo\(model.photoCount == 1 ? "" : "s")",
+            size: .medium,
+            height: 560,
+            status: model.sheetError.map { SheetStatus(text: $0, tone: .error) },
+            actions: .commit(verb: "Rename", enabled: model.canApply, cancelEnabled: !model.isWorking),
+            onDismiss: { model.cancel() },
+            onPrimary: { model.apply() },
+            leading: { if model.isWorking { ProgressView().controlSize(.small) } },
+            content: { bodyContent }
+        )
+        .interactiveDismissDisabled(model.isWorking) // never lose the sheet (and its errors) mid-rename
+        .onAppear { model.sheetDidAppear() }
+        .onDisappear { model.sheetDidDisappear() }
+    }
+
+    private var bodyContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Rename \(model.photoCount) Photo\(model.photoCount == 1 ? "" : "s")")
-                .font(.headline)
             Text("This renames the original files on disk (and their edit files). Nothing is renamed until every row below is fine, and you can undo the last rename.")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
@@ -34,7 +49,7 @@ struct RenameSheetView: View {
                 if let error = model.templateError {
                     Text(error.errorDescription ?? "Invalid template")
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Theme.error)
                 } else {
                     Text("Tokens: {name} {seq} {seq:4} {date} {datetime} {rating} {label} {flag} — the file extension is kept.")
                         .font(.caption2)
@@ -48,7 +63,7 @@ struct RenameSheetView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 70)
                 if let message = model.sequenceStartMessage {
-                    Text(message).font(.caption).foregroundStyle(.red)
+                    Text(message).font(.caption).foregroundStyle(Theme.error)
                 }
             }
 
@@ -62,32 +77,7 @@ struct RenameSheetView: View {
             }
 
             previewList
-
-            if let error = model.sheetError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack {
-                if model.isWorking { ProgressView().controlSize(.small) }
-                Spacer()
-                Button("Cancel") { model.cancel() }
-                    .buttonStyle(.flat)
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(model.isWorking)
-                Button("Rename") { model.apply() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(FlatButtonStyle(prominent: true))
-                    .disabled(!model.canApply)
-            }
         }
-        .padding()
-        .frame(width: 580, height: 560)
-        .interactiveDismissDisabled(model.isWorking) // never lose the sheet (and its errors) mid-rename
-        .onAppear { model.sheetDidAppear() }
-        .onDisappear { model.sheetDidDisappear() }
     }
 
     private var previewList: some View {
@@ -128,9 +118,9 @@ struct RenameSheetView: View {
                 .truncationMode(.middle)
         case .blocked(let block):
             HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.red)
+                Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(Theme.error)
                 Text(oldName).lineLimit(1).truncationMode(.middle)
-                Text(block.message).foregroundStyle(.red)
+                Text(block.message).foregroundStyle(Theme.error)
             }
             .font(.system(.caption, design: .monospaced))
         }

@@ -53,6 +53,12 @@ targets:
             CFBundleTypeRole: Viewer
             LSHandlerRank: Alternate
             LSItemContentTypes: [public.folder]
+        # The in-app drag payload of library thumbnails (dragged onto a sidebar collection). It conforms to public.data only, so it is never
+        # a URL, a file or an image to anything else.
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.photoapp.PhotoApp.library-photos
+            UTTypeDescription: Lightbench library photos
+            UTTypeConformsTo: [public.data]
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: "Copyright © 2026 Praween Siritanasak"
         # Opts out of the system "Liquid Glass" restyling that the macOS 26+ SDK applies to toolbars and controls (the user confirmed the

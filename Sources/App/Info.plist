@@ -58,5 +58,18 @@
 	<string>NSApplication</string>
 	<key>UIDesignRequiresCompatibility</key>
 	<true/>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Lightbench library photos</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.photoapp.PhotoApp.library-photos</string>
+		</dict>
+	</array>
 </dict>
 </plist>

@@ -26,7 +26,7 @@ final class AlertSitesTests: XCTestCase {
         // Verdicts: every entry is still a raw alert to be converted to `feedbackAlert` or kept because it asks a question / needs a decision;
         // FeedbackAlertModifier is the one generic alert.
         let allowed: [String: Int] = [
-            "CollectionSidebarView.swift": 6,
+            "CollectionSidebarView.swift": 2,
             "FeedbackAlertModifier.swift": 1,
             "LibraryGridView.swift": 1,
             "LooksTabView.swift": 1,

@@ -208,6 +208,33 @@ final class ShowPhotosInSubfoldersTests: XCTestCase {
         try await waitUntil("the added photo appears under the parent") { model.photos.contains { $0.filename == "o.jpg" } }
     }
 
+    func testAnAlbumCountRisesImmediatelyOnAddSelectedPhotos() async throws {
+        let (model, db, _) = try await makeModel()
+        let album = try await db.createCollection(name: "Album")
+        await model.refresh()
+        let albumID = try XCTUnwrap(album.id)
+        XCTAssertNil(model.collectionPhotoCounts[albumID], "an empty album has no entry yet")
+        model.setSelection(Set(model.photos.prefix(2).compactMap(\.id)))
+        model.addSelectedPhotos(to: album)
+        XCTAssertEqual(model.collectionPhotoCounts[albumID], 2, "synchronous, before the database write lands")
+    }
+
+    func testRemovingAMasterDropsItsVirtualCopiesFromFolderCountsImmediately() async throws {
+        let (model, db, ids) = try await makeModel()
+        let day = try XCTUnwrap(ids["Day1"])
+        let all = try await db.allPhotos()
+        let master = try XCTUnwrap(all.first { $0.filename == "1.jpg" })
+        _ = try await db.createVirtualCopy(of: master, versionKey: "aaaaaaaa")
+        await model.refresh()
+        XCTAssertEqual(model.collectionPhotoCounts[day], 2, "master + copy")
+        let shown = try XCTUnwrap(model.photos.first { $0.id == master.id })
+        model.removePhoto(shown)
+        XCTAssertNil(model.collectionPhotoCounts[day], "both gone at once")
+        try await Task.sleep(nanoseconds: 300_000_000)
+        await model.refresh()
+        XCTAssertNil(model.collectionPhotoCounts[day], "same as after a refresh")
+    }
+
     // MARK: scope name
 
     func testScopeNameSaysSubfoldersOnlyForAFolderWithTheFlagOn() async throws {
@@ -226,31 +253,31 @@ final class ShowPhotosInSubfoldersTests: XCTestCase {
 
     // MARK: stored folder counts
 
-    func testStoredFolderCountsFollowMembershipChangesAndTheFlag() async throws {
+    func testStoredCollectionCountsFollowMembershipChangesAndTheFlag() async throws {
         let (model, _, ids) = try await makeModel()
         let year = try XCTUnwrap(ids["2024"])
         let tripID = try XCTUnwrap(ids["Trip"])
         let dayID = try XCTUnwrap(ids["Day1"])
-        XCTAssertEqual(model.folderPhotoCounts[year], 1)
-        XCTAssertEqual(model.folderPhotoCounts[tripID], 1)
-        XCTAssertEqual(model.folderPhotoCounts[dayID], 1)
+        XCTAssertEqual(model.collectionPhotoCounts[year], 1)
+        XCTAssertEqual(model.collectionPhotoCounts[tripID], 1)
+        XCTAssertEqual(model.collectionPhotoCounts[dayID], 1)
 
         model.showPhotosInSubfolders = true
-        XCTAssertEqual(model.folderPhotoCounts[year], 3, "the subtree total while the flag is on")
-        XCTAssertEqual(model.folderPhotoCounts[tripID], 2)
-        XCTAssertEqual(model.folderPhotoCounts[dayID], 1)
+        XCTAssertEqual(model.collectionPhotoCounts[year], 3, "the subtree total while the flag is on")
+        XCTAssertEqual(model.collectionPhotoCounts[tripID], 2)
+        XCTAssertEqual(model.collectionPhotoCounts[dayID], 1)
 
         let day = try XCTUnwrap(model.collections.first { $0.name == "Day1" })
         let other = try XCTUnwrap(model.photos.first { $0.filename == "o.jpg" })
         model.toggleMembership(of: other, in: day)
-        XCTAssertEqual(model.folderPhotoCounts[dayID], 2, "updated synchronously with the local membership change")
-        XCTAssertEqual(model.folderPhotoCounts[year], 4)
+        XCTAssertEqual(model.collectionPhotoCounts[dayID], 2, "updated synchronously with the local membership change")
+        XCTAssertEqual(model.collectionPhotoCounts[year], 4)
 
         model.toggleMembership(of: other, in: day)
-        XCTAssertEqual(model.folderPhotoCounts[year], 3)
+        XCTAssertEqual(model.collectionPhotoCounts[year], 3)
 
         model.showPhotosInSubfolders = false
-        XCTAssertEqual(model.folderPhotoCounts[year], 1)
+        XCTAssertEqual(model.collectionPhotoCounts[year], 1)
     }
 
     func testScopeNameAndEmptyStateOnlyMentionSubfoldersWhenThereAreSome() async throws {

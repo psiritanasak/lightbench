@@ -45,14 +45,24 @@ final class CatalogModel: ObservableObject {
     }
     /// The title of every catalog result.
     nonisolated static let feedbackTitle = "Photo Catalog"
-    @Published private(set) var photos: [Photo] = []
+    @Published private(set) var photos: [Photo] = [] { didSet { scheduleSmartCollectionCounts() } }
     @Published private(set) var collections: [PhotoCollection] = []
     /// Phase 5 slice 2: named, saved edit-state "looks", applicable to any
     /// photo. Loaded in `refresh()` alongside `collections` — same shape,
     /// same reasoning.
     @Published private(set) var presets: [Preset] = []
     /// Saved filter sets shown in the sidebar, sorted by name; loaded in `refresh()`.
-    @Published private(set) var smartCollections: [SmartCollection] = []
+    /// Photos per smart collection, computed off the main thread (`CatalogModel+SidebarCounts.swift`). A smart collection missing
+    /// from the map has no count yet; the sidebar shows nothing for it, never 0. Written only by `scheduleSmartCollectionCounts`
+    /// (not `private(set)`: that extension lives in another file).
+    @Published var smartCollectionCounts: [Int64: Int] = [:]
+    /// Every photo in the catalog, read in `refresh()` ONLY while a plain collection is viewed (when `photos` holds just that
+    /// collection) and smart collections exist; nil otherwise. The counts run over it, with `photos` rows put in its place.
+    var smartCountBasePhotos: [Photo]?
+    var smartCountTask: Task<Void, Never>?
+    /// True while `photos` holds every photo (set right after `refresh()` assigns it), false while it holds one collection.
+    var photosAreWholeCatalog = true
+    @Published private(set) var smartCollections: [SmartCollection] = [] { didSet { scheduleSmartCollectionCounts() } }
     private var smartCollectionLoadError: String?
     /// Which photos `photos` reflects. Setting this re-filters `photos` —
     /// see `didSet` below and `refresh()`. Also clears `selectedPhotoIDs`
@@ -73,7 +83,7 @@ final class CatalogModel: ObservableObject {
         didSet {
             guard oldValue != showPhotosInSubfolders else { return }
             preferences.showPhotosInSubfolders = showPhotosInSubfolders
-            recomputeFolderPhotoCounts()
+            recomputeCollectionPhotoCounts()
             if case .collection(let id) = selectedFilter, collections.first(where: { $0.id == id })?.isFolder == true {
                 selectedPhotoIDs.removeAll()
                 gridSelectionAnchor = nil
@@ -81,10 +91,10 @@ final class CatalogModel: ObservableObject {
             }
         }
     }
-    /// Folder id → the number the sidebar shows beside it (direct, or the subtree total while `showPhotosInSubfolders` is on). Stored, not
+    /// Collection id → the number the sidebar shows beside it (albums: direct members; folders: direct, or the subtree total while `showPhotosInSubfolders` is on). Stored, not
     /// computed in the sidebar's body: it is O(photos x depth) and the sidebar redraws on every grid click. Kept in step with `collections`,
-    /// `membershipsByPhotoID` and the flag by `recomputeFolderPhotoCounts()` (assigns only on a real change).
-    @Published private(set) var folderPhotoCounts: [Int64: Int] = [:]
+    /// `membershipsByPhotoID` and the flag by `recomputeCollectionPhotoCounts()` (assigns only on a real change).
+    @Published private(set) var collectionPhotoCounts: [Int64: Int] = [:]
     /// photoID → the set of collectionIDs it belongs to, rebuilt from
     /// `allMemberships()` on every `refresh()`. Keeping this as one
     /// client-side map (rather than a query per grid cell) is what makes
@@ -92,12 +102,12 @@ final class CatalogModel: ObservableObject {
     /// dictionary lookup.
     @Published private(set) var membershipsByPhotoID: [Int64: Set<Int64>] = [:]
     /// All keywords, sorted case-insensitively by name (refreshed with everything else).
-    @Published private(set) var keywords: [Keyword] = []
+    @Published private(set) var keywords: [Keyword] = [] { didSet { scheduleSmartCollectionCounts() } }
     /// photoID → the keyword ids on it; same role/discipline as `membershipsByPhotoID`.
-    @Published private(set) var keywordIDsByPhotoID: [Int64: Set<Int64>] = [:]
+    @Published private(set) var keywordIDsByPhotoID: [Int64: Set<Int64>] = [:] { didSet { scheduleSmartCollectionCounts() } }
     /// photoID → Library info (title, caption, creator, copyright). Keyed by the MASTER photo id only: a virtual copy has no
     /// entry of its own (read through `info(for:)` / `inheritingFromMasters`).
-    @Published private(set) var infoByPhotoID: [Int64: PhotoInfo] = [:]
+    @Published private(set) var infoByPhotoID: [Int64: PhotoInfo] = [:] { didSet { scheduleSmartCollectionCounts() } }
     /// Which photos are checked in the Library grid, for batch export —
     /// pure in-memory UI state (unlike every other `@Published` mutation
     /// in this class, this never touches the database, so it needs no
@@ -191,7 +201,7 @@ final class CatalogModel: ObservableObject {
     @Published private(set) var people: [PersonSummary] = []
     @Published private(set) var personIDsByPhotoID: [Int64: Set<Int64>] = [:]
     /// The cached camera data (EXIF) the Library search's `iso:`/`camera:`/`date:`… fields read; see `CatalogModel+Metadata.swift`.
-    @Published private(set) var metadataByPhotoID: [Int64: PhotoMetadata] = [:]
+    @Published private(set) var metadataByPhotoID: [Int64: PhotoMetadata] = [:] { didSet { scheduleSmartCollectionCounts() } }
     /// Non-nil while the background metadata scan runs ("Reading camera data… 120/1097").
     @Published private(set) var metadataScanProgress: MetadataScanner.Progress?
     var metadataScanTask: Task<Void, Never>?
@@ -706,7 +716,7 @@ final class CatalogModel: ObservableObject {
             let memberships = try await database.allMemberships()
             membershipsByPhotoID = Dictionary(grouping: memberships, by: \.photoId)
                 .mapValues { Set($0.map(\.collectionId)) }
-            recomputeFolderPhotoCounts()
+            recomputeCollectionPhotoCounts()
             let loadedKeywords = try await database.allKeywords()
             let keywordLinks = try await database.allKeywordLinks()
             keywords = Self.sortedKeywords(loadedKeywords)
@@ -740,11 +750,17 @@ final class CatalogModel: ObservableObject {
             switch selectedFilter {
             case .allPhotos, .smartCollection:
                 photos = try await database.allPhotos()
+                photosAreWholeCatalog = true
+                smartCountBasePhotos = nil // only AFTER `photos` is whole: a recount in between must not see a collection-only list
             case .collection(let collectionID):
+                // A failed read keeps the previous base (possibly nil: the counts then clear, never run over the collection).
+                if smartCollections.isEmpty { smartCountBasePhotos = nil }
+                else if let loaded = try? await database.allPhotos() { smartCountBasePhotos = loaded }
                 let viewed = viewedCollectionIDs(of: collectionID)
                 photos = viewed.count > 1
                     ? try await database.photos(inCollections: Array(viewed).sorted())
                     : try await database.photos(inCollection: collectionID)
+                photosAreWholeCatalog = false
             }
             // Its own do/catch like the face read: a failed camera-data read keeps the previous map.
             // Virtual copies have no camera data / faces of their own: they inherit their master's, so search and the Person filter see them.
@@ -889,10 +905,10 @@ final class CatalogModel: ObservableObject {
         return seen
     }
 
-    private func recomputeFolderPhotoCounts() {
-        let counts = SidebarRows.folderPhotoCounts(collections: collections, membershipsByPhotoID: membershipsByPhotoID,
-                                                   includeSubfolders: showPhotosInSubfolders)
-        if counts != folderPhotoCounts { folderPhotoCounts = counts }
+    private func recomputeCollectionPhotoCounts() {
+        let counts = SidebarRows.collectionPhotoCounts(collections: collections, membershipsByPhotoID: membershipsByPhotoID,
+                                                      includeSubfolders: showPhotosInSubfolders)
+        if counts != collectionPhotoCounts { collectionPhotoCounts = counts }
     }
 
     func descendantFolderIDs(of folderID: Int64) -> Set<Int64> { Self.descendantFolderIDs(of: folderID, in: collections) }
@@ -1690,14 +1706,18 @@ final class CatalogModel: ObservableObject {
         // Keep the empty-state decision honest: `photoCount` is only re-read by `refresh()`, which this path skips on success.
         // Only when the list actually got shorter (a repeated Remove on the same cell must not under-count).
         if photos.count < before { photoCount = max(0, photoCount - (before - photos.count)) }
+        smartCountBasePhotos?.removeAll { $0.id == id || (photo.isVirtualCopy == false && $0.masterId == id) }
         selectedPhotoIDs.remove(id)
         if !photo.isVirtualCopy { selectedPhotoIDs.subtract(removedCopyIDs) } // the cascade took the copies; they must not stay selected
-        membershipsByPhotoID.removeValue(forKey: id)
-        recomputeFolderPhotoCounts()
-        keywordIDsByPhotoID.removeValue(forKey: id)
-        infoByPhotoID.removeValue(forKey: id)
-        personIDsByPhotoID.removeValue(forKey: id)
-        metadataByPhotoID.removeValue(forKey: id)
+        // The cascaded copies joined the master's collections, so their memberships (and per-photo maps) go with it.
+        for removedID in removedCopyIDs.union([id]) {
+            membershipsByPhotoID.removeValue(forKey: removedID)
+            keywordIDsByPhotoID.removeValue(forKey: removedID)
+            infoByPhotoID.removeValue(forKey: removedID)
+            personIDsByPhotoID.removeValue(forKey: removedID)
+            metadataByPhotoID.removeValue(forKey: removedID)
+        }
+        recomputeCollectionPhotoCounts()
         // The database trigger dissolves a stack left with fewer than two members; mirror that now, then re-read once the delete landed.
         pruneStacks(removingMasters: photo.isVirtualCopy ? [] : [id])
         invalidateThumbnail(for: URL(fileURLWithPath: photo.path))
@@ -1766,6 +1786,10 @@ final class CatalogModel: ObservableObject {
 
     func renameSmartCollection(_ smart: SmartCollection, to name: String) async {
         guard let database, let id = smart.id else { return }
+        // Local name first, so the row never shows the old name while the write runs; the refresh below restores the real list.
+        if let index = smartCollections.firstIndex(where: { $0.id == id }), let cleaned = KeywordName.normalize(name) {
+            smartCollections[index].name = cleaned
+        }
         do {
             try await database.renameSmartCollection(id: id, to: name)
         } catch {
@@ -1887,7 +1911,7 @@ final class CatalogModel: ObservableObject {
     }
 
     static func sortedKeywords(_ list: [Keyword]) -> [Keyword] {
-        list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        list.sorted { $0.name < $1.name }  // the database's own order: SQLite BINARY (case-sensitive) on `name`
     }
 
     /// keywordID → how many photos carry it, across the whole catalog. One pass; callers build it once per render.
@@ -2018,40 +2042,43 @@ final class CatalogModel: ObservableObject {
 
     // MARK: - Collections (Phase 4 slice 4)
 
-    /// Creates a new collection. An empty (or whitespace-only) name is
-    /// rejected before ever reaching the database — mirroring how other
-    /// write paths in this class validate up front.
-    func createCollection(name: String) {
-        guard let database else { return }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        Task.detached { [weak self] in
-            _ = try? await database.createCollection(name: trimmed)
-            await self?.refresh()
+    /// Creates a new collection through the ordered write chain (D94) and returns it (nil: an empty name, no database, or a failed
+    /// write, which is posted as an error). The new row is put into `collections` at once so the sidebar's draft row never flickers away
+    /// and back; the refresh that follows the write puts the list in its real order. It does NOT select the new collection: selecting
+    /// would clear the grid selection, and the next step is usually to drag that selection onto it.
+    @discardableResult
+    func createCollection(name: String) async -> PhotoCollection? {
+        guard let database, let cleaned = KeywordName.normalize(name) else { return nil }
+        let task = enqueueWrite { () -> Result<PhotoCollection, Error> in
+            do { return .success(try await database.createCollection(name: cleaned)) } catch { return .failure(error) }
+        }
+        switch await task.value {
+        case .success(let created):
+            if !collections.contains(where: { $0.id == created.id }) {
+                collections = (collections + [created]).sorted { $0.name < $1.name }  // the database's own order: SQLite BINARY (case-sensitive) on `name`
+            }
+            scheduleRefreshAfterWrites()
+            return created
+        case .failure(let error):
+            post(.error("Couldn't create the collection", error.localizedDescription))
+            scheduleRefreshAfterWrites()
+            return nil
         }
     }
 
-    /// Renames `collection`. Same shape as `createCollection`: validate up
-    /// front, fire-and-forget write, then full `refresh()` — NOT a
-    /// local-first splice, for the same reason `createPreset`'s own doc
-    /// comment already gives: the sidebar list is alphabetical, not
-    /// insertion-ordered, so there's no local position to guess at ahead
-    /// of the write.
-    ///
-    /// `isFolder` guard: rename on a folder-tree collection is out of
-    /// scope for this slice (see `deleteCollection`'s own doc comment for
-    /// the full reasoning — a folder's `name` diverging from its
-    /// `folderPath` interacts oddly with re-import). `CollectionSidebarView`
-    /// never offers this action for a folder row, but the guard is
-    /// defense-in-depth against a future caller reaching this method
-    /// directly, not just documentation.
+    /// Renames `collection` through the ordered write chain (D94): the new name is written into `collections` first, the write is
+    /// queued, and the refresh that follows puts the list back in name order. A failed write is posted as an error and the list is
+    /// re-read. `isFolder` guard: renaming a folder-tree collection stays out of scope (a folder's `name` diverging from its
+    /// `folderPath` interacts oddly with re-import; see `deleteCollection`); the sidebar never offers it, this is defence in depth.
     func renameCollection(_ collection: PhotoCollection, to name: String) {
-        guard let database, let id = collection.id, !collection.isFolder else { return }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        Task.detached { [weak self] in
-            try? await database.renameCollection(id: id, to: trimmed)
-            await self?.refresh()
+        guard let database, let id = collection.id, !collection.isFolder, let cleaned = KeywordName.normalize(name) else { return }
+        if let index = collections.firstIndex(where: { $0.id == id }) { collections[index].name = cleaned }
+        let task = enqueueWrite { () -> Error? in
+            do { try await database.renameCollection(id: id, to: cleaned); return nil } catch { return error }
+        }
+        scheduleRefreshAfterWrites()
+        Task { [weak self] in
+            if let error = await task.value { self?.post(.error("Couldn't rename the collection", error.localizedDescription)) }
         }
     }
 
@@ -2148,7 +2175,7 @@ final class CatalogModel: ObservableObject {
                 photos.removeAll { $0.id == photoID }
             }
         }
-        recomputeFolderPhotoCounts()
+        recomputeCollectionPhotoCounts()
 
         enqueueWrite { [weak self] in
             do {
@@ -2188,24 +2215,43 @@ final class CatalogModel: ObservableObject {
     /// batched transaction (`CatalogDatabase.addPhotos`), not N separate
     /// calls.
     func addSelectedPhotos(to collection: PhotoCollection) {
-        guard let database, let collectionID = collection.id else { return }
-        let visibleSelectedIDs = Set(photos.compactMap(\.id)).intersection(selectedPhotoIDs)
-        guard !visibleSelectedIDs.isEmpty else { return }
-        let photoIDs = Array(visibleSelectedIDs)
+        addPhotos(ids: Array(Set(photos.compactMap(\.id)).intersection(selectedPhotoIDs)), to: collection, reportsResult: false)
+    }
 
-        for photoID in photoIDs {
-            membershipsByPhotoID[photoID, default: []].insert(collectionID)
-        }
-        recomputeFolderPhotoCounts()
+    /// Adds `ids` (a drag from the grid) to `collection`: memberships and counts change at once, the write is queued behind earlier ones
+    /// (D94), and the result is posted ONLY after the write has landed (never a toast for something not written). Ids the catalog no
+    /// longer knows are reported as not added (an alert); a failed write posts an error and re-reads everything. Posted through
+    /// `post`, the queue, so a later result cannot replace it.
+    func addPhotos(ids: [Int64], to collection: PhotoCollection, reportsResult: Bool = true) {
+        guard let database, let collectionID = collection.id, !collection.isFolder, !ids.isEmpty else { return }
+        let known = Set(photos.compactMap(\.id)).union((smartCountBasePhotos ?? []).compactMap(\.id))
+        let members = Set(membershipsByPhotoID.filter { $0.value.contains(collectionID) }.keys)
+        let result = SidebarDrop.result(dragged: ids, existingMembers: members, knownIDs: known)
+        guard !result.added.isEmpty || reportsResult else { return }
 
+        for photoID in result.added { membershipsByPhotoID[photoID, default: []].insert(collectionID) }
+        recomputeCollectionPhotoCounts()
+
+        let toAdd = result.added
+        let name = collection.name
         enqueueWrite { [weak self] in
             do {
-                try await database.addPhotos(photoIDs, toCollection: collectionID)
-                await self?.scheduleRefreshAfterWrites(ifViewing: collectionID)
+                if !toAdd.isEmpty { try await database.addPhotos(toAdd, toCollection: collectionID) }
+                await self?.finishAdd(result: result, collectionID: collectionID, name: name, reportsResult: reportsResult, failure: nil)
             } catch {
-                await self?.scheduleRefreshAfterWrites()
+                await self?.finishAdd(result: result, collectionID: collectionID, name: name, reportsResult: reportsResult, failure: error)
             }
         }
+    }
+
+    private func finishAdd(result: SidebarDrop.Result, collectionID: Int64, name: String, reportsResult: Bool, failure: Error?) {
+        if let failure {
+            if reportsResult { post(.error("Couldn't add photos", failure.localizedDescription)) }
+            scheduleRefreshAfterWrites()
+            return
+        }
+        if reportsResult { post(SidebarDrop.feedback(result, collectionName: name)) }
+        scheduleRefreshAfterWrites(ifViewing: collectionID)
     }
 
     // MARK: - Folder access (read-only, persisted across relaunches)

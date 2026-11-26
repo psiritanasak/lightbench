@@ -2592,7 +2592,8 @@ struct ContentView: View {
                         autoCropAspectRatio: { effectiveAspectRatio },
                         rotateEnabled: RotateAvailability.isEnabled(
                             hasImage: document.currentImage != nil, loadInFlight: document.isLoadInFlight,
-                            renameWorking: renameModel.isWorking, cullActive: false, showLibrary: false)
+                            renameWorking: renameModel.isWorking, cullActive: false, showLibrary: false),
+                        toolSections: $adjustPanel.toolSections
                     )
                 case .looks:
                     LooksTabView(document: document, catalog: catalog, previews: lookPreviews, panel: $adjustPanel)

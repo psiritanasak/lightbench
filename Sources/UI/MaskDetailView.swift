@@ -267,8 +267,9 @@ struct MaskDetailView: View {
                         .accessibilityAddTraits(showsDepthSelection ? [.isSelected] : [])
                         .accessibilityLabel(showsDepthSelection ? "Hide Depth Selection" : "Show Depth Selection")
                 }
-                Text("0% is the farthest part of the photo, 100% the nearest. The window between Far and Near is selected.")
-                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                HelpCaption(
+                    short: "The window between Far and Near is selected.",
+                    help: "0% is the farthest part of the photo, 100% the nearest. The window between Far and Near is selected.")
             }
         }
     }

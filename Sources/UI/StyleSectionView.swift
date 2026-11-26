@@ -55,8 +55,9 @@ struct StyleSectionView: View {
             }
             // Nothing to scale (no preset, pad centred): the slider would only write an invisible edit.
             .disabled(StyleMath.isIdentity(id: state.styleID, tone: state.styleTone, color: state.styleColor))
-            Text("Color is mostly Vibrance (designed to spare skin tones) plus some Saturation. Protect skin below can hold the colour back on people.")
-                .font(.caption2).foregroundStyle(Theme.textSecondary)
+            HelpCaption(
+                short: "Color is mostly Vibrance plus some Saturation.",
+                help: "Color is mostly Vibrance (designed to spare skin tones) plus some Saturation. Protect skin below can hold the colour back on people.")
             protectSkinControls
             textureControls
             Button("Reset Style") { document.resetStyle() }
@@ -81,8 +82,9 @@ struct StyleSectionView: View {
                 String(format: "%.0f%%", $0 * 100)
             }
             .disabled(!state.styleProtectSkin)
-            Text("Looks for skin on people: printed faces and underwater skin are missed, skin-coloured clothing is treated as skin, and large flat skin-coloured areas may be marked. Monochrome styles (Silver, Ink) are not protected. Tested on a narrow range of skin tones.")
-                .font(.caption2).foregroundStyle(Theme.textSecondary)
+            HelpCaption(
+                short: "Looks for skin on people only.",
+                help: "Looks for skin on people: printed faces and underwater skin are missed, skin-coloured clothing is treated as skin, and large flat skin-coloured areas may be marked. Monochrome styles (Silver, Ink) are not protected. Tested on a narrow range of skin tones.")
         }
     }
 
@@ -106,8 +108,9 @@ struct StyleSectionView: View {
             .disabled(StyleTexture(rawValue: state.styleTexture) == nil)
             Toggle("Grain", isOn: Binding(get: { state.styleGrain }, set: { document.setStyleGrain($0) }))
                 .accessibilityLabel("Style grain")
-            Text("Soft smooths detail and is not skin-aware; Glow blooms bright areas; Film adds crisp texture. Grain adds film grain, with or without a texture. Style strength scales the preset and pad only.")
-                .font(.caption2).foregroundStyle(Theme.textSecondary)
+            HelpCaption(
+                short: "Style strength scales the preset and pad only.",
+                help: "Soft smooths detail and is not skin-aware; Glow blooms bright areas; Film adds crisp texture. Grain adds film grain, with or without a texture. Style strength scales the preset and pad only.")
         }
     }
 

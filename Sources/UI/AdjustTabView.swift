@@ -1518,8 +1518,9 @@ struct AdjustTabView: View {
             .disabled(document.currentImage == nil || !identity || spots.count >= EditState.maxRetouchSpots)
             .accessibilityLabel("Add Spot")
             if spots.isEmpty {
-                Text("No spots yet. Press Place Spots and click each blemish (drag to size it), or Add Spot and drag it into place. Drag the dashed circle to choose where to copy from.")
-                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                HelpCaption(
+                    short: "No spots yet.",
+                    help: "Press Place Spots and click each blemish (drag to size it), or Add Spot and drag it into place. Drag the dashed circle to choose where to copy from.")
             } else {
                 ForEach(Array(spots.enumerated()), id: \.element.id) { index, spot in
                     retouchSpotRow(number: index + 1, spot: spot)
@@ -1727,6 +1728,48 @@ extension Binding where Value == Set<ToolSection> {
             get: { wrappedValue.contains(section) },
             set: { if $0 { wrappedValue.insert(section) } else { wrappedValue.remove(section) } }
         )
+    }
+}
+
+/// A small "?" button that shows longer help text in a popover. Keeps a panel to one short line while the full explanation stays
+/// one click away (VoiceOver reads "Help"; the popover text is the explanation).
+struct HelpPopoverButton: View {
+    let text: String
+    @State private var isShown = false
+
+    var body: some View {
+        Button { isShown.toggle() } label: {
+            Image(systemName: "questionmark.circle")
+                .font(.caption)
+                .foregroundStyle(Theme.textSecondary)
+                .frame(width: 16, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Help")
+        .accessibilityHint(text)
+        .popover(isPresented: $isShown, arrowEdge: .bottom) {
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(Theme.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 240, alignment: .leading)
+                .padding(12)
+        }
+    }
+}
+
+/// One short caption line with a trailing "?" that opens the long explanation.
+struct HelpCaption: View {
+    let short: String
+    let help: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(short).font(.caption).foregroundStyle(Theme.textSecondary)
+            Spacer(minLength: 0)
+            HelpPopoverButton(text: help)
+        }
     }
 }
 

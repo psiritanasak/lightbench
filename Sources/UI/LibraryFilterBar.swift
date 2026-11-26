@@ -28,7 +28,7 @@ struct LibraryFilterBar: View {
     }
 
     private func chip(_ isActive: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 6).fill(isActive ? Theme.selectedFill : Color.clear)
+        RoundedRectangle(cornerRadius: Theme.Radius.m).fill(isActive ? Theme.selectedFill : Color.clear)
     }
 
     /// Which row to draw: `.adaptive` lets `ViewThatFits` choose (the app); tests pin one row.
@@ -215,19 +215,19 @@ struct LibraryFilterBar: View {
 /// The search syntax popover.
 struct SearchHelpView: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.px6) {
             Text("Search").font(.headline).foregroundStyle(Theme.textPrimary)
             ForEach(SearchHelp.rows, id: \.field) { row in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                     Text(row.example).font(.system(.caption, design: .monospaced)).foregroundStyle(Theme.textPrimary)
                         .frame(width: 150, alignment: .leading)
                     Text(row.meaning).font(.caption).foregroundStyle(Theme.textSecondary)
                 }
             }
             Text(SearchHelp.note).font(.caption).foregroundStyle(Theme.textTertiary)
-                .fixedSize(horizontal: false, vertical: true).frame(width: 340, alignment: .leading).padding(.top, 4)
+                .fixedSize(horizontal: false, vertical: true).frame(width: 340, alignment: .leading).padding(.top, Theme.Space.xs)
         }
-        .padding(14)
+        .padding(Theme.Space.px14)
         // A system popover is translucent: on a busy grid the grey caption text became hard to read (seen live). A solid panel
         // behind the content, like the app's other overlays.
         .background(Theme.panel)

@@ -1,8 +1,8 @@
 /// The top-level editing tool. The tab bar started as a mirror of Apple Photos' Adjust/Filters/Crop/Clean Up; `.looks` takes the
-/// Filters slot — it holds the "pick a starting point" controls (Looks, Style, Presets) — and `.cleanUp` stays an inert placeholder.
+/// Filters slot — it holds the "pick a starting point" controls (Looks, Style, Presets).
 /// `.retouch`, `.redEye` and `.masks` are the point tools that used to be sections of the Adjust scroll; each is its own rail entry.
 enum EditorTab: CaseIterable {
-    case adjust, looks, retouch, redEye, masks, crop, cleanUp
+    case adjust, looks, retouch, redEye, masks, crop
 
     var label: String {
         switch self {
@@ -12,14 +12,13 @@ enum EditorTab: CaseIterable {
         case .redEye: return "Red-Eye"
         case .masks: return "Masks"
         case .crop: return "Crop"
-        case .cleanUp: return "Clean Up"
         }
     }
 
     /// Whether Compare mode and the zoom/pan state survive switching TO this tab. Every tab that shows the live image keeps them
-    /// (Retouch on purpose: spots are placed zoomed in; the point tools were Adjust sections, which kept both); Crop changes the frame
-    /// and Clean Up has nothing built, so they reset both.
-    var keepsCompareAndZoom: Bool { self != .crop && self != .cleanUp }
+    /// (Retouch on purpose: spots are placed zoomed in; the point tools were Adjust sections, which kept both); Crop changes the frame,
+    /// so it resets both.
+    var keepsCompareAndZoom: Bool { self != .crop }
 
     // MARK: - Point-tool ownership
 
@@ -44,8 +43,7 @@ enum EditorTab: CaseIterable {
 
     // MARK: - Tool rail
 
-    /// The tabs the right-hand tool rail shows, top to bottom. `.cleanUp` is an inert placeholder with nothing to show, so it has
-    /// no rail entry (the case stays so existing switch statements keep compiling).
+    /// The tabs the right-hand tool rail shows, top to bottom.
     static let railTabs: [EditorTab] = [.adjust, .looks, .retouch, .redEye, .masks, .crop]
 
     /// The rail's caption ("Edit" for Adjust, as the rail names its tools by what you do).
@@ -57,7 +55,6 @@ enum EditorTab: CaseIterable {
         case .redEye: return "Red-eye"
         case .masks: return "Masks"
         case .crop: return "Crop"
-        case .cleanUp: return "Clean Up"
         }
     }
 
@@ -70,7 +67,6 @@ enum EditorTab: CaseIterable {
         case .redEye: return "eye"
         case .masks: return "circle.dashed"
         case .crop: return "crop"
-        case .cleanUp: return "sparkles"
         }
     }
 }

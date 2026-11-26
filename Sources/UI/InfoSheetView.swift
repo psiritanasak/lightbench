@@ -33,7 +33,7 @@ struct InfoFieldsView: View {
     }
 
     private func row(_ title: String, _ field: InfoText.Field, multiline: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack {
                 Text(title).font(.subheadline)
                 Spacer()
@@ -55,7 +55,7 @@ struct InfoFieldsView: View {
                     .focused($focused, equals: field)
                     .onKeyPress(keys: [.tab], action: captionTab)
                     .accessibilityLabel(title)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.hairline))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.s).stroke(Theme.hairline))
             } else {
                 TextField(draft.isMixed(field) ? "Multiple values" : "", text: binding(field))
                     .textFieldStyle(.roundedBorder)
@@ -66,7 +66,7 @@ struct InfoFieldsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             row("Title", .title)
             row("Caption", .caption, multiline: true)
             row("Creator", .creator)

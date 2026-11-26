@@ -35,13 +35,13 @@ struct RenameSheetView: View {
     }
 
     private var bodyContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text("This renames the original files on disk (and their edit files). Nothing is renamed until every row below is fine, and you can undo the last rename.")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 Text("New name")
                 TextField("{name}", text: $model.template)
                     .textFieldStyle(.roundedBorder)
@@ -57,7 +57,7 @@ struct RenameSheetView: View {
                 }
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: Theme.Space.s) {
                 Text("Start numbering at")
                 TextField("1", text: $model.sequenceStartText)
                     .textFieldStyle(.roundedBorder)
@@ -82,7 +82,7 @@ struct RenameSheetView: View {
 
     private var previewList: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
+            LazyVStack(alignment: .leading, spacing: Theme.Space.px2) {
                 if let plan = model.plan {
                     ForEach(Array(plan.entries.enumerated()), id: \.offset) { _, entry in
                         row(for: entry)
@@ -93,10 +93,10 @@ struct RenameSheetView: View {
                         .foregroundStyle(Theme.textSecondary)
                 }
             }
-            .padding(6)
+            .padding(Theme.Space.px6)
         }
         .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
     }
 
     @ViewBuilder
@@ -104,7 +104,7 @@ struct RenameSheetView: View {
         let oldName = URL(fileURLWithPath: entry.photo.path).lastPathComponent
         switch entry.decision {
         case .rename:
-            HStack(spacing: 6) {
+            HStack(spacing: Theme.Space.px6) {
                 Text(oldName).foregroundStyle(Theme.textSecondary).lineLimit(1).truncationMode(.middle)
                 Image(systemName: "arrow.right").font(.caption2).foregroundStyle(Theme.textTertiary)
                 Text(entry.newName ?? "").lineLimit(1).truncationMode(.middle)
@@ -117,7 +117,7 @@ struct RenameSheetView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         case .blocked(let block):
-            HStack(spacing: 6) {
+            HStack(spacing: Theme.Space.px6) {
                 Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(Theme.error)
                 Text(oldName).lineLimit(1).truncationMode(.middle)
                 Text(block.message).foregroundStyle(Theme.error)

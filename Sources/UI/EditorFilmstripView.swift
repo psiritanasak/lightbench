@@ -36,7 +36,7 @@ struct EditorFilmstripView: View {
         let items = catalog.filmstripItems(openEditKey: currentEditKey)
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 8) {
+                LazyHStack(spacing: Theme.Space.s) {
                     ForEach(items, id: \.cellID) { item in
                         FilmstripCell(
                             catalog: catalog,
@@ -50,8 +50,8 @@ struct EditorFilmstripView: View {
                         .id(item.cellID)
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+                .padding(.horizontal, Theme.Space.s)
+                .padding(.vertical, Theme.Space.s)
             }
             .onAppear {
                 if let target = StackCellPresentation.scrollTarget(forFocusedKey: currentEditKey, in: items) {
@@ -99,7 +99,7 @@ private struct FilmstripCell: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: Theme.Radius.s)
                 .fill(Color.gray.opacity(0.2))
             // D5 (IMPROVEMENTS.md): `isMissing` takes priority over a
             // cached `image` — see `LibraryThumbnailCell`'s own doc
@@ -113,7 +113,7 @@ private struct FilmstripCell: View {
                 // added below discards it as a child — folded into the
                 // cell's own label instead (see below) so nothing regresses.
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 14))
+                    .font(Theme.Font.glyph14())
                     .foregroundStyle(Theme.warning)
                     .frame(width: cellSize, height: cellSize)
             } else if let image {
@@ -126,7 +126,7 @@ private struct FilmstripCell: View {
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: cellSize, height: cellSize)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.s))
             } else {
                 ProgressView()
                     .controlSize(.small)
@@ -136,7 +136,7 @@ private struct FilmstripCell: View {
         .frame(width: cellSize, height: cellSize)
         .clipped()
         .overlay(
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: Theme.Radius.s)
                 .stroke(Theme.selectedOutline, lineWidth: isCurrent ? 2 : 0)
         )
         .overlay(alignment: .topTrailing) { stackBadge }
@@ -186,18 +186,18 @@ extension FilmstripCell {
         switch badge {
         case .count(let count):
             Text("\(count)")
-                .font(.system(size: 10, weight: .bold)).monospacedDigit()
-                .padding(.horizontal, 5).padding(.vertical, 1)
+                .font(Theme.Font.caption(.bold)).monospacedDigit()
+                .padding(.horizontal, Theme.Space.px5).padding(.vertical, Theme.Space.px1)
                 .background(Theme.raised, in: Capsule())
                 .foregroundStyle(Theme.textPrimary)
-                .padding(3)
+                .padding(Theme.Space.px3)
         case .marker:
             Image(systemName: "square.stack")
-                .font(.system(size: 9, weight: .bold))
-                .padding(3)
+                .font(Theme.Font.micro(.bold))
+                .padding(Theme.Space.px3)
                 .background(Theme.raised, in: Circle())
                 .foregroundStyle(Theme.textPrimary)
-                .padding(3)
+                .padding(Theme.Space.px3)
         case .none:
             EmptyView()
         }

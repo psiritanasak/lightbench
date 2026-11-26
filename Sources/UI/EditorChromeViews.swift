@@ -15,23 +15,11 @@ struct ZoomPercentageHUD: View {
         Text("\(Int((zoomScale * 100).rounded()))%")
             .font(.caption)
             .monospacedDigit()
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .solidPanel(cornerRadius: 6)
-            .padding(12)
+            .padding(.horizontal, Theme.Space.s)
+            .padding(.vertical, Theme.Space.xs)
+            .solidPanel(cornerRadius: Theme.Radius.m)
+            .padding(Theme.Space.m)
             .allowsHitTesting(false)
     }
 }
 
-/// Stand-in body for an `EditorTab` that has no implementation yet (Clean Up) — the tab
-/// bar started as a mirror of Apple Photos' tab set, so that tab exists in the UI before its feature does.
-struct PlaceholderTab: View {
-    let message: String
-
-    var body: some View {
-        Text(message)
-            .foregroundStyle(Theme.textSecondary)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 40)
-    }
-}

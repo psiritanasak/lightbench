@@ -21,7 +21,7 @@ struct RecentlyDeletedSheetView: View {
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: Theme.Space.px10) {
                         ForEach(model.rows) { row in rowView(row) }
                         ForEach(model.unreadable) { item in unreadableView(item) }
                     }
@@ -45,18 +45,18 @@ struct RecentlyDeletedSheetView: View {
     }
 
     private func unreadableView(_ item: UnreadableDeletedPhoto) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text(item.name).font(.body.weight(.medium)).lineLimit(1).truncationMode(.middle)
             Text("Unreadable entry (made by a newer version of Lightbench, or damaged). It cannot be restored here.").font(.caption).foregroundStyle(Theme.textSecondary)
             Button("Remove from List") { Task { await model.forget(item.id, catalog: catalog) } }.buttonStyle(.flat)
         }
-        .padding(10)
-        .background(Theme.raised, in: RoundedRectangle(cornerRadius: 8))
+        .padding(Theme.Space.px10)
+        .background(Theme.raised, in: RoundedRectangle(cornerRadius: Theme.Radius.px8))
     }
 
     private func rowView(_ row: RecentlyDeletedModel.Row) -> some View {
         let entry = row.entry
-        return VStack(alignment: .leading, spacing: 4) {
+        return VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(alignment: .firstTextBaseline) {
                 Text(entry.name).font(.body.weight(.medium)).lineLimit(1).truncationMode(.middle)
                 if entry.isVirtualCopyEntry {
@@ -78,8 +78,8 @@ struct RecentlyDeletedSheetView: View {
                 Button("Remove from List") { Task { await model.forget(entry.id, catalog: catalog) } }.buttonStyle(.flat)
             }
         }
-        .padding(10)
-        .background(Theme.raised, in: RoundedRectangle(cornerRadius: 8))
+        .padding(Theme.Space.px10)
+        .background(Theme.raised, in: RoundedRectangle(cornerRadius: Theme.Radius.px8))
     }
 }
 

@@ -28,10 +28,10 @@ struct CullView: View {
                 if let note = model.note {
                     Text(note)
                         .font(.title2.weight(.semibold))
-                        .padding(.horizontal, 16).padding(.vertical, 8)
-                        .solidPanel(cornerRadius: 10)
+                        .padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.s)
+                        .solidPanel(cornerRadius: Theme.Radius.l)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                        .padding(.bottom, 24)
+                        .padding(.bottom, Theme.Space.px24)
                         .allowsHitTesting(false)
                 }
             }
@@ -56,7 +56,7 @@ struct CullView: View {
     // MARK: Pieces
 
     private func topBar(counts: CullSession.Counts) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: Theme.Space.px14) {
             Button { onExit() } label: { Label("Exit", systemImage: "xmark") }
                 .buttonStyle(.flat)
                 .help("Leave culling (Esc)")
@@ -79,7 +79,7 @@ struct CullView: View {
             Toggle("Unflagged only", isOn: Binding(get: { model.onlyUnflagged }, set: { model.setOnlyUnflagged($0) }))
                 .help("Cull only photos that have no flag yet")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Theme.Space.m)
         .frame(height: Theme.Metrics.barHeight + 8)
         .background(Theme.panel)
         .overlay(alignment: .bottom) { Divider() }
@@ -91,7 +91,7 @@ struct CullView: View {
         switch model.session?.mode ?? .loupe {
         case .loupe: photoLayer(photo)
         case .compare:
-            HStack(spacing: 2) {
+            HStack(spacing: Theme.Space.px2) {
                 if let id = model.session?.selectID { cell(id: id, rows: rows, caption: "Select") }
                 if let id = model.session?.currentID { cell(id: id, rows: rows, caption: "Candidate") }
             }
@@ -104,8 +104,8 @@ struct CullView: View {
         let ids = model.session?.surveyIDs ?? []
         return GeometryReader { proxy in
             let layout = CullLayout.grid(count: ids.count, area: proxy.size)
-            let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: layout.columns)
-            LazyVGrid(columns: columns, spacing: 2) {
+            let columns = Array(repeating: GridItem(.flexible(), spacing: Theme.Space.px2), count: layout.columns)
+            LazyVGrid(columns: columns, spacing: Theme.Space.px2) {
                 ForEach(ids, id: \.self) { id in
                     cell(id: id, rows: rows, caption: nil)
                         .frame(height: max(40, (proxy.size.height - CGFloat(layout.rows - 1) * 2) / CGFloat(layout.rows)))
@@ -134,18 +134,18 @@ struct CullView: View {
         }
         .overlay(alignment: .topLeading) { flagBadge(photo?.flagStatus ?? .none).scaleEffect(0.6, anchor: .topLeading) }
         .overlay(alignment: .bottomLeading) {
-            HStack(spacing: 6) {
+            HStack(spacing: Theme.Space.px6) {
                 if let caption { Text(caption).font(.caption.weight(.semibold)) }
                 Text(photo?.filename ?? "").font(.caption).lineLimit(1)
                 if let badge = model.session?.stackBadgeText(for: id) { Text("· \(badge)").font(.caption).lineLimit(1) }
                 if let rating = photo?.rating, rating > 0 { Text(String(repeating: "★", count: rating)).font(.caption) }
             }
-            .padding(.horizontal, 8).padding(.vertical, 3)
+            .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.px3)
             .background(Color.black.opacity(0.55))
             .foregroundStyle(.white)
-            .padding(6)
+            .padding(Theme.Space.px6)
         }
-        .overlay(alignment: .bottomTrailing) { if slot?.isPlaceholder == true { ProgressView().controlSize(.small).padding(8) } }
+        .overlay(alignment: .bottomTrailing) { if slot?.isPlaceholder == true { ProgressView().controlSize(.small).padding(Theme.Space.s) } }
         .overlay { if focused { Rectangle().stroke(Theme.selectedOutline, lineWidth: 3) } }
         .clipped()
         .contentShape(Rectangle())
@@ -167,13 +167,13 @@ struct CullView: View {
                 .overlay(alignment: .topLeading) { if ready { flagBadge(photo?.flagStatus ?? .none) } }
                 .overlay(alignment: .topTrailing) { stackChip(for: photo?.id) }
                 .overlay(alignment: .bottomTrailing) {
-                    if model.isPlaceholder || !ready { ProgressView().controlSize(.small).padding(10) }
+                    if model.isPlaceholder || !ready { ProgressView().controlSize(.small).padding(Theme.Space.px10) }
                 }
                 .overlay(alignment: .bottom) {
                     if ready, let photo, model.cameraPreviewOnlyID == photo.id {
                         Text("Camera preview only: this RAW could not be decoded")
-                            .font(.caption).padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(Color.black.opacity(0.6)).foregroundStyle(.white).padding(8)
+                            .font(.caption).padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.px3)
+                            .background(Color.black.opacity(0.6)).foregroundStyle(.white).padding(Theme.Space.s)
                     }
                 }
         } else if model.decodeFailed {
@@ -189,10 +189,10 @@ struct CullView: View {
         if let id, let text = model.session?.stackBadgeText(for: id) {
             Label(text, systemImage: "square.stack")
                 .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8).padding(.vertical, 4)
+                .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.xs)
                 .background(Color.black.opacity(0.55))
                 .foregroundStyle(.white)
-                .padding(10)
+                .padding(Theme.Space.px10)
         }
     }
 
@@ -211,24 +211,26 @@ struct CullView: View {
     private func flagBadge(_ status: FlagStatus) -> some View {
         if status != .none {
             Image(systemName: status.symbolName)
-                .font(.system(size: 34, weight: .semibold))
+                .font(Theme.Font.display(.semibold))
                 .foregroundStyle(status.tint)
-                .padding(14)
+                .padding(Theme.Space.px14)
                 .accessibilityLabel(status.accessibilityValue)
         }
     }
 
     private func bottomBar(_ photo: Photo?) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: Theme.Space.px14) {
             StarRatingRow(rating: photo?.rating ?? 0) { model.handle(.command(.rating($0))) }
-            flagButton(.picked, current: photo?.flagStatus ?? .none)
-            flagButton(.rejected, current: photo?.flagStatus ?? .none)
-            labelDots(current: photo?.colorLabel ?? .none)
+            ForEach([FlagStatus.picked, .rejected], id: \.self) { target in
+                FlagToggleButton(target: target, current: photo?.flagStatus ?? .none, isEnabled: true,
+                                 help: target == .picked ? "Pick (P)" : "Reject (X)") { model.handle(.command(.flag($0))) }
+            }
+            ColorLabelDots(current: photo?.colorLabel ?? .none, isEnabled: true) { model.handle(.command(.label($0))) }
             Spacer()
             Text(hint)
                 .font(.caption2).foregroundStyle(Theme.textTertiary).lineLimit(1)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Theme.Space.m)
         .frame(height: Theme.Metrics.barHeight)
         .background(Theme.panel)
         .overlay(alignment: .top) { Divider() }
@@ -239,34 +241,6 @@ struct CullView: View {
         case .loupe: return "← → move · P pick · X reject · U clear · 0–5 rate · 6–9 label · S stack · C compare · N survey · ⌘Z undo · Return opens in Editor"
         case .compare: return "← → candidate · ↑ swap · ↓ make select · P X U 0–5 6–9 act on the candidate · C / Esc back · ⌘Z undo"
         case .survey: return "← → focus · / remove from page · P X U 0–5 6–9 act on the focused photo · N / Esc back · ⌘Z undo"
-        }
-    }
-
-    private func flagButton(_ target: FlagStatus, current: FlagStatus) -> some View {
-        let isOn = current == target
-        let name = target == .picked ? "Pick" : "Reject"
-        return Button {
-            model.handle(.command(.flag(target)))
-        } label: {
-            Image(systemName: isOn ? target.symbolName : (target == .picked ? "flag" : "xmark.circle"))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(isOn ? target.tint : Theme.textSecondary)
-        .accessibilityLabel(name)
-        .accessibilityAddTraits(isOn ? [.isSelected] : [])
-    }
-
-    private func labelDots(current: ColorLabel) -> some View {
-        HStack(spacing: 5) {
-            ForEach(ColorLabel.menuOrder.filter { $0 != .none }, id: \.self) { label in
-                Button { model.handle(.command(.label(label))) } label: {
-                    Circle().fill(label.color).frame(width: 11, height: 11)
-                        .overlay(Circle().stroke(Color.primary.opacity(current == label ? 0.9 : 0.15), lineWidth: current == label ? 2 : 1))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(label.accessibilityName)
-                .accessibilityAddTraits(current == label ? [.isSelected] : [])
-            }
         }
     }
 

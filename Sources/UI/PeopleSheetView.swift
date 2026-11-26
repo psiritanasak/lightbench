@@ -33,7 +33,7 @@ struct PeopleSheetView: View {
             scanRow
             if let summary = model.summary { Text(summary).font(.caption).foregroundStyle(Theme.textSecondary) }
 
-            HStack(alignment: .top, spacing: 14) {
+            HStack(alignment: .top, spacing: Theme.Space.px14) {
                 peopleList.frame(width: 250)
                 Divider()
                 detail.frame(maxWidth: .infinity, alignment: .topLeading)
@@ -101,7 +101,7 @@ struct PeopleSheetView: View {
 
     private var peopleList: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
+            LazyVStack(alignment: .leading, spacing: Theme.Space.px2) {
                 if model.unsortedCount > 0 {
                     row(selection: .unsorted, title: "Unsorted faces", subtitle: "\(model.unsortedCount) face\(model.unsortedCount == 1 ? "" : "s")", crop: nil, dimmed: false)
                 }
@@ -113,7 +113,7 @@ struct PeopleSheetView: View {
                     row(selection: .smallFaces, title: "Small faces", subtitle: "\(model.smallFaceCount) face\(model.smallFaceCount == 1 ? "" : "s")", crop: nil, dimmed: false)
                 }
                 if model.people.isEmpty && model.unsortedCount == 0 && model.smallFaceCount == 0 && !model.isWorking {
-                    Text("No faces yet. Choose “Find Faces”.").font(.caption).foregroundStyle(Theme.textSecondary).padding(8)
+                    Text("No faces yet. Choose “Find Faces”.").font(.caption).foregroundStyle(Theme.textSecondary).padding(Theme.Space.s)
                 }
             }
         }
@@ -121,15 +121,15 @@ struct PeopleSheetView: View {
 
     private func row(selection: FacesModel.Selection, title: String, subtitle: String, crop: Data?, dimmed: Bool) -> some View {
         let isSelected = model.selection == selection
-        return HStack(spacing: 10) {
+        return HStack(spacing: Theme.Space.px10) {
             FaceImage(data: crop, size: 38)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: Theme.Space.px1) {
                 Text(title).lineLimit(1)
                 Text(subtitle).font(.caption).foregroundStyle(Theme.textSecondary)
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8).padding(.vertical, 5)
+        .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.px5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .selectionChip(isSelected: isSelected)
         .opacity(dimmed ? 0.55 : 1)
@@ -148,13 +148,13 @@ struct PeopleSheetView: View {
         case .person?:
             if let person = selectedPerson { personDetail(person) } else { hint }
         case .unsorted?:
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
                 Text("Unsorted faces").font(.subheadline.weight(.semibold))
                 Text("Faces the grouping was not sure about. Right-click a face to give it to someone.").font(.caption).foregroundStyle(Theme.textSecondary)
                 faceGrid(person: nil)
             }
         case .smallFaces?:
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
                 Text("Small faces").font(.subheadline.weight(.semibold))
                 Text("Faces found by searching the photos at full size. They are never grouped automatically: right-click a face to give it to someone.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
@@ -170,7 +170,7 @@ struct PeopleSheetView: View {
     }
 
     private func personDetail(_ person: PersonSummary) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack {
                 TextField("Name", text: $nameText)
                     .textFieldStyle(.roundedBorder)
@@ -213,20 +213,20 @@ struct PeopleSheetView: View {
     }
 
     private func faceGrid(person: PersonSummary?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             markBar(person: person)
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: 8)], spacing: 8) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: Theme.Space.s)], spacing: Theme.Space.s) {
                     ForEach(model.selectedFaces) { face in
                         let marked = face.id.map { model.markedFaceIDs.contains($0) } ?? false
                         FaceImage(data: face.crop, size: 78)
                             .help(face.isConfirmed ? "Confirmed by you" : (face.isSmall ? "Small face: never grouped automatically" : "Grouped automatically"))
-                            .overlay { if marked { RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.selectedOutline, lineWidth: 3) } }
+                            .overlay { if marked { RoundedRectangle(cornerRadius: Theme.Radius.m).strokeBorder(Theme.selectedOutline, lineWidth: 3) } }
                             .overlay(alignment: .topTrailing) {
-                                if marked { Image(systemName: "checkmark.circle.fill").font(.callout).foregroundStyle(.white).padding(3) }
+                                if marked { Image(systemName: "checkmark.circle.fill").font(.callout).foregroundStyle(.white).padding(Theme.Space.px3) }
                             }
                             .overlay(alignment: .bottomTrailing) {
-                                if face.isConfirmed { Image(systemName: "person.crop.circle.badge.checkmark").font(.caption).foregroundStyle(.white).padding(3) }
+                                if face.isConfirmed { Image(systemName: "person.crop.circle.badge.checkmark").font(.caption).foregroundStyle(.white).padding(Theme.Space.px3) }
                             }
                             .contentShape(Rectangle())
                             .onTapGesture { if let id = face.id { model.toggleMark(id) } }
@@ -251,7 +251,7 @@ struct PeopleSheetView: View {
         let ids = model.markedInShownOrder
         if !ids.isEmpty || model.canUndoAssignment {
             ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: Theme.Space.s) {
                 // First, so it is never the item scrolled off the right edge of a narrow sheet right after an assignment.
                 if model.canUndoAssignment {
                     Button("Undo Assign") { Task { await model.undoLastAssignment() } }.buttonStyle(.flat)
@@ -327,7 +327,7 @@ struct FaceImage: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
         .accessibilityHidden(true)
     }
 }

@@ -76,7 +76,6 @@ final class ViewCommandsTests: XCTestCase {
             XCTAssertTrue(enabled(.selectTab(tab), context(.editor)))
             XCTAssertFalse(enabled(.selectTab(tab), context(.library)))
         }
-        XCTAssertFalse(enabled(.selectTab(.cleanUp), context(.editor)))
     }
 
     func testRevertNeedsEverythingQuiet() {

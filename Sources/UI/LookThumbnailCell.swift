@@ -19,7 +19,7 @@ struct LookThumbnailCell: View {
 
     var body: some View {
         let cell = Button(action: action) {
-            VStack(spacing: 3) {
+            VStack(spacing: Theme.Space.px3) {
                 Color.primary.opacity(0.08)
                     .aspectRatio(Self.aspect, contentMode: .fit)
                     .overlay {
@@ -27,8 +27,8 @@ struct LookThumbnailCell: View {
                             Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fill)
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(isSelected ? Theme.selectedOutline : Color.clear, lineWidth: 2))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m).stroke(isSelected ? Theme.selectedOutline : Color.clear, lineWidth: 2))
                 Text(name)
                     .font(.caption2)
                     .lineLimit(1)

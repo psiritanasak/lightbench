@@ -15,7 +15,7 @@ struct EditorKeywordsPopover: View {
     var body: some View {
         let chips = model.draft.chips
         let suggestions = model.suggestions(among: allKeywords)
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text("Keywords").font(.headline).foregroundStyle(Theme.textPrimary)
             if model.targetIsCopy {
                 Text("Keywords are this version's own: a virtual copy keeps keywords apart from its original.")
@@ -36,7 +36,7 @@ struct EditorKeywordsPopover: View {
             if chips.isEmpty {
                 Text("No keywords yet").font(.caption).foregroundStyle(Theme.textSecondary)
             } else {
-                FlowRow(spacing: 6) {
+                FlowRow(spacing: Theme.Space.px6) {
                     ForEach(chips) { chip in
                         Button {
                             if let id = chip.keywordID { model.remove(id: id) } else { model.undoAdd(name: chip.name) }
@@ -52,7 +52,7 @@ struct EditorKeywordsPopover: View {
 
             if !suggestions.isEmpty {
                 Text("Add an existing keyword").font(.subheadline).foregroundStyle(Theme.textPrimary)
-                FlowRow(spacing: 6) {
+                FlowRow(spacing: Theme.Space.px6) {
                     ForEach(suggestions) { keyword in
                         Button(keyword.name) { model.acceptSuggestion(keyword) }
                             .buttonStyle(FlatButtonStyle(compact: true))
@@ -67,7 +67,7 @@ struct EditorKeywordsPopover: View {
                 Button("Done") { model.commit() }.buttonStyle(FlatButtonStyle(prominent: true))
             }
         }
-        .padding(16)
+        .padding(Theme.Space.l)
         .frame(width: 360)
         .onAppear { fieldFocused = true }
         .onExitCommand { model.discard() }

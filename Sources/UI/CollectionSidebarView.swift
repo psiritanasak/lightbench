@@ -49,11 +49,11 @@ struct CollectionSidebarView: View {
     var body: some View {
         let rows = rows
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 1) {
+            LazyVStack(alignment: .leading, spacing: Theme.Space.px1) {
                 ForEach(rows) { row in rowView(row) }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
+            .padding(.horizontal, Theme.Space.s)
+            .padding(.vertical, Theme.Space.s)
         }
         // Solid like the Editor's Adjust panel (no system sidebar material).
         .background(Theme.panel)
@@ -115,14 +115,14 @@ struct CollectionSidebarView: View {
     private func rowView(_ row: SidebarRow) -> some View {
         switch row.kind {
         case .header:
-            HStack(spacing: 4) {
+            HStack(spacing: Theme.Space.xs) {
                 Self.header(row.title)
                 Spacer(minLength: 0)
                 if let add = row.addAction { addButton(add) }
             }
-            .padding(.horizontal, 8)
-            .padding(.top, 10)
-            .padding(.bottom, 2)
+            .padding(.horizontal, Theme.Space.s)
+            .padding(.top, Theme.Space.px10)
+            .padding(.bottom, Theme.Space.px2)
             .frame(maxWidth: .infinity, alignment: .leading)
         case .item:
             itemRow(row)
@@ -140,7 +140,7 @@ struct CollectionSidebarView: View {
                 + (enabled ? "" : " Set a filter first.")
             : "New collection"
         return Button { begin(isSmart ? .newSmart : .newCollection) } label: {
-            Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
+            Image(systemName: "plus").font(Theme.Font.caption(.semibold))
                 .frame(width: 16, height: 16).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -259,7 +259,7 @@ struct CollectionSidebarView: View {
 
     private func nameField(_ row: SidebarRow) -> some View {
         let own = edit(for: row)
-        return VStack(alignment: .leading, spacing: 2) {
+        return VStack(alignment: .leading, spacing: Theme.Space.px2) {
             TextField("Name", text: $editText)
                 .textFieldStyle(.plain)
                 .lineLimit(1)
@@ -287,7 +287,7 @@ struct CollectionSidebarView: View {
                 Text(editError).font(.caption).foregroundStyle(Theme.warning).lineLimit(2)
             }
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, Theme.Space.px1)
         .overlay(alignment: .bottom) {
             if editError != nil { Rectangle().fill(Theme.warning).frame(height: 1) }
         }
@@ -295,13 +295,13 @@ struct CollectionSidebarView: View {
 
     private func itemRow(_ row: SidebarRow) -> some View {
         let isSelected = row.filter == catalog.selectedFilter
-        return HStack(spacing: 4) {
+        return HStack(spacing: Theme.Space.xs) {
             Color.clear.frame(width: CGFloat(row.depth) * 14, height: 1)
             if row.folderID != nil {
                 // A fixed-width disclosure slot so titles line up whether or not a folder has sub-folders.
                 if row.hasChildren, let id = row.folderID {
                     Image(systemName: row.isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(Theme.Font.micro(.semibold))
                         .foregroundStyle(Theme.textSecondary)
                         .frame(width: 12, height: 16)
                         .contentShape(Rectangle())
@@ -321,8 +321,8 @@ struct CollectionSidebarView: View {
                     .foregroundStyle(Theme.textTertiary)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.horizontal, Theme.Space.s)
+        .padding(.vertical, Theme.Space.px5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .selectionChip(isSelected: isSelected, isHovered: hoveredRowID == row.id)
         .contentShape(Rectangle())
@@ -448,10 +448,10 @@ private struct CollectionDropTarget: ViewModifier {
         if enabled {
             content
                 .background {
-                    if isTargeted { RoundedRectangle(cornerRadius: 5).fill(Theme.selectedFill) }
+                    if isTargeted { RoundedRectangle(cornerRadius: Theme.Radius.px5).fill(Theme.selectedFill) }
                 }
                 .overlay {
-                    if isTargeted { RoundedRectangle(cornerRadius: 5).stroke(Theme.selectedOutline, lineWidth: 1).allowsHitTesting(false) }
+                    if isTargeted { RoundedRectangle(cornerRadius: Theme.Radius.px5).stroke(Theme.selectedOutline, lineWidth: 1).allowsHitTesting(false) }
                 }
                 .dropDestination(for: LibraryPhotoDrag.self) { items, _ in
                     drop(Array(Set(items.flatMap(\.photoIDs))).sorted())

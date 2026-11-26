@@ -54,7 +54,7 @@ struct EditSliderRow: View {
     @Environment(\.sliderResetAction) private var resetAction
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack {
                 Text(label)
                     .contentShape(Rectangle())
@@ -71,7 +71,7 @@ struct EditSliderRow: View {
                             .frame(width: 60)
                             .monospacedDigit()
                             .focused($isTextFieldFocused)
-                            .padding(.horizontal, 3)
+                            .padding(.horizontal, Theme.Space.px3)
                             .overlay(readoutOutline)
                             .accessibilityLabel("\(label) value")
                             .onSubmit { commitEditingText() }
@@ -99,7 +99,7 @@ struct EditSliderRow: View {
                         Text(format(value))
                             .monospacedDigit()
                             .foregroundStyle(Theme.textSecondary)
-                            .padding(.horizontal, 3)
+                            .padding(.horizontal, Theme.Space.px3)
                             .overlay(readoutOutline)
                             .contentShape(Rectangle())
                             .help("Click to type a value")
@@ -153,7 +153,7 @@ struct EditSliderRow: View {
     }
 
     private var readoutOutline: some View {
-        RoundedRectangle(cornerRadius: 3)
+        RoundedRectangle(cornerRadius: Theme.Radius.px3)
             .strokeBorder(Theme.hairline, lineWidth: 1)
             .opacity(EditSliderRowChrome.showsReadoutOutline(isHovered: isReadoutHovered, isEditing: isEditingText) ? 1 : 0)
             .allowsHitTesting(false)

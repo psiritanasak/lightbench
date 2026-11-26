@@ -10,10 +10,10 @@ struct RecentlyDeletedSheetView: View {
     @State private var confirmEmpty = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Recently Deleted").font(.headline)
+        SheetScaffold(title: "Recently Deleted", size: .medium, status: footerStatus, actions: .done(), onDismiss: onDone, leading: {
+            Button("Empty List…") { confirmEmpty = true }.buttonStyle(.flat).disabled(model.rows.isEmpty && model.unreadable.isEmpty)
+        }) {
             Text(RecentlyDeletedModel.explanation).font(.caption).foregroundStyle(Theme.textSecondary)
-            if let message = model.statusMessage { Text(message).font(.caption).foregroundStyle(Theme.warning) }
 
             if model.rows.isEmpty && model.unreadable.isEmpty {
                 Text("Nothing here. Photos you move to the Trash from Lightbench appear in this list.")
@@ -28,15 +28,7 @@ struct RecentlyDeletedSheetView: View {
                 }
                 .frame(minHeight: 200, maxHeight: 420)
             }
-
-            HStack {
-                Button("Empty List…") { confirmEmpty = true }.buttonStyle(.flat).disabled(model.rows.isEmpty && model.unreadable.isEmpty)
-                Spacer()
-                Button("Done", action: onDone).keyboardShortcut(.cancelAction).buttonStyle(.flat)
-            }
         }
-        .padding(20)
-        .frame(width: 640)
         .task { await model.load(catalog: catalog) }
         .confirmationDialog("Empty the Recently Deleted list?", isPresented: $confirmEmpty, titleVisibility: .visible) {
             Button("Empty List", role: .destructive) { Task { await model.emptyList(catalog: catalog) } }
@@ -44,6 +36,13 @@ struct RecentlyDeletedSheetView: View {
         } message: {
             Text("This only clears Lightbench's record of these photos, so they can no longer be restored from here. No file is touched: whatever is in the Finder's Trash stays there.")
         }
+    }
+
+    /// The model's message as the footer status: a failure or refusal is an error, a result is plain info.
+    private var footerStatus: SheetStatus? {
+        guard let message = model.statusMessage else { return nil }
+        let failed = message.hasPrefix("Couldn't") || message.contains("was not restored") || message == CatalogModel.renameInProgressMessage
+        return SheetStatus(text: message, tone: failed ? .error : .info)
     }
 
     private func unreadableView(_ item: UnreadableDeletedPhoto) -> some View {

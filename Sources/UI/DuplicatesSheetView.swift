@@ -14,8 +14,8 @@ struct DuplicatesSheetView: View {
     private var pickedLeftCount: Int { model.rejectable(model.groups.idsToReject).leftPicked }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Find Duplicates").font(.headline)
+        SheetScaffold(title: "Find Duplicates", size: .large, status: SheetStatus.classifying(model.statusMessage),
+                      actions: .done(returnKey: false), onDismiss: onDone) {
             Text("Compares the photos in the current view. Files are never deleted or changed — \"keep best\" only flags the others as Rejected, which you can undo.")
                 .font(.caption).foregroundStyle(Theme.textSecondary)
 
@@ -36,7 +36,6 @@ struct DuplicatesSheetView: View {
             }
 
             if let summary = model.summary { Text(summary).font(.caption).foregroundStyle(Theme.textSecondary) }
-            if let message = model.statusMessage { Text(message).font(.caption).foregroundStyle(Theme.warning) }
 
             if model.hasScanned && !model.isScanning {
                 if model.groups.isEmpty {
@@ -58,11 +57,7 @@ struct DuplicatesSheetView: View {
                     }
                 }
             }
-
-            HStack { Spacer(); Button("Done", action: onDone).keyboardShortcut(.cancelAction).buttonStyle(.flat) }
         }
-        .padding(20)
-        .frame(width: 640)
         .confirmationDialog(
             "Reject \(rejectCount) photo\(rejectCount == 1 ? "" : "s")?", isPresented: $confirmAll, titleVisibility: .visible
         ) {

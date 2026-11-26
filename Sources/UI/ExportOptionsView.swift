@@ -133,11 +133,15 @@ struct ExportOptionsView: View {
         }
     }
 
-    private var form: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(ExportSheetRules.title(count: photoCount, kind: exportModel.settings.kind))
-                .font(.headline)
+    /// A small section label: the options are grouped File / Image / Metadata / Watermark.
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title).font(.caption).textCase(.uppercase).foregroundStyle(Theme.textSecondary).padding(.top, 4)
+    }
 
+    /// The options only (title and footer belong to `SheetScaffold`).
+    private var options: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionHeader("File")
             Picker("Output", selection: $exportModel.settings.kind) {
                 ForEach(ExportKind.allCases) { kind in
                     Text(kind.label).tag(kind)
@@ -157,50 +161,6 @@ struct ExportOptionsView: View {
                 }
             }
             .disabled(!renderControlsEnabled)
-
-            Picker("Color space", selection: $exportModel.settings.colorSpace) {
-                ForEach(ExportColorSpace.allCases) { space in
-                    Text(space.label).tag(space)
-                }
-            }
-            .disabled(!renderControlsEnabled)
-
-            Picker("Sharpening", selection: $exportModel.settings.sharpening) {
-                ForEach(ExportSharpening.allCases) { option in
-                    Text(option.label).tag(option)
-                }
-            }
-            .disabled(!renderControlsEnabled)
-
-            if !renderControlsEnabled {
-                Text(ExportSheetRules.originalMetadataLabel)
-                    .font(.caption)
-                    .foregroundStyle(Theme.textSecondary)
-            } else {
-            VStack(alignment: .leading, spacing: 4) {
-                Picker("Metadata", selection: $exportModel.settings.metadata) {
-                    ForEach(ExportMetadataPolicy.allCases) { policy in
-                        Text(policy.label).tag(policy)
-                    }
-                }
-                if exportModel.settings.metadata == .all {
-                    Text("Includes the location (GPS) if the photo has one.")
-                        .font(.caption)
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                Toggle("Add Library keywords", isOn: $exportModel.settings.includeKeywords)
-                    .disabled(exportModel.settings.metadata == .none)
-                Text(keywordCaption)
-                    .font(.caption)
-                    .foregroundStyle(Theme.textSecondary)
-                Toggle("Add Library title, caption, creator and copyright", isOn: $exportModel.settings.includeInfo)
-                    .disabled(exportModel.settings.metadata == .none)
-                Text(infoCaption)
-                    .font(.caption)
-                    .foregroundStyle(Theme.textSecondary)
-            }
-            .disabled(!renderControlsEnabled)
-            }
 
             if exportModel.settings.format.isLossy {
                 VStack(alignment: .leading, spacing: 4) {
@@ -261,7 +221,7 @@ struct ExportOptionsView: View {
                 case .templateError(let error):
                     Text(error.errorDescription ?? "Invalid template")
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Theme.error)
                 case .photoError(let error):
                     Text("The first photo would fail: \(error.errorDescription ?? "invalid name"). Other photos may still export.")
                         .font(.caption)
@@ -278,6 +238,66 @@ struct ExportOptionsView: View {
                     .foregroundStyle(Theme.textTertiary)
             }
 
+            sectionHeader("Image")
+            Picker("Color space", selection: $exportModel.settings.colorSpace) {
+                ForEach(ExportColorSpace.allCases) { space in
+                    Text(space.label).tag(space)
+                }
+            }
+            .disabled(!renderControlsEnabled)
+
+            Picker("Sharpening", selection: $exportModel.settings.sharpening) {
+                ForEach(ExportSharpening.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .disabled(!renderControlsEnabled)
+
+            Group {
+                Toggle("Resize", isOn: $useCustomResize)
+                if useCustomResize {
+                    HStack {
+                        Text("Long edge:")
+                        TextField("pixels", text: $maxLongEdgeText)
+                            .frame(width: 80)
+                        Text("px")
+                    }
+                }
+            }
+            .disabled(!renderControlsEnabled)
+
+            sectionHeader("Metadata")
+            if !renderControlsEnabled {
+                Text(ExportSheetRules.originalMetadataLabel)
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+            } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Metadata", selection: $exportModel.settings.metadata) {
+                    ForEach(ExportMetadataPolicy.allCases) { policy in
+                        Text(policy.label).tag(policy)
+                    }
+                }
+                if exportModel.settings.metadata == .all {
+                    Text("Includes the location (GPS) if the photo has one.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Toggle("Add Library keywords", isOn: $exportModel.settings.includeKeywords)
+                    .disabled(exportModel.settings.metadata == .none)
+                Text(keywordCaption)
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                Toggle("Add Library title, caption, creator and copyright", isOn: $exportModel.settings.includeInfo)
+                    .disabled(exportModel.settings.metadata == .none)
+                Text(infoCaption)
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .disabled(!renderControlsEnabled)
+            }
+
+            sectionHeader("Watermark")
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Watermark", isOn: $exportModel.settings.watermark.isEnabled)
                 if exportModel.settings.watermark.isEnabled {
@@ -329,63 +349,39 @@ struct ExportOptionsView: View {
                 importLogo(result)
             }
 
-            Group {
-                Toggle("Resize", isOn: $useCustomResize)
-                if useCustomResize {
-                    HStack {
-                        Text("Long edge:")
-                        TextField("pixels", text: $maxLongEdgeText)
-                            .frame(width: 80)
-                        Text("px")
-                    }
-                }
-            }
-            .disabled(!renderControlsEnabled)
-
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .buttonStyle(.flat)
-                Button("Export") {
-                    sizeLimitText = ExportSheetRules.effectiveSizeLimitText(typed: sizeLimitText, current: exportModel.settings.maxFileSizeKB)
-                    if exportModel.settings.maxFileSizeKB != nil {
-                        exportModel.settings.maxFileSizeKB = ExportSettings.sanitizedFileSizeKB(Int(sizeLimitText))
-                    }
-                    // `resized(_:option:)` also guards against a
-                    // non-positive value, but clamping here too means an
-                    // invalid/empty field falls back to a sane default
-                    // rather than a silent no-op-sized export.
-                    let parsedLongEdge: CGFloat = Double(maxLongEdgeText).flatMap { $0.isFinite ? CGFloat($0) : nil } ?? 2048
-                    exportModel.settings.resize = useCustomResize
-                        ? ExportResize.maxLongEdge(parsedLongEdge).sanitized
-                        : .original
-                    dismiss()
-                    // Deferred to the next run loop turn, AFTER the sheet
-                    // has actually finished dismissing — live-tested and
-                    // confirmed: calling `onExport()` (which opens an
-                    // `NSOpenPanel.runModal()`) synchronously right after
-                    // `dismiss()` races the sheet's own still-in-progress
-                    // dismissal, and the resulting panel appears but
-                    // doesn't respond to clicks.
-                    DispatchQueue.main.async {
-                        onExport()
-                    }
-                }
-                .buttonStyle(FlatButtonStyle(prominent: true))
-                .disabled(photoCount == 0 || (preview?.blocksExport ?? false))
-            }
         }
-        .padding()
     }
 
-    /// The form as-is when it fits; otherwise the same form in a scroll view, so the Export button can never end up
-    /// below the bottom of a small screen (the watermark section made the sheet taller).
-    var body: some View {
-        ViewThatFits(in: .vertical) {
-            form
-            ScrollView { form }.frame(height: 560)
+    /// Writes the dialog's choices into the settings and hands over to the export. Runs from the sheet's Export button.
+    private func startExport() {
+        sizeLimitText = ExportSheetRules.effectiveSizeLimitText(typed: sizeLimitText, current: exportModel.settings.maxFileSizeKB)
+        if exportModel.settings.maxFileSizeKB != nil {
+            exportModel.settings.maxFileSizeKB = ExportSettings.sanitizedFileSizeKB(Int(sizeLimitText))
         }
-        .frame(width: 380)
+        // `resized(_:option:)` also guards against a non-positive value, but clamping here too means an invalid/empty field falls back to a
+        // sane default rather than a silent no-op-sized export.
+        let parsedLongEdge: CGFloat = Double(maxLongEdgeText).flatMap { $0.isFinite ? CGFloat($0) : nil } ?? 2048
+        exportModel.settings.resize = useCustomResize ? ExportResize.maxLongEdge(parsedLongEdge).sanitized : .original
+        dismiss()
+        // Deferred to the next run loop turn, AFTER the sheet has actually finished dismissing — live-tested and confirmed: calling
+        // `onExport()` (which opens an `NSOpenPanel.runModal()`) synchronously right after `dismiss()` races the sheet's own
+        // still-in-progress dismissal, and the resulting panel appears but doesn't respond to clicks.
+        DispatchQueue.main.async { onExport() }
+    }
+
+    /// The options when they fit; otherwise the same options in a scroll view, so the footer (Cancel / Export) is pinned and can never end
+    /// up below the bottom of a small screen (the watermark section made the sheet taller).
+    var body: some View {
+        SheetScaffold(
+            title: ExportSheetRules.title(count: photoCount, kind: exportModel.settings.kind), size: .medium,
+            actions: .commit(verb: "Export", enabled: !(photoCount == 0 || (preview?.blocksExport ?? false))),
+            onDismiss: { dismiss() }, onPrimary: startExport
+        ) {
+            ViewThatFits(in: .vertical) {
+                options
+                ScrollView { options }.frame(height: 480)
+            }
+        }
         .onChange(of: exportModel.settings.watermark.isEnabled) { _, _ in refreshLogoState() }
         .onChange(of: exportModel.settings.watermark.kind) { _, _ in refreshLogoState() }
         .onChange(of: exportModel.settings.watermark.text) { _, _ in refreshLogoState() }

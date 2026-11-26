@@ -40,8 +40,9 @@ struct KeywordSheetView: View {
         let allCounts = catalog.keywordPhotoCounts
         let onSelection = catalog.keywords.filter { counts[$0.id ?? -1, default: 0] > 0 }
         let suggestions = catalog.keywords.filter { counts[$0.id ?? -1, default: 0] < photoIDs.count }
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Keywords for \(photoIDs.count) Photo\(photoIDs.count == 1 ? "" : "s")").font(.headline)
+        // The keyword field owns Return (add), so Done is only the Esc button: `returnKey: false`.
+        SheetScaffold(title: "Keywords for \(photoIDs.count) Photo\(photoIDs.count == 1 ? "" : "s")", size: .small,
+                      actions: .done(returnKey: false), onDismiss: onDone) {
             if hiddenCount > 0 {
                 Text("\(hiddenCount) of them \(hiddenCount == 1 ? "is" : "are") hidden by the current filters and will be changed too.")
                     .font(.caption).foregroundStyle(Theme.warning)
@@ -112,14 +113,7 @@ struct KeywordSheetView: View {
                 }
                 .frame(maxHeight: 120)
             }
-
-            HStack {
-                Spacer()
-                Button("Done", action: onDone).keyboardShortcut(.defaultAction).buttonStyle(FlatButtonStyle(prominent: true))
-            }
         }
-        .padding(20)
-        .frame(width: 460)
         .confirmationDialog(
             "Delete keyword “\(pendingDelete?.name ?? "")” from every photo?",
             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),

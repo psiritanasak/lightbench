@@ -197,7 +197,20 @@ struct CollectionSidebarView: View {
         case .cancel:
             editing = nil
         case .invalid(let message):
-            if keepOpenOnInvalid { editError = message; focusedEdit = edit } else { editing = nil }
+            if keepOpenOnInvalid {
+                editError = message
+                // Return makes the field give up first responder AFTER this handler returns, so setting focus here is undone (Esc then
+                // never reached the field). Re-focus on the next run-loop pass, and only if this edit is still the open one.
+                DispatchQueue.main.async {
+                    guard editing == edit else { return }
+                    focusedEdit = edit
+                    if let text = NSApp.keyWindow?.firstResponder as? NSTextView, text.isFieldEditor, text.string == editText {
+                        text.selectAll(nil)
+                    }
+                }
+            } else {
+                editing = nil
+            }
         case .commit(let name):
             editError = nil
             switch edit {

@@ -80,6 +80,13 @@ final class SidebarNamingSourcePinTests: XCTestCase {
         XCTAssertFalse(text.contains("\"Rename Smart Collection\""))
     }
 
+    /// Live finding 2026-11-26: after a refused name, Return took keyboard focus off the field, so Esc never reached it. The refocus must
+    /// happen on the next run-loop pass, and only while that edit is still the open one.
+    func testARefusedNameRefocusesTheFieldAfterTheSubmitReturns() throws {
+        let text = try source()
+        XCTAssertTrue(text.contains("DispatchQueue.main.async {\n                    guard editing == edit else { return }\n                    focusedEdit = edit"))
+    }
+
     func testEscapeAndReturnArePresent() throws {
         let text = try source()
         XCTAssertTrue(text.contains(".onExitCommand"))

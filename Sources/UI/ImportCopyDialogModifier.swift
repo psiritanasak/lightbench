@@ -62,7 +62,7 @@ struct ImportCopySheetView: View {
     }
 
     private var bodyContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text("From “\(model.setup?.sourceFolder.lastPathComponent ?? "")” · \(sizeText). \(ImportCopyModel.sheetIntro(mode: model.options.mode))")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
@@ -86,7 +86,7 @@ struct ImportCopySheetView: View {
                 .labelsHidden()
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack {
                     Text("Name").frame(width: 70, alignment: .leading)
                     TextField("{name}", text: $model.options.renameTemplate)
@@ -121,7 +121,7 @@ struct ImportCopySheetView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Theme.Space.px2) {
                 ForEach(Array(model.previewLines().enumerated()), id: \.offset) { _, line in
                     Text(line)
                         .font(.system(.caption, design: .monospaced))

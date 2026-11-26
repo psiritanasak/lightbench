@@ -110,7 +110,7 @@ struct SheetScaffold<Leading: View, Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text(title).font(.headline)
             if height != nil {
                 content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -125,7 +125,7 @@ struct SheetScaffold<Leading: View, Content: View>: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Theme.Space.s) {
             leading
             if let status {
                 Text(status.text)

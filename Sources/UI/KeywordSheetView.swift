@@ -65,7 +65,7 @@ struct KeywordSheetView: View {
             if onSelection.isEmpty {
                 Text("None yet").font(.caption).foregroundStyle(Theme.textSecondary)
             } else {
-                FlowRow(spacing: 6) {
+                FlowRow(spacing: Theme.Space.px6) {
                     ForEach(onSelection) { keyword in
                         let partial = counts[keyword.id ?? -1, default: 0] < photoIDs.count
                         Button {
@@ -81,7 +81,7 @@ struct KeywordSheetView: View {
 
             if !suggestions.isEmpty {
                 Text("Add an existing keyword").font(.subheadline)
-                FlowRow(spacing: 6) {
+                FlowRow(spacing: Theme.Space.px6) {
                     ForEach(suggestions) { keyword in
                         Button(keyword.name) {
                             if keyword.id != nil { catalog.addKeywords(keyword.name, to: photoIDs) }
@@ -95,7 +95,7 @@ struct KeywordSheetView: View {
             if !catalog.keywords.isEmpty {
                 Text("All keywords").font(.subheadline)
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
                         ForEach(catalog.keywords) { keyword in
                             HStack {
                                 Text(keyword.name)

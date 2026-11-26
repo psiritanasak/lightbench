@@ -29,8 +29,8 @@ struct FlatButtonStyle: ButtonStyle {
         return configuration.label
             .font(compact ? .caption : .body)
             .foregroundStyle(prominent ? Color.white : Color.primary)
-            .padding(.horizontal, compact ? 8 : 10)
-            .padding(.vertical, compact ? 3 : 5)
+            .padding(.horizontal, compact ? Theme.Space.s : Theme.Space.px10)
+            .padding(.vertical, compact ? Theme.Space.px3 : Theme.Space.px5)
             .frame(maxWidth: fullWidth ? .infinity : nil)
             .background(RoundedRectangle(cornerRadius: radius).fill(Self.fill(isOn: isOn, prominent: prominent, pressed: configuration.isPressed)))
             .overlay(RoundedRectangle(cornerRadius: radius).stroke(Self.outline(isOn: isOn, prominent: prominent), lineWidth: 1))

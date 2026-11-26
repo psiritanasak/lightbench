@@ -43,7 +43,7 @@ struct DuplicatesSheetView: View {
                         .foregroundStyle(Theme.textSecondary)
                 } else {
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 14) {
+                        LazyVStack(alignment: .leading, spacing: Theme.Space.px14) {
                             ForEach(model.groups) { group in groupRow(group) }
                         }
                     }
@@ -78,7 +78,7 @@ struct DuplicatesSheetView: View {
     }
 
     private func groupRow(_ group: DuplicateGroup) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.px6) {
             HStack {
                 Text(label(group.kind)).font(.subheadline.bold())
                 Text("\(group.photoIDs.count) photos").font(.caption).foregroundStyle(Theme.textSecondary)
@@ -89,7 +89,7 @@ struct DuplicatesSheetView: View {
                     .accessibilityLabel("Keep best, reject others: \(label(group.kind)), best is \(model.photosByID[group.bestID]?.filename ?? "unknown")")
             }
             ScrollView(.horizontal) {
-                HStack(spacing: 10) {
+                HStack(spacing: Theme.Space.px10) {
                     ForEach(group.photoIDs, id: \.self) { id in
                         if let photo = model.photosByID[id] {
                             DuplicateThumbnail(catalog: catalog, photo: photo, isBest: id == group.bestID)
@@ -98,8 +98,8 @@ struct DuplicatesSheetView: View {
                 }
             }
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+        .padding(Theme.Space.s)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.px8).fill(Color.primary.opacity(0.06)))
     }
 
     private func reject(_ ids: [Int64]) {
@@ -129,7 +129,7 @@ private struct DuplicateThumbnail: View {
     @State private var image: CGImage?
 
     var body: some View {
-        VStack(spacing: 3) {
+        VStack(spacing: Theme.Space.px3) {
             ZStack(alignment: .topLeading) {
                 Group {
                     if let image { Image(decorative: image, scale: 1).resizable().scaledToFill() } else { Color.gray.opacity(0.3) }
@@ -137,8 +137,8 @@ private struct DuplicateThumbnail: View {
                 .frame(width: 96, height: 96).clipped()
                 .opacity(photo.flagStatus == .rejected ? 0.4 : 1)
                 if isBest {
-                    Text("BEST").font(.caption2.bold()).padding(.horizontal, 4).padding(.vertical, 1)
-                        .background(Theme.markOn, in: Capsule()).foregroundStyle(.black).padding(3)
+                    Text("BEST").font(.caption2.bold()).padding(.horizontal, Theme.Space.xs).padding(.vertical, Theme.Space.px1)
+                        .background(Theme.markOn, in: Capsule()).foregroundStyle(.black).padding(Theme.Space.px3)
                 }
             }
             Text(photo.filename).font(.caption2).lineLimit(1).frame(width: 96)

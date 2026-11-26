@@ -11,7 +11,7 @@ struct ToastView: View {
     private var feedback: Feedback { entry.feedback }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Theme.Space.s) {
             icon
             Text(feedback.title)
                 .font(.caption)
@@ -32,10 +32,10 @@ struct ToastView: View {
             .focusable(false)
             .accessibilityLabel("Dismiss")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.vertical, Theme.Space.s)
         .frame(maxWidth: 480)
-        .solidPanel(cornerRadius: 8)
+        .solidPanel(cornerRadius: Theme.Radius.px8)
         .onHover(perform: onHover)
         .accessibilityElement(children: .contain)
         .transition(.opacity)
@@ -66,9 +66,9 @@ struct ActivityStrip: View {
     static let cancelHint = "Stops after the current photo. Files already exported are kept."
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             ForEach(items) { item in
-                HStack(spacing: 10) {
+                HStack(spacing: Theme.Space.px10) {
                     Text(item.text)
                         .font(.caption)
                         .foregroundStyle(Theme.textPrimary)
@@ -89,8 +89,8 @@ struct ActivityStrip: View {
                 }
             }
         }
-        .padding(12)
-        .solidPanel(cornerRadius: 10)
+        .padding(Theme.Space.m)
+        .solidPanel(cornerRadius: Theme.Radius.l)
         .accessibilityElement(children: .contain)
     }
 }
@@ -102,7 +102,7 @@ struct FeedbackOverlay: View {
     var onCancel: (ActivityItem.Kind) -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Theme.Space.s) {
             if let entry = toasts.current {
                 ToastView(
                     entry: entry,
@@ -116,7 +116,7 @@ struct FeedbackOverlay: View {
                 ActivityStrip(items: activities, onCancel: onCancel)
             }
         }
-        .padding(.bottom, 16)
+        .padding(.bottom, Theme.Space.l)
         .animation(.easeInOut(duration: 0.2), value: toasts.current?.id)
     }
 }

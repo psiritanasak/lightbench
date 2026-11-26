@@ -168,14 +168,14 @@ enum KeyboardShortcutCatalog {
 struct KeyboardShortcutsView: View {
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: Theme.Space.px18) {
                 ForEach(KeyboardShortcutCatalog.sections, id: \.title) { section in
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: Theme.Space.px6) {
                         Text(section.title)
                             .font(.headline)
                             .foregroundStyle(Theme.textPrimary)
                         ForEach(Array(section.entries.enumerated()), id: \.offset) { _, entry in
-                            HStack(alignment: .firstTextBaseline, spacing: 16) {
+                            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.l) {
                                 Text(entry.keys)
                                     .font(.system(.body, design: .monospaced))
                                     .foregroundStyle(Theme.textPrimary)
@@ -188,7 +188,7 @@ struct KeyboardShortcutsView: View {
                     }
                 }
             }
-            .padding(24)
+            .padding(Theme.Space.px24)
         }
         .frame(width: 620, height: 560)
         .background(Theme.panel)

@@ -67,14 +67,14 @@ struct ExportOptionsView: View {
     /// always present), never an `NSOpenPanel` opened from here (see the note at the Export button about panels and
     /// sheet dismissal).
     private var logoRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Theme.Space.px10) {
             ZStack {
-                RoundedRectangle(cornerRadius: 4).fill(Theme.raised)
+                RoundedRectangle(cornerRadius: Theme.Radius.s).fill(Theme.raised)
                 if let logoThumbnail {
                     Image(decorative: logoThumbnail, scale: 1)
                         .resizable()
                         .scaledToFit()
-                        .padding(3)
+                        .padding(Theme.Space.px3)
                 }
             }
             .frame(width: 44, height: 44)
@@ -135,12 +135,12 @@ struct ExportOptionsView: View {
 
     /// A small section label: the options are grouped File / Image / Metadata / Watermark.
     private func sectionHeader(_ title: String) -> some View {
-        Text(title).font(.caption).textCase(.uppercase).foregroundStyle(Theme.textSecondary).padding(.top, 4)
+        Text(title).font(.caption).textCase(.uppercase).foregroundStyle(Theme.textSecondary).padding(.top, Theme.Space.xs)
     }
 
     /// The options only (title and footer belong to `SheetScaffold`).
     private var options: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: Theme.Space.l) {
             sectionHeader("File")
             Picker("Output", selection: $exportModel.settings.kind) {
                 ForEach(ExportKind.allCases) { kind in
@@ -163,7 +163,7 @@ struct ExportOptionsView: View {
             .disabled(!renderControlsEnabled)
 
             if exportModel.settings.format.isLossy {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text("Quality: \(Int(exportModel.settings.quality * 100))%")
                     ThinSlider(
                         value: Binding(get: { Double(exportModel.settings.quality) }, set: { exportModel.settings.quality = CGFloat(($0 * 100).rounded() / 100) }),
@@ -176,7 +176,7 @@ struct ExportOptionsView: View {
             }
 
             if ExportSheetRules.sizeLimitAvailable(exportModel.settings) {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Toggle("Limit file size", isOn: Binding(
                         get: { exportModel.settings.maxFileSizeKB != nil },
                         set: { on in
@@ -212,7 +212,7 @@ struct ExportOptionsView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 Text("File name")
                 TextField("{name}", text: $exportModel.settings.namingTemplate)
                     .textFieldStyle(.roundedBorder)
@@ -272,7 +272,7 @@ struct ExportOptionsView: View {
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
             } else {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 Picker("Metadata", selection: $exportModel.settings.metadata) {
                     ForEach(ExportMetadataPolicy.allCases) { policy in
                         Text(policy.label).tag(policy)
@@ -298,7 +298,7 @@ struct ExportOptionsView: View {
             }
 
             sectionHeader("Watermark")
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: Theme.Space.px6) {
                 Toggle("Watermark", isOn: $exportModel.settings.watermark.isEnabled)
                 if exportModel.settings.watermark.isEnabled {
                     Picker("Mark", selection: $exportModel.settings.watermark.kind) {

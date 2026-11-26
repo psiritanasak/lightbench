@@ -7,8 +7,9 @@ struct AutoStackSheetView: View {
     let onDone: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Auto Stack").font(.headline)
+        SheetScaffold(title: "Auto Stack", size: .medium, status: SheetStatus.classifying(model.statusMessage),
+                      actions: .doneAndApply(verb: "Apply", enabled: model.canApply, doneEnabled: !model.isApplying),
+                      onDismiss: onDone, onPrimary: { Task { await catalog.applyAutoStack() } }) {
             Text("Looks at the \(model.shownCount) photos shown (originals only; virtual copies follow their original) and proposes a stack for each burst: shots taken within the time below that also look alike. Nothing changes until you press Apply.")
                 .font(.caption).foregroundStyle(Theme.textSecondary)
 
@@ -88,19 +89,7 @@ struct AutoStackSheetView: View {
                         .disabled(model.isWorking)
                 }
             }
-            if let message = model.statusMessage { Text(message).font(.caption).foregroundStyle(Theme.warning) }
-
-            HStack {
-                Spacer()
-                Button("Apply") { Task { await catalog.applyAutoStack() } }
-                    .buttonStyle(FlatButtonStyle(prominent: true))
-                    .disabled(!model.canApply)
-                Button("Done", action: onDone).keyboardShortcut(.cancelAction).buttonStyle(.flat)
-                    .disabled(model.isApplying)
-            }
         }
-        .padding(20)
-        .frame(width: 560)
         // An Apply is writing: the sheet stays until it and the Library refresh after it are done.
         .interactiveDismissDisabled(model.isApplying)
     }

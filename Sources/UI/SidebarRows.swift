@@ -1,10 +1,11 @@
 import Foundation
 
 /// One line of the Library sidebar: a section header, a selectable item (All Photos, a collection, a smart collection, a folder) or a
-/// small action ("New Collection…", "Save Current Filters…"). The sidebar draws its own rows (the system `List` highlight cannot be
+/// header "+" button. The sidebar draws its own rows (the system `List` highlight cannot be
 /// restyled), so this flat, ordered list is what it renders and what the keyboard navigates. Pure: no SwiftUI.
 struct SidebarRow: Identifiable, Equatable {
-    enum Kind: Equatable { case header, item, action }
+    enum Kind: Equatable { case header, item }
+    /// The "+" at the right of a section header.
     enum Action: Equatable { case newCollection, saveFilters }
     enum Source: Equatable { case allPhotos, collection(PhotoCollection), smart(SmartCollection), folder(PhotoCollection) }
 
@@ -19,7 +20,8 @@ struct SidebarRow: Identifiable, Equatable {
         if case .smart(let smart)? = source { return smart.criteria.summary }
         return nil
     }
-    var action: Action?
+    /// Header rows only: the "+" button.
+    var addAction: Action?
     /// Folder rows only: nesting depth (0 = a root), whether it has sub-folders, and whether they are shown.
     var depth = 0
     var hasChildren = false
@@ -29,32 +31,39 @@ struct SidebarRow: Identifiable, Equatable {
     /// The number shown beside the title (nil = none): All Photos, collections, smart collections (only once known) and folders. See
     /// `SidebarRows.collectionPhotoCounts`.
     var count: Int?
+    /// The name is being edited in place (a draft row is always editing).
+    var isEditing = false
 }
 
 enum SidebarRows {
-    /// The rows, top to bottom: All Photos, Collections (+ "New Collection…"), Smart Collections (+ "Save Current Filters…"), then the
+    static let draftCollectionID = "draft-collection"
+    static let draftSmartID = "draft-smart"
+
+    /// The rows, top to bottom: All Photos, Collections (header "+" = new), Smart Collections (header "+" = save filters), then the
     /// Folders tree (only when there are folders). Folder children are listed only under EXPANDED folders (collapsed by default).
     static func rows(collections: [PhotoCollection], smartCollections: [SmartCollection], expandedFolders: Set<Int64>,
                      collectionCounts: [Int64: Int]? = nil, allPhotosCount: Int? = nil,
-                     smartCounts: [Int64: Int]? = nil) -> [SidebarRow] {
+                     smartCounts: [Int64: Int]? = nil, editing: SidebarEdit? = nil) -> [SidebarRow] {
         var rows: [SidebarRow] = [SidebarRow(id: "all", kind: .item, title: "All Photos", filter: .allPhotos, source: .allPhotos,
                                              count: allPhotosCount)]
 
-        rows.append(SidebarRow(id: "header-collections", kind: .header, title: "Collections"))
+        rows.append(SidebarRow(id: "header-collections", kind: .header, title: "Collections", addAction: .newCollection))
+        // A draft row (no filter, so Up / Down skip it) sits directly under its header, next to the "+" that was clicked.
+        if editing == .newCollection { rows.append(SidebarRow(id: draftCollectionID, kind: .item, title: "", isEditing: true)) }
         for collection in collections where !collection.isFolder {
             guard let id = collection.id else { continue }
             rows.append(SidebarRow(id: "collection-\(id)", kind: .item, title: collection.name, filter: .collection(id),
-                                   source: .collection(collection), count: collectionCounts.map { $0[id, default: 0] }))
+                                   source: .collection(collection), count: collectionCounts.map { $0[id, default: 0] },
+                                   isEditing: editing == .renameCollection(id)))
         }
-        rows.append(SidebarRow(id: "action-new-collection", kind: .action, title: "New Collection…", action: .newCollection))
 
-        rows.append(SidebarRow(id: "header-smart", kind: .header, title: "Smart Collections"))
+        rows.append(SidebarRow(id: "header-smart", kind: .header, title: "Smart Collections", addAction: .saveFilters))
+        if editing == .newSmart { rows.append(SidebarRow(id: draftSmartID, kind: .item, title: "", isEditing: true)) }
         for smart in smartCollections {
             guard let id = smart.id else { continue }
             rows.append(SidebarRow(id: "smart-\(id)", kind: .item, title: smart.name, filter: .smartCollection(id), source: .smart(smart),
-                                   count: smartCounts?[id]))
+                                   count: smartCounts?[id], isEditing: editing == .renameSmart(id)))
         }
-        rows.append(SidebarRow(id: "action-save-filters", kind: .action, title: "Save Current Filters…", action: .saveFilters))
 
         let folders = collections.filter(\.isFolder)
         if !folders.isEmpty {

@@ -1786,6 +1786,10 @@ final class CatalogModel: ObservableObject {
 
     func renameSmartCollection(_ smart: SmartCollection, to name: String) async {
         guard let database, let id = smart.id else { return }
+        // Local name first, so the row never shows the old name while the write runs; the refresh below restores the real list.
+        if let index = smartCollections.firstIndex(where: { $0.id == id }), let cleaned = KeywordName.normalize(name) {
+            smartCollections[index].name = cleaned
+        }
         do {
             try await database.renameSmartCollection(id: id, to: name)
         } catch {
@@ -1907,7 +1911,7 @@ final class CatalogModel: ObservableObject {
     }
 
     static func sortedKeywords(_ list: [Keyword]) -> [Keyword] {
-        list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        list.sorted { $0.name < $1.name }  // the database's own order: SQLite BINARY (case-sensitive) on `name`
     }
 
     /// keywordID → how many photos carry it, across the whole catalog. One pass; callers build it once per render.
@@ -2038,40 +2042,43 @@ final class CatalogModel: ObservableObject {
 
     // MARK: - Collections (Phase 4 slice 4)
 
-    /// Creates a new collection. An empty (or whitespace-only) name is
-    /// rejected before ever reaching the database — mirroring how other
-    /// write paths in this class validate up front.
-    func createCollection(name: String) {
-        guard let database else { return }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        Task.detached { [weak self] in
-            _ = try? await database.createCollection(name: trimmed)
-            await self?.refresh()
+    /// Creates a new collection through the ordered write chain (D94) and returns it (nil: an empty name, no database, or a failed
+    /// write, which is posted as an error). The new row is put into `collections` at once so the sidebar's draft row never flickers away
+    /// and back; the refresh that follows the write puts the list in its real order. It does NOT select the new collection: selecting
+    /// would clear the grid selection, and the next step is usually to drag that selection onto it.
+    @discardableResult
+    func createCollection(name: String) async -> PhotoCollection? {
+        guard let database, let cleaned = KeywordName.normalize(name) else { return nil }
+        let task = enqueueWrite { () -> Result<PhotoCollection, Error> in
+            do { return .success(try await database.createCollection(name: cleaned)) } catch { return .failure(error) }
+        }
+        switch await task.value {
+        case .success(let created):
+            if !collections.contains(where: { $0.id == created.id }) {
+                collections = (collections + [created]).sorted { $0.name < $1.name }  // the database's own order: SQLite BINARY (case-sensitive) on `name`
+            }
+            scheduleRefreshAfterWrites()
+            return created
+        case .failure(let error):
+            post(.error("Couldn't create the collection", error.localizedDescription))
+            scheduleRefreshAfterWrites()
+            return nil
         }
     }
 
-    /// Renames `collection`. Same shape as `createCollection`: validate up
-    /// front, fire-and-forget write, then full `refresh()` — NOT a
-    /// local-first splice, for the same reason `createPreset`'s own doc
-    /// comment already gives: the sidebar list is alphabetical, not
-    /// insertion-ordered, so there's no local position to guess at ahead
-    /// of the write.
-    ///
-    /// `isFolder` guard: rename on a folder-tree collection is out of
-    /// scope for this slice (see `deleteCollection`'s own doc comment for
-    /// the full reasoning — a folder's `name` diverging from its
-    /// `folderPath` interacts oddly with re-import). `CollectionSidebarView`
-    /// never offers this action for a folder row, but the guard is
-    /// defense-in-depth against a future caller reaching this method
-    /// directly, not just documentation.
+    /// Renames `collection` through the ordered write chain (D94): the new name is written into `collections` first, the write is
+    /// queued, and the refresh that follows puts the list back in name order. A failed write is posted as an error and the list is
+    /// re-read. `isFolder` guard: renaming a folder-tree collection stays out of scope (a folder's `name` diverging from its
+    /// `folderPath` interacts oddly with re-import; see `deleteCollection`); the sidebar never offers it, this is defence in depth.
     func renameCollection(_ collection: PhotoCollection, to name: String) {
-        guard let database, let id = collection.id, !collection.isFolder else { return }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        Task.detached { [weak self] in
-            try? await database.renameCollection(id: id, to: trimmed)
-            await self?.refresh()
+        guard let database, let id = collection.id, !collection.isFolder, let cleaned = KeywordName.normalize(name) else { return }
+        if let index = collections.firstIndex(where: { $0.id == id }) { collections[index].name = cleaned }
+        let task = enqueueWrite { () -> Error? in
+            do { try await database.renameCollection(id: id, to: cleaned); return nil } catch { return error }
+        }
+        scheduleRefreshAfterWrites()
+        Task { [weak self] in
+            if let error = await task.value { self?.post(.error("Couldn't rename the collection", error.localizedDescription)) }
         }
     }
 

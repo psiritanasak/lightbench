@@ -18,14 +18,16 @@ final class SidebarRowsTests: XCTestCase {
 
     func testRowOrderAndKinds() {
         let rows = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [])
-        XCTAssertEqual(rows.map(\.id), ["all", "header-collections", "collection-1", "collection-2", "action-new-collection",
-                                        "header-smart", "smart-5", "action-save-filters",
+        XCTAssertEqual(rows.map(\.id), ["all", "header-collections", "collection-1", "collection-2",
+                                        "header-smart", "smart-5",
                                         "header-folders", "folder-10", "folder-20"])
-        XCTAssertEqual(rows.map(\.kind), [.item, .header, .item, .item, .action, .header, .item, .action, .header, .item, .item])
+        XCTAssertEqual(rows.map(\.kind), [.item, .header, .item, .item, .header, .item, .header, .item, .item])
         XCTAssertEqual(rows.first { $0.id == "collection-1" }?.filter, .collection(1))
         XCTAssertEqual(rows.first { $0.id == "smart-5" }?.filter, .smartCollection(5))
         XCTAssertEqual(rows.first { $0.id == "all" }?.filter, .allPhotos)
-        XCTAssertEqual(rows.first { $0.id == "action-save-filters" }?.action, .saveFilters)
+        XCTAssertEqual(rows.first { $0.id == "header-smart" }?.addAction, .saveFilters)
+        XCTAssertEqual(rows.first { $0.id == "header-collections" }?.addAction, .newCollection)
+        XCTAssertNil(rows.first { $0.id == "header-folders" }?.addAction)
     }
 
     func testOnlySmartCollectionRowsHaveATooltipDescribingTheirCriteria() {
@@ -37,7 +39,7 @@ final class SidebarRowsTests: XCTestCase {
         XCTAssertNil(rows.first { $0.id == "collection-1" }?.tooltip)
         XCTAssertNil(rows.first { $0.id == "all" }?.tooltip)
         XCTAssertNil(rows.first { $0.id == "folder-10" }?.tooltip)
-        XCTAssertNil(rows.first { $0.id == "action-save-filters" }?.tooltip)
+        XCTAssertNil(rows.first { $0.id == "header-smart" }?.tooltip)
     }
 
     func testNoFoldersMeansNoFoldersSection() {
@@ -188,5 +190,27 @@ final class SidebarRowsTests: XCTestCase {
         let known = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [],
                                      smartCounts: [smartID: 0])
         XCTAssertEqual(known.first { $0.id == "smart-\(smartID)" }?.count, 0, "a known zero is shown")
+    }
+
+    func testADraftRowSitsDirectlyUnderItsHeaderAndHasNoFilter() {
+        let c = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [], editing: .newCollection)
+        let index = c.firstIndex { $0.id == "header-collections" }! + 1
+        XCTAssertEqual(c[index].id, SidebarRows.draftCollectionID)
+        XCTAssertNil(c[index].filter, "Up / Down skip a draft")
+        XCTAssertTrue(c[index].isEditing)
+        XCTAssertFalse(SidebarRows.selectableFilters(in: c).isEmpty)
+        let s = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [], editing: .newSmart)
+        XCTAssertEqual(s[s.firstIndex { $0.id == "header-smart" }! + 1].id, SidebarRows.draftSmartID)
+        XCTAssertEqual(SidebarRows.selectableFilters(in: c), SidebarRows.selectableFilters(
+            in: SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [])))
+    }
+
+    func testOnlyTheRenamedRowIsEditing() {
+        let rows = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [],
+                                    editing: .renameCollection(2))
+        XCTAssertEqual(rows.filter(\.isEditing).map(\.id), ["collection-2"])
+        let smartRows = SidebarRows.rows(collections: sample.collections, smartCollections: sample.smart, expandedFolders: [],
+                                         editing: .renameSmart(5))
+        XCTAssertEqual(smartRows.filter(\.isEditing).map(\.id), ["smart-5"])
     }
 }

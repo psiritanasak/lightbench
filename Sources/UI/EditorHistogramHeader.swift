@@ -12,14 +12,14 @@ struct EditorHistogramHeader: View {
     static func isShown(on tab: EditorTab) -> Bool { tab == .adjust }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: Theme.Space.px3) {
             Button { mode = mode.next } label: {
                 HistogramView(data: data, channels: mode.channels)
                     .overlay(alignment: .topTrailing) {
                         Text(mode.rawValue).font(.caption2).foregroundStyle(Theme.textSecondary)
-                            .padding(.horizontal, 4).padding(.vertical, 1)
-                            .background(Theme.panel.opacity(0.7), in: RoundedRectangle(cornerRadius: 3))
-                            .padding(4)
+                            .padding(.horizontal, Theme.Space.xs).padding(.vertical, Theme.Space.px1)
+                            .background(Theme.panel.opacity(0.7), in: RoundedRectangle(cornerRadius: Theme.Radius.px3))
+                            .padding(Theme.Space.xs)
                     }
                     .contentShape(Rectangle())
             }
@@ -29,7 +29,7 @@ struct EditorHistogramHeader: View {
             .accessibilityValue(mode.rawValue)
             .accessibilityHint("Switches between Luminance and RGB")
             // The text lines are read as ONE VoiceOver element; the histogram itself stays hidden (see `HistogramView`).
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: Theme.Space.px3) {
                 if let exposure = cameraInfo.flatMap(ExifStripText.exposureLine) {
                     Text(exposure)
                         .font(.system(.caption2, design: .monospaced))
@@ -47,8 +47,8 @@ struct EditorHistogramHeader: View {
             .accessibilityElement(children: .combine)
         }
         .padding(.horizontal)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
+        .padding(.top, Theme.Space.s)
+        .padding(.bottom, Theme.Space.px6)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

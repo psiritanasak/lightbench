@@ -13,16 +13,16 @@ struct RailEntryLabel: View {
     var showsTitle = true
 
     var body: some View {
-        VStack(spacing: 3) {
-            Image(systemName: symbol).font(.system(size: 17))
-            if showsTitle { Text(title).font(.system(size: 10)).lineLimit(1) }
+        VStack(spacing: Theme.Space.px3) {
+            Image(systemName: symbol).font(Theme.Font.glyph17())
+            if showsTitle { Text(title).font(Theme.Font.caption()).lineLimit(1) }
         }
         .frame(width: EditorToolRailMetrics.width - 8, height: showsTitle ? Self.height : Self.iconOnlyHeight)
         // Dimmed through the COLOUR, not `.opacity`: a `Menu` draws its label itself and ignores an opacity set on it, but it follows
         // the foreground colour (this is what makes a disabled Compare entry look disabled like the others).
         .foregroundStyle(Self.color(isOn: isOn, isEnabled: isEnabled))
-        .background(RoundedRectangle(cornerRadius: 8).fill(isOn ? Theme.selectedFill.opacity(isEnabled ? 1 : 0.4) : Color.clear))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.px8).fill(isOn ? Theme.selectedFill.opacity(isEnabled ? 1 : 0.4) : Color.clear))
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.px8))
     }
 
     static let height: CGFloat = 48

@@ -29,7 +29,7 @@ struct EditorRailActions: View {
 
     var body: some View {
         let hasImage = document.currentImage != nil
-        VStack(spacing: 6) {
+        VStack(spacing: Theme.Space.px6) {
             entry("Undo", Symbol.undo, enabled: document.canUndo) { document.undo() }
             entry("Redo", Symbol.redo, enabled: document.canRedo) { document.redo() }
             entry("Revert", Symbol.revert,

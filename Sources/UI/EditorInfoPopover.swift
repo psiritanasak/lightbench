@@ -10,7 +10,7 @@ struct EditorInfoPopover: View {
     // MARK: Body
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text("Info").font(.headline).foregroundStyle(Theme.textPrimary)
             if model.targetIsCopy {
                 Text(InfoFieldsView.copyNote(count: 1)).font(.caption).foregroundStyle(Theme.textSecondary)
@@ -30,7 +30,7 @@ struct EditorInfoPopover: View {
                     .buttonStyle(FlatButtonStyle(prominent: true))
             }
         }
-        .padding(16)
+        .padding(Theme.Space.l)
         .frame(width: 360)
         .onExitCommand { model.discard() }
         // A system popover is translucent; a solid panel behind the content, like the search-help popover and the app's other overlays.

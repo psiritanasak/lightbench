@@ -21,9 +21,9 @@ struct HistoryPopoverView: View {
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
                 .textCase(.uppercase)
-                .padding(.horizontal, 14)
-                .padding(.top, 10)
-                .padding(.bottom, 4)
+                .padding(.horizontal, Theme.Space.px14)
+                .padding(.top, Theme.Space.px10)
+                .padding(.bottom, Theme.Space.xs)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -31,8 +31,8 @@ struct HistoryPopoverView: View {
                             rowButton(row).id(row.id)
                         }
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.bottom, 6)
+                    .padding(.horizontal, Theme.Space.px6)
+                    .padding(.bottom, Theme.Space.px6)
                 }
                 .frame(height: min(CGFloat(rows.count) * Self.rowHeight + 8, Self.maxHeight))
                 // One run-loop turn later on appear: a `LazyVStack` has not laid its rows out yet when `onAppear` fires, and
@@ -62,9 +62,9 @@ struct HistoryPopoverView: View {
                 Spacer()
                 if row.isCurrent { Image(systemName: "checkmark").font(.caption).foregroundStyle(.white) }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, Theme.Space.s)
             .frame(height: Self.rowHeight)
-            .background(RoundedRectangle(cornerRadius: 6).fill(row.isCurrent ? Theme.selectedFill : Color.clear))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(row.isCurrent ? Theme.selectedFill : Color.clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -27,7 +27,7 @@ struct PointColorDetailView: View {
     var onBeginColorPick: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: Theme.Space.px14) {
             Button(pointColor.hasTarget ? "Re-pick Color" : "Pick Color") {
                 onBeginColorPick?()
             }

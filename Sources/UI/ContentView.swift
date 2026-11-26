@@ -1987,8 +1987,8 @@ struct ContentView: View {
                         // rather than as "working."
                         if document.isLoadingImage {
                             ProgressView("Decoding RAW photo…")
-                                .padding(24)
-                                .solidPanel(cornerRadius: 12)
+                                .padding(Theme.Space.px24)
+                                .solidPanel(cornerRadius: Theme.Radius.px12)
                         }
                         noPhotoHint
                         // D8 (IMPROVEMENTS.md): extracted out of this
@@ -2602,7 +2602,7 @@ struct ContentView: View {
             .padding(.bottom)
             // Both `HSplitView` panes start at the SAME native y-offset below the window's toolbar chrome; a small fixed top
             // clearance (there is no tab bar above the photo any more, so nothing needs measuring to line the two up).
-            .padding(.top, 12)
+            .padding(.top, Theme.Space.m)
             .editSliderResets(document)
             // Belt-and-suspenders: guarantees this content block always
             // fills the full width the ScrollView offers.

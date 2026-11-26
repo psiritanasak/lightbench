@@ -15,10 +15,10 @@ struct ZoomPercentageHUD: View {
         Text("\(Int((zoomScale * 100).rounded()))%")
             .font(.caption)
             .monospacedDigit()
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .solidPanel(cornerRadius: 6)
-            .padding(12)
+            .padding(.horizontal, Theme.Space.s)
+            .padding(.vertical, Theme.Space.xs)
+            .solidPanel(cornerRadius: Theme.Radius.m)
+            .padding(Theme.Space.m)
             .allowsHitTesting(false)
     }
 }

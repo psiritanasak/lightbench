@@ -38,11 +38,10 @@ struct RecentlyDeletedSheetView: View {
         }
     }
 
-    /// The model's message as the footer status: a failure or refusal is an error, a result is plain info.
+    /// The model's message as the footer status, with the tone the model chose for it.
     private var footerStatus: SheetStatus? {
         guard let message = model.statusMessage else { return nil }
-        let failed = message.hasPrefix("Couldn't") || message.contains("was not restored") || message == CatalogModel.renameInProgressMessage
-        return SheetStatus(text: message, tone: failed ? .error : .info)
+        return SheetStatus(text: message, tone: model.statusTone)
     }
 
     private func unreadableView(_ item: UnreadableDeletedPhoto) -> some View {

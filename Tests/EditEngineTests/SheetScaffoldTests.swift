@@ -59,6 +59,26 @@ final class SheetScaffoldTests: XCTestCase {
         XCTAssertEqual(SheetStatus.classifying("Couldn't apply the stacks: x")?.tone, .error)
         XCTAssertEqual(SheetStatus.classifying("Nothing to reject.")?.tone, .caution)
         XCTAssertEqual(SheetStatus.classifying("Cancelled. Nothing was changed.")?.tone, .caution)
+        XCTAssertEqual(SheetStatus.classifying("The photos aren't ready")?.tone, .info, "different wording stays plain info")
+        XCTAssertEqual(SheetStatus.classifying("Photo isn't ready yet")?.tone, .error)
+        XCTAssertEqual(SheetStatus.classifying("There are no photos to compare.")?.tone, .caution)
+        XCTAssertEqual(SheetStatus.classifying("2 could not be compared (no face print).")?.tone, .caution)
+        XCTAssertEqual(SheetStatus.classifying("The gap changed; scan again.")?.tone, .caution)
+        XCTAssertEqual(SheetStatus.classifying("Scan in progress")?.tone, .caution)
+        XCTAssertEqual(SheetStatus.classifying("Created 3 stacks.")?.tone, .info, "a success must stay info")
+        XCTAssertEqual(SheetStatus.classifying("Selected 5 similar faces.")?.tone, .info)
+    }
+
+    func testEveryRecentlyDeletedOutcomeHasADeliberateTone() {
+        typealias M = RecentlyDeletedModel
+        XCTAssertEqual(M.tone(for: .restored(DeletedPhotoRestoreReport())), .info)
+        XCTAssertEqual(M.tone(for: .restored(DeletedPhotoRestoreReport(missingCollections: ["Trips"]))), .caution, "a partial restore")
+        for refusal in [DeletedPhotoRestoreOutcome.notFound, .fileMissing, .editFileMissing] {
+            XCTAssertEqual(M.tone(for: refusal), .caution, "\(refusal): the user has something to do first")
+        }
+        for failure in [DeletedPhotoRestoreOutcome.pathInUse, .masterMissing, .idInUse] {
+            XCTAssertEqual(M.tone(for: failure), .error, "\(failure): it cannot be restored")
+        }
     }
 
     func testEnabledFlagsReachTheButtons() {

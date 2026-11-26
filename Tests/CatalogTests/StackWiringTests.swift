@@ -171,7 +171,7 @@ final class StackWiringTests: XCTestCase {
         XCTAssertFalse(try source("Sources/UI/AutoStackSheetView.swift").contains("catalog.autoStackScopePhotos.count) photos shown"))
         let sheet = try source("Sources/UI/AutoStackSheetView.swift")
         XCTAssertTrue(sheet.contains("&& !catalog.autoStack.isWorking"), "the sheet cannot be reopened over a running Apply")
-        XCTAssertTrue(sheet.contains(".disabled(!model.canApply)") && sheet.contains("interactiveDismissDisabled(model.isApplying)"))
+        XCTAssertTrue(sheet.contains("enabled: model.canApply") && sheet.contains("interactiveDismissDisabled(model.isApplying)"))
         XCTAssertTrue(try source("Sources/App/PhotoAppApp.swift").contains("catalog.autoStackSheetPresented || catalog.autoStack.isWorking || catalog.duplicatesSheetPresented"),
                       "the Auto Stack menu item is off while it works")
         XCTAssertTrue(sheet.contains("whole library") && sheet.contains("Narrow the view"))

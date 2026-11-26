@@ -468,7 +468,7 @@ New findings (not in section 2; each is assigned to a slice below):
 | 5 | B2 panel defaults + histogram | done 2026-11-18 | | see the slice |
 | 6 | B3 slider row | done 2026-11-18 | | see the slice |
 | 7 | A3 + B4 menus and shortcuts | done 2026-11-19 | | see the slice |
-| 8 | C2 sheet scaffold | M | low | |
+| 8 | C2 sheet scaffold | done 2026-11-26 | | see the slice |
 | 9 | A4 sidebar | done 2026-11-26 (on branch a4-sidebar, not merged) | | see the slice |
 | 10 | B5 tool panels | M | low | |
 | 11 | A5 filter bar | done 2026-11-18 | | see the slice |

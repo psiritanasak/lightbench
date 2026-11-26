@@ -154,4 +154,40 @@ final class SheetScaffoldTests: XCTestCase {
         let rep = render(sheet, size: CGSize(width: 520, height: 200))
         XCTAssertGreaterThan(count(rep) { self.isError($0) }, 40)
     }
+
+    // MARK: Source lint (C2): every sheet uses the scaffold
+
+    /// The nine sheet views (one per `.sheet(` site; `AlertSitesTests` pins that count). A new sheet must use `SheetScaffold` and be added here.
+    private static let sheetFiles = [
+        "KeywordSheetView", "InfoSheetView", "RecentlyDeletedSheetView", "DuplicatesSheetView", "AutoStackSheetView", "PeopleSheetView",
+        "RenameSheetView", "ImportCopyDialogModifier", "ExportOptionsView",
+    ]
+
+    private func uiSource(_ name: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let text = try String(contentsOf: root.appendingPathComponent("Sources/UI/\(name).swift"), encoding: .utf8)
+        return text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line in line.range(of: "//").map { String(line[..<$0.lowerBound]) } ?? String(line) }.joined(separator: "\n")
+    }
+
+    func testEverySheetViewUsesTheScaffold() throws {
+        for name in Self.sheetFiles {
+            XCTAssertTrue(try uiSource(name).contains("SheetScaffold("), "\(name) must lay itself out with SheetScaffold")
+        }
+    }
+
+    func testNoSheetUsesARawRedForText() throws {
+        for name in Self.sheetFiles {
+            let text = try uiSource(name)
+            XCTAssertFalse(text.contains(".foregroundStyle(.red"), "\(name): errors use Theme.error")
+            XCTAssertFalse(text.contains("Color.red"), "\(name): errors use Theme.error")
+        }
+    }
+
+    func testTheScaffoldItselfPresentsNothingAndNamesNoAccent() throws {
+        let text = try uiSource("SheetScaffold")
+        XCTAssertFalse(text.contains(".sheet("))
+        XCTAssertFalse(text.contains(".alert("))
+        XCTAssertFalse(text.contains("Theme.accent"))
+    }
 }

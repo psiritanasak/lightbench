@@ -2215,24 +2215,43 @@ final class CatalogModel: ObservableObject {
     /// batched transaction (`CatalogDatabase.addPhotos`), not N separate
     /// calls.
     func addSelectedPhotos(to collection: PhotoCollection) {
-        guard let database, let collectionID = collection.id else { return }
-        let visibleSelectedIDs = Set(photos.compactMap(\.id)).intersection(selectedPhotoIDs)
-        guard !visibleSelectedIDs.isEmpty else { return }
-        let photoIDs = Array(visibleSelectedIDs)
+        addPhotos(ids: Array(Set(photos.compactMap(\.id)).intersection(selectedPhotoIDs)), to: collection, reportsResult: false)
+    }
 
-        for photoID in photoIDs {
-            membershipsByPhotoID[photoID, default: []].insert(collectionID)
-        }
+    /// Adds `ids` (a drag from the grid) to `collection`: memberships and counts change at once, the write is queued behind earlier ones
+    /// (D94), and the result is posted ONLY after the write has landed (never a toast for something not written). Ids the catalog no
+    /// longer knows are reported as not added (an alert); a failed write posts an error and re-reads everything. Posted through
+    /// `post`, the queue, so a later result cannot replace it.
+    func addPhotos(ids: [Int64], to collection: PhotoCollection, reportsResult: Bool = true) {
+        guard let database, let collectionID = collection.id, !collection.isFolder, !ids.isEmpty else { return }
+        let known = Set(photos.compactMap(\.id)).union((smartCountBasePhotos ?? []).compactMap(\.id))
+        let members = Set(membershipsByPhotoID.filter { $0.value.contains(collectionID) }.keys)
+        let result = SidebarDrop.result(dragged: ids, existingMembers: members, knownIDs: known)
+        guard !result.added.isEmpty || reportsResult else { return }
+
+        for photoID in result.added { membershipsByPhotoID[photoID, default: []].insert(collectionID) }
         recomputeCollectionPhotoCounts()
 
+        let toAdd = result.added
+        let name = collection.name
         enqueueWrite { [weak self] in
             do {
-                try await database.addPhotos(photoIDs, toCollection: collectionID)
-                await self?.scheduleRefreshAfterWrites(ifViewing: collectionID)
+                if !toAdd.isEmpty { try await database.addPhotos(toAdd, toCollection: collectionID) }
+                await self?.finishAdd(result: result, collectionID: collectionID, name: name, reportsResult: reportsResult, failure: nil)
             } catch {
-                await self?.scheduleRefreshAfterWrites()
+                await self?.finishAdd(result: result, collectionID: collectionID, name: name, reportsResult: reportsResult, failure: error)
             }
         }
+    }
+
+    private func finishAdd(result: SidebarDrop.Result, collectionID: Int64, name: String, reportsResult: Bool, failure: Error?) {
+        if let failure {
+            if reportsResult { post(.error("Couldn't add photos", failure.localizedDescription)) }
+            scheduleRefreshAfterWrites()
+            return
+        }
+        if reportsResult { post(SidebarDrop.feedback(result, collectionName: name)) }
+        scheduleRefreshAfterWrites(ifViewing: collectionID)
     }
 
     // MARK: - Folder access (read-only, persisted across relaunches)

@@ -35,6 +35,8 @@ struct CollectionSidebarView: View {
     /// Folders whose children are shown. Collapsed by default, like the old `OutlineGroup`.
     @State private var expandedFolders: Set<Int64> = []
     @State private var hoveredRowID: String?
+    /// The plain collection row a thumbnail drag is currently over.
+    @State private var dropTargetRowID: String?
     @FocusState private var isFocused: Bool
 
     private var rows: [SidebarRow] {
@@ -316,6 +318,15 @@ struct CollectionSidebarView: View {
             if inside { hoveredRowID = row.id } else if hoveredRowID == row.id { hoveredRowID = nil }
         }
         .onTapGesture { if !row.isEditing { select(row) } }
+        .modifier(CollectionDropTarget(enabled: SidebarDrop.accepts(row), isTargeted: dropTargetRowID == row.id,
+                                       setTargeted: { inside in
+                                           if inside { dropTargetRowID = row.id } else if dropTargetRowID == row.id { dropTargetRowID = nil }
+                                       },
+                                       drop: { ids in
+                                           guard case .collection(let collection)? = row.source else { return false }
+                                           catalog.addPhotos(ids: ids, to: collection)
+                                           return true
+                                       }))
         .modifier(ItemAccessibility(row: row, isSelected: isSelected, select: { select(row) }))
         .modifier(DisclosureAccessibility(row: row) { if let id = row.folderID { toggle(id) } })
         .contextMenu { contextMenu(for: row) }
@@ -407,6 +418,33 @@ private struct ItemAccessibility: ViewModifier {
                 .accessibilityLabel(row.title)
                 .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
                 .accessibilityAction { select() }
+        }
+    }
+}
+
+/// Makes a plain-collection row a drop target for dragged library thumbnails, with the quiet highlight (grey chip + white ring, never
+/// blue) while one is over it. Rows that do not accept photos get no destination at all, so the drag falls through to the window's URL drop,
+/// which refuses it (the cursor shows "not allowed").
+private struct CollectionDropTarget: ViewModifier {
+    let enabled: Bool
+    let isTargeted: Bool
+    let setTargeted: (Bool) -> Void
+    let drop: ([Int64]) -> Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .background {
+                    if isTargeted { RoundedRectangle(cornerRadius: 5).fill(Theme.selectedFill) }
+                }
+                .overlay {
+                    if isTargeted { RoundedRectangle(cornerRadius: 5).stroke(Theme.selectedOutline, lineWidth: 1).allowsHitTesting(false) }
+                }
+                .dropDestination(for: LibraryPhotoDrag.self) { items, _ in
+                    drop(Array(Set(items.flatMap(\.photoIDs))).sorted())
+                } isTargeted: { setTargeted($0) }
+        } else {
+            content
         }
     }
 }

@@ -99,7 +99,7 @@ enum KeyboardShortcutCatalog {
         ]),
         ShortcutSection(title: "Library sidebar", entries: [
             ShortcutEntry(keys: "\u{2191} \u{2193}", action: "Move between collections and folders",
-                          source: .code(file: "Sources/UI/CollectionSidebarView.swift", contains: ".onKeyPress(.upArrow) { catalog.selectedFilter = SidebarRows.moved(from: catalog.selectedFilter, by: -1, in: rows); return .handled }")),
+                          source: .code(file: "Sources/UI/CollectionSidebarView.swift", contains: ".onKeyPress(.upArrow) { if focusedEdit != nil { return .ignored }; catalog.selectedFilter = SidebarRows.moved(from: catalog.selectedFilter, by: -1, in: rows); return .handled }")),
             ShortcutEntry(keys: "\u{2192} \u{2190}", action: "Expand / collapse a folder",
                           source: .code(file: "Sources/UI/CollectionSidebarView.swift", contains: "expandedFolders = SidebarRows.expanding(catalog.selectedFilter")),
         ]),

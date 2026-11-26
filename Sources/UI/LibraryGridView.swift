@@ -1114,6 +1114,10 @@ private struct LibraryThumbnailCell: View {
         .contentShape(Rectangle().inset(by: -CellChrome.selectionPlateOutset))
         // The same items as the ellipsis button. The target is built when the menu opens, from values this cell already has.
         .contextMenu { menuItems }
+        // Drag onto a sidebar collection. No drag gesture is added: `.draggable` is AppKit's own drag source, which starts only once the pointer
+        // moves past the system drag distance and then owns the mouse-up, so a drag never selects, opens or runs a range, and a click
+        // without movement behaves as before. The payload is read when the drag starts and never changes the selection.
+        .draggable(LibraryPhotoDrag(photoIDs: SidebarDrop.draggedIDs(for: item, selection: actions.selection)))
         // ONE single-click recogniser (no `count: 2` one, so SwiftUI never waits to see if a second click follows): a click selects at once,
         // and AppKit's click count on the event tells the second click of a double-click apart.
         .onTapGesture {

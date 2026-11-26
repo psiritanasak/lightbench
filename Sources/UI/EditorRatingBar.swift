@@ -22,11 +22,18 @@ struct EditorRatingBar: View {
 
     var body: some View {
         let photo = meta.photo
-        HStack(spacing: 14) {
+        HStack(spacing: Theme.Space.px14) {
             StarRatingRow(rating: photo?.rating ?? 0) { meta.setRating($0) }
-            flagButton(.picked, current: photo?.flagStatus ?? .none)
-            flagButton(.rejected, current: photo?.flagStatus ?? .none)
-            labelDots(current: photo?.colorLabel ?? .none)
+            // Pick or Reject: clicking the photo's current state clears it back to unflagged.
+            ForEach([FlagStatus.picked, .rejected], id: \.self) { target in
+                let current = photo?.flagStatus ?? .none
+                FlagToggleButton(target: target, current: current, isEnabled: photo != nil,
+                                 help: target == .picked ? "Pick (P)" : "Reject (X)") { meta.setFlag(current == $0 ? FlagStatus.none : $0) }
+            }
+            // Six label dots; clicking the photo's current label clears it.
+            ColorLabelDots(current: photo?.colorLabel ?? .none, isEnabled: photo != nil) {
+                meta.setLabel((photo?.colorLabel ?? .none).toggled(to: $0))
+            }
             if let saveStatus { saveStatusChip(saveStatus) }
             if photo == nil {
                 Text("Not in your Library").font(.caption).foregroundStyle(Theme.textSecondary)
@@ -45,7 +52,7 @@ struct EditorRatingBar: View {
                 .disabled(!canCopy)
                 .help("Copy this photo's edit settings (⇧⌘C)")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Theme.Space.m)
         .frame(height: Theme.Metrics.barHeight)
         .frame(maxWidth: .infinity)
         .background(Theme.panel)
@@ -61,12 +68,12 @@ struct EditorRatingBar: View {
             .buttonStyle(FlatButtonStyle(compact: true))
             .lineLimit(1).fixedSize()
         return ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) {
+            HStack(spacing: Theme.Space.px6) {
                 warning
                 Text(status.title).font(.caption).foregroundStyle(Theme.warning).lineLimit(1).fixedSize()
                 button
             }
-            HStack(spacing: 6) { warning; button }
+            HStack(spacing: Theme.Space.px6) { warning; button }
             Button { onSaveAction(status.action) } label: { warning }.buttonStyle(.plain)
                 .accessibilityLabel(status.actionTitle)
                 .help("\(status.help) Click to \(status.actionTitle).")
@@ -109,41 +116,5 @@ struct EditorRatingBar: View {
             .popover(isPresented: Binding(get: { keywords.isOpen }, set: { if !$0 { keywords.commit() } }), arrowEdge: .top) {
                 EditorKeywordsPopover(model: keywords, allKeywords: allKeywords)
             }
-    }
-
-    /// Pick or Reject: clicking the photo's current state clears it back to unflagged.
-    private func flagButton(_ target: FlagStatus, current: FlagStatus) -> some View {
-        let isOn = current == target
-        let name = target == .picked ? "Pick" : "Reject"
-        return Button {
-            meta.setFlag(isOn ? FlagStatus.none : target)
-        } label: {
-            Image(systemName: target == .picked ? (isOn ? "flag.fill" : "flag") : (isOn ? "xmark.circle.fill" : "xmark.circle"))
-                .foregroundStyle(isOn ? target.tint : Theme.textSecondary)
-        }
-        .buttonStyle(.plain)
-        .disabled(meta.photo == nil)
-        .help(target == .picked ? "Pick (P)" : "Reject (X)")
-        .accessibilityLabel(name)
-        .accessibilityAddTraits(isOn ? .isSelected : [])
-    }
-
-    /// Six label dots; clicking the photo's current label clears it.
-    private func labelDots(current: ColorLabel) -> some View {
-        HStack(spacing: 5) {
-            ForEach(ColorLabel.menuOrder.filter { $0 != .none }, id: \.self) { label in
-                let isOn = current == label
-                Button {
-                    meta.setLabel(current.toggled(to: label))
-                } label: {
-                    Circle().fill(label.color).frame(width: 11, height: 11)
-                        .overlay(Circle().stroke(Color.primary.opacity(isOn ? 0.9 : 0.15), lineWidth: isOn ? 2 : 1))
-                }
-                .buttonStyle(.plain)
-                .disabled(meta.photo == nil)
-                .accessibilityLabel(label.accessibilityName)
-                .accessibilityAddTraits(isOn ? .isSelected : [])
-            }
-        }
     }
 }

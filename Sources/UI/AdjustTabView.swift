@@ -281,7 +281,7 @@ struct AdjustTabView: View {
     }
 
     private func toolBody<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
@@ -339,7 +339,7 @@ struct AdjustTabView: View {
     }
 
     private var adjustBody: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text("Adjust")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
@@ -510,7 +510,7 @@ struct AdjustTabView: View {
             Text(curvePointReadoutText)
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
-            HStack(spacing: 8) {
+            HStack(spacing: Theme.Space.s) {
                 Button("Add Point") {
                     let binding = toneCurvePointsBinding(for: panel.selectedToneCurveChannel)
                     binding.wrappedValue = ToneCurveEditing.addingAtWidestGap(of: binding.wrappedValue)
@@ -930,8 +930,8 @@ struct AdjustTabView: View {
             // Seven icon + caption tiles in rows of four (4 + 3). Plain `HStack` rows, not `LazyVGrid`: this file has a
             // documented Swift type-checker blow-up history with over-packed `@ViewBuilder` closures. Each tile keeps the
             // long "Add <Kind> Mask" accessibility label (the caption drops the shared "Add"/"Mask" words to fit).
-            VStack(spacing: 8) {
-                HStack(spacing: 8) {
+            VStack(spacing: Theme.Space.s) {
+                HStack(spacing: Theme.Space.s) {
                     maskAddTile(.radial, caption: "Radial", label: "Add Radial Mask") { addMask(kind: .radial) }
                     maskAddTile(.linear, caption: "Linear", label: "Add Linear Mask") { addMask(kind: .linear) }
                     maskAddTile(.brush, caption: "Brush", label: "Add Brush Mask") { addMask(kind: .brush) }
@@ -939,7 +939,7 @@ struct AdjustTabView: View {
                         addMask(kind: .luminanceRange)
                     }
                 }
-                HStack(spacing: 8) {
+                HStack(spacing: Theme.Space.s) {
                     maskAddTile(.colorRange, caption: "Color", label: "Add Color Range Mask") { addMask(kind: .colorRange) }
                     maskAddTile(
                         .subject, caption: document.isSelectingSubject ? "Finding…" : "Subject",
@@ -985,8 +985,8 @@ struct AdjustTabView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: maskKindIcon(kind)).font(.system(size: 14))
+            VStack(spacing: Theme.Space.xs) {
+                Image(systemName: maskKindIcon(kind)).font(Theme.Font.glyph14())
                 Text(caption).lineLimit(1).minimumScaleFactor(0.75)
             }
             .frame(maxWidth: .infinity)
@@ -1421,7 +1421,7 @@ struct AdjustTabView: View {
     /// still counts as a RAW edit: the RAW header's edited dot shows it and
     /// the RAW header's reset (Reset RAW) clears it (`AdjustSection.raw`).
     private var rawSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             EditSliderRow(
                 label: "Boost Amount", value: $document.editState.boostAmount,
                 range: 0...1, identity: 1.0, displayMultiplier: 100
@@ -1670,7 +1670,7 @@ struct AdjustTabView: View {
             // fit); keeping the 22pt diameter the user asked for but at
             // the tighter 6pt spacing recovers that size without
             // reintroducing the overflow.
-            HStack(spacing: 6) {
+            HStack(spacing: Theme.Space.px6) {
                 ForEach(SelectiveColorBand.allCases, id: \.self) { band in
                     Button {
                         panel.selectedSelectiveColorBand = band
@@ -1756,7 +1756,7 @@ struct HelpPopoverButton: View {
                 .foregroundStyle(Theme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 240, alignment: .leading)
-                .padding(12)
+                .padding(Theme.Space.m)
         }
     }
 }
@@ -1767,7 +1767,7 @@ struct HelpCaption: View {
     let help: String
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.px6) {
             Text(short).font(.caption).foregroundStyle(Theme.textSecondary)
             Spacer(minLength: 0)
             HelpPopoverButton(text: help, topic: short)
@@ -1812,10 +1812,10 @@ struct AdjustSectionContainer<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             if isExpanded {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: Theme.Space.px14) {
                     content()
                 }
-                .padding(.top, 8)
+                .padding(.top, Theme.Space.s)
             }
         }
     }
@@ -1836,16 +1836,16 @@ struct AdjustSectionContainer<Content: View>: View {
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Theme.Space.px6) {
             Button {
                 switch Self.headerClick(optionHeld: NSEvent.modifierFlags.contains(.option), canSolo: onSolo != nil) {
                 case .solo: onSolo?()
                 case .toggle: isExpanded.toggle()
                 }
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: Theme.Space.px6) {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(Theme.Font.micro(.semibold))
                         .foregroundStyle(Theme.textSecondary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                         .frame(width: 12)
@@ -1871,7 +1871,7 @@ struct AdjustSectionContainer<Content: View>: View {
                     onReset?()
                 } label: {
                     Image(systemName: "arrow.uturn.backward")
-                        .font(.system(size: 11))
+                        .font(Theme.Font.body())
                         .foregroundStyle(Theme.textSecondary)
                         .frame(width: 16, height: 16)
                 }

@@ -13,13 +13,6 @@ final class TokenLiteralLintTests: XCTestCase {
         "HistogramView.swift": "histogram geometry",
         "FlatButtonStyle.swift": "the button style owns its own metrics",
         "StylePadGeometry.swift": "style-pad geometry",
-        // TODO(C3 part 2): the Edit-panel tool files were being rebuilt by B5 while part 1 ran; sweep them and delete these entries.
-        "AdjustTabView.swift": "TODO(C3 part 2)",
-        "CropTabView.swift": "TODO(C3 part 2)",
-        "LooksTabView.swift": "TODO(C3 part 2)",
-        "StyleSectionView.swift": "TODO(C3 part 2)",
-        "MaskDetailView.swift": "TODO(C3 part 2)",
-        "EditorToolRail.swift": "TODO(C3 part 2)",
     ]
 
     /// (what to report, pattern) — applied to each line with its `//` comment removed.

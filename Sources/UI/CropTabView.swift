@@ -22,7 +22,7 @@ struct CropTabView: View {
     @Binding var toolSections: Set<ToolSection>
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             autoGroup
             straightenGroup
             rotateFlipGroup
@@ -47,7 +47,7 @@ struct CropTabView: View {
             .buttonStyle(.flat)
             .disabled(document.currentImage == nil || document.isAutoStraightening || document.isAutoUprighting || document.isAutoCropping)
             .help("Find the horizon and set Straighten to level it")
-            HStack(spacing: 8) {
+            HStack(spacing: Theme.Space.s) {
                 uprightButton(.level, title: "Level", help: "Find the dominant lines and rotate the photo so they are level")
                 uprightButton(.vertical, title: "Vertical", help: "Straighten vertical lines: rotate and correct keystone so they run parallel")
             }
@@ -125,8 +125,8 @@ struct CropTabView: View {
 
     /// Rotate Left / Rotate Right (90°): each press is one undo step; the crop follows the picture.
     private var rotateRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            HStack(spacing: Theme.Space.s) {
                 rotateButton(.left, title: "Rotate Left", symbol: "rotate.left", help: "Turn the picture 90° counter-clockwise (⌘[)")
                 rotateButton(.right, title: "Rotate Right", symbol: "rotate.right", help: "Turn the picture 90° clockwise (⌘])")
             }
@@ -168,7 +168,7 @@ struct CropTabView: View {
     /// that it has a dedicated tab to live in. Each row is tappable; the
     /// selected preset shows a checkmark.
     private var aspectSection: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Theme.Space.px2) {
             ForEach(CropAspectPreset.allCases, id: \.self) { preset in
                 Button {
                     onSelectAspect(preset)
@@ -190,7 +190,7 @@ struct CropTabView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.vertical, 4)
+                .padding(.vertical, Theme.Space.xs)
                 .accessibilityAddTraits(preset == selectedAspect ? [.isSelected] : [])
             }
         }

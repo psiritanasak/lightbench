@@ -25,7 +25,7 @@ struct LooksTabView: View {
     @State private var newPresetName = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text("Looks")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
@@ -136,7 +136,7 @@ struct LooksTabView: View {
 
     /// Exactly three columns: an adaptive grid is not guaranteed three at the sidebar's 300 pt minimum (360 before 2026-11-05) once the padding, the
     /// disclosure indent and an always-visible scroll bar are taken off.
-    private static let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+    private static let columns = Array(repeating: GridItem(.flexible(), spacing: Theme.Space.s), count: 3)
 
     private func lookCell(_ item: LookPreviewItem, userLooks: [LookLibrary.UserLook]) -> some View {
         let user = userLooks.first { $0.id == item.id }
@@ -155,12 +155,12 @@ struct LooksTabView: View {
         let userLooks = LookLibrary.shared.userLooks
         let items = LookPreviewItem.looks(userLooks: userLooks)
         return Group {
-            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: Theme.Space.px10) {
                 ForEach(items.filter { !$0.isImportedLook }) { item in lookCell(item, userLooks: userLooks) }
             }
             if !userLooks.isEmpty {
                 Text("Imported").font(.caption).foregroundStyle(Theme.textSecondary)
-                LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 10) {
+                LazyVGrid(columns: Self.columns, alignment: .leading, spacing: Theme.Space.px10) {
                     ForEach(items.filter(\.isImportedLook)) { item in lookCell(item, userLooks: userLooks) }
                 }
             }

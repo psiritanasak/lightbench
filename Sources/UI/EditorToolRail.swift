@@ -20,7 +20,7 @@ struct EditorToolRail<Actions: View>: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 6) {
+            VStack(spacing: Theme.Space.px6) {
                 ForEach(EditorTab.railTabs, id: \.self) { tab in
                     let isSelected = tab == selectedTab
                     Button {
@@ -34,12 +34,12 @@ struct EditorToolRail<Actions: View>: View {
                     .accessibilityAddTraits(isSelected ? [.isSelected] : [])
                 }
                 if Actions.self != EmptyView.self {
-                    Divider().padding(.horizontal, 10).padding(.vertical, 4)
+                    Divider().padding(.horizontal, Theme.Space.px10).padding(.vertical, Theme.Space.xs)
                     actions
                 }
             }
-            .padding(.top, 8)
-            .padding(.bottom, 8)
+            .padding(.top, Theme.Space.s)
+            .padding(.bottom, Theme.Space.s)
         }
         .frame(width: EditorToolRailMetrics.width)
         .frame(maxHeight: .infinity)

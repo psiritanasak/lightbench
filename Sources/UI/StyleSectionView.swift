@@ -37,8 +37,8 @@ struct StyleSectionView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LazyVGrid(columns: Self.cellColumns, alignment: .leading, spacing: 10) { chip(id: "", name: "None") }
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            LazyVGrid(columns: Self.cellColumns, alignment: .leading, spacing: Theme.Space.px10) { chip(id: "", name: "None") }
             ForEach(StylePreset.Family.allCases, id: \.self) { family in
                 presetGrid(title: family.title, presets: StyleLibrary.presets(in: family))
             }
@@ -69,7 +69,7 @@ struct StyleSectionView: View {
     /// "Protect skin": keeps the style's colour changes off detected skin (its tone changes stay). Detection runs once, when the
     /// toggle goes on; turning it off drops the stored skin map.
     private var protectSkinControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Toggle("Protect skin", isOn: Binding(get: { state.styleProtectSkin }, set: { document.setProtectSkin($0) }))
                 .disabled(document.isDetectingSkin)
                 .accessibilityLabel("Protect skin")
@@ -91,9 +91,9 @@ struct StyleSectionView: View {
     /// Texture (None / Soft / Glow / Film), its own strength, and the Grain toggle. Independent of the Strength slider above,
     /// which scales only the preset and the pad.
     private var textureControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text("Texture").font(.caption).foregroundStyle(Theme.textSecondary).textCase(.uppercase)
-            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 6) {
+            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: Theme.Space.px6) {
                 textureChip(id: "", name: "None")
                 ForEach(StyleTexture.allCases) { texture in textureChip(id: texture.id, name: texture.title) }
             }
@@ -119,14 +119,14 @@ struct StyleSectionView: View {
     }
 
     /// Text chips (the texture row).
-    private static let columns = [GridItem(.adaptive(minimum: 68), spacing: 6)]
+    private static let columns = [GridItem(.adaptive(minimum: 68), spacing: Theme.Space.px6)]
     /// Preview cells (the preset grids): exactly three columns, like the Looks grid.
-    private static let cellColumns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+    private static let cellColumns = Array(repeating: GridItem(.flexible(), spacing: Theme.Space.s), count: 3)
 
     private func presetGrid(title: String, presets: [StylePreset]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.px6) {
             Text(title).font(.caption).foregroundStyle(Theme.textSecondary).textCase(.uppercase)
-            LazyVGrid(columns: Self.cellColumns, alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: Self.cellColumns, alignment: .leading, spacing: Theme.Space.px10) {
                 ForEach(presets) { preset in chip(id: preset.id, name: preset.name) }
             }
         }
@@ -150,11 +150,11 @@ struct StyleSectionView: View {
 
     private func chipButton(name: String, selected: Bool, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(name).font(.callout).lineLimit(1).frame(maxWidth: .infinity).padding(.vertical, 5)
+            Text(name).font(.callout).lineLimit(1).frame(maxWidth: .infinity).padding(.vertical, Theme.Space.px5)
         }
         .buttonStyle(.plain)
-        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.strongFill : Color.primary.opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Theme.selectedOutline : Color.clear, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(selected ? Theme.strongFill : Color.primary.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m).stroke(selected ? Theme.selectedOutline : Color.clear, lineWidth: 1))
         .fontWeight(selected ? .semibold : .regular)
         .accessibilityLabel(label)
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -195,12 +195,12 @@ struct StylePadView: View {
             }
         }
         .frame(width: Self.side, height: Self.side)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.15), lineWidth: 1))
-        .overlay(alignment: .top) { axisLabel("Tone +").padding(.top, 2) }
-        .overlay(alignment: .bottom) { axisLabel("Tone −").padding(.bottom, 2) }
-        .overlay(alignment: .leading) { axisLabel("Color −").padding(.leading, 3) }
-        .overlay(alignment: .trailing) { axisLabel("Color +").padding(.trailing, 3) }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.px8))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.px8).stroke(Color.white.opacity(0.15), lineWidth: 1))
+        .overlay(alignment: .top) { axisLabel("Tone +").padding(.top, Theme.Space.px2) }
+        .overlay(alignment: .bottom) { axisLabel("Tone −").padding(.bottom, Theme.Space.px2) }
+        .overlay(alignment: .leading) { axisLabel("Color −").padding(.leading, Theme.Space.px3) }
+        .overlay(alignment: .trailing) { axisLabel("Color +").padding(.trailing, Theme.Space.px3) }
         .frame(maxWidth: .infinity, alignment: .center)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Style pad")
@@ -214,6 +214,6 @@ struct StylePadView: View {
     }
 
     private func axisLabel(_ text: String) -> some View {
-        Text(text).font(.system(size: 9)).foregroundStyle(.white.opacity(0.55)).allowsHitTesting(false)
+        Text(text).font(Theme.Font.micro()).foregroundStyle(.white.opacity(0.55)).allowsHitTesting(false)
     }
 }

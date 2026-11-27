@@ -150,7 +150,7 @@ struct MaskDetailView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             AdjustSectionContainer(title: "Adjustments", isExpanded: $toolSections.isOpen(.maskAdjustments)) {
                 toneRows
                 colorRows
@@ -707,7 +707,7 @@ private struct SubjectSilhouetteThumbnail: View {
         }
         .frame(width: 40, height: 40)
         .background(Color.black)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.s))
         .accessibilityHidden(true)
     }
 }

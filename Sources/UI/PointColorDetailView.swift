@@ -70,6 +70,12 @@ struct PointColorDetailView: View {
             EditSliderRow(
                 label: "Luminance", value: $pointColor.luminance, range: -1...1, identity: 0, displayMultiplier: 100
             ) { String(format: "%+.0f%%", $0 * 100) }
+            // Variance: negative evens out the colours inside the picked range (pulls their hue and saturation toward the picked colour),
+            // positive increases the colour contrast inside it. No gradient track on this row (the Point Color view stays free of track palettes).
+            EditSliderRow(
+                label: "Variance", value: $pointColor.variance, range: -1...1, identity: 0, displayMultiplier: 100
+            ) { String(format: "%+.0f%%", $0 * 100) }
+            .help("Negative evens out the colors inside the picked range; positive increases the color contrast inside it.")
             // Cites `PointColorTuning.hueWindow(forRange:)`/
             // `saturationWindow(forRange:)` directly, never literals — the
             // same single-source-of-truth discipline every other kind's

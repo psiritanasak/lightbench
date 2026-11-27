@@ -1389,6 +1389,140 @@ final class EditPipelineTests: XCTestCase {
         return state
     }
 
+    // MARK: Point Color Variance
+    //
+    // Numbers below were MEASURED against the real kernel with a temporary harness (run, then deleted) on 2026-11-27: target hue 0,
+    // target saturation 0.5762 (linear red 0.6/0.05/0.05), Range 0.5 unless stated. A saturation-window / hue-window pixel's weight is
+    // below 1, so the pulled/pushed values are not "collapsed onto the target"; only the SIGN, the symmetry and the untouched cases are
+    // design requirements (the exact values pin the shipped by-eye convention, factor 1).
+
+    private func varianceState(_ variance: Double, hue: Double = 0, targetSaturation: Double = 0.5762, range: Double = 0.5) -> EditState {
+        var state = pointColorState(hue: hue, targetHue: 0, targetSaturation: targetSaturation, range: range)
+        state.pointColors[0].variance = variance
+        return state
+    }
+
+    private func variancePixel(_ variance: Double, _ r: Double, _ g: Double, _ b: Double, hue: Double = 0,
+                               targetSaturation: Double = 0.5762, range: Double = 0.5) -> (r: Float, g: Float, b: Float, a: Float) {
+        linearPixel(of: EditPipeline.apply(varianceState(variance, hue: hue, targetSaturation: targetSaturation, range: range),
+                                           to: solidColorImage(r: r, g: g, b: b)))
+    }
+
+    func testVarianceZeroLeavesAShiftExactlyAsItWas() {
+        // The kernel RUNS here (Hue and Saturation are non-zero) with variance 0: the pixel must match the values the kernel gave before
+        // Variance existed (measured 2026-11-27 with variance 0; every added term is exactly 0, so they are the old values).
+        var state = pointColorState(hue: 1, saturation: 0.5, targetHue: 0, targetSaturation: 0.5762)
+        state.pointColors[0].variance = 0
+        let p = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(r: 0.6, g: 0.2, b: 0.2)))
+        XCTAssertEqual(p.r, 0.66639, accuracy: accuracy)
+        XCTAssertEqual(p.g, 0.25418, accuracy: accuracy)
+        XCTAssertEqual(p.b, 0.16775, accuracy: accuracy)
+    }
+
+    func testVarianceZeroDoesNotClampSaturationBeforeTheSaturationMultiply() {
+        // Regression for a reviewer-caught bug: `rgb2hsl` gives S > 1 for a negative (wide-gamut) channel, and the original kernel clamped
+        // only AFTER the Saturation multiply. Linear 1/0/-0.2 has perceptual hue 19.58 and saturation 2.88; targeting exactly that colour
+        // gives full hue/saturation weight at Range 1. With Saturation -50% the shipped result is clamp(2.88 * 0.5) = 1 (unchanged
+        // chroma, here darker values below); a kernel that clamped S to 1 first gives 0.5 and measured (0.12367, 0.03730, 0.01510).
+        let state = pointColorState(saturation: -0.5, targetHue: 19.583146078323345, targetSaturation: 2.879948228665505, range: 1)
+        let p = linearPixel(of: EditPipeline.apply(state, to: solidColorImage(r: 1.0, g: 0.0, b: -0.2)))
+        XCTAssertEqual(p.r, 0.22864, accuracy: accuracy)
+        XCTAssertEqual(p.g, 0.02406, accuracy: accuracy)
+        XCTAssertNotEqual(p.r, 0.12367, accuracy: 0.02, "must not be the clamp-first result")
+    }
+
+    func testVarianceMovesAPixelOffTheTargetSaturationTowardOrAwayFromIt() {
+        // Linear 0.6/0.2/0.2 is LESS saturated than the target. Negative variance evens it out (toward the target, so MORE saturated: the
+        // green channel falls); positive increases the contrast (away from it, LESS saturated: green rises). This also proves the
+        // kernel's new argument is wired (a count mismatch would return the input unchanged).
+        let negative = variancePixel(-1, 0.6, 0.2, 0.2)
+        let positive = variancePixel(1, 0.6, 0.2, 0.2)
+        XCTAssertEqual(negative.g, 0.17895, accuracy: accuracy)
+        XCTAssertEqual(positive.g, 0.22242, accuracy: accuracy)
+        XCTAssertLessThan(negative.g, 0.2)
+        XCTAssertGreaterThan(positive.g, 0.2)
+        XCTAssertEqual(negative.g, negative.b, accuracy: accuracy, "a neutral-axis shift keeps g == b")
+    }
+
+    func testVarianceSpreadsHueSymmetricallyOnBothSidesOfTheTarget() {
+        // 0.6/0.2/0.05 sits a little on one side of hue 0, 0.6/0.05/0.2 on the other (mirror images). The signed, wrapped hue distance
+        // must treat them symmetrically: the same amount of change on the mirrored channel.
+        let posSide = variancePixel(-1, 0.6, 0.2, 0.05)
+        let negSide = variancePixel(-1, 0.6, 0.05, 0.2)
+        XCTAssertEqual(posSide.g, 0.16792, accuracy: accuracy)
+        XCTAssertEqual(negSide.b, 0.16792, accuracy: accuracy)
+        XCTAssertEqual(posSide.g, negSide.b, accuracy: 0.0005)
+        let posPush = variancePixel(1, 0.6, 0.2, 0.05)
+        let negPush = variancePixel(1, 0.6, 0.05, 0.2)
+        XCTAssertEqual(posPush.g, 0.23539, accuracy: accuracy)
+        XCTAssertEqual(negPush.b, 0.23539, accuracy: accuracy)
+        XCTAssertLessThan(posSide.g, 0.2, "pulled toward hue 0 (redder: green falls)")
+        XCTAssertGreaterThan(posPush.g, 0.2, "pushed away from hue 0")
+    }
+
+    func testVarianceLeavesThePickedColorAndPixelsOutsideTheRangeAlone() {
+        for variance in [-1.0, 1.0] {
+            let exact = variancePixel(variance, 0.6, 0.05, 0.05)
+            XCTAssertEqual(exact.g, 0.05, accuracy: accuracy, "the picked colour itself has distance 0")
+            let farBlue = variancePixel(variance, 0.05, 0.05, 0.6)
+            XCTAssertEqual(farBlue.b, 0.6, accuracy: accuracy)
+            XCTAssertEqual(farBlue.r, 0.05, accuracy: accuracy)
+            // Linear 0.6/0/0 has saturation 1: 0.42 away from the target, outside the saturation window at Range 0.5.
+            let tooSaturated = variancePixel(variance, 0.6, 0.0, 0.0)
+            XCTAssertEqual(tooSaturated.r, 0.6, accuracy: accuracy)
+            XCTAssertEqual(tooSaturated.g, 0.0, accuracy: accuracy)
+        }
+    }
+
+    func testVarianceNeverRotatesTheHueOfANearGreyPixelTowardAGreyTarget() {
+        // A grey target (saturation 0, Range 1) has the fabricated hue 0 of `rgb2hsl`. A near-grey BLUE-ish pixel (0.3/0.3/0.31, hue 240)
+        // is selected, and Variance must change its CHROMA only: red and green stay equal and blue stays the largest channel (an
+        // ungated hue spread would rotate it toward hue 0). Measured 2026-11-27: Variance -100% -> (0.30481, 0.30481, 0.30514),
+        // +100% -> (0.29523, 0.29523, 0.31490).
+        func run(_ variance: Double) -> (r: Float, g: Float, b: Float, a: Float) {
+            var state = pointColorState(targetHue: 0, targetSaturation: 0, range: 1)
+            state.pointColors[0].variance = variance
+            return linearPixel(of: EditPipeline.apply(state, to: solidColorImage(r: 0.3, g: 0.3, b: 0.31)))
+        }
+        let evened = run(-1), spread = run(1)
+        XCTAssertEqual(evened.r, evened.g, accuracy: 0.0001)
+        XCTAssertEqual(spread.r, spread.g, accuracy: 0.0001)
+        XCTAssertEqual(evened.b, 0.30514, accuracy: accuracy)
+        XCTAssertEqual(spread.b, 0.31490, accuracy: accuracy)
+        XCTAssertLessThan(evened.b - evened.r, 0.31 - 0.3, "evened out: closer to grey")
+        XCTAssertGreaterThan(spread.b - spread.r, 0.31 - 0.3, "spread: more colour")
+        // A pure grey has no chroma to scale at all.
+        var grey = pointColorState(targetHue: 0, targetSaturation: 0, range: 1)
+        grey.pointColors[0].variance = -1
+        XCTAssertEqual(linearPixel(of: EditPipeline.apply(grey, to: solidColorImage(0.3))).r, 0.3, accuracy: accuracy)
+    }
+
+    func testVarianceKeepsHeadroomAboveOne() {
+        // Linear 1.2/0.5/0.2 normalises to saturation 1 (the maximum channel is 1 after scaling), so it needs a saturation-1 target to be
+        // inside the window. The red channel (the headroom) must stay 1.2: only the other channels move, in the right direction.
+        func run(_ variance: Double) -> (r: Float, g: Float, b: Float, a: Float) {
+            var state = pointColorState(targetHue: 0, targetSaturation: 1.0, range: 0.5)
+            state.pointColors[0].variance = variance
+            return linearPixel(of: EditPipeline.apply(state, to: solidColorImage(r: 1.2, g: 0.5, b: 0.2)))
+        }
+        let pulled = run(-1), pushed = run(1)
+        XCTAssertEqual(pulled.r, 1.2, accuracy: accuracy)
+        XCTAssertEqual(pushed.r, 1.2, accuracy: accuracy)
+        XCTAssertEqual(pulled.g, 0.43294, accuracy: accuracy)
+        XCTAssertEqual(pushed.g, 0.57276, accuracy: accuracy)
+    }
+
+    func testVarianceRunsBeforeTheHueShiftInTheSamePass() {
+        // 0.6/0.2/0.2 with Hue +100%: hue-only gives green 0.27465; with Variance -100% as well, the pixel is first pulled toward the
+        // target (green 0.179) and then shifted, which lands on a different value than shifting alone.
+        let hueOnly = variancePixel(0, 0.6, 0.2, 0.2, hue: 1)
+        let both = variancePixel(-1, 0.6, 0.2, 0.2, hue: 1)
+        XCTAssertEqual(hueOnly.g, 0.27465, accuracy: accuracy)
+        XCTAssertEqual(both.g, 0.26143, accuracy: accuracy)
+        XCTAssertEqual(both.b, 0.17895, accuracy: accuracy)
+        XCTAssertNotEqual(both.g, hueOnly.g, accuracy: 0.005)
+    }
+
     func testPointColorZeroIsExactNoOp() {
         // Includes 1.2 to prove an inactive stage preserves headroom (no
         // kernel invocation at all — the `pointColorsActive` guard), and

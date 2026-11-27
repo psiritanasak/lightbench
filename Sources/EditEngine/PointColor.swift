@@ -71,6 +71,10 @@ struct PointColor: Identifiable, Equatable, Codable {
     var hue: Double = 0
     var saturation: Double = 0
     var luminance: Double = 0
+    /// -1...1, identity 0. Lightroom's Variance: negative evens out the colours inside the picked range (pulls their hue and saturation
+    /// toward the picked colour), positive increases the colour contrast (pushes them away). Hue and saturation only; see
+    /// `PointColor.cikernel` for the exact rule. Added after the first release: an older sidecar decodes it as 0.
+    var variance: Double = 0
 
     /// True when every ADJUSTMENT field is at identity, regardless of
     /// `hasTarget`/target/range — matches `Mask.isIdentity`'s own
@@ -78,11 +82,11 @@ struct PointColor: Identifiable, Equatable, Codable {
     /// enable/skip mechanism: an un-picked instance, or a picked one with
     /// all-zero sliders, is a guaranteed no-op in the pipeline.
     var isIdentity: Bool {
-        hue == 0 && saturation == 0 && luminance == 0
+        hue == 0 && saturation == 0 && luminance == 0 && variance == 0
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, hasTarget, targetHue, targetSaturation, range, hue, saturation, luminance
+        case id, hasTarget, targetHue, targetSaturation, range, hue, saturation, luminance, variance
     }
 }
 
@@ -108,5 +112,6 @@ extension PointColor {
         hue = try container.decodeIfPresent(Double.self, forKey: .hue) ?? 0
         saturation = try container.decodeIfPresent(Double.self, forKey: .saturation) ?? 0
         luminance = try container.decodeIfPresent(Double.self, forKey: .luminance) ?? 0
+        variance = try container.decodeIfPresent(Double.self, forKey: .variance) ?? 0
     }
 }

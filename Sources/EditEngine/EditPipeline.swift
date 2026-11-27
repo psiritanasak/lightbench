@@ -1267,6 +1267,9 @@ enum EditPipeline {
                 NSNumber(value: pointColorInstance.hue),
                 NSNumber(value: pointColorInstance.saturation),
                 NSNumber(value: pointColorInstance.luminance),
+                // MUST match the kernel's signature (`pointColor(..., luminance, variance)`): a count mismatch makes `apply` return nil and
+                // this stage silently does nothing (the real-kernel Variance tests catch that).
+                NSNumber(value: pointColorInstance.variance),
             ]
             img = kernel.apply(extent: img.extent, arguments: arguments) ?? img
         }

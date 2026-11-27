@@ -923,6 +923,19 @@ final class EditStateCodableTests: XCTestCase {
         XCTAssertEqual(pointColor.hue, 0.5)
         XCTAssertEqual(pointColor.saturation, 0)
         XCTAssertEqual(pointColor.luminance, 0)
+        XCTAssertEqual(pointColor.variance, 0, "a sidecar written before Variance existed decodes it as 0")
+    }
+
+    func testPointColorVarianceRoundTripsAndAloneIsNotIdentity() throws {
+        let onlyVariance = PointColor(hasTarget: true, targetHue: 30, targetSaturation: 0.5, variance: -0.4)
+        XCTAssertFalse(onlyVariance.isIdentity, "Variance alone makes the instance active")
+        XCTAssertTrue(PointColor(hasTarget: true, targetHue: 30, targetSaturation: 0.5).isIdentity)
+        var state = EditState()
+        state.pointColors = [onlyVariance]
+        XCTAssertFalse(state.isEffectivelyIdentity)
+        let decoded = try JSONDecoder().decode(EditState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(decoded.pointColors[0].variance, -0.4)
+        XCTAssertEqual(decoded, state)
     }
 
     func testPointColorIDRoundTripsThroughCodable() throws {

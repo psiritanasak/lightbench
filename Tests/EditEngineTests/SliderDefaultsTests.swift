@@ -60,7 +60,7 @@ final class SliderDefaultsTests: XCTestCase {
             files: ["Sources/UI/PointColorDetailView.swift"],
             pattern: #"value: \$pointColor\.(\w+),\s*range: [^,]+, identity: ([-0-9.]+)"#,
             defaults: PointColor())
-        XCTAssertGreaterThanOrEqual(count, 4)
+        XCTAssertGreaterThanOrEqual(count, 5, "Hue, Saturation, Luminance, Variance, Range")
         XCTAssertEqual(mismatches, [])
         XCTAssertEqual(unresolved, [])
     }

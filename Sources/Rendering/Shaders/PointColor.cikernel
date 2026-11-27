@@ -24,6 +24,17 @@
 //
 // target = (targetHueDegrees, targetSaturation, hueWindowDegrees, saturationWindow)
 // hue/saturation/luminance: -1...1 adjustment amounts, 0 = identity.
+// variance: -1...1, 0 = identity. Lightroom's Point Color "Variance": it evens out (negative) or increases (positive) the colour contrast
+// INSIDE the picked range. Each pixel's signed hue and saturation distance from the picked colour is scaled by (1 + variance * weight):
+// variance -1 at full weight collapses the pixel onto the picked hue and saturation, +1 doubles its distance, and the raised-cosine
+// weight fades both to nothing at the window's edge (a pixel outside the range is untouched). The spread runs BEFORE the Hue /
+// Saturation / Luminance shifts, so a shift moves the already evened (or spread) colours. Hue and saturation only, NO luminance
+// spread (same reason as the missing luminance selection axis above). The factor 1 is a by-eye convention, not a measurement. The hue
+// spread is gated by the pixel's own saturation (like the selection) AND by the picked colour's, because a near-grey pixel has no real hue
+// to rotate and a grey target's hue is fabricated.
+// `variance == 0` makes every added term exactly 0, so the output is bit-identical to a kernel without it. Limit: a pixel with a
+// channel above 1 normalises to saturation 1, so on such headroom pixels the saturation spread can only move toward / away from a
+// target at or below 1, never raise a saturation that is already 1.
 //
 // Reviewer-caught real bug, fixed here: `rgb2hsl` returns a FABRICATED
 // hue of 0 for any achromatic pixel (`C == 0` branch). With no gate on
@@ -83,7 +94,7 @@ float raisedCosine(float d, float W) {
     return 0.5 * (1.0 + cos(3.14159265 * d / W));
 }
 
-kernel vec4 pointColor(__sample s, vec4 target, float hue, float saturation, float luminance) {
+kernel vec4 pointColor(__sample s, vec4 target, float hue, float saturation, float luminance, float variance) {
     float kHue = 30.0;
     float kLum = 0.25;
 
@@ -130,6 +141,20 @@ kernel vec4 pointColor(__sample s, vec4 target, float hue, float saturation, flo
         return s;
     }
 
+    // Variance: scale the signed distance from the picked colour by (1 + variance * weight). The hue distance is wrapped to the shortest
+    // way round (-180...180) so the spread never takes the long way across 0/360; it is gated like the selection so a near-grey pixel
+    // keeps its (meaningless) hue. variance == 0 adds exactly 0 to both.
+    float signedHueDist = mod(hslv.x - target.x + 180.0, 360.0) - 180.0;
+    // Gated by BOTH the pixel's and the picked colour's saturation: a grey pixel has no hue to rotate, and a grey target's hue is the
+    // fabricated 0 of `rgb2hsl`, so spreading toward / away from it would rotate real hues toward a made-up one.
+    float hueGate = smoothstep(0.0, kHueMeaningfulSaturation, hslv.y) * smoothstep(0.0, kHueMeaningfulSaturation, target.y);
+    float spreadH = signedHueDist * variance * weight * hueGate;
+    float spreadS = (hslv.y - target.y) * variance * weight;
+    float spreadHue = hslv.x + spreadH;
+    // NOT clamped here: `rgb2hsl` gives S > 1 for a negative (wide-gamut) channel, and the old code clamped only AFTER the Saturation
+    // multiply, so an inner clamp would change existing edits at variance 0. The final `newS` clamp is the only one.
+    float spreadSat = hslv.y + spreadS;
+
     // Unnormalized (not divided by weight): hue=saturation=luminance=0
     // collapses to an exact identity regardless of weight, matching
     // SelectiveColor.cikernel's own precedent.
@@ -137,9 +162,9 @@ kernel vec4 pointColor(__sample s, vec4 target, float hue, float saturation, flo
     float lumDelta = weight * luminance * kLum;
     float satMul = 1.0 + weight * saturation;
 
-    float newH = mod(hslv.x + hueDelta, 360.0);
+    float newH = mod(spreadHue + hueDelta, 360.0);
     if (newH < 0.0) { newH = newH + 360.0; }
-    float newS = clamp(hslv.y * satMul, 0.0, 1.0);
+    float newS = clamp(spreadSat * satMul, 0.0, 1.0);
     float newL = clamp(hslv.z + lumDelta, 0.0, 1.0);
 
     vec3 outRGB = hsl2rgb(vec3(newH, newS, newL)) * scale;

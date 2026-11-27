@@ -470,9 +470,9 @@ New findings (not in section 2; each is assigned to a slice below):
 | 7 | A3 + B4 menus and shortcuts | done 2026-11-19 | | see the slice |
 | 8 | C2 sheet scaffold | done 2026-11-26 | | see the slice |
 | 9 | A4 sidebar | done 2026-11-26 (on branch a4-sidebar, not merged) | | see the slice |
-| 10 | B5 tool panels | M | low | |
+| 10 | B5 tool panels | done 2026-11-27 | | see the slice |
 | 11 | A5 filter bar | done 2026-11-18 | | see the slice |
-| 12 | C3 tokens | L (mechanical) | low, wide | last, touches everything |
+| 12 | C3 tokens | done 2026-11-27 | | see the slice |
 
 C1 and C2 can each be split over two sessions (the kit, then the call sites)
 if a session runs long. Tracks A and B touch different files (except

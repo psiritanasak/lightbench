@@ -21,7 +21,6 @@ struct RenameSheetView: View {
         SheetScaffold(
             title: "Rename \(model.photoCount) Photo\(model.photoCount == 1 ? "" : "s")",
             size: .medium,
-            height: 560,
             status: model.sheetError.map { SheetStatus(text: $0, tone: .error) },
             actions: .commit(verb: "Rename", enabled: model.canApply, cancelEnabled: !model.isWorking),
             onDismiss: { model.cancel() },
@@ -95,6 +94,9 @@ struct RenameSheetView: View {
             }
             .padding(Theme.Space.px6)
         }
+        // A bounded, flexible list (was a fixed 560 pt SHEET, taller than the window at its minimum size): it grows to 340 pt for a long
+        // preview and shrinks to 160 pt, so the sheet fits a small window.
+        .frame(minHeight: 160, idealHeight: 300, maxHeight: 340)
         .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
     }

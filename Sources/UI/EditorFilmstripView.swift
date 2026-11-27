@@ -45,6 +45,7 @@ struct EditorFilmstripView: View {
                             badge: StackCellPresentation.badge(for: item),
                             badgeLabel: StackCellPresentation.badgeAccessibilityLabel(for: item),
                             cellSize: cellSize,
+                            thumbnailRevision: catalog.thumbnailRevisions[item.photo.editKey, default: 0],
                             onTap: { onSelect(item.photo) }
                         )
                         .id(item.cellID)
@@ -82,6 +83,12 @@ struct EditorFilmstripView: View {
 /// shares that actor's cache — anything the Library grid already decoded
 /// is a free hit here, and this cell's on-screen size is well under the
 /// cache's own 240px decode size, so it never forces a re-decode either.
+/// `FilmstripCell`'s `.task(id:)` key: the photo plus its thumbnail revision (see `FilmstripCell.thumbnailRevision`).
+private struct FilmstripThumbnailKey: Equatable {
+    let editKey: String
+    let revision: Int
+}
+
 private struct FilmstripCell: View {
     let catalog: CatalogModel
     let photo: Photo
@@ -89,6 +96,10 @@ private struct FilmstripCell: View {
     var badge: StackCellPresentation.Badge = .none
     var badgeLabel = ""
     let cellSize: CGFloat
+    /// `catalog.thumbnailRevisions[photo.editKey]`, read by the PARENT (which observes the catalog) and passed down like the grid does: an
+    /// edit or a reset of the OPEN photo invalidates its thumbnail while this cell is on screen showing the same photo, which a task keyed
+    /// on the photo alone never notices (the strip kept the old brightness until you went back to the Library).
+    let thumbnailRevision: Int
     let onTap: () -> Void
 
     @State private var image: CGImage?
@@ -152,7 +163,7 @@ private struct FilmstripCell: View {
         .accessibilityLabel((isMissing ? "\(photo.filename), missing" : photo.filename) + (badgeLabel.isEmpty ? "" : ", \(badgeLabel)"))
         .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : [.isButton])
         .accessibilityAction { onTap() }
-        .task(id: photo.editKey) {
+        .task(id: FilmstripThumbnailKey(editKey: photo.editKey, revision: thumbnailRevision)) {
             // Reset immediately — see `LibraryThumbnailCell`'s own
             // `.task(id:)` for why a reused cell must not carry over the
             // previous photo's `isMissing` value.

@@ -24,6 +24,7 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let findSmallFaces = "prefs.v1.findSmallFaces"
         static let quickRawPreviews = "prefs.v1.quickRawPreviews"
         static let editPanelOpenSections = "prefs.v1.editPanelOpenSections"
+        static let toolPanelOpenSections = "prefs.v1.toolPanelOpenSections"
     }
 
     let defaults: UserDefaults
@@ -70,6 +71,12 @@ struct AppPreferences: @unchecked Sendable { // UserDefaults is thread-safe
     var editPanelOpenSections: [String]? {
         get { defaults.stringArray(forKey: Key.editPanelOpenSections) }
         nonmutating set { defaults.set(newValue, forKey: Key.editPanelOpenSections) }
+    }
+
+    /// Which Masks / Crop groups are open (`ToolSection` raw values). nil = never set: every group open. `[]` = all closed.
+    var toolPanelOpenSections: [String]? {
+        get { defaults.stringArray(forKey: Key.toolPanelOpenSections) }
+        nonmutating set { defaults.set(newValue, forKey: Key.toolPanelOpenSections) }
     }
 
     /// Library: while a RAW photo's real thumbnail is still rendering, show the camera's embedded JPEG preview in its cell (it has the camera's

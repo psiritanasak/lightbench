@@ -18,7 +18,7 @@ import UniformTypeIdentifiers
 struct AdjustPanelState {
     /// Which Masks-detail / Crop-tab groups are open (UI only, not an `EditState` field and not an `AdjustSection`).
     /// Everything starts open: the Masks detail's Combine group only appears when another mask exists.
-    var toolSections: Set<ToolSection> = Set(ToolSection.allCases)
+    var toolSections: Set<ToolSection> = ToolSection.stored()
 
     /// Which Edit-tab sections are open (see the type comment for the defaults and persistence).
     var editSections = AdjustSectionExpansion()
@@ -989,7 +989,8 @@ struct AdjustTabView: View {
                 Image(systemName: maskKindIcon(kind)).font(Theme.Font.glyph14())
                 Text(caption).lineLimit(1).minimumScaleFactor(0.75)
             }
-            .frame(maxWidth: .infinity)
+            // One height for every tile: a caption that scales down (Luminance) must not make its tile shorter than its neighbours.
+            .frame(maxWidth: .infinity, minHeight: 44)
         }
         .buttonStyle(FlatButtonStyle(fullWidth: true, compact: true))
         .disabled(isDisabled)
@@ -1719,14 +1720,28 @@ struct AdjustTabView: View {
 enum ToolSection: String, CaseIterable, Hashable {
     case maskAdjustments, maskShape, maskCombine
     case cropAuto, cropStraighten, cropRotate, cropAspect, cropInsets
+
+    /// The groups that were open when the app last ran (every group on the first run; unknown names from another version are ignored).
+    static func stored(_ preferences: AppPreferences = .shared) -> Set<ToolSection> {
+        guard let names = preferences.toolPanelOpenSections else { return Set(allCases) }
+        return Set(names.compactMap(ToolSection.init(rawValue:)))
+    }
+
+    static func store(_ open: Set<ToolSection>, _ preferences: AppPreferences = .shared) {
+        preferences.toolPanelOpenSections = open.map(\.rawValue).sorted()
+    }
 }
 
 extension Binding where Value == Set<ToolSection> {
-    /// A Bool binding for one group's open state.
+    /// A Bool binding for one group's open state. Every change is written to `AppPreferences.shared`, so use it only on
+    /// `AdjustPanelState.toolSections`, never on a scratch set.
     func isOpen(_ section: ToolSection) -> Binding<Bool> {
         Binding<Bool>(
             get: { wrappedValue.contains(section) },
-            set: { if $0 { wrappedValue.insert(section) } else { wrappedValue.remove(section) } }
+            set: {
+                if $0 { wrappedValue.insert(section) } else { wrappedValue.remove(section) }
+                ToolSection.store(wrappedValue)
+            }
         )
     }
 }

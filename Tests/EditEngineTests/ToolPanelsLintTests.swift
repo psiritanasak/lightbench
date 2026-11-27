@@ -1,4 +1,5 @@
 import XCTest
+@testable import PhotoApp
 
 /// Source lint for the Editor's tool panels (slice B5): every panel group uses the one shared header (`AdjustSectionContainer`), and
 /// no code in `Sources/UI` uses a system `DisclosureGroup` (its header toggles only from the chevron and cannot carry the edited dot).
@@ -52,5 +53,44 @@ final class ToolPanelsLintTests: XCTestCase {
         // UI-only: the groups' open flags must not become part of the persisted edit or of Reset Adjustments' section list.
         let section = try String(contentsOf: uiSources.deletingLastPathComponent().appendingPathComponent("EditEngine/AdjustSection.swift"), encoding: .utf8)
         XCTAssertFalse(section.contains("ToolSection"))
+    }
+}
+
+/// The open state of the Masks / Crop groups is remembered across launches (`AppPreferences.toolPanelOpenSections`).
+final class ToolSectionPersistenceTests: XCTestCase {
+    private var suiteNames: [String] = []
+
+    override func tearDown() {
+        for name in suiteNames { UserDefaults(suiteName: name)?.removePersistentDomain(forName: name) }
+        suiteNames = []
+    }
+
+    /// A throwaway suite per test; never falls back to the developer's real defaults.
+    private func makePreferences() throws -> AppPreferences {
+        let name = "ToolSectionPersistenceTests-\(UUID().uuidString)"
+        suiteNames.append(name)
+        return AppPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: name)))
+    }
+
+    func testFirstRunHasEveryGroupOpen() throws {
+        XCTAssertEqual(ToolSection.stored(try makePreferences()), Set(ToolSection.allCases))
+    }
+
+    func testTheOpenSetRoundTrips() throws {
+        let preferences = try makePreferences()
+        ToolSection.store(Set<ToolSection>([.cropAuto, .maskShape]), preferences)
+        XCTAssertEqual(ToolSection.stored(preferences), Set<ToolSection>([.cropAuto, .maskShape]))
+    }
+
+    func testAllClosedIsRememberedAndNotTreatedAsFirstRun() throws {
+        let preferences = try makePreferences()
+        ToolSection.store(Set<ToolSection>(), preferences)
+        XCTAssertEqual(ToolSection.stored(preferences), Set<ToolSection>())
+    }
+
+    func testUnknownNamesAreIgnored() throws {
+        let preferences = try makePreferences()
+        preferences.toolPanelOpenSections = ["cropAuto", "someFutureGroup"]
+        XCTAssertEqual(ToolSection.stored(preferences), Set<ToolSection>([.cropAuto]))
     }
 }

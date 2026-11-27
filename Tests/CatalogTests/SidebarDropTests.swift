@@ -89,6 +89,13 @@ final class SidebarDropTests: XCTestCase {
         XCTAssertTrue(type.conforms(to: .data))
     }
 
+    func testThePayloadIsVisibleOnlyInsideThisApp() throws {
+        // Without `.ownProcess` Finder accepts the drag and creates an unopenable file on the Desktop (found by hand 2026-11-27).
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/UI/LibraryPhotoDrag.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains(".visibility(.ownProcess)"))
+    }
+
     func testTheTypeIsDeclaredInProjectYml() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let yml = try String(contentsOf: root.appendingPathComponent("project.yml"), encoding: .utf8)

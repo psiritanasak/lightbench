@@ -129,8 +129,8 @@ struct CollectionSidebarView: View {
         }
     }
 
-    /// The "+" at the right of a section header. Collections: a draft row. Smart Collections: a draft row too, but only while there is
-    /// a filter worth saving (the tooltip says what it saves, and why it is off).
+    /// The "+" at the right of a section header. Collections: a draft row. Smart Collections: a draft row too while there is a filter worth
+    /// saving; with none, the button stays CLICKABLE (a dimmed, dead button gave no hint why; found by hand 2026-11-27) and says what to do.
     private func addButton(_ action: SidebarRow.Action) -> some View {
         let isSmart = action == .saveFilters
         let enabled = !isSmart || catalog.hasSaveableFilterCriteria
@@ -139,16 +139,22 @@ struct CollectionSidebarView: View {
             ? "Saves the current rating, flag, label and keyword filters and the search box (for example iso:>1600 camera:d610) as a smart collection over the whole catalog."
                 + (enabled ? "" : " Set a filter first.")
             : "New collection"
-        return Button { begin(isSmart ? .newSmart : .newCollection) } label: {
+        return Button {
+            if isSmart, !catalog.hasSaveableFilterCriteria {
+                catalog.post(Feedback(kind: .nothingToDo, title: "Nothing to save yet",
+                                      message: "Set a rating, flag, label or keyword filter, or type in the search box, then press + to save it as a smart collection."))
+            } else {
+                begin(isSmart ? .newSmart : .newCollection)
+            }
+        } label: {
             Image(systemName: "plus").font(Theme.Font.caption(.semibold))
                 .frame(width: 16, height: 16).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(enabled ? Theme.textSecondary : Theme.textTertiary)
-        .disabled(!enabled)
         .help(help)
         .accessibilityLabel(title)
-        .accessibilityHint(enabled ? "" : "Set a filter first")
+        .accessibilityHint(enabled ? "" : "No filter is set; pressing explains how to save one")
     }
 
     // MARK: In-place naming

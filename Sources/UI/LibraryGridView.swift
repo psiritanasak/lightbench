@@ -1114,10 +1114,17 @@ private struct LibraryThumbnailCell: View {
         .contentShape(Rectangle().inset(by: -CellChrome.selectionPlateOutset))
         // The same items as the ellipsis button. The target is built when the menu opens, from values this cell already has.
         .contextMenu { menuItems }
-        // Drag onto a sidebar collection. No drag gesture is added: `.draggable` is AppKit's own drag source, which starts only once the pointer
-        // moves past the system drag distance and then owns the mouse-up, so a drag never selects, opens or runs a range, and a click
-        // without movement behaves as before. The payload is read when the drag starts and never changes the selection.
-        .draggable(LibraryPhotoDrag(photoIDs: SidebarDrop.draggedIDs(for: item, selection: actions.selection)))
+        // Drag onto a sidebar collection. The drag itself is an AppKit session (`LibraryPhotoDragSource`) that Finder and every other app
+        // refuse: SwiftUI's `.draggable` / `.onDrag` offered the payload to Finder, which wrote it as a file on the Desktop. A small
+        // `DragGesture` only DETECTS the drag (it needs 8 pt of movement, so a click never reaches it) and hands over to AppKit, which then
+        // owns the mouse-up: a drag never selects, opens or runs a range. The payload is read when the drag starts and never changes the selection.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 8).onChanged { _ in
+                LibraryPhotoDragSource.begin(
+                    photoIDs: SidebarDrop.draggedIDs(for: item, selection: actions.selection),
+                    image: image.map { NSImage(cgImage: $0, size: NSSize(width: 72, height: 72)) })
+            }
+        )
         // ONE single-click recogniser (no `count: 2` one, so SwiftUI never waits to see if a second click follows): a click selects at once,
         // and AppKit's click count on the event tells the second click of a double-click apart.
         .onTapGesture {

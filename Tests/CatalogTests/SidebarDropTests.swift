@@ -1,3 +1,4 @@
+import AppKit
 import UniformTypeIdentifiers
 import XCTest
 @testable import PhotoApp
@@ -89,13 +90,6 @@ final class SidebarDropTests: XCTestCase {
         XCTAssertTrue(type.conforms(to: .data))
     }
 
-    func testThePayloadIsVisibleOnlyInsideThisApp() throws {
-        // Without `.ownProcess` Finder accepts the drag and creates an unopenable file on the Desktop (found by hand 2026-11-27).
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let source = try String(contentsOf: root.appendingPathComponent("Sources/UI/LibraryPhotoDrag.swift"), encoding: .utf8)
-        XCTAssertTrue(source.contains(".visibility(.ownProcess)"))
-    }
-
     func testTheTypeIsDeclaredInProjectYml() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let yml = try String(contentsOf: root.appendingPathComponent("project.yml"), encoding: .utf8)
@@ -106,11 +100,36 @@ final class SidebarDropTests: XCTestCase {
 
     // MARK: Wiring
 
-    func testDraggableAppearsOnceAndTheGridHasNoDragGesture() throws {
+    func testTheGridStartsTheDragThroughTheAppKitSourceNotSwiftUIDrag() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let grid = try String(contentsOf: root.appendingPathComponent("Sources/UI/LibraryGridView.swift"), encoding: .utf8)
-        XCTAssertEqual(grid.components(separatedBy: ".draggable(").count - 1, 1)
-        XCTAssertFalse(grid.contains("DragGesture"))
+        XCTAssertEqual(grid.components(separatedBy: "LibraryPhotoDragSource.begin(").count - 1, 1)
+        XCTAssertEqual(grid.components(separatedBy: "DragGesture(minimumDistance: 8)").count - 1, 1, "one detector, 8 pt so a click never reaches it")
+        XCTAssertFalse(grid.contains(".draggable("), "SwiftUI's drag offers the payload to Finder (a file on the Desktop)")
+        XCTAssertFalse(grid.contains(".onDrag {"))
+        XCTAssertFalse(grid.contains("onTapGesture(count: 2"))
+    }
+
+    func testADragMayOnlyBeDroppedInsideThisApp() {
+        XCTAssertEqual(LibraryPhotoDragSource.operationMask(for: .withinApplication), .copy)
+        XCTAssertEqual(LibraryPhotoDragSource.operationMask(for: .outsideApplication), [], "Finder must never be offered the drop")
+    }
+
+    @MainActor
+    func testADragOnlyBeginsFromAMouseDraggedEventAndNeverTwice() {
+        XCTAssertTrue(LibraryPhotoDragSource.canBegin(eventType: .leftMouseDragged, isDragging: false))
+        XCTAssertFalse(LibraryPhotoDragSource.canBegin(eventType: .leftMouseDragged, isDragging: true), "a second session must not start")
+        XCTAssertFalse(LibraryPhotoDragSource.canBegin(eventType: .leftMouseDown, isDragging: false))
+        XCTAssertFalse(LibraryPhotoDragSource.canBegin(eventType: nil, isDragging: false))
+        XCTAssertFalse(LibraryPhotoDragSource.begin(photoIDs: [], image: nil), "nothing to drag")
+    }
+
+    func testTheDragPasteboardItemHoldsOnlyOurJSON() throws {
+        let type = NSPasteboard.PasteboardType(UTType.lightbenchLibraryPhotos.identifier)
+        let item = try XCTUnwrap(LibraryPhotoDragSource.pasteboardItem(for: [3, 1, 2]))
+        XCTAssertEqual(item.types, [type], "no URL, file, image or text")
+        let data = try XCTUnwrap(item.data(forType: type))
+        XCTAssertEqual(try JSONDecoder().decode(LibraryPhotoDrag.self, from: data), LibraryPhotoDrag(photoIDs: [3, 1, 2]))
     }
 }
 

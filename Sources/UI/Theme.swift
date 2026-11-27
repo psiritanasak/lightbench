@@ -33,6 +33,7 @@ enum Theme {
     }
 
     /// Text and glyph sizes, named by role; each equals a size the UI already used. A function so a call site keeps its weight.
+    /// NOTE: inside `enum Theme`, a bare `Font` means THIS enum; write `SwiftUI.Font` for the system type.
     enum Font {
         /// 9 pt: badge and count text.
         static func micro(_ weight: SwiftUI.Font.Weight = .regular) -> SwiftUI.Font { .system(size: 9, weight: weight) }

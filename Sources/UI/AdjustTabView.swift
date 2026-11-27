@@ -1735,6 +1735,8 @@ extension Binding where Value == Set<ToolSection> {
 /// one click away (VoiceOver reads "Help"; the popover text is the explanation).
 struct HelpPopoverButton: View {
     let text: String
+    /// What the help is about; VoiceOver reads "Help: <topic>" so several buttons in one panel are told apart.
+    var topic: String?
     @State private var isShown = false
 
     var body: some View {
@@ -1746,7 +1748,7 @@ struct HelpPopoverButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Help")
+        .accessibilityLabel(topic.map { "Help: \($0)" } ?? "Help")
         .accessibilityHint(text)
         .popover(isPresented: $isShown, arrowEdge: .bottom) {
             Text(text)
@@ -1768,7 +1770,7 @@ struct HelpCaption: View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(short).font(.caption).foregroundStyle(Theme.textSecondary)
             Spacer(minLength: 0)
-            HelpPopoverButton(text: help)
+            HelpPopoverButton(text: help, topic: short)
         }
     }
 }

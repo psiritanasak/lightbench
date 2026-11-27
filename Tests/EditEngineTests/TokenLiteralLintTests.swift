@@ -56,4 +56,19 @@ final class TokenLiteralLintTests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: sources.appendingPathComponent(name).path), "\(name) is allow-listed but missing")
         }
     }
+
+    /// The patterns really catch the raw forms and let the token forms through (a broken regex would otherwise pass silently).
+    func testThePatternsCatchRawLiteralsAndAllowTokens() {
+        func hits(_ line: String) -> Bool {
+            Self.banned.contains { line.range(of: $0.1, options: .regularExpression) != nil }
+        }
+        for raw in [".padding(8)", ".padding(.horizontal, 8)", "HStack(spacing: 6) {", "RoundedRectangle(cornerRadius: 6)",
+                    ".font(.system(size: 9))", ".padding(.vertical, compact ? 3 : 5)", "LazyVStack(alignment: .leading, spacing: 1)"] {
+            XCTAssertTrue(hits(raw), "should be banned: \(raw)")
+        }
+        for fine in ["VStack(spacing: 0) {", ".padding(Theme.Space.s)", ".padding(.horizontal, Theme.Space.m)", "cornerRadius: Theme.Radius.m",
+                     ".font(Theme.Font.micro(.semibold))", "HStack(spacing: Theme.Space.xs) {"] {
+            XCTAssertFalse(hits(fine), "should be allowed: \(fine)")
+        }
+    }
 }
